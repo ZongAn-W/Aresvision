@@ -12,6 +12,10 @@ class TrainingStartRequest(BaseModel):
     model_source: str = Field(default="official", description="official | uploaded")
     uploaded_model_id: Optional[str] = Field(default=None, description="Validated uploaded model package id")
 
+
+class RenameTrainingModelRequest(BaseModel):
+    model_name: str = Field(..., min_length=1, max_length=255)
+
 class TrainingTaskResponse(BaseModel):
     id: int
     model_script: str

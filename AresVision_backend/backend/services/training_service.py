@@ -729,6 +729,34 @@ class TrainingService:
             result = await session.execute(select(ModelTrainingTask).order_by(ModelTrainingTask.id.desc()))
             return result.scalars().all()
 
+    async def rename_model(self, task_id: int, model_name: str) -> ModelTrainingTask:
+        normalized_name = (model_name or "").strip()
+        if not normalized_name:
+            raise ValueError("模型名称不能为空")
+        if len(normalized_name) > 255:
+            raise ValueError("模型名称不能超过 255 个字符")
+
+        async with async_session_maker() as session:
+            task = await session.get(ModelTrainingTask, task_id)
+            if not task:
+                raise FileNotFoundError("Task not found")
+            if task.status != "completed":
+                raise ValueError("只能重命名已完成训练的模型")
+
+            existing = await session.execute(
+                select(ModelTrainingTask).where(
+                    ModelTrainingTask.custom_model_name == normalized_name,
+                    ModelTrainingTask.id != task_id,
+                )
+            )
+            if existing.scalars().first():
+                raise ValueError(f"模型名称 '{normalized_name}' 已被使用，请换一个名称")
+
+            task.custom_model_name = normalized_name
+            await session.commit()
+            await session.refresh(task)
+            return task
+
     async def stop_training(self, task_id: int):
         async with async_session_maker() as session:
             task = await session.get(ModelTrainingTask, task_id)

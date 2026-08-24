@@ -812,6 +812,18 @@ export async function fetchLogs(taskId) {
   return res.json();
 }
 
+export async function renameTrainingModel(taskId, modelName) {
+  const res = await authedFetch(`${BASE}/training/tasks/${taskId}/name`, {
+    method: 'PATCH',
+    body: JSON.stringify({ model_name: modelName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.json();
+}
+
 export async function stopTrainingTask(taskId) {
   const res = await authedFetch(`${BASE}/training/tasks/${taskId}/stop`, {
     method: 'POST',

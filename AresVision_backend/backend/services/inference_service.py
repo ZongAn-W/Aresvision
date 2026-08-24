@@ -10,7 +10,7 @@ import re
 import netCDF4 as nc
 from pathlib import Path
 
-from config import MCD_DIR
+from config import MCD_DIR, MCD_RAW_3H_DIR
 from database.models import ModelTrainingTask
 from database.engine import async_session_maker
 from core.metrics import compute_error_distribution, compute_metrics, compute_test_set_metrics
@@ -28,6 +28,7 @@ from training_backbones.model_zoo import (
     normalize_model_architecture,
     normalize_use_sphere,
 )
+from training_backbones.uploaded_model_contract import run_uploaded_model
 
 _NETCDF_READ_LOCK = threading.RLock()
 
@@ -655,27 +656,55 @@ class InferenceService:
         truth = y_torch[sample_idx, :, 0].cpu().numpy()
         return pred, truth, y_mean, y_std, list(active_vars)
 
+    def _prepare_uploaded_task_tensors(
+        self,
+        hypers: dict,
+        window: int,
+        horizon: int,
+        data_dirs=None,
+    ):
+        from training_backbones.user_model_runner import (
+            parse_selected_channels,
+            prepare_tensors,
+        )
+
+        directories = data_dirs or {}
+        selected_channels = parse_selected_channels(hypers.get("selected_channels", []))
+        openmars_dir = Path(directories.get("ARESVISION_OPENMARS_DIR") or self.openmars_dir)
+        mcd_dir = Path(directories.get("ARESVISION_MCD_DIR") or self.mcd_dir)
+        mcd_overview_dir = Path(
+            directories.get("MCD_RAW_3H_DIR")
+            or directories.get("ARESVISION_MCD_RAW_3H_DIR")
+            or MCD_RAW_3H_DIR
+        )
+        tensors = prepare_tensors(
+            openmars_dir,
+            mcd_dir,
+            selected_channels,
+            window,
+            horizon,
+            training_dataset=hypers.get("training_dataset", "openmars_mcd"),
+            mcd_overview_dir=mcd_overview_dir,
+            return_ls=True,
+        )
+        return selected_channels, tensors
+
     def _predict_uploaded_task_window(self, task, hypers: dict, ls_start: float, horizon: int, data_dirs=None):
         from training_backbones.user_model_runner import (
             assert_prediction_shape,
             build_uploaded_model_config,
             load_uploaded_model,
-            parse_selected_channels,
-            prepare_tensors,
         )
 
-        selected_channels = parse_selected_channels(hypers.get("selected_channels", []))
-        openmars_dir = Path((data_dirs or {}).get("ARESVISION_OPENMARS_DIR") or self.openmars_dir)
-        mcd_dir = Path((data_dirs or {}).get("ARESVISION_MCD_DIR") or self.mcd_dir)
         window = int(hypers.get("window", 3))
         task_horizon = int(hypers.get("horizon", horizon or 3))
-        x_torch, y_torch, y_mean, y_std, height, width = prepare_tensors(
-            openmars_dir,
-            mcd_dir,
-            selected_channels,
+        selected_channels, tensors = self._prepare_uploaded_task_tensors(
+            hypers,
             window,
             task_horizon,
+            data_dirs,
         )
+        x_torch, y_torch, ls_torch, y_mean, y_std, height, width = tensors
         sample_idx = min(max(0, int(round(float(ls_start) / 360.0 * max(1, len(x_torch) - 1)))), len(x_torch) - 1)
         config = build_uploaded_model_config(
             in_channels=int(x_torch.shape[2]),
@@ -696,9 +725,15 @@ class InferenceService:
         model.eval()
 
         x_sample = x_torch[sample_idx: sample_idx + 1].to(self.device)
+        ls_sample = ls_torch[sample_idx: sample_idx + 1].to(self.device) if ls_torch is not None else None
         truth_tensor = y_torch[sample_idx: sample_idx + 1]
         with torch.no_grad():
-            pred_tensor = model(x_sample)
+            pred_tensor = run_uploaded_model(
+                model,
+                x_sample,
+                ls_sample,
+                context="uploaded prediction",
+            )
             assert_prediction_shape(pred_tensor, truth_tensor.to(self.device), "uploaded prediction")
         pred = pred_tensor[0, :, 0].cpu().numpy()
         truth = truth_tensor[0, :, 0].cpu().numpy()
@@ -795,22 +830,17 @@ class InferenceService:
             assert_prediction_shape,
             build_uploaded_model_config,
             load_uploaded_model,
-            parse_selected_channels,
-            prepare_tensors,
         )
 
-        selected_channels = parse_selected_channels(hypers.get("selected_channels", []))
-        openmars_dir = Path((data_dirs or {}).get("ARESVISION_OPENMARS_DIR") or self.openmars_dir)
-        mcd_dir = Path((data_dirs or {}).get("ARESVISION_MCD_DIR") or self.mcd_dir)
         window = int(hypers.get("window", 3))
         task_horizon = int(hypers.get("horizon", horizon or 3))
-        x_torch, y_torch, y_mean, y_std, height, width = prepare_tensors(
-            openmars_dir,
-            mcd_dir,
-            selected_channels,
+        selected_channels, tensors = self._prepare_uploaded_task_tensors(
+            hypers,
             window,
             task_horizon,
+            data_dirs,
         )
+        x_torch, y_torch, ls_torch, y_mean, y_std, height, width = tensors
         config = build_uploaded_model_config(
             in_channels=int(x_torch.shape[2]),
             window=window,
@@ -832,6 +862,7 @@ class InferenceService:
         split = int(0.8 * len(x_torch))
         x_test = x_torch[split:]
         y_test = y_torch[split:]
+        ls_test = ls_torch[split:] if ls_torch is not None else None
         if len(x_test) == 0:
             raise ValueError("No uploaded model test samples are available")
 
@@ -843,7 +874,13 @@ class InferenceService:
             for start in range(0, len(x_test), batch_size):
                 end = min(start + batch_size, len(x_test))
                 truth_tensor = y_test[start:end].to(self.device)
-                pred = model(x_test[start:end].to(self.device))
+                ls_batch = ls_test[start:end].to(self.device) if ls_test is not None else None
+                pred = run_uploaded_model(
+                    model,
+                    x_test[start:end].to(self.device),
+                    ls_batch,
+                    context="uploaded test-set metrics",
+                )
                 assert_prediction_shape(pred, truth_tensor, "uploaded test-set metrics")
                 pred_np = pred.cpu().numpy()
                 pred_batches.append(pred_np[:, :actual_horizon, 0] * (y_std + 1e-6) + y_mean)
@@ -984,22 +1021,17 @@ class InferenceService:
             assert_prediction_shape,
             build_uploaded_model_config,
             load_uploaded_model,
-            parse_selected_channels,
-            prepare_tensors,
         )
 
-        selected_channels = parse_selected_channels(hypers.get("selected_channels", []))
-        openmars_dir = Path((data_dirs or {}).get("ARESVISION_OPENMARS_DIR") or self.openmars_dir)
-        mcd_dir = Path((data_dirs or {}).get("ARESVISION_MCD_DIR") or self.mcd_dir)
         window = int(hypers.get("window", 3))
         task_horizon = int(hypers.get("horizon", horizon or 3))
-        x_torch, y_torch, y_mean, y_std, height, width = prepare_tensors(
-            openmars_dir,
-            mcd_dir,
-            selected_channels,
+        selected_channels, tensors = self._prepare_uploaded_task_tensors(
+            hypers,
             window,
             task_horizon,
+            data_dirs,
         )
+        x_torch, y_torch, ls_torch, y_mean, y_std, height, width = tensors
         config = build_uploaded_model_config(
             in_channels=int(x_torch.shape[2]),
             window=window,
@@ -1021,16 +1053,23 @@ class InferenceService:
         split = int(0.8 * len(x_torch))
         x_test = x_torch[split:].clone()
         y_test = y_torch[split:]
+        ls_test = ls_torch[split:] if ls_torch is not None else None
         if len(x_test) == 0:
             return {"items": [], "baseline_metric": "r2", "baseline_value": 0.0}
         sample_size = min(40, len(x_test))
         sample_indices = np.linspace(0, len(x_test) - 1, sample_size, dtype=int)
         x_sample = x_test[sample_indices]
         y_sample = y_test[sample_indices]
+        ls_sample = ls_test[sample_indices] if ls_test is not None else None
 
         def score(batch):
             with torch.no_grad():
-                pred = model(batch.to(self.device))
+                pred = run_uploaded_model(
+                    model,
+                    batch.to(self.device),
+                    ls_sample.to(self.device) if ls_sample is not None else None,
+                    context="uploaded permutation importance",
+                )
                 assert_prediction_shape(pred, y_sample.to(self.device), "uploaded permutation importance")
                 pred_np = pred.cpu().numpy()
             truth = y_sample.numpy()
@@ -1285,23 +1324,18 @@ class InferenceService:
             assert_prediction_shape,
             build_uploaded_model_config,
             load_uploaded_model,
-            parse_selected_channels,
-            prepare_tensors,
         )
 
-        selected_channels = parse_selected_channels(hypers.get("selected_channels", []))
-        openmars_dir = Path((data_dirs or {}).get("ARESVISION_OPENMARS_DIR") or self.openmars_dir)
-        mcd_dir = Path((data_dirs or {}).get("ARESVISION_MCD_DIR") or self.mcd_dir)
         window = int(hypers.get("window", 3))
         horizon = int(hypers.get("horizon", 3))
 
-        x_torch, y_torch, y_mean, y_std, height, width = prepare_tensors(
-            openmars_dir,
-            mcd_dir,
-            selected_channels,
+        selected_channels, tensors = self._prepare_uploaded_task_tensors(
+            hypers,
             window,
             horizon,
+            data_dirs,
         )
+        x_torch, y_torch, ls_torch, y_mean, y_std, height, width = tensors
         config = build_uploaded_model_config(
             in_channels=int(x_torch.shape[2]),
             window=window,
@@ -1324,6 +1358,7 @@ class InferenceService:
         split = int(0.8 * len(x_torch))
         x_test = x_torch[split:]
         y_test_true = y_torch[split:]
+        ls_test = ls_torch[split:] if ls_torch is not None else None
         if len(x_test) == 0:
             raise ValueError("No uploaded model test samples are available")
 
@@ -1332,7 +1367,13 @@ class InferenceService:
             indices = np.linspace(0, len(x_test) - 1, sample_size, dtype=int)
             test_xb = x_test[indices].to(self.device)
             test_yb = y_test_true[indices]
-            pred_tensor = model(test_xb)
+            test_lsb = ls_test[indices].to(self.device) if ls_test is not None else None
+            pred_tensor = run_uploaded_model(
+                model,
+                test_xb,
+                test_lsb,
+                context="uploaded inference test",
+            )
             assert_prediction_shape(
                 pred_tensor,
                 test_yb.to(self.device),

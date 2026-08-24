@@ -26,6 +26,12 @@ if str(BACKEND_DIR) not in sys.path:
 from config import MCD_DIR, MCD_RAW_3H_DIR
 from services.ozone_units import normalize_ozone_column_units
 from services.transfer_learning_strategy import apply_freeze_strategy
+from training_backbones.uploaded_model_contract import (
+    attach_uploaded_model_contract,
+    run_uploaded_model,
+    uploaded_model_requires_ls,
+    validate_ls_tensor,
+)
 
 CHANNEL_ORDER = ["U", "V", "D", "S", "T"]
 TRAINING_DATASET_OPENMARS_MCD = "openmars_mcd"
@@ -141,13 +147,14 @@ def load_uploaded_model(model_path: Path, config: dict[str, Any]) -> nn.Module:
         build_model = getattr(module, "build_model", None)
         if not callable(build_model):
             raise TypeError("Uploaded model must export build_model(config)")
+        model_spec = getattr(module, "MODEL_SPEC", None)
         model = build_model(config)
     finally:
         sys.modules.pop(module_name, None)
 
     if not isinstance(model, nn.Module):
         raise TypeError("build_model(config) must return torch.nn.Module")
-    return model
+    return attach_uploaded_model_contract(model, model_spec)
 
 
 def assert_prediction_shape(prediction: Any, target: Any, context: str) -> None:
@@ -210,11 +217,25 @@ def _clean_array(value: Any) -> np.ndarray:
     return np.nan_to_num(np.asarray(array, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
 
-def _read_ls_variable(dataset: Any, file_path: Path) -> np.ndarray:
+def _ls_array(value: Any) -> np.ndarray:
+    array = np.asanyarray(value)
+    if np.ma.isMaskedArray(array):
+        array = array.filled(np.nan)
+    return np.asarray(array, dtype=np.float32).reshape(-1)
+
+
+def _read_ls_variable(
+    dataset: Any,
+    file_path: Path,
+    *,
+    required: bool = True,
+) -> Optional[np.ndarray]:
     if "Ls" in dataset.variables:
-        return _clean_array(dataset.variables["Ls"][:]).reshape(-1)
+        return _ls_array(dataset.variables["Ls"][:])
     if "ls" in dataset.variables:
-        return _clean_array(dataset.variables["ls"][:]).reshape(-1)
+        return _ls_array(dataset.variables["ls"][:])
+    if not required:
+        return None
     raise ValueError(f"Missing Ls variable in {file_path}")
 
 
@@ -229,6 +250,8 @@ def _merge_sol_hour(data: Any) -> np.ndarray:
 
 def _expand_mcd_ls(dataset: Any, file_path: Path, sample_var_name: str) -> np.ndarray:
     ls_values = _read_ls_variable(dataset, file_path)
+    if ls_values is None:
+        raise ValueError(f"Missing Ls variable in {file_path}")
     sample_shape = dataset.variables[sample_var_name].shape
     if len(sample_shape) >= 4:
         sol_count, hour_count = int(sample_shape[0]), int(sample_shape[1])
@@ -264,9 +287,33 @@ def _expand_mcd_ls(dataset: Any, file_path: Path, sample_var_name: str) -> np.nd
     return ls_values[:target_count]
 
 
-def _load_openmars(openmars_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+def _validate_file_ls_length(
+    ls_values: Optional[np.ndarray],
+    frame_count: int,
+    file_path: Path,
+    *,
+    required: bool,
+) -> Optional[np.ndarray]:
+    if ls_values is None:
+        return None
+    actual_count = int(ls_values.shape[0])
+    if actual_count == int(frame_count):
+        return ls_values
+    if required:
+        raise ValueError(
+            f"Ls length mismatch in {file_path}: expected {int(frame_count)}, got {actual_count}"
+        )
+    return None
+
+
+def _load_openmars(
+    openmars_dir: Path,
+    *,
+    require_ls: bool = True,
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
     o3_list: list[np.ndarray] = []
     ls_list: list[np.ndarray] = []
+    ls_missing = False
     for file_path in sorted(Path(openmars_dir).glob("*.nc"), key=natural_sort_key):
         with netCDF4.Dataset(str(file_path)) as dataset:
             if "o3col" not in dataset.variables:
@@ -277,26 +324,39 @@ def _load_openmars(openmars_dir: Path) -> tuple[np.ndarray, np.ndarray]:
             if o3.ndim != 3:
                 raise ValueError(f"Invalid OpenMars o3col shape in {file_path}: {o3.shape}")
             o3_list.append(o3)
-            ls_list.append(_read_ls_variable(dataset, file_path))
+            ls_values = _validate_file_ls_length(
+                _read_ls_variable(dataset, file_path, required=require_ls),
+                int(o3.shape[0]),
+                file_path,
+                required=require_ls,
+            )
+            if ls_values is None:
+                ls_missing = True
+            else:
+                ls_list.append(ls_values)
 
     if not o3_list:
         raise FileNotFoundError(f"No OpenMars .nc files found in {openmars_dir}")
 
     y_raw = _clean_array(np.concatenate(o3_list, axis=0))
-    ls_raw = _clean_array(np.concatenate(ls_list, axis=0)).reshape(-1)
-    time_count = min(int(y_raw.shape[0]), int(ls_raw.shape[0]))
+    ls_raw = None if ls_missing or not ls_list else np.concatenate(ls_list, axis=0).astype(np.float32)
+    time_count = int(y_raw.shape[0])
+    if ls_raw is not None:
+        time_count = min(time_count, int(ls_raw.shape[0]))
     if time_count <= 0:
         raise ValueError("OpenMars timeline is empty")
-    return y_raw[:time_count], ls_raw[:time_count]
+    return y_raw[:time_count], None if ls_raw is None else ls_raw[:time_count]
 
 
 def _load_mcd_features(
     mcd_dir: Path,
     selected_channels: list[str],
-    om_ls_raw: np.ndarray,
+    om_ls_raw: Optional[np.ndarray],
 ) -> dict[str, np.ndarray]:
     if not selected_channels:
         return {}
+    if om_ls_raw is None:
+        raise ValueError("Missing Ls data required to align selected MCD features")
 
     mcd_data = {MCD_VARS_MAP[channel][1]: [] for channel in selected_channels}
     mcd_ls: list[np.ndarray] = []
@@ -345,10 +405,13 @@ def _load_mcd_features(
 def _load_mcd_overview(
     mcd_overview_dir: Path,
     selected_channels: list[str],
-) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    *,
+    require_ls: bool = True,
+) -> tuple[np.ndarray, Optional[np.ndarray], dict[str, np.ndarray]]:
     y_parts: list[np.ndarray] = []
     ls_parts: list[np.ndarray] = []
     feature_parts = {MCD_VARS_MAP[channel][1]: [] for channel in selected_channels}
+    ls_missing = False
 
     for file_path in sorted(Path(mcd_overview_dir).glob("*.nc"), key=natural_sort_key):
         with netCDF4.Dataset(str(file_path)) as dataset:
@@ -358,7 +421,16 @@ def _load_mcd_overview(
             if y.ndim != 3:
                 raise ValueError(f"Invalid MCD overview o3col shape in {file_path}: {y.shape}")
             y_parts.append(y)
-            ls_parts.append(_read_ls_variable(dataset, file_path))
+            ls_values = _validate_file_ls_length(
+                _read_ls_variable(dataset, file_path, required=require_ls),
+                int(y.shape[0]),
+                file_path,
+                required=require_ls,
+            )
+            if ls_values is None:
+                ls_missing = True
+            else:
+                ls_parts.append(ls_values)
 
             for channel in selected_channels:
                 var_name, short_name = MCD_VARS_MAP[channel]
@@ -373,25 +445,35 @@ def _load_mcd_overview(
         raise FileNotFoundError(f"No MCD overview .nc files found in {mcd_overview_dir}")
 
     y_raw = _clean_array(np.concatenate(y_parts, axis=0))
-    ls_raw = _clean_array(np.concatenate(ls_parts, axis=0)).reshape(-1)
+    ls_raw = None if ls_missing or not ls_parts else np.concatenate(ls_parts, axis=0).astype(np.float32)
     vars_dict = {
         short_name: _clean_array(np.concatenate(parts, axis=0))
         for short_name, parts in feature_parts.items()
     }
-    time_count = min([int(y_raw.shape[0]), int(ls_raw.shape[0])] + [int(v.shape[0]) for v in vars_dict.values()])
+    time_lengths = [int(y_raw.shape[0])] + [int(v.shape[0]) for v in vars_dict.values()]
+    if ls_raw is not None:
+        time_lengths.append(int(ls_raw.shape[0]))
+    time_count = min(time_lengths)
     if time_count <= 0:
         raise ValueError("MCD overview timeline is empty")
     return (
         y_raw[:time_count],
-        ls_raw[:time_count],
+        None if ls_raw is None else ls_raw[:time_count],
         {name: value[:time_count] for name, value in vars_dict.items()},
     )
 
 
-def _read_raw_mcd_ls_variable(dataset: Any, file_path: Path) -> np.ndarray:
+def _read_raw_mcd_ls_variable(
+    dataset: Any,
+    file_path: Path,
+    *,
+    required: bool = True,
+) -> Optional[np.ndarray]:
     for name in ("LS", "Ls", "ls"):
         if name in dataset.variables:
-            return _clean_array(dataset.variables[name][:]).reshape(-1)
+            return _ls_array(dataset.variables[name][:])
+    if not required:
+        return None
     raise ValueError(f"Missing LS variable in raw MCD file {file_path}")
 
 
@@ -424,10 +506,13 @@ def _fit_raw_mcd_lat_grid(data: Any, lat_values: Any) -> np.ndarray:
 def _load_raw_3h_mcd(
     raw_dir: Path,
     selected_channels: list[str],
-) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    *,
+    require_ls: bool = True,
+) -> tuple[np.ndarray, Optional[np.ndarray], dict[str, np.ndarray]]:
     y_parts: list[np.ndarray] = []
     ls_parts: list[np.ndarray] = []
     feature_parts = {MCD_VARS_MAP[channel][1]: [] for channel in selected_channels}
+    ls_missing = False
 
     for file_path in sorted(Path(raw_dir).glob("*.nc"), key=natural_sort_key):
         with netCDF4.Dataset(str(file_path)) as dataset:
@@ -443,7 +528,16 @@ def _load_raw_3h_mcd(
                 allow_mcd_legacy_heuristic=True,
             )
             y_parts.append(_clean_array(y))
-            ls_parts.append(_read_raw_mcd_ls_variable(dataset, file_path))
+            ls_values = _validate_file_ls_length(
+                _read_raw_mcd_ls_variable(dataset, file_path, required=require_ls),
+                int(y.shape[0]),
+                file_path,
+                required=require_ls,
+            )
+            if ls_values is None:
+                ls_missing = True
+            else:
+                ls_parts.append(ls_values)
 
             for channel in selected_channels:
                 var_name, short_name = MCD_VARS_MAP[channel]
@@ -459,17 +553,20 @@ def _load_raw_3h_mcd(
         raise FileNotFoundError(f"No raw 3h MCD .nc files found in {raw_dir}")
 
     y_raw = _clean_array(np.concatenate(y_parts, axis=0))
-    ls_raw = _clean_array(np.concatenate(ls_parts, axis=0)).reshape(-1)
+    ls_raw = None if ls_missing or not ls_parts else np.concatenate(ls_parts, axis=0).astype(np.float32)
     vars_dict = {
         short_name: _clean_array(np.concatenate(parts, axis=0))
         for short_name, parts in feature_parts.items()
     }
-    time_count = min([int(y_raw.shape[0]), int(ls_raw.shape[0])] + [int(v.shape[0]) for v in vars_dict.values()])
+    time_lengths = [int(y_raw.shape[0])] + [int(v.shape[0]) for v in vars_dict.values()]
+    if ls_raw is not None:
+        time_lengths.append(int(ls_raw.shape[0]))
+    time_count = min(time_lengths)
     if time_count <= 0:
         raise ValueError("Raw 3h MCD timeline is empty")
     return (
         y_raw[:time_count],
-        ls_raw[:time_count],
+        None if ls_raw is None else ls_raw[:time_count],
         {name: value[:time_count] for name, value in vars_dict.items()},
     )
 
@@ -477,7 +574,9 @@ def _load_raw_3h_mcd(
 def _load_mcd_full_training_dataset(
     data_dir: Path,
     selected_channels: list[str],
-) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    *,
+    require_ls: bool = True,
+) -> tuple[np.ndarray, Optional[np.ndarray], dict[str, np.ndarray]]:
     has_raw_files = False
     for file_path in sorted(Path(data_dir).glob("*.nc"), key=natural_sort_key):
         with netCDF4.Dataset(str(file_path)) as dataset:
@@ -485,8 +584,8 @@ def _load_mcd_full_training_dataset(
                 has_raw_files = True
                 break
     if has_raw_files:
-        return _load_raw_3h_mcd(data_dir, selected_channels)
-    return _load_mcd_overview(data_dir, selected_channels)
+        return _load_raw_3h_mcd(data_dir, selected_channels, require_ls=require_ls)
+    return _load_mcd_overview(data_dir, selected_channels, require_ls=require_ls)
 
 
 def prepare_tensors(
@@ -497,7 +596,8 @@ def prepare_tensors(
     horizon: int,
     training_dataset: Any = TRAINING_DATASET_OPENMARS_MCD,
     mcd_overview_dir: Any | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, float, float, int, int]:
+    return_ls: bool = False,
+):
     selected = parse_selected_channels(selected_channels)
     dataset = normalize_training_dataset(training_dataset)
     window = int(window)
@@ -507,14 +607,21 @@ def prepare_tensors(
 
     if dataset == TRAINING_DATASET_MCD_OVERVIEW:
         overview_dir = Path(mcd_overview_dir or (BACKEND_DIR / "data" / "mcd_overview"))
-        y_raw, _ls_raw, vars_dict = _load_mcd_full_training_dataset(overview_dir, selected)
+        y_raw, ls_raw, vars_dict = _load_mcd_full_training_dataset(
+            overview_dir,
+            selected,
+            require_ls=False,
+        )
     else:
-        y_raw, om_ls_raw = _load_openmars(Path(openmars_dir))
+        y_raw, om_ls_raw = _load_openmars(Path(openmars_dir), require_ls=bool(selected))
+        ls_raw = om_ls_raw
         vars_dict = _load_mcd_features(Path(mcd_dir), selected, om_ls_raw)
     feature_names = [MCD_VARS_MAP[channel][1] for channel in selected]
     features = [y_raw] + [vars_dict[name] for name in feature_names]
 
     min_time = min(int(feature.shape[0]) for feature in features)
+    if ls_raw is not None:
+        min_time = min(min_time, int(ls_raw.shape[0]))
     min_height = min(int(feature.shape[1]) for feature in features)
     min_width = min(int(feature.shape[2]) for feature in features)
     if min_time <= 0 or min_height <= 0 or min_width <= 0:
@@ -551,27 +658,68 @@ def prepare_tensors(
 
     x_seq: list[np.ndarray] = []
     y_seq: list[np.ndarray] = []
+    ls_seq: list[np.ndarray] = []
     for idx in range(sample_count):
         x_seq.append(x_scaled[idx : idx + window])
         y_seq.append(y_scaled[idx + window : idx + window + horizon])
+        if ls_raw is not None:
+            ls_seq.append(ls_raw[idx : idx + window])
 
     x_torch = torch.tensor(np.array(x_seq)).permute(0, 1, 4, 2, 3).float()
     y_torch = torch.tensor(np.array(y_seq)).unsqueeze(2).float()
+    if return_ls:
+        ls_torch = torch.tensor(np.array(ls_seq), dtype=torch.float32) if ls_raw is not None else None
+        return x_torch, y_torch, ls_torch, y_mean, y_std, height, width
     return x_torch, y_torch, y_mean, y_std, height, width
 
 
 def _split_train_test(
     x_torch: torch.Tensor,
     y_torch: torch.Tensor,
+    ls_torch: Optional[torch.Tensor] = None,
 ) -> tuple[TensorDataset, TensorDataset]:
     if len(x_torch) < 2:
         raise ValueError("At least two training samples are required")
     split = int(0.8 * len(x_torch))
     split = min(max(1, split), len(x_torch) - 1)
+    if ls_torch is None:
+        return (
+            TensorDataset(x_torch[:split], y_torch[:split]),
+            TensorDataset(x_torch[split:], y_torch[split:]),
+        )
     return (
-        TensorDataset(x_torch[:split], y_torch[:split]),
-        TensorDataset(x_torch[split:], y_torch[split:]),
+        TensorDataset(x_torch[:split], ls_torch[:split], y_torch[:split]),
+        TensorDataset(x_torch[split:], ls_torch[split:], y_torch[split:]),
     )
+
+
+def _forward_uploaded_batch(
+    model: nn.Module,
+    batch: Any,
+    device: torch.device,
+    context: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if len(batch) == 2:
+        x_batch, target = batch
+        ls_batch = None
+    elif len(batch) == 3:
+        x_batch, ls_batch, target = batch
+    else:
+        raise ValueError(
+            f"{context} batch must contain (x, y) or (x, ls, y), got {len(batch)} tensors"
+        )
+
+    x_device = x_batch.to(device)
+    target_device = target.to(device)
+    ls_device = ls_batch.to(device) if ls_batch is not None else None
+    prediction = run_uploaded_model(
+        model,
+        x_device,
+        ls_device,
+        context=context,
+    )
+    assert_prediction_shape(prediction, target_device, context)
+    return prediction, target_device
 
 
 def _evaluate_metrics(
@@ -642,7 +790,7 @@ def main() -> None:
             ),
         )
     )
-    x_torch, y_torch, y_mean, y_std, height, width = prepare_tensors(
+    x_torch, y_torch, ls_torch, y_mean, y_std, height, width = prepare_tensors(
         openmars_dir,
         mcd_dir,
         selected_channels,
@@ -650,11 +798,8 @@ def main() -> None:
         args.horizon,
         training_dataset=training_dataset,
         mcd_overview_dir=mcd_overview_dir,
+        return_ls=True,
     )
-
-    train_dataset, test_dataset = _split_train_test(x_torch, y_torch)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     param_schema = parse_json_arg(args.uploaded_model_param_schema)
     custom_params = parse_json_arg(args.custom_model_params)
@@ -671,6 +816,18 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_uploaded_model(Path(args.uploaded_model_path), config).to(device)
+    model_ls = None
+    if uploaded_model_requires_ls(model):
+        model_ls = validate_ls_tensor(
+            x_torch,
+            ls_torch,
+            "uploaded training dataset",
+        )
+
+    train_dataset, test_dataset = _split_train_test(x_torch, y_torch, model_ls)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
     apply_transfer_learning(model, args, device)
     criterion = nn.SmoothL1Loss()
     trainable_params = [param for param in model.parameters() if param.requires_grad]
@@ -689,14 +846,16 @@ def main() -> None:
     for epoch in range(1, epochs + 1):
         model.train()
         loss_sum = 0.0
-        for batch_idx, (xb, yb) in enumerate(train_loader, start=1):
-            xb = xb.to(device)
-            yb = yb.to(device)
+        for batch_idx, batch in enumerate(train_loader, start=1):
             if optimizer is not None:
                 optimizer.zero_grad()
-            pred = model(xb)
-            assert_prediction_shape(pred, yb, f"training epoch {epoch} batch {batch_idx}")
-            loss = criterion(pred, yb)
+            pred, target = _forward_uploaded_batch(
+                model,
+                batch,
+                device,
+                f"training epoch {epoch} batch {batch_idx}",
+            )
+            loss = criterion(pred, target)
             if optimizer is not None:
                 loss.backward()
                 optimizer.step()
@@ -711,11 +870,14 @@ def main() -> None:
         model.eval()
         val_loss_sum = 0.0
         with torch.no_grad():
-            for xb, yb in test_loader:
-                yb_device = yb.to(device)
-                pred = model(xb.to(device))
-                assert_prediction_shape(pred, yb_device, f"validation epoch {epoch}")
-                val_loss_sum += float(criterion(pred, yb_device).item())
+            for batch_idx, batch in enumerate(test_loader, start=1):
+                pred, target = _forward_uploaded_batch(
+                    model,
+                    batch,
+                    device,
+                    f"validation epoch {epoch} batch {batch_idx}",
+                )
+                val_loss_sum += float(criterion(pred, target).item())
         train_loss = loss_sum / max(1, len(train_loader))
         val_loss = val_loss_sum / max(1, len(test_loader))
         print(f"Epoch {epoch}/{epochs} Loss={train_loss:.4f} Val Loss={val_loss:.4f}", flush=True)
@@ -738,11 +900,15 @@ def main() -> None:
     true_batches: list[np.ndarray] = []
     pred_batches: list[np.ndarray] = []
     with torch.no_grad():
-        for batch_idx, (xb, yb) in enumerate(test_loader, start=1):
-            pred = model(xb.to(device))
-            assert_prediction_shape(pred, yb.to(device), f"metrics batch {batch_idx}")
+        for batch_idx, batch in enumerate(test_loader, start=1):
+            pred, target = _forward_uploaded_batch(
+                model,
+                batch,
+                device,
+                f"metrics batch {batch_idx}",
+            )
             pred_batches.append(pred.cpu().numpy())
-            true_batches.append(yb.numpy())
+            true_batches.append(target.cpu().numpy())
     if not true_batches:
         raise ValueError("No test batches available for metrics")
 

@@ -11,6 +11,22 @@ MODEL_SPEC = {
     },
 }
 
+# Models that need historical solar longitude can opt in with this metadata:
+# MODEL_SPEC_WITH_LS = {
+#     **MODEL_SPEC,
+#     "auxiliary_inputs": {
+#         "ls": {
+#             "required": True,
+#             "shape": ["batch", "window"],
+#             "dtype": "float32",
+#             "unit": "degree",
+#         }
+#     },
+# }
+# The corresponding model method is:
+# def forward(self, x, ls):
+#     ...
+
 
 class ExampleUploadedModel(nn.Module):
     def __init__(self, in_channels, horizon, hidden_dim, dropout):

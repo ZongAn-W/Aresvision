@@ -39,6 +39,41 @@ The platform passes these core config keys to `build_model(config)`:
 
 Any custom fields declared in `MODEL_SPEC["parameters"]` are also included in `config`.
 
+## Optional Ls Input
+
+Models that use historical solar longitude can opt into a separate `ls` tensor. The declaration must exactly match this contract:
+
+```python
+MODEL_SPEC = {
+    "name": "ExamplePhaseModel",
+    "description": "Model with explicit solar-longitude context.",
+    "auxiliary_inputs": {
+        "ls": {
+            "required": True,
+            "shape": ["batch", "window"],
+            "dtype": "float32",
+            "unit": "degree",
+        }
+    },
+    "parameters": {},
+}
+```
+
+The model then accepts two inputs:
+
+```python
+def forward(self, x, ls):
+    # x:  [batch, window, channels, height, width]
+    # ls: [batch, window]
+    ...
+```
+
+Each Ls value is measured in degrees and corresponds to the historical frame at the same window index. Ls always covers the input window, even when `window` and `horizon` differ.
+
+Models that omit `auxiliary_inputs` remain single-input models and receive only `model(x)`. The platform does not inspect the function signature, insert Ls into a feature channel, or retry calls after `TypeError`.
+
+For declared Ls models, the platform rejects missing data, non-floating tensors, values with the wrong `[batch, window]` shape, and any `NaN` or infinite value. It never substitutes zeros, random values, or `None` for required Ls data. Unknown auxiliary inputs and deviations from the metadata block above are rejected during upload validation.
+
 ## Parameter Schema
 
 Supported parameter types:
@@ -77,9 +112,9 @@ Before a model can be trained, the platform:
 1. Parses the file as UTF-8 Python.
 2. Checks imports and disallowed calls.
 3. Imports the module in a validation process.
-4. Normalizes `MODEL_SPEC["parameters"]`.
+4. Normalizes `MODEL_SPEC["parameters"]` and validates optional auxiliary-input metadata.
 5. Calls `build_model(config)`.
-6. Runs a dry forward pass with shape `[2, 3, 1, 8, 16]`.
+6. Runs a dry forward pass with x shape `[2, 3, 1, 8, 16]` and, when declared, Ls shape `[2, 3]`.
 7. Requires dry-run output shape `[2, 3, 1, 8, 16]`.
 
 ## Minimal Model

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import C from '../constants/colors';
 import { useT } from '../i18n';
 import { useSettings } from '../contexts/SettingsContext';
@@ -17,6 +18,7 @@ import {
   uploadTrainingWeight,
   fetchTrainingWeights,
   deleteTrainingWeight,
+  renameTrainingModel,
 } from '../services/api';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ModelTestModal from '../components/ModelTestModal';
@@ -67,6 +69,8 @@ import {
   hasTransferSourceTask,
   readTransferSourceTaskConfig,
 } from './ModelTrainingPage/transferSourceConfig';
+import RenameModelDialog from './ModelTrainingPage/RenameModelDialog';
+import { normalizeTrainedModelName } from './ModelTrainingPage/trainedModelRename';
 
 const MONO_FONT = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
 const UNIFIED_TRAINING_SCRIPT = 'demo3.py';
@@ -327,6 +331,7 @@ function TrainingTaskCard({
   onDelete,
   onTest,
   onAnalyze,
+  onRename,
 }) {
   const statusMeta = getStatusMeta(task.status, t);
   const hyperparameters = useMemo(() => parseHyperparameters(task.hyperparameters), [task.hyperparameters]);
@@ -547,6 +552,27 @@ function TrainingTaskCard({
 
         {task.status === 'completed' && (
           <>
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                onRename(task);
+              }}
+              disabled={isProcessing}
+              style={{
+                ...actionBaseStyle,
+                minHeight: 44,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 7,
+                background: C.bgMuted,
+                border: `1px solid ${C.border}`,
+                color: C.ice,
+                opacity: isProcessing ? 0.6 : 1,
+              }}
+            >
+              <EditRoundedIcon sx={{ fontSize: 17 }} />
+              {copy.renameModel}
+            </button>
             <button
               onClick={(event) => {
                 event.stopPropagation();
@@ -784,6 +810,8 @@ export default function ModelTrainingPage() {
       stopTraining: isZh ? '停止训练' : 'Stop training',
       testModel: isZh ? '模型测试' : 'Test model',
       deleteRecord: isZh ? '删除记录' : 'Delete record',
+      renameModel: isZh ? '重命名' : 'Rename',
+      renameSuccess: isZh ? '模型名称已更新' : 'Model name updated',
       viewLogs: isZh ? '查看日志' : 'View logs',
       modelNameAvailable: isZh ? '名称可用' : 'Name available',
       presetLoginHint: isZh ? '登录后会自动加载训练脚本。' : 'Training presets load automatically after sign-in.',
@@ -831,6 +859,7 @@ export default function ModelTrainingPage() {
   const [seed, setSeed] = useState(11);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [testTaskId, setTestTaskId] = useState(null);
+  const [renameTask, setRenameTask] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [architecturePickerOpen, setArchitecturePickerOpen] = useState(false);
@@ -1513,6 +1542,14 @@ export default function ModelTrainingPage() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleRenameTask = async (normalizedName) => {
+    if (!renameTask) return;
+    await renameTrainingModel(renameTask.id, normalizedName);
+    await loadTasks();
+    setRenameTask(null);
+    showToast(copy.renameSuccess, 'success');
   };
 
   const handleUploadWeight = async (file) => {
@@ -3002,6 +3039,7 @@ export default function ModelTrainingPage() {
                   onDelete={setConfirmDeleteId}
                   onTest={setTestTaskId}
                   onAnalyze={handleAnalyzeTask}
+                  onRename={setRenameTask}
                 />
               ))}
             </div>
@@ -3021,6 +3059,18 @@ export default function ModelTrainingPage() {
         )}
 
         {testTaskId && <ModelTestModal taskId={testTaskId} onClose={() => setTestTaskId(null)} />}
+        {renameTask && (
+          <RenameModelDialog
+            task={renameTask}
+            tasks={tasks}
+            language={settings.language}
+            onClose={() => setRenameTask(null)}
+            onSave={async (name) => {
+              const normalizedName = normalizeTrainedModelName(name);
+              await handleRenameTask(normalizedName);
+            }}
+          />
+        )}
       </div>
     </div>
   );

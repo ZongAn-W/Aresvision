@@ -56,6 +56,43 @@ def build_model(config):
     return TinyModel(config["horizon"])
 """
 
+LS_MODEL_SOURCE = """
+import torch
+from torch import nn
+
+MODEL_SPEC = {
+    "name": "TinyLsModel",
+    "description": "Tiny model requiring historical solar longitude.",
+    "auxiliary_inputs": {
+        "ls": {
+            "required": True,
+            "shape": ["batch", "window"],
+            "dtype": "float32",
+            "unit": "degree",
+        }
+    },
+    "parameters": {},
+}
+
+
+class TinyLsModel(nn.Module):
+    def __init__(self, horizon):
+        super().__init__()
+        self.horizon = horizon
+
+    def forward(self, x, ls):
+        if ls.shape != x.shape[:2]:
+            raise ValueError(f"misaligned Ls: {ls.shape} vs {x.shape[:2]}")
+        if ls.dtype != torch.float32:
+            raise ValueError(f"wrong Ls dtype: {ls.dtype}")
+        last = x[:, -1, :1]
+        return last.unsqueeze(1).repeat(1, self.horizon, 1, 1, 1)
+
+
+def build_model(config):
+    return TinyLsModel(config["horizon"])
+"""
+
 
 def _write_temp_model(temp_dir: str, source: str) -> Path:
     path = Path(temp_dir) / "uploaded_model.py"
@@ -84,6 +121,32 @@ def test_valid_model_passes_and_reports_metadata():
     assert result.description == "Tiny repeat baseline for validator tests."
     assert result.param_schema["hidden_dim"]["default"] == 8
     assert result.output_shape == [2, 3, 1, 8, 16]
+
+
+def test_ls_model_dry_run_receives_declared_auxiliary_input():
+    result = _validate_source(LS_MODEL_SOURCE)
+
+    assert result.ok is True
+    assert result.errors == []
+    assert result.output_shape == [2, 3, 1, 8, 16]
+
+
+def test_unknown_auxiliary_input_is_rejected():
+    result = _validate_source(
+        LS_MODEL_SOURCE.replace('"ls": {', '"season": {', 1)
+    )
+
+    assert result.ok is False
+    assert any("auxiliary" in error.lower() and "only ls" in error for error in result.errors)
+
+
+def test_malformed_ls_auxiliary_input_is_rejected_before_dry_run():
+    result = _validate_source(
+        LS_MODEL_SOURCE.replace('"unit": "degree"', '"unit": "radian"', 1)
+    )
+
+    assert result.ok is False
+    assert any("auxiliary_inputs.ls" in error for error in result.errors)
 
 
 def test_disallowed_import_fails_before_import():

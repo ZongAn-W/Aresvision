@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any
 
 import config
+from training_backbones.uploaded_model_contract import (
+    attach_uploaded_model_contract,
+    normalize_auxiliary_inputs,
+    run_uploaded_model,
+)
 
 
 ALLOWED_IMPORT_ROOTS = {"torch", "numpy"}
@@ -255,6 +260,17 @@ class UserModelValidator:
                 warnings=warnings,
             )
 
+        try:
+            normalize_auxiliary_inputs(model_spec)
+        except ValueError as exc:
+            return UserModelValidationResult(
+                ok=False,
+                errors=[str(exc)],
+                warnings=warnings,
+                display_name=display_name,
+                description=description,
+            )
+
         param_schema, schema_errors = UserModelValidator._normalize_parameters(
             model_spec.get("parameters", {})
         )
@@ -302,10 +318,17 @@ class UserModelValidator:
                 param_schema=param_schema,
             )
 
+        attach_uploaded_model_contract(model, model_spec)
+
         try:
             model.eval()
             with torch.no_grad():
-                output = model(torch.zeros(2, 3, 1, 8, 16))
+                output = run_uploaded_model(
+                    model,
+                    torch.zeros(2, 3, 1, 8, 16),
+                    torch.zeros(2, 3, dtype=torch.float32),
+                    context="uploaded model dry-run",
+                )
         except Exception as exc:  # noqa: BLE001
             return UserModelValidationResult(
                 ok=False,

@@ -8,6 +8,7 @@ from auth.dependencies import get_current_user
 from database.models import ModelTrainingTask, User
 from schemas.training import (
     LogResponse,
+    RenameTrainingModelRequest,
     TrainingStartRequest,
     TrainingTaskResponse,
     TrainingWeightFileListResponse,
@@ -165,6 +166,21 @@ async def get_tasks(current_user: User = Depends(get_current_user)):
     if _is_admin(current_user):
         return tasks
     return [task for task in tasks if task.user_id == current_user.id]
+
+
+@router.patch("/training/tasks/{task_id}/name", response_model=TrainingTaskResponse)
+async def rename_training_model(
+    task_id: int,
+    req: RenameTrainingModelRequest,
+    current_user: User = Depends(get_current_user),
+):
+    await _get_task_with_access_check(task_id, current_user)
+    try:
+        return await training_service.rename_model(task_id, req.model_name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.get("/training/tasks/{task_id}/logs", response_model=LogResponse)

@@ -1,3 +1,4 @@
+import ast
 import sys
 from pathlib import Path
 
@@ -29,6 +30,29 @@ def test_uploaded_model_download_asset_rejects_unknown_kind():
         assert exc.detail == "Uploaded model download asset not found"
     else:
         raise AssertionError("Expected HTTPException")
+
+
+def test_uploaded_model_guide_documents_optional_ls_contract_without_changing_template():
+    assets = user_models.get_uploaded_model_download_assets()
+    guide = assets["guide"]["path"].read_text(encoding="utf-8")
+    template = assets["template"]["path"].read_text(encoding="utf-8")
+
+    assert "auxiliary_inputs" in guide
+    assert "def forward(self, x, ls):" in guide
+    assert "[batch, window]" in guide
+    assert '"dtype": "float32"' in guide
+    assert '"unit": "degree"' in guide
+    assert "#     \"auxiliary_inputs\": {" in template
+    assert "# def forward(self, x, ls):" in template
+
+    module = ast.parse(template)
+    model_class = next(node for node in module.body if isinstance(node, ast.ClassDef))
+    forward = next(
+        node
+        for node in model_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "forward"
+    )
+    assert [argument.arg for argument in forward.args.args] == ["self", "x"]
 
 
 if __name__ == "__main__":
