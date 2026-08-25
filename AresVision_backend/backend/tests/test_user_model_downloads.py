@@ -44,6 +44,14 @@ def test_uploaded_model_guide_documents_optional_ls_contract_without_changing_te
     assert '"unit": "degree"' in guide
     assert "#     \"auxiliary_inputs\": {" in template
     assert "# def forward(self, x, ls):" in template
+    assert '"topography": {' in guide
+    assert '["batch", 1, "height", "width"]' in guide
+    assert '"unit": "meter"' in guide
+    assert "def forward(self, x, topography):" in guide
+    assert "def forward(self, x, ls, topography):" in guide
+    assert "# def forward(self, x, topography):" in template
+    assert "# def forward(self, x, ls, topography):" in template
+    assert "terrain_encoder" in template
 
     module = ast.parse(template)
     model_class = next(node for node in module.body if isinstance(node, ast.ClassDef))

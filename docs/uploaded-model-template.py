@@ -27,6 +27,51 @@ MODEL_SPEC = {
 # def forward(self, x, ls):
 #     ...
 
+# Models that need static MOLA elevation can opt in with this metadata:
+# MODEL_SPEC_WITH_TOPOGRAPHY = {
+#     **MODEL_SPEC,
+#     "auxiliary_inputs": {
+#         "topography": {
+#             "required": True,
+#             "shape": ["batch", 1, "height", "width"],
+#             "dtype": "float32",
+#             "unit": "meter",
+#         }
+#     },
+# }
+# topography is static and has no window/time axis. It is not part of
+# config["in_channels"]. A terrain encoder may fuse it with the last frame:
+# def forward(self, x, topography):
+#     terrain_features = self.terrain_encoder(topography)
+#     temporal_features = self.encoder(x[:, -1])
+#     fused = temporal_features + terrain_features
+#     return self.head(fused).unsqueeze(1).repeat(1, self.horizon, 1, 1, 1)
+
+# Models may declare both inputs. Positional order is always x, ls, topography:
+# MODEL_SPEC_WITH_LS_AND_TOPOGRAPHY = {
+#     **MODEL_SPEC,
+#     "auxiliary_inputs": {
+#         "ls": {
+#             "required": True,
+#             "shape": ["batch", "window"],
+#             "dtype": "float32",
+#             "unit": "degree",
+#         },
+#         "topography": {
+#             "required": True,
+#             "shape": ["batch", 1, "height", "width"],
+#             "dtype": "float32",
+#             "unit": "meter",
+#         },
+#     },
+# }
+# def forward(self, x, ls, topography):
+#     terrain_features = self.terrain_encoder(topography)
+#     temporal_features = self.encoder(x[:, -1])
+#     phase_bias = self.phase_encoder(ls).unsqueeze(-1).unsqueeze(-1)
+#     fused = temporal_features + terrain_features + phase_bias
+#     return self.head(fused).unsqueeze(1).repeat(1, self.horizon, 1, 1, 1)
+
 
 class ExampleUploadedModel(nn.Module):
     def __init__(self, in_channels, horizon, hidden_dim, dropout):

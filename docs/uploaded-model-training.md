@@ -74,6 +74,83 @@ Models that omit `auxiliary_inputs` remain single-input models and receive only 
 
 For declared Ls models, the platform rejects missing data, non-floating tensors, values with the wrong `[batch, window]` shape, and any `NaN` or infinite value. It never substitutes zeros, random values, or `None` for required Ls data. Unknown auxiliary inputs and deviations from the metadata block above are rejected during upload validation.
 
+## Optional MOLA Topography Input
+
+Models can opt into static Mars surface elevation independently of Ls:
+
+```python
+MODEL_SPEC = {
+    "name": "ExampleTopographyModel",
+    "description": "Model with explicit MOLA terrain context.",
+    "auxiliary_inputs": {
+        "topography": {
+            "required": True,
+            "shape": ["batch", 1, "height", "width"],
+            "dtype": "float32",
+            "unit": "meter",
+        }
+    },
+    "parameters": {},
+}
+```
+
+The corresponding method is:
+
+```python
+def forward(self, x, topography):
+    # x:           [batch, window, channels, height, width]
+    # topography:  [batch, 1, height, width], float32 meters
+    ...
+```
+
+Topography is static. It has no window dimension, is not repeated through time,
+and is not included in `in_channels`. The platform reads the actual latitude
+and longitude coordinates of the selected training dataset and periodically
+resamples its built-in NASA/PDS MOLA grid to those coordinates. Matching array
+dimensions alone are not treated as spatial alignment.
+
+A model can declare both auxiliary inputs:
+
+```python
+MODEL_SPEC = {
+    "name": "ExampleLsTopographyModel",
+    "auxiliary_inputs": {
+        "ls": {
+            "required": True,
+            "shape": ["batch", "window"],
+            "dtype": "float32",
+            "unit": "degree",
+        },
+        "topography": {
+            "required": True,
+            "shape": ["batch", 1, "height", "width"],
+            "dtype": "float32",
+            "unit": "meter",
+        },
+    },
+    "parameters": {},
+}
+
+def forward(self, x, ls, topography):
+    ...
+```
+
+Dispatch is based only on `MODEL_SPEC` and always uses this order: `x`, then
+declared `ls`, then declared `topography`. The platform does not inspect the
+function signature, catch `TypeError` to retry, or pass undeclared inputs.
+
+Upload dry-run, training, validation, final metrics, test evaluation,
+permutation importance, and formal prediction all use the same dispatcher.
+Permutation importance shuffles only ordinary `x` features; Ls and topography
+remain fixed. The static `[1, height, width]` terrain tensor is expanded to
+`[batch, 1, height, width]` without copying it for each sample.
+
+A declared topography model fails clearly if the MOLA asset is absent, corrupt,
+non-finite, or cannot align to the target coordinates. There is no zero, random,
+`None`, or flat-terrain fallback. Models without a topography declaration do
+not load the asset. See [mola-topography-asset.md](mola-topography-asset.md) for
+the source product and reproduction process.
+
 ## Parameter Schema
 
 Supported parameter types:

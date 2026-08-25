@@ -12,10 +12,17 @@ from pathlib import Path
 from typing import Any
 
 import config
+from config import MOLA_TOPOGRAPHY_PATH
+from training_backbones.mola_topography import (
+    global_cell_center_coordinates,
+    prepare_topography_grid,
+)
 from training_backbones.uploaded_model_contract import (
     attach_uploaded_model_contract,
+    expand_topography_batch,
     normalize_auxiliary_inputs,
     run_uploaded_model,
+    uploaded_model_requires_topography,
 )
 
 
@@ -323,10 +330,27 @@ class UserModelValidator:
         try:
             model.eval()
             with torch.no_grad():
+                x = torch.zeros(2, 3, 1, 8, 16)
+                topography_batch = None
+                if uploaded_model_requires_topography(model):
+                    target_latitude, target_longitude = global_cell_center_coordinates(
+                        8, 16
+                    )
+                    topography_grid = prepare_topography_grid(
+                        target_latitude,
+                        target_longitude,
+                        asset_path=MOLA_TOPOGRAPHY_PATH,
+                    )
+                    topography_batch = expand_topography_batch(
+                        x,
+                        topography_grid,
+                        "uploaded model dry-run",
+                    )
                 output = run_uploaded_model(
                     model,
-                    torch.zeros(2, 3, 1, 8, 16),
-                    torch.zeros(2, 3, dtype=torch.float32),
+                    x,
+                    ls=torch.zeros(2, 3, dtype=torch.float32),
+                    topography=topography_batch,
                     context="uploaded model dry-run",
                 )
         except Exception as exc:  # noqa: BLE001

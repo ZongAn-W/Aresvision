@@ -22,6 +22,7 @@ from training_backbones.user_model_runner import (  # noqa: E402
 )
 from training_backbones.uploaded_model_contract import (  # noqa: E402
     attach_uploaded_model_contract,
+    expand_topography_batch,
     normalize_auxiliary_inputs,
     run_uploaded_model,
 )
@@ -88,6 +89,26 @@ LS_MODEL_SPEC = {
     },
 }
 
+TOPOGRAPHY_MODEL_SPEC = {
+    "name": "TopographyModel",
+    "auxiliary_inputs": {
+        "topography": {
+            "required": True,
+            "shape": ["batch", 1, "height", "width"],
+            "dtype": "float32",
+            "unit": "meter",
+        }
+    },
+}
+
+LS_TOPOGRAPHY_MODEL_SPEC = {
+    "name": "LsTopographyModel",
+    "auxiliary_inputs": {
+        **LS_MODEL_SPEC["auxiliary_inputs"],
+        **TOPOGRAPHY_MODEL_SPEC["auxiliary_inputs"],
+    },
+}
+
 
 class _LegacyRecordingModel(torch.nn.Module):
     def __init__(self):
@@ -106,6 +127,26 @@ class _LsRecordingModel(torch.nn.Module):
 
     def forward(self, x, ls):
         self.received_ls = ls
+        return x[:, -1:, :1]
+
+
+class _TopographyRecordingModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.received_topography = None
+
+    def forward(self, x, topography):
+        self.received_topography = topography
+        return x[:, -1:, :1]
+
+
+class _LsTopographyRecordingModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.arguments = None
+
+    def forward(self, x, ls, topography):
+        self.arguments = (x, ls, topography)
         return x[:, -1:, :1]
 
 
@@ -128,10 +169,68 @@ def test_ls_uploaded_model_receives_batch_window_tensor():
     assert torch.equal(model.received_ls, ls)
 
 
+def test_topography_model_receives_only_x_and_topography():
+    model = attach_uploaded_model_contract(
+        _TopographyRecordingModel(), TOPOGRAPHY_MODEL_SPEC
+    )
+    x = torch.zeros(2, 3, 1, 8, 16)
+    topography = torch.ones(2, 1, 8, 16, dtype=torch.float32)
+
+    run_uploaded_model(
+        model,
+        x,
+        ls=torch.ones(2, 3),
+        topography=topography,
+        context="topography test",
+    )
+
+    assert model.received_topography is topography
+
+
+def test_combined_model_argument_order_is_x_ls_topography():
+    model = attach_uploaded_model_contract(
+        _LsTopographyRecordingModel(), LS_TOPOGRAPHY_MODEL_SPEC
+    )
+    x = torch.zeros(2, 3, 1, 8, 16)
+    ls = torch.ones(2, 3)
+    topography = torch.ones(2, 1, 8, 16)
+
+    run_uploaded_model(model, x, ls=ls, topography=topography)
+
+    assert model.arguments[0] is x
+    assert model.arguments[1] is ls
+    assert model.arguments[2] is topography
+
+
+def test_undeclared_topography_is_not_passed_to_legacy_or_ls_models():
+    x = torch.zeros(2, 3, 1, 8, 16)
+    topography = torch.ones(2, 1, 8, 16)
+    legacy = attach_uploaded_model_contract(_LegacyRecordingModel(), {"name": "Legacy"})
+    ls_model = attach_uploaded_model_contract(_LsRecordingModel(), LS_MODEL_SPEC)
+
+    run_uploaded_model(legacy, x, topography=topography)
+    run_uploaded_model(ls_model, x, ls=torch.ones(2, 3), topography=topography)
+
+    assert legacy.argument_count == 1
+    assert ls_model.received_ls.shape == (2, 3)
+
+
+def test_static_topography_expands_without_copy_for_changing_batch_size():
+    grid = torch.arange(32, dtype=torch.float32).reshape(1, 4, 8)
+    x = torch.zeros(3, 5, 1, 4, 8)
+
+    batch = expand_topography_batch(x, grid, "expand test")
+
+    assert batch.shape == (3, 1, 4, 8)
+    assert batch.dtype == torch.float32
+    assert batch.stride(0) == 0
+    assert batch.untyped_storage().data_ptr() == grid.untyped_storage().data_ptr()
+
+
 @pytest.mark.parametrize(
     ("auxiliary_inputs", "message"),
     [
-        ({"season": {}}, "only ls"),
+        ({"season": {}}, "only ls and topography"),
         ({"ls": None}, "must be a dict.*None"),
         ({"ls": {**LS_MODEL_SPEC["auxiliary_inputs"]["ls"], "required": False}}, "required.*got False"),
         ({"ls": {**LS_MODEL_SPEC["auxiliary_inputs"]["ls"], "required": 1}}, "required.*got 1.*int"),
@@ -139,11 +238,48 @@ def test_ls_uploaded_model_receives_batch_window_tensor():
         ({"ls": {**LS_MODEL_SPEC["auxiliary_inputs"]["ls"], "dtype": "float64"}}, "dtype.*float64"),
         ({"ls": {**LS_MODEL_SPEC["auxiliary_inputs"]["ls"], "unit": "radian"}}, "unit.*radian"),
         ({"ls": {**LS_MODEL_SPEC["auxiliary_inputs"]["ls"], "extra": True}}, "unexpected fields.*extra"),
+        ({"topography": None}, "topography must be a dict.*None"),
+        ({"topography": {**TOPOGRAPHY_MODEL_SPEC["auxiliary_inputs"]["topography"], "required": False}}, "topography.required.*False"),
+        ({"topography": {**TOPOGRAPHY_MODEL_SPEC["auxiliary_inputs"]["topography"], "shape": ["batch", "height", "width"]}}, "topography.shape.*height"),
+        ({"topography": {**TOPOGRAPHY_MODEL_SPEC["auxiliary_inputs"]["topography"], "dtype": "float64"}}, "topography.dtype.*float64"),
+        ({"topography": {**TOPOGRAPHY_MODEL_SPEC["auxiliary_inputs"]["topography"], "unit": "kilometer"}}, "topography.unit.*kilometer"),
     ],
 )
 def test_auxiliary_input_metadata_is_strict(auxiliary_inputs, message):
     with pytest.raises(ValueError, match=message):
         normalize_auxiliary_inputs({"name": "Invalid", "auxiliary_inputs": auxiliary_inputs})
+
+
+def test_missing_auxiliary_metadata_field_reports_expected_and_actual():
+    metadata = dict(LS_MODEL_SPEC["auxiliary_inputs"]["ls"])
+    metadata.pop("unit")
+
+    with pytest.raises(ValueError) as exc_info:
+        normalize_auxiliary_inputs(
+            {"name": "Invalid", "auxiliary_inputs": {"ls": metadata}}
+        )
+
+    message = str(exc_info.value)
+    assert "MODEL_SPEC.auxiliary_inputs.ls.unit" in message
+    assert "expected 'degree'" in message
+    assert "got <missing>" in message
+
+
+def test_unexpected_auxiliary_metadata_field_reports_expected_and_actual():
+    metadata = {
+        **LS_MODEL_SPEC["auxiliary_inputs"]["ls"],
+        "extra": True,
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        normalize_auxiliary_inputs(
+            {"name": "Invalid", "auxiliary_inputs": {"ls": metadata}}
+        )
+
+    message = str(exc_info.value)
+    assert "MODEL_SPEC.auxiliary_inputs.ls.extra" in message
+    assert "expected <not allowed>" in message
+    assert "got True (bool)" in message
 
 
 @pytest.mark.parametrize(
@@ -164,6 +300,35 @@ def test_required_ls_tensor_is_validated(ls, message):
 
     with pytest.raises(ValueError, match=message):
         run_uploaded_model(model, x, ls, context="validation test")
+
+
+@pytest.mark.parametrize(
+    ("topography", "message"),
+    [
+        (None, "requires topography data"),
+        ([[[1.0]]], "torch.Tensor"),
+        (torch.ones(2, 1, 8, 16, dtype=torch.int64), "torch.float32"),
+        (torch.ones(2, 8, 16), "4D"),
+        (torch.ones(2, 2, 8, 16), "shape mismatch"),
+        (torch.ones(1, 1, 8, 16), "shape mismatch"),
+        (torch.ones(2, 1, 7, 16), "shape mismatch"),
+        (torch.full((2, 1, 8, 16), float("nan")), "finite"),
+        (torch.full((2, 1, 8, 16), float("inf")), "finite"),
+    ],
+)
+def test_required_topography_tensor_is_validated(topography, message):
+    model = attach_uploaded_model_contract(
+        _TopographyRecordingModel(), TOPOGRAPHY_MODEL_SPEC
+    )
+    x = torch.zeros(2, 3, 1, 8, 16)
+
+    with pytest.raises(ValueError, match=message):
+        run_uploaded_model(
+            model,
+            x,
+            topography=topography,
+            context="validation test",
+        )
 
 
 def test_uploaded_runner_uses_central_mcd_directory(tmp_path, monkeypatch):
@@ -203,6 +368,8 @@ def _write_overview_file(
     *,
     include_ls: bool = True,
     ls_count: int = 6,
+    latitude: object = (-45.0, 45.0),
+    longitude: object = (0.0, 120.0, 240.0),
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with netCDF4.Dataset(str(path), "w", format="NETCDF4") as ds:
@@ -221,8 +388,10 @@ def _write_overview_file(
                 ls_count,
                 dtype=np.float32,
             ) % 360.0
-        ds.createVariable("lat", "f4", ("lat",))[:] = np.array([-45.0, 45.0], dtype=np.float32)
-        ds.createVariable("lon", "f4", ("lon",))[:] = np.array([0.0, 120.0, 240.0], dtype=np.float32)
+        if latitude is not None:
+            ds.createVariable("lat", "f4", ("lat",))[:] = np.asarray(latitude, dtype=np.float32)
+        if longitude is not None:
+            ds.createVariable("lon", "f4", ("lon",))[:] = np.asarray(longitude, dtype=np.float32)
 
         base = np.arange(36, dtype=np.float32).reshape(6, 2, 3) + offset
         for var_name, delta in {
@@ -236,7 +405,12 @@ def _write_overview_file(
             ds.createVariable(var_name, "f4", ("time", "lat", "lon"))[:] = base + delta
 
 
-def _write_raw_3h_mcd_file(path: Path, offset: float) -> None:
+def _write_raw_3h_mcd_file(
+    path: Path,
+    offset: float,
+    *,
+    include_longitude: bool = True,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with netCDF4.Dataset(str(path), "w", format="NETCDF4") as ds:
         ds.createDimension("time", 10)
@@ -250,7 +424,13 @@ def _write_raw_3h_mcd_file(path: Path, offset: float) -> None:
             dtype=np.float32,
         ) % 360.0
         ds.createVariable("lat", "f4", ("lat",))[:] = np.linspace(90.0, -90.0, 37, dtype=np.float32)
-        ds.createVariable("lon", "f4", ("lon",))[:] = np.linspace(-180.0, 175.0, 72, dtype=np.float32)
+        if include_longitude:
+            ds.createVariable("lon", "f4", ("lon",))[:] = np.linspace(
+                -180.0,
+                175.0,
+                72,
+                dtype=np.float32,
+            )
 
         base = np.arange(10 * 37 * 72, dtype=np.float32).reshape(10, 37, 72) + offset
         for var_name, delta in {
@@ -414,6 +594,98 @@ def test_forward_uploaded_batch_keeps_legacy_model_single_input():
     assert torch.equal(prediction, target)
 
 
+def test_forward_uploaded_batch_expands_static_topography():
+    model = attach_uploaded_model_contract(
+        _TopographyRecordingModel(), TOPOGRAPHY_MODEL_SPEC
+    )
+    x = torch.zeros(2, 3, 1, 2, 2)
+    y = torch.zeros(2, 1, 1, 2, 2)
+    static_topography = torch.arange(4, dtype=torch.float32).reshape(1, 2, 2)
+
+    prediction, target = runner_module._forward_uploaded_batch(
+        model,
+        (x, y),
+        torch.device("cpu"),
+        "topography training test",
+        topography_grid=static_topography,
+    )
+
+    assert model.received_topography.shape == (2, 1, 2, 2)
+    assert torch.equal(model.received_topography[0], static_topography)
+    assert torch.equal(model.received_topography[1], static_topography)
+    assert model.received_topography.stride(0) == 0
+    assert torch.equal(prediction, target)
+
+
+def test_runner_main_reuses_topography_in_training_validation_and_metrics(
+    monkeypatch,
+):
+    workspace_tmp = BACKEND_DIR / ".test_tmp" / f"uploaded_runner_topo_{uuid.uuid4().hex}"
+    output_path = workspace_tmp / "trained.pth"
+    model = attach_uploaded_model_contract(
+        _TopographyRecordingModel(), TOPOGRAPHY_MODEL_SPEC
+    )
+    model.topography_calls = []
+    original_forward = model.forward
+
+    def recording_forward(x, topography):
+        model.topography_calls.append(topography.detach().clone())
+        return original_forward(x, topography).repeat(1, 2, 1, 1, 1)
+
+    model.forward = recording_forward
+    x = torch.zeros(5, 3, 1, 2, 3)
+    y = torch.zeros(5, 2, 1, 2, 3)
+    latitude = np.array([-45.0, 45.0], dtype=np.float32)
+    longitude = np.array([0.0, 120.0, 240.0], dtype=np.float32)
+    static_topography = torch.arange(6, dtype=torch.float32).reshape(1, 2, 3)
+    prepare_topography_calls = []
+
+    def fake_prepare_tensors(*args, **kwargs):
+        assert kwargs["return_ls"] is True
+        assert kwargs["return_coordinates"] is True
+        return x, y, None, 0.0, 1.0, 2, 3, latitude, longitude
+
+    def fake_prepare_topography(target_latitude, target_longitude, **kwargs):
+        prepare_topography_calls.append((target_latitude, target_longitude))
+        return static_topography
+
+    monkeypatch.setattr(runner_module, "prepare_tensors", fake_prepare_tensors)
+    monkeypatch.setattr(runner_module, "prepare_topography_grid", fake_prepare_topography, raising=False)
+    monkeypatch.setattr(runner_module, "load_uploaded_model", lambda *args, **kwargs: model)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(runner_module.__file__),
+            "--epochs",
+            "1",
+            "--batch_size",
+            "2",
+            "--window",
+            "3",
+            "--horizon",
+            "2",
+            "--output_path",
+            str(output_path),
+            "--uploaded_model_path",
+            str(workspace_tmp / "unused.py"),
+        ],
+    )
+
+    try:
+        runner_module.main()
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+        if workspace_tmp.exists():
+            workspace_tmp.rmdir()
+
+    assert len(prepare_topography_calls) == 1
+    assert len(model.topography_calls) == 4
+    assert [call.shape[0] for call in model.topography_calls] == [2, 2, 1, 1]
+    assert all(call.shape[1:] == (1, 2, 3) for call in model.topography_calls)
+
+
 def test_runner_main_passes_ls_through_training_validation_and_metrics(monkeypatch):
     workspace_tmp = BACKEND_DIR / ".test_tmp" / f"uploaded_runner_main_{uuid.uuid4().hex}"
     overview_dir = workspace_tmp / "mcd_overview"
@@ -421,8 +693,8 @@ def test_runner_main_passes_ls_through_training_validation_and_metrics(monkeypat
     second_file = overview_dir / "MCD_MY25_overview.nc"
     model_path = workspace_tmp / "ls_model.source"
     output_path = workspace_tmp / "trained.pth"
-    _write_overview_file(first_file, 0.0)
-    _write_overview_file(second_file, 10.0)
+    _write_overview_file(first_file, 0.0, latitude=None, longitude=None)
+    _write_overview_file(second_file, 10.0, latitude=None, longitude=None)
     model_path.write_text(LS_RUNNER_MODEL_SOURCE, encoding="utf-8")
 
     try:
@@ -469,7 +741,13 @@ def test_runner_main_trains_legacy_model_when_dataset_has_no_ls(monkeypatch):
     data_file = overview_dir / "MCD_MY24_overview.nc"
     model_path = workspace_tmp / "legacy_model.source"
     output_path = workspace_tmp / "trained.pth"
-    _write_overview_file(data_file, 0.0, include_ls=False)
+    _write_overview_file(
+        data_file,
+        0.0,
+        include_ls=False,
+        latitude=None,
+        longitude=None,
+    )
     model_path.write_text(MODEL_SOURCE, encoding="utf-8")
 
     try:
@@ -589,6 +867,140 @@ def test_prepare_tensors_builds_uploaded_runner_dataset_from_mcd_overview():
     assert list(y_torch.shape) == [9, 2, 1, 2, 3]
     assert height == 2
     assert width == 3
+
+
+def test_prepare_tensors_returns_actual_target_coordinates():
+    workspace_tmp = BACKEND_DIR / ".test_tmp" / f"uploaded_runner_grid_{uuid.uuid4().hex}"
+    overview_dir = workspace_tmp / "mcd_overview"
+    first_file = overview_dir / "MCD_MY24_overview.nc"
+    second_file = overview_dir / "MCD_MY25_overview.nc"
+    _write_overview_file(first_file, 0.0)
+    _write_overview_file(second_file, 10.0)
+
+    try:
+        result = prepare_tensors(
+            workspace_tmp / "openmars",
+            workspace_tmp / "MCD",
+            [],
+            window=3,
+            horizon=2,
+            training_dataset="mcd_overview",
+            mcd_overview_dir=overview_dir,
+            return_ls=True,
+            return_coordinates=True,
+        )
+    finally:
+        for file_path in (first_file, second_file):
+            if file_path.exists():
+                file_path.unlink()
+        if overview_dir.exists():
+            overview_dir.rmdir()
+        if workspace_tmp.exists():
+            workspace_tmp.rmdir()
+
+    x, y, ls, _mean, _std, height, width, latitude, longitude = result
+    assert x.shape[1] == 3
+    assert y.shape[1] == 2
+    assert ls.shape[1] == 3
+    assert (height, width) == (2, 3)
+    assert np.array_equal(latitude, np.array([-45.0, 45.0], dtype=np.float32))
+    assert np.array_equal(longitude, np.array([0.0, 120.0, 240.0], dtype=np.float32))
+
+
+def test_prepare_tensors_rejects_mismatched_dataset_grids():
+    workspace_tmp = BACKEND_DIR / ".test_tmp" / f"uploaded_runner_bad_grid_{uuid.uuid4().hex}"
+    overview_dir = workspace_tmp / "mcd_overview"
+    first_file = overview_dir / "MCD_MY24_overview.nc"
+    second_file = overview_dir / "MCD_MY25_overview.nc"
+    _write_overview_file(first_file, 0.0)
+    _write_overview_file(second_file, 10.0, latitude=(45.0, -45.0))
+
+    try:
+        with pytest.raises(ValueError, match="Spatial grid mismatch"):
+            prepare_tensors(
+                workspace_tmp / "openmars",
+                workspace_tmp / "MCD",
+                [],
+                window=3,
+                horizon=2,
+                training_dataset="mcd_overview",
+                mcd_overview_dir=overview_dir,
+                return_coordinates=True,
+            )
+    finally:
+        for file_path in (first_file, second_file):
+            if file_path.exists():
+                file_path.unlink()
+        if overview_dir.exists():
+            overview_dir.rmdir()
+        if workspace_tmp.exists():
+            workspace_tmp.rmdir()
+
+
+def test_prepare_tensors_rejects_missing_dataset_coordinates():
+    workspace_tmp = BACKEND_DIR / ".test_tmp" / f"uploaded_runner_no_grid_{uuid.uuid4().hex}"
+    overview_dir = workspace_tmp / "mcd_overview"
+    data_file = overview_dir / "MCD_MY24_overview.nc"
+    _write_overview_file(data_file, 0.0, longitude=None)
+
+    try:
+        with pytest.raises(ValueError) as exc_info:
+            prepare_tensors(
+                workspace_tmp / "openmars",
+                workspace_tmp / "MCD",
+                [],
+                window=2,
+                horizon=2,
+                training_dataset="mcd_overview",
+                mcd_overview_dir=overview_dir,
+                return_coordinates=True,
+            )
+    finally:
+        if data_file.exists():
+            data_file.unlink()
+        if overview_dir.exists():
+            overview_dir.rmdir()
+        if workspace_tmp.exists():
+            workspace_tmp.rmdir()
+
+    assert data_file.name in str(exc_info.value)
+    assert "longitude" in str(exc_info.value).lower()
+
+
+def test_prepare_tensors_can_return_missing_coordinates_when_they_are_optional():
+    workspace_tmp = BACKEND_DIR / ".test_tmp" / f"uploaded_runner_optional_grid_{uuid.uuid4().hex}"
+    overview_dir = workspace_tmp / "mcd_overview"
+    data_file = overview_dir / "MCD_MY24_overview.nc"
+    _write_overview_file(data_file, 0.0, latitude=None, longitude=None)
+
+    try:
+        result = prepare_tensors(
+            workspace_tmp / "openmars",
+            workspace_tmp / "MCD",
+            [],
+            window=2,
+            horizon=2,
+            training_dataset="mcd_overview",
+            mcd_overview_dir=overview_dir,
+            return_ls=True,
+            return_coordinates=True,
+            require_coordinates=False,
+        )
+    finally:
+        if data_file.exists():
+            data_file.unlink()
+        if overview_dir.exists():
+            overview_dir.rmdir()
+        if workspace_tmp.exists():
+            workspace_tmp.rmdir()
+
+    x, y, ls, _mean, _std, height, width, latitude, longitude = result
+    assert x.shape == (3, 2, 1, 2, 3)
+    assert y.shape == (3, 2, 1, 2, 3)
+    assert ls.shape == (3, 2)
+    assert (height, width) == (2, 3)
+    assert latitude is None
+    assert longitude is None
 
 
 def test_prepare_tensors_aligns_ls_to_history_when_window_differs_from_horizon():
@@ -777,6 +1189,52 @@ def test_prepare_tensors_builds_uploaded_runner_dataset_from_raw_3h_mcd():
     assert list(y_torch.shape) == [17, 2, 1, 36, 72]
     assert height == 36
     assert width == 72
+
+
+def test_prepare_tensors_allows_raw_mcd_without_longitude_when_coordinates_are_optional():
+    workspace_tmp = BACKEND_DIR / ".test_tmp" / f"uploaded_runner_raw_no_lon_{uuid.uuid4().hex}"
+    raw_dir = workspace_tmp / "MCD_Output_global_10m_ls_lst"
+    data_file = raw_dir / "MCD_MY24_global_3h_5deg_10m_ls_lst.nc"
+    _write_raw_3h_mcd_file(data_file, 0.0, include_longitude=False)
+
+    try:
+        result = prepare_tensors(
+            workspace_tmp / "openmars",
+            workspace_tmp / "MCD",
+            [],
+            window=2,
+            horizon=2,
+            training_dataset="mcd_overview",
+            mcd_overview_dir=raw_dir,
+            return_coordinates=True,
+            require_coordinates=False,
+        )
+    finally:
+        if data_file.exists():
+            data_file.unlink()
+        if raw_dir.exists():
+            raw_dir.rmdir()
+        if workspace_tmp.exists():
+            workspace_tmp.rmdir()
+
+    x, y, _mean, _std, height, width, latitude, longitude = result
+    assert x.shape == (7, 2, 1, 36, 72)
+    assert y.shape == (7, 2, 1, 36, 72)
+    assert (height, width) == (36, 72)
+    assert latitude is None
+    assert longitude is None
+
+
+@pytest.mark.parametrize("ascending", [False, True])
+def test_fit_raw_mcd_36_row_field_matches_declared_target_latitude(ascending):
+    latitude = runner_module.RAW_MCD_TARGET_LAT.copy()
+    if ascending:
+        latitude = latitude[::-1].copy()
+    field = np.broadcast_to(latitude[None, :, None], (1, 36, 72)).copy()
+
+    fitted = runner_module._fit_raw_mcd_lat_grid(field, latitude)
+
+    assert np.array_equal(fitted[0, :, 0], runner_module.RAW_MCD_TARGET_LAT)
 
 
 if __name__ == "__main__":

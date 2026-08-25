@@ -49,6 +49,10 @@ TRAINING_LOGS_DIR = BASE_DIR / "models" / "training_logs"
 PERF_CACHE_DIR = DATA_DIR / "perf_cache"
 PERSONAL_CACHE_DIR = DATA_DIR / "personal_cache"
 MCD_CACHE_DIR = DATA_DIR / "mcd_cache"
+MOLA_TOPOGRAPHY_PATH = Path(os.getenv(
+    "ARESVISION_MOLA_TOPOGRAPHY_PATH",
+    DATA_DIR / "assets" / "mola_topography_5deg.nc",
+))
 
 # ─── 网格 ───
 SUPPORTED_MARS_YEARS = [27, 28]

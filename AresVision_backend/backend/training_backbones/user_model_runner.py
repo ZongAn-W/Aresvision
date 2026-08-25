@@ -23,14 +23,20 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from config import MCD_DIR, MCD_RAW_3H_DIR
+from config import MCD_DIR, MCD_RAW_3H_DIR, MOLA_TOPOGRAPHY_PATH
 from services.ozone_units import normalize_ozone_column_units
 from services.transfer_learning_strategy import apply_freeze_strategy
 from training_backbones.uploaded_model_contract import (
     attach_uploaded_model_contract,
+    expand_topography_batch,
     run_uploaded_model,
     uploaded_model_requires_ls,
+    uploaded_model_requires_topography,
     validate_ls_tensor,
+)
+from training_backbones.mola_topography import (
+    prepare_topography_grid,
+    validate_rectilinear_grid,
 )
 
 CHANNEL_ORDER = ["U", "V", "D", "S", "T"]
@@ -239,6 +245,57 @@ def _read_ls_variable(
     raise ValueError(f"Missing Ls variable in {file_path}")
 
 
+def _read_spatial_coordinates(
+    dataset: Any,
+    file_path: Path,
+    *,
+    required: bool = True,
+) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    lat_name = "lat" if "lat" in dataset.variables else None
+    if lat_name is None and "latitude" in dataset.variables:
+        lat_name = "latitude"
+    lon_name = "lon" if "lon" in dataset.variables else None
+    if lon_name is None and "longitude" in dataset.variables:
+        lon_name = "longitude"
+    missing = []
+    if lat_name is None:
+        missing.append("latitude")
+    if lon_name is None:
+        missing.append("longitude")
+    if missing:
+        if not required:
+            return None
+        raise ValueError(f"Missing spatial coordinates {missing} in {file_path}")
+    latitude, longitude = validate_rectilinear_grid(
+        dataset.variables[lat_name][:],
+        dataset.variables[lon_name][:],
+        context=f"dataset grid in {file_path}",
+        require_global_longitude=True,
+    )
+    return latitude.astype(np.float32), longitude.astype(np.float32)
+
+
+def _require_matching_grid(
+    expected: tuple[np.ndarray, np.ndarray],
+    actual: tuple[np.ndarray, np.ndarray],
+    file_path: Path,
+) -> None:
+    same_latitude = (
+        expected[0].shape == actual[0].shape
+        and np.allclose(expected[0], actual[0], rtol=0.0, atol=1e-4)
+    )
+    same_longitude = (
+        expected[1].shape == actual[1].shape
+        and np.allclose(expected[1], actual[1], rtol=0.0, atol=1e-4)
+    )
+    if not same_latitude or not same_longitude:
+        raise ValueError(
+            f"Spatial grid mismatch in {file_path}: expected "
+            f"({len(expected[0])}, {len(expected[1])}), got "
+            f"({len(actual[0])}, {len(actual[1])})"
+        )
+
+
 def _merge_sol_hour(data: Any) -> np.ndarray:
     array = _clean_array(data)
     if array.ndim == 4:
@@ -310,10 +367,19 @@ def _load_openmars(
     openmars_dir: Path,
     *,
     require_ls: bool = True,
-) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    require_coordinates: bool = True,
+) -> tuple[
+    np.ndarray,
+    Optional[np.ndarray],
+    Optional[np.ndarray],
+    Optional[np.ndarray],
+]:
     o3_list: list[np.ndarray] = []
     ls_list: list[np.ndarray] = []
     ls_missing = False
+    spatial_grid: Optional[tuple[np.ndarray, np.ndarray]] = None
+    spatial_shape: Optional[tuple[int, int]] = None
+    coordinates_complete = True
     for file_path in sorted(Path(openmars_dir).glob("*.nc"), key=natural_sort_key):
         with netCDF4.Dataset(str(file_path)) as dataset:
             if "o3col" not in dataset.variables:
@@ -323,6 +389,32 @@ def _load_openmars(
                 o3 = np.nanmean(o3, axis=1)
             if o3.ndim != 3:
                 raise ValueError(f"Invalid OpenMars o3col shape in {file_path}: {o3.shape}")
+            file_shape = (int(o3.shape[1]), int(o3.shape[2]))
+            if spatial_shape is None:
+                spatial_shape = file_shape
+            elif spatial_shape != file_shape:
+                raise ValueError(
+                    f"OpenMars spatial shape mismatch in {file_path}: "
+                    f"expected {spatial_shape}, got {file_shape}"
+                )
+            file_grid = _read_spatial_coordinates(
+                dataset,
+                file_path,
+                required=require_coordinates,
+            )
+            if file_grid is None:
+                coordinates_complete = False
+            else:
+                if file_shape != (len(file_grid[0]), len(file_grid[1])):
+                    raise ValueError(
+                        f"OpenMars spatial shape mismatch in {file_path}: "
+                        f"field {o3.shape[1:]}, coordinates "
+                        f"({len(file_grid[0])}, {len(file_grid[1])})"
+                    )
+                if spatial_grid is None:
+                    spatial_grid = file_grid
+                else:
+                    _require_matching_grid(spatial_grid, file_grid, file_path)
             o3_list.append(o3)
             ls_values = _validate_file_ls_length(
                 _read_ls_variable(dataset, file_path, required=require_ls),
@@ -337,6 +429,8 @@ def _load_openmars(
 
     if not o3_list:
         raise FileNotFoundError(f"No OpenMars .nc files found in {openmars_dir}")
+    if require_coordinates and spatial_grid is None:
+        raise ValueError(f"No OpenMars spatial grid found in {openmars_dir}")
 
     y_raw = _clean_array(np.concatenate(o3_list, axis=0))
     ls_raw = None if ls_missing or not ls_list else np.concatenate(ls_list, axis=0).astype(np.float32)
@@ -345,13 +439,23 @@ def _load_openmars(
         time_count = min(time_count, int(ls_raw.shape[0]))
     if time_count <= 0:
         raise ValueError("OpenMars timeline is empty")
-    return y_raw[:time_count], None if ls_raw is None else ls_raw[:time_count]
+    return (
+        y_raw[:time_count],
+        None if ls_raw is None else ls_raw[:time_count],
+        spatial_grid[0] if coordinates_complete and spatial_grid is not None else None,
+        spatial_grid[1] if coordinates_complete and spatial_grid is not None else None,
+    )
 
 
 def _load_mcd_features(
     mcd_dir: Path,
     selected_channels: list[str],
     om_ls_raw: Optional[np.ndarray],
+    target_latitude: Optional[np.ndarray],
+    target_longitude: Optional[np.ndarray],
+    target_shape: tuple[int, int],
+    *,
+    require_coordinates: bool = True,
 ) -> dict[str, np.ndarray]:
     if not selected_channels:
         return {}
@@ -373,9 +477,26 @@ def _load_mcd_features(
             ]
             if missing:
                 raise ValueError(f"MCD file {file_path} is missing variables: {missing}")
+            file_grid = _read_spatial_coordinates(
+                dataset,
+                file_path,
+                required=require_coordinates,
+            )
+            if target_latitude is not None and target_longitude is not None and file_grid is not None:
+                _require_matching_grid(
+                    (target_latitude, target_longitude),
+                    file_grid,
+                    file_path,
+                )
             for channel in selected_channels:
                 var_name, short_name = MCD_VARS_MAP[channel]
-                mcd_data[short_name].append(_merge_sol_hour(dataset.variables[var_name][:]))
+                merged = _merge_sol_hour(dataset.variables[var_name][:])
+                if tuple(merged.shape[1:]) != target_shape:
+                    raise ValueError(
+                        f"MCD spatial shape mismatch in {file_path}: "
+                        f"expected {target_shape}, got {tuple(merged.shape[1:])}"
+                    )
+                mcd_data[short_name].append(merged)
             mcd_ls.append(_expand_mcd_ls(dataset, file_path, first_var))
 
     if not mcd_ls:
@@ -407,11 +528,21 @@ def _load_mcd_overview(
     selected_channels: list[str],
     *,
     require_ls: bool = True,
-) -> tuple[np.ndarray, Optional[np.ndarray], dict[str, np.ndarray]]:
+    require_coordinates: bool = True,
+) -> tuple[
+    np.ndarray,
+    Optional[np.ndarray],
+    dict[str, np.ndarray],
+    Optional[np.ndarray],
+    Optional[np.ndarray],
+]:
     y_parts: list[np.ndarray] = []
     ls_parts: list[np.ndarray] = []
     feature_parts = {MCD_VARS_MAP[channel][1]: [] for channel in selected_channels}
     ls_missing = False
+    spatial_grid: Optional[tuple[np.ndarray, np.ndarray]] = None
+    spatial_shape: Optional[tuple[int, int]] = None
+    coordinates_complete = True
 
     for file_path in sorted(Path(mcd_overview_dir).glob("*.nc"), key=natural_sort_key):
         with netCDF4.Dataset(str(file_path)) as dataset:
@@ -420,6 +551,32 @@ def _load_mcd_overview(
             y = _clean_array(dataset.variables["o3col"][:])
             if y.ndim != 3:
                 raise ValueError(f"Invalid MCD overview o3col shape in {file_path}: {y.shape}")
+            file_shape = (int(y.shape[1]), int(y.shape[2]))
+            if spatial_shape is None:
+                spatial_shape = file_shape
+            elif spatial_shape != file_shape:
+                raise ValueError(
+                    f"MCD overview spatial shape mismatch in {file_path}: "
+                    f"expected {spatial_shape}, got {file_shape}"
+                )
+            file_grid = _read_spatial_coordinates(
+                dataset,
+                file_path,
+                required=require_coordinates,
+            )
+            if file_grid is None:
+                coordinates_complete = False
+            else:
+                if file_shape != (len(file_grid[0]), len(file_grid[1])):
+                    raise ValueError(
+                        f"MCD overview spatial shape mismatch in {file_path}: "
+                        f"field {y.shape[1:]}, coordinates "
+                        f"({len(file_grid[0])}, {len(file_grid[1])})"
+                    )
+                if spatial_grid is None:
+                    spatial_grid = file_grid
+                else:
+                    _require_matching_grid(spatial_grid, file_grid, file_path)
             y_parts.append(y)
             ls_values = _validate_file_ls_length(
                 _read_ls_variable(dataset, file_path, required=require_ls),
@@ -443,6 +600,8 @@ def _load_mcd_overview(
 
     if not y_parts:
         raise FileNotFoundError(f"No MCD overview .nc files found in {mcd_overview_dir}")
+    if require_coordinates and spatial_grid is None:
+        raise ValueError(f"No MCD overview spatial grid found in {mcd_overview_dir}")
 
     y_raw = _clean_array(np.concatenate(y_parts, axis=0))
     ls_raw = None if ls_missing or not ls_parts else np.concatenate(ls_parts, axis=0).astype(np.float32)
@@ -460,6 +619,8 @@ def _load_mcd_overview(
         y_raw[:time_count],
         None if ls_raw is None else ls_raw[:time_count],
         {name: value[:time_count] for name, value in vars_dict.items()},
+        spatial_grid[0] if coordinates_complete and spatial_grid is not None else None,
+        spatial_grid[1] if coordinates_complete and spatial_grid is not None else None,
     )
 
 
@@ -484,6 +645,8 @@ def _fit_raw_mcd_lat_grid(data: Any, lat_values: Any) -> np.ndarray:
 
     lat = np.asarray(lat_values, dtype=np.float32).reshape(-1)
     if field.shape[1] == RAW_MCD_TARGET_LAT.shape[0]:
+        if lat.shape[0] == field.shape[1] and lat[0] < lat[-1]:
+            return field[:, ::-1, :72]
         return field[:, :, :72]
 
     if field.shape[1] == RAW_MCD_TARGET_LAT.shape[0] + 1 and lat.shape[0] == field.shape[1]:
@@ -508,11 +671,20 @@ def _load_raw_3h_mcd(
     selected_channels: list[str],
     *,
     require_ls: bool = True,
-) -> tuple[np.ndarray, Optional[np.ndarray], dict[str, np.ndarray]]:
+    require_coordinates: bool = True,
+) -> tuple[
+    np.ndarray,
+    Optional[np.ndarray],
+    dict[str, np.ndarray],
+    Optional[np.ndarray],
+    Optional[np.ndarray],
+]:
     y_parts: list[np.ndarray] = []
     ls_parts: list[np.ndarray] = []
     feature_parts = {MCD_VARS_MAP[channel][1]: [] for channel in selected_channels}
     ls_missing = False
+    spatial_grid: Optional[tuple[np.ndarray, np.ndarray]] = None
+    coordinates_complete = True
 
     for file_path in sorted(Path(raw_dir).glob("*.nc"), key=natural_sort_key):
         with netCDF4.Dataset(str(file_path)) as dataset:
@@ -522,6 +694,22 @@ def _load_raw_3h_mcd(
                 raise ValueError(f"Raw MCD file {file_path} is missing lat")
 
             lat_values = dataset.variables["lat"][:]
+            source_grid = _read_spatial_coordinates(
+                dataset,
+                file_path,
+                required=require_coordinates,
+            )
+            if source_grid is None:
+                coordinates_complete = False
+            else:
+                file_grid = (
+                    RAW_MCD_TARGET_LAT.copy(),
+                    np.asarray(source_grid[1], dtype=np.float32)[:72],
+                )
+                if spatial_grid is None:
+                    spatial_grid = file_grid
+                else:
+                    _require_matching_grid(spatial_grid, file_grid, file_path)
             y = normalize_ozone_column_units(
                 _fit_raw_mcd_lat_grid(dataset.variables["O3COL"][:], lat_values),
                 getattr(dataset.variables["O3COL"], "units", None),
@@ -551,6 +739,8 @@ def _load_raw_3h_mcd(
 
     if not y_parts:
         raise FileNotFoundError(f"No raw 3h MCD .nc files found in {raw_dir}")
+    if require_coordinates and spatial_grid is None:
+        raise ValueError(f"No raw 3h MCD spatial grid found in {raw_dir}")
 
     y_raw = _clean_array(np.concatenate(y_parts, axis=0))
     ls_raw = None if ls_missing or not ls_parts else np.concatenate(ls_parts, axis=0).astype(np.float32)
@@ -568,6 +758,8 @@ def _load_raw_3h_mcd(
         y_raw[:time_count],
         None if ls_raw is None else ls_raw[:time_count],
         {name: value[:time_count] for name, value in vars_dict.items()},
+        spatial_grid[0] if coordinates_complete and spatial_grid is not None else None,
+        spatial_grid[1] if coordinates_complete and spatial_grid is not None else None,
     )
 
 
@@ -576,7 +768,14 @@ def _load_mcd_full_training_dataset(
     selected_channels: list[str],
     *,
     require_ls: bool = True,
-) -> tuple[np.ndarray, Optional[np.ndarray], dict[str, np.ndarray]]:
+    require_coordinates: bool = True,
+) -> tuple[
+    np.ndarray,
+    Optional[np.ndarray],
+    dict[str, np.ndarray],
+    Optional[np.ndarray],
+    Optional[np.ndarray],
+]:
     has_raw_files = False
     for file_path in sorted(Path(data_dir).glob("*.nc"), key=natural_sort_key):
         with netCDF4.Dataset(str(file_path)) as dataset:
@@ -584,8 +783,18 @@ def _load_mcd_full_training_dataset(
                 has_raw_files = True
                 break
     if has_raw_files:
-        return _load_raw_3h_mcd(data_dir, selected_channels, require_ls=require_ls)
-    return _load_mcd_overview(data_dir, selected_channels, require_ls=require_ls)
+        return _load_raw_3h_mcd(
+            data_dir,
+            selected_channels,
+            require_ls=require_ls,
+            require_coordinates=require_coordinates,
+        )
+    return _load_mcd_overview(
+        data_dir,
+        selected_channels,
+        require_ls=require_ls,
+        require_coordinates=require_coordinates,
+    )
 
 
 def prepare_tensors(
@@ -597,6 +806,8 @@ def prepare_tensors(
     training_dataset: Any = TRAINING_DATASET_OPENMARS_MCD,
     mcd_overview_dir: Any | None = None,
     return_ls: bool = False,
+    return_coordinates: bool = False,
+    require_coordinates: Optional[bool] = None,
 ):
     selected = parse_selected_channels(selected_channels)
     dataset = normalize_training_dataset(training_dataset)
@@ -604,31 +815,77 @@ def prepare_tensors(
     horizon = int(horizon)
     if window <= 0 or horizon <= 0:
         raise ValueError("window and horizon must be positive")
+    coordinates_required = (
+        bool(return_coordinates)
+        if require_coordinates is None
+        else bool(require_coordinates)
+    )
 
     if dataset == TRAINING_DATASET_MCD_OVERVIEW:
         overview_dir = Path(mcd_overview_dir or (BACKEND_DIR / "data" / "mcd_overview"))
-        y_raw, ls_raw, vars_dict = _load_mcd_full_training_dataset(
+        (
+            y_raw,
+            ls_raw,
+            vars_dict,
+            target_latitude,
+            target_longitude,
+        ) = _load_mcd_full_training_dataset(
             overview_dir,
             selected,
             require_ls=False,
+            require_coordinates=coordinates_required,
         )
     else:
-        y_raw, om_ls_raw = _load_openmars(Path(openmars_dir), require_ls=bool(selected))
+        (
+            y_raw,
+            om_ls_raw,
+            target_latitude,
+            target_longitude,
+        ) = _load_openmars(
+            Path(openmars_dir),
+            require_ls=bool(selected),
+            require_coordinates=coordinates_required,
+        )
         ls_raw = om_ls_raw
-        vars_dict = _load_mcd_features(Path(mcd_dir), selected, om_ls_raw)
+        target_shape = (int(y_raw.shape[1]), int(y_raw.shape[2]))
+        vars_dict = _load_mcd_features(
+            Path(mcd_dir),
+            selected,
+            om_ls_raw,
+            target_latitude,
+            target_longitude,
+            target_shape,
+            require_coordinates=coordinates_required,
+        )
     feature_names = [MCD_VARS_MAP[channel][1] for channel in selected]
     features = [y_raw] + [vars_dict[name] for name in feature_names]
 
     min_time = min(int(feature.shape[0]) for feature in features)
     if ls_raw is not None:
         min_time = min(min_time, int(ls_raw.shape[0]))
-    min_height = min(int(feature.shape[1]) for feature in features)
-    min_width = min(int(feature.shape[2]) for feature in features)
-    if min_time <= 0 or min_height <= 0 or min_width <= 0:
+    target_shape = (int(y_raw.shape[1]), int(y_raw.shape[2]))
+    if target_latitude is not None and target_longitude is not None:
+        coordinate_shape = (len(target_latitude), len(target_longitude))
+        if coordinate_shape != target_shape:
+            raise ValueError(
+                "Loaded target spatial shape does not match target coordinates: "
+                f"field {target_shape}, coordinates {coordinate_shape}"
+            )
+    mismatched_shapes = [
+        tuple(feature.shape[1:])
+        for feature in features
+        if tuple(feature.shape[1:]) != target_shape
+    ]
+    if mismatched_shapes:
+        raise ValueError(
+            "Loaded feature spatial shape does not match target coordinates: "
+            f"target {target_shape}, feature shapes {mismatched_shapes}"
+        )
+    if min_time <= 0 or target_shape[0] <= 0 or target_shape[1] <= 0:
         raise ValueError("Loaded data has invalid dimensions")
 
     features = [
-        _clean_array(feature[:min_time, :min_height, :min_width])
+        _clean_array(feature[:min_time])
         for feature in features
     ]
     y_raw = features[0]
@@ -669,7 +926,30 @@ def prepare_tensors(
     y_torch = torch.tensor(np.array(y_seq)).unsqueeze(2).float()
     if return_ls:
         ls_torch = torch.tensor(np.array(ls_seq), dtype=torch.float32) if ls_raw is not None else None
+        if return_coordinates:
+            return (
+                x_torch,
+                y_torch,
+                ls_torch,
+                y_mean,
+                y_std,
+                height,
+                width,
+                None if target_latitude is None else target_latitude.astype(np.float32),
+                None if target_longitude is None else target_longitude.astype(np.float32),
+            )
         return x_torch, y_torch, ls_torch, y_mean, y_std, height, width
+    if return_coordinates:
+        return (
+            x_torch,
+            y_torch,
+            y_mean,
+            y_std,
+            height,
+            width,
+            None if target_latitude is None else target_latitude.astype(np.float32),
+            None if target_longitude is None else target_longitude.astype(np.float32),
+        )
     return x_torch, y_torch, y_mean, y_std, height, width
 
 
@@ -698,6 +978,7 @@ def _forward_uploaded_batch(
     batch: Any,
     device: torch.device,
     context: str,
+    topography_grid: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if len(batch) == 2:
         x_batch, target = batch
@@ -712,10 +993,18 @@ def _forward_uploaded_batch(
     x_device = x_batch.to(device)
     target_device = target.to(device)
     ls_device = ls_batch.to(device) if ls_batch is not None else None
+    topography_batch = None
+    if uploaded_model_requires_topography(model):
+        topography_batch = expand_topography_batch(
+            x_device,
+            topography_grid,
+            context,
+        )
     prediction = run_uploaded_model(
         model,
         x_device,
-        ls_device,
+        ls=ls_device,
+        topography=topography_batch,
         context=context,
     )
     assert_prediction_shape(prediction, target_device, context)
@@ -790,7 +1079,17 @@ def main() -> None:
             ),
         )
     )
-    x_torch, y_torch, ls_torch, y_mean, y_std, height, width = prepare_tensors(
+    (
+        x_torch,
+        y_torch,
+        ls_torch,
+        y_mean,
+        y_std,
+        height,
+        width,
+        target_latitude,
+        target_longitude,
+    ) = prepare_tensors(
         openmars_dir,
         mcd_dir,
         selected_channels,
@@ -799,6 +1098,8 @@ def main() -> None:
         training_dataset=training_dataset,
         mcd_overview_dir=mcd_overview_dir,
         return_ls=True,
+        return_coordinates=True,
+        require_coordinates=False,
     )
 
     param_schema = parse_json_arg(args.uploaded_model_param_schema)
@@ -821,6 +1122,18 @@ def main() -> None:
         model_ls = validate_ls_tensor(
             x_torch,
             ls_torch,
+            "uploaded training dataset",
+        )
+    model_topography = None
+    if uploaded_model_requires_topography(model):
+        model_topography = prepare_topography_grid(
+            target_latitude,
+            target_longitude,
+            asset_path=MOLA_TOPOGRAPHY_PATH,
+        ).to(device)
+        expand_topography_batch(
+            x_torch[:1].to(device),
+            model_topography,
             "uploaded training dataset",
         )
 
@@ -854,6 +1167,7 @@ def main() -> None:
                 batch,
                 device,
                 f"training epoch {epoch} batch {batch_idx}",
+                topography_grid=model_topography,
             )
             loss = criterion(pred, target)
             if optimizer is not None:
@@ -876,6 +1190,7 @@ def main() -> None:
                     batch,
                     device,
                     f"validation epoch {epoch} batch {batch_idx}",
+                    topography_grid=model_topography,
                 )
                 val_loss_sum += float(criterion(pred, target).item())
         train_loss = loss_sum / max(1, len(train_loader))
@@ -906,6 +1221,7 @@ def main() -> None:
                 batch,
                 device,
                 f"metrics batch {batch_idx}",
+                topography_grid=model_topography,
             )
             pred_batches.append(pred.cpu().numpy())
             true_batches.append(target.cpu().numpy())

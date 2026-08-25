@@ -10,7 +10,7 @@ import re
 import netCDF4 as nc
 from pathlib import Path
 
-from config import MCD_DIR, MCD_RAW_3H_DIR
+from config import MCD_DIR, MCD_RAW_3H_DIR, MOLA_TOPOGRAPHY_PATH
 from database.models import ModelTrainingTask
 from database.engine import async_session_maker
 from core.metrics import compute_error_distribution, compute_metrics, compute_test_set_metrics
@@ -28,7 +28,12 @@ from training_backbones.model_zoo import (
     normalize_model_architecture,
     normalize_use_sphere,
 )
-from training_backbones.uploaded_model_contract import run_uploaded_model
+from training_backbones.mola_topography import prepare_topography_grid
+from training_backbones.uploaded_model_contract import (
+    expand_topography_batch,
+    run_uploaded_model,
+    uploaded_model_requires_topography,
+)
 
 _NETCDF_READ_LOCK = threading.RLock()
 
@@ -686,8 +691,43 @@ class InferenceService:
             training_dataset=hypers.get("training_dataset", "openmars_mcd"),
             mcd_overview_dir=mcd_overview_dir,
             return_ls=True,
+            return_coordinates=True,
+            require_coordinates=False,
         )
         return selected_channels, tensors
+
+    def _prepare_uploaded_topography(self, model, latitude, longitude):
+        if not uploaded_model_requires_topography(model):
+            return None
+        return prepare_topography_grid(
+            latitude,
+            longitude,
+            asset_path=MOLA_TOPOGRAPHY_PATH,
+        ).to(self.device)
+
+    def _run_uploaded_task_model(
+        self,
+        model,
+        x_batch,
+        ls_batch,
+        topography_grid,
+        context,
+    ):
+        x_device = x_batch.to(self.device)
+        topography_batch = None
+        if uploaded_model_requires_topography(model):
+            topography_batch = expand_topography_batch(
+                x_device,
+                topography_grid,
+                context,
+            )
+        return run_uploaded_model(
+            model,
+            x_device,
+            ls=ls_batch.to(self.device) if ls_batch is not None else None,
+            topography=topography_batch,
+            context=context,
+        )
 
     def _predict_uploaded_task_window(self, task, hypers: dict, ls_start: float, horizon: int, data_dirs=None):
         from training_backbones.user_model_runner import (
@@ -704,7 +744,17 @@ class InferenceService:
             task_horizon,
             data_dirs,
         )
-        x_torch, y_torch, ls_torch, y_mean, y_std, height, width = tensors
+        (
+            x_torch,
+            y_torch,
+            ls_torch,
+            y_mean,
+            y_std,
+            height,
+            width,
+            target_latitude,
+            target_longitude,
+        ) = tensors
         sample_idx = min(max(0, int(round(float(ls_start) / 360.0 * max(1, len(x_torch) - 1)))), len(x_torch) - 1)
         config = build_uploaded_model_config(
             in_channels=int(x_torch.shape[2]),
@@ -723,16 +773,22 @@ class InferenceService:
         state_dict = self._load_task_state_dict(task)
         model.load_state_dict(state_dict)
         model.eval()
+        topography_grid = self._prepare_uploaded_topography(
+            model,
+            target_latitude,
+            target_longitude,
+        )
 
         x_sample = x_torch[sample_idx: sample_idx + 1].to(self.device)
         ls_sample = ls_torch[sample_idx: sample_idx + 1].to(self.device) if ls_torch is not None else None
         truth_tensor = y_torch[sample_idx: sample_idx + 1]
         with torch.no_grad():
-            pred_tensor = run_uploaded_model(
+            pred_tensor = self._run_uploaded_task_model(
                 model,
                 x_sample,
                 ls_sample,
-                context="uploaded prediction",
+                topography_grid,
+                "uploaded prediction",
             )
             assert_prediction_shape(pred_tensor, truth_tensor.to(self.device), "uploaded prediction")
         pred = pred_tensor[0, :, 0].cpu().numpy()
@@ -840,7 +896,17 @@ class InferenceService:
             task_horizon,
             data_dirs,
         )
-        x_torch, y_torch, ls_torch, y_mean, y_std, height, width = tensors
+        (
+            x_torch,
+            y_torch,
+            ls_torch,
+            y_mean,
+            y_std,
+            height,
+            width,
+            target_latitude,
+            target_longitude,
+        ) = tensors
         config = build_uploaded_model_config(
             in_channels=int(x_torch.shape[2]),
             window=window,
@@ -858,6 +924,11 @@ class InferenceService:
         state_dict = self._load_task_state_dict(task)
         model.load_state_dict(state_dict)
         model.eval()
+        topography_grid = self._prepare_uploaded_topography(
+            model,
+            target_latitude,
+            target_longitude,
+        )
 
         split = int(0.8 * len(x_torch))
         x_test = x_torch[split:]
@@ -875,11 +946,12 @@ class InferenceService:
                 end = min(start + batch_size, len(x_test))
                 truth_tensor = y_test[start:end].to(self.device)
                 ls_batch = ls_test[start:end].to(self.device) if ls_test is not None else None
-                pred = run_uploaded_model(
+                pred = self._run_uploaded_task_model(
                     model,
-                    x_test[start:end].to(self.device),
+                    x_test[start:end],
                     ls_batch,
-                    context="uploaded test-set metrics",
+                    topography_grid,
+                    "uploaded test-set metrics",
                 )
                 assert_prediction_shape(pred, truth_tensor, "uploaded test-set metrics")
                 pred_np = pred.cpu().numpy()
@@ -1031,7 +1103,17 @@ class InferenceService:
             task_horizon,
             data_dirs,
         )
-        x_torch, y_torch, ls_torch, y_mean, y_std, height, width = tensors
+        (
+            x_torch,
+            y_torch,
+            ls_torch,
+            y_mean,
+            y_std,
+            height,
+            width,
+            target_latitude,
+            target_longitude,
+        ) = tensors
         config = build_uploaded_model_config(
             in_channels=int(x_torch.shape[2]),
             window=window,
@@ -1049,6 +1131,11 @@ class InferenceService:
         state_dict = self._load_task_state_dict(task)
         model.load_state_dict(state_dict)
         model.eval()
+        topography_grid = self._prepare_uploaded_topography(
+            model,
+            target_latitude,
+            target_longitude,
+        )
 
         split = int(0.8 * len(x_torch))
         x_test = x_torch[split:].clone()
@@ -1064,11 +1151,12 @@ class InferenceService:
 
         def score(batch):
             with torch.no_grad():
-                pred = run_uploaded_model(
+                pred = self._run_uploaded_task_model(
                     model,
-                    batch.to(self.device),
-                    ls_sample.to(self.device) if ls_sample is not None else None,
-                    context="uploaded permutation importance",
+                    batch,
+                    ls_sample,
+                    topography_grid,
+                    "uploaded permutation importance",
                 )
                 assert_prediction_shape(pred, y_sample.to(self.device), "uploaded permutation importance")
                 pred_np = pred.cpu().numpy()
@@ -1335,7 +1423,17 @@ class InferenceService:
             horizon,
             data_dirs,
         )
-        x_torch, y_torch, ls_torch, y_mean, y_std, height, width = tensors
+        (
+            x_torch,
+            y_torch,
+            ls_torch,
+            y_mean,
+            y_std,
+            height,
+            width,
+            target_latitude,
+            target_longitude,
+        ) = tensors
         config = build_uploaded_model_config(
             in_channels=int(x_torch.shape[2]),
             window=window,
@@ -1354,6 +1452,11 @@ class InferenceService:
         state_dict = self._load_task_state_dict(task)
         model.load_state_dict(state_dict)
         model.eval()
+        topography_grid = self._prepare_uploaded_topography(
+            model,
+            target_latitude,
+            target_longitude,
+        )
 
         split = int(0.8 * len(x_torch))
         x_test = x_torch[split:]
@@ -1368,11 +1471,12 @@ class InferenceService:
             test_xb = x_test[indices].to(self.device)
             test_yb = y_test_true[indices]
             test_lsb = ls_test[indices].to(self.device) if ls_test is not None else None
-            pred_tensor = run_uploaded_model(
+            pred_tensor = self._run_uploaded_task_model(
                 model,
                 test_xb,
                 test_lsb,
-                context="uploaded inference test",
+                topography_grid,
+                "uploaded inference test",
             )
             assert_prediction_shape(
                 pred_tensor,

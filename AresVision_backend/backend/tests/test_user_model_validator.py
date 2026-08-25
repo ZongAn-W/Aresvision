@@ -6,6 +6,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from services import user_model_validator  # noqa: E402
 from services.user_model_validator import UserModelValidator  # noqa: E402
 
 
@@ -93,6 +94,60 @@ def build_model(config):
     return TinyLsModel(config["horizon"])
 """
 
+TOPOGRAPHY_MODEL_SOURCE = """
+import torch
+from torch import nn
+
+MODEL_SPEC = {
+    "name": "TinyTopographyModel",
+    "description": "Tiny model requiring MOLA terrain.",
+    "auxiliary_inputs": {
+        "topography": {
+            "required": True,
+            "shape": ["batch", 1, "height", "width"],
+            "dtype": "float32",
+            "unit": "meter",
+        }
+    },
+    "parameters": {},
+}
+
+class TinyTopographyModel(nn.Module):
+    def __init__(self, horizon):
+        super().__init__()
+        self.horizon = horizon
+
+    def forward(self, x, topography):
+        if topography.shape != (x.shape[0], 1, x.shape[-2], x.shape[-1]):
+            raise ValueError(f"wrong topography shape: {topography.shape}")
+        if topography.dtype != torch.float32 or not torch.isfinite(topography).all():
+            raise ValueError("invalid topography dtype or values")
+        if torch.all(topography == topography.flatten()[0]):
+            raise ValueError("topography must be real non-flat MOLA terrain")
+        return x[:, -1:, :1].repeat(1, self.horizon, 1, 1, 1)
+
+def build_model(config):
+    return TinyTopographyModel(config["horizon"])
+"""
+
+LS_TOPOGRAPHY_MODEL_SOURCE = TOPOGRAPHY_MODEL_SOURCE.replace(
+    '"topography": {',
+    '"ls": {\n'
+    '            "required": True,\n'
+    '            "shape": ["batch", "window"],\n'
+    '            "dtype": "float32",\n'
+    '            "unit": "degree",\n'
+    '        },\n'
+    '        "topography": {',
+    1,
+).replace(
+    "def forward(self, x, topography):",
+    "def forward(self, x, ls, topography):\n"
+    "        if ls.shape != x.shape[:2]:\n"
+    "            raise ValueError(f'wrong Ls shape: {ls.shape}')",
+    1,
+)
+
 
 def _write_temp_model(temp_dir: str, source: str) -> Path:
     path = Path(temp_dir) / "uploaded_model.py"
@@ -129,6 +184,61 @@ def test_ls_model_dry_run_receives_declared_auxiliary_input():
     assert result.ok is True
     assert result.errors == []
     assert result.output_shape == [2, 3, 1, 8, 16]
+
+
+def test_topography_model_dry_run_receives_real_mola_tensor():
+    result = _validate_source(TOPOGRAPHY_MODEL_SOURCE)
+
+    assert result.ok is True
+    assert result.errors == []
+    assert result.output_shape == [2, 3, 1, 8, 16]
+
+
+def test_ls_topography_model_dry_run_receives_fixed_argument_order():
+    result = _validate_source(LS_TOPOGRAPHY_MODEL_SOURCE)
+
+    assert result.ok is True
+    assert result.errors == []
+
+
+def test_topography_model_dry_run_fails_when_mola_asset_is_missing(
+    monkeypatch,
+    tmp_path,
+):
+    missing = tmp_path / "missing-mola.nc"
+    monkeypatch.setattr(user_model_validator, "MOLA_TOPOGRAPHY_PATH", missing)
+
+    result = _validate_source_with_validator(
+        TOPOGRAPHY_MODEL_SOURCE,
+        UserModelValidator(timeout_seconds=None),
+    )
+
+    assert result.ok is False
+    assert any(str(missing) in error and "(8, 16)" in error for error in result.errors)
+
+
+def test_legacy_and_ls_dry_runs_do_not_load_mola(monkeypatch):
+    def fail_if_loaded(*args, **kwargs):
+        raise AssertionError("MOLA must not load for undeclared topography")
+
+    monkeypatch.setattr(
+        user_model_validator,
+        "prepare_topography_grid",
+        fail_if_loaded,
+        raising=False,
+    )
+
+    legacy_result = _validate_source_with_validator(
+        VALID_MODEL_SOURCE,
+        UserModelValidator(timeout_seconds=None),
+    )
+    ls_result = _validate_source_with_validator(
+        LS_MODEL_SOURCE,
+        UserModelValidator(timeout_seconds=None),
+    )
+
+    assert legacy_result.ok is True
+    assert ls_result.ok is True
 
 
 def test_unknown_auxiliary_input_is_rejected():
