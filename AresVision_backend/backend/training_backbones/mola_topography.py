@@ -50,7 +50,7 @@ def validate_rectilinear_grid(
     if require_global_longitude:
         cyclic_gaps = np.diff(np.concatenate((sorted_lon, [sorted_lon[0] + 360.0])))
         spacing = float(np.median(cyclic_gaps))
-        if not np.allclose(cyclic_gaps, spacing, rtol=0.0, atol=1e-5):
+        if not np.allclose(cyclic_gaps, spacing, rtol=0.0, atol=1e-4):
             raise ValueError(
                 f"{context} longitude must cover a uniform complete global period"
             )

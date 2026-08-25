@@ -16,6 +16,7 @@ from training_backbones.mola_topography import (  # noqa: E402
     load_mola_asset,
     prepare_topography_grid,
     resample_mola,
+    validate_rectilinear_grid,
 )
 from config import MOLA_TOPOGRAPHY_PATH  # noqa: E402
 from scripts.build_mola_topography_asset import validate_asset  # noqa: E402
@@ -325,6 +326,23 @@ def test_load_rejects_incomplete_periodic_longitude_grid(mola_tmp_path):
 
     with pytest.raises(ValueError, match="global period"):
         load_mola_asset(path)
+
+
+def test_validate_grid_accepts_float32_longitudes_converted_from_radians():
+    latitude = np.arange(87.5, -90.0, -5.0, dtype=np.float32)
+    longitude = np.rad2deg(
+        np.linspace(-np.pi, np.pi, 72, endpoint=False, dtype=np.float32)
+    ).astype(np.float32)
+
+    actual_latitude, actual_longitude = validate_rectilinear_grid(
+        latitude,
+        longitude,
+        context="OpenMars float32 grid",
+        require_global_longitude=True,
+    )
+
+    assert np.array_equal(actual_latitude, latitude.astype(np.float64))
+    assert np.array_equal(actual_longitude, longitude.astype(np.float64))
 
 
 def test_prepare_static_topography_returns_float32_1hw_tensor(mola_tmp_path):
