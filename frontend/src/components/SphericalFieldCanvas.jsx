@@ -70,6 +70,20 @@ function createLabelSprite(text, isLight, fontScale = 1) {
   return sprite;
 }
 
+function updateGeoLabelVisibility(overlay, globeGroup, camera) {
+  if (!overlay || !globeGroup || !camera) return;
+
+  const cameraLocal = globeGroup
+    .worldToLocal(camera.getWorldPosition(new THREE.Vector3()))
+    .normalize();
+  overlay.children.forEach((child) => {
+    const normal = child.userData?.geoLabelNormal;
+    if (!normal) return;
+    const isPole = child.userData.geoLabelRole === 'latitude-pole';
+    child.visible = isPole || normal.dot(cameraLocal) > 0.22;
+  });
+}
+
 function buildGeoOverlay(isLight, fontScale = 1) {
   const group = new THREE.Group();
   group.name = 'geo-overlay';
@@ -78,7 +92,7 @@ function buildGeoOverlay(isLight, fontScale = 1) {
   const majorColor = isLight ? 0x1e293b : 0xc7e1ff;
   const lineRadius = 0.902;
   const latStep = 30;
-  const lonStep = 30;
+  const lonStep = 60;
 
   const makeLine = (points, color, opacity) => {
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
@@ -110,25 +124,19 @@ function buildGeoOverlay(isLight, fontScale = 1) {
     group.add(makeLine(points, isMajor ? majorColor : minorColor, isMajor ? 0.48 : 0.2));
   }
 
-  const latLabels = [-90, -60, -30, 0, 30, 60, 90];
+  const latLabels = [-90, -60, -30, 30, 60, 90];
   const degree = '\u00B0';
   const formatLatLabel = (lat) => (lat === 0 ? `0${degree}` : `${Math.abs(lat)}${degree}${lat > 0 ? 'N' : 'S'}`);
   latLabels.forEach((lat) => {
     const sprite = createLabelSprite(formatLatLabel(lat), isLight, fontScale);
     const p = latLonToVec3(lat, 8, lat === 90 || lat === -90 ? 1.06 : 1.03);
     sprite.position.set(p.x, p.y, p.z);
-    group.add(sprite);
-  });
-  // Mirror latitude labels on the opposite hemisphere so labels remain visible when rotating.
-  latLabels.forEach((lat) => {
-    if (lat === 90 || lat === -90 || lat === 0) return; // Avoid duplicated poles and equator label overlap.
-    const sprite = createLabelSprite(formatLatLabel(lat), isLight, fontScale);
-    const p = latLonToVec3(lat, 188, 1.03);
-    sprite.position.set(p.x, p.y, p.z);
+    sprite.userData.geoLabelNormal = p.clone().normalize();
+    if (Math.abs(lat) === 90) sprite.userData.geoLabelRole = 'latitude-pole';
     group.add(sprite);
   });
 
-  const lonLabels = Array.from({ length: 12 }, (_, index) => index * 30);
+  const lonLabels = Array.from({ length: 360 / lonStep }, (_, index) => index * lonStep);
   const lonLabelLat = 0;
   const formatLonLabel = (lon) => {
     if (lon === 0) return `0${degree}`;
@@ -141,6 +149,7 @@ function buildGeoOverlay(isLight, fontScale = 1) {
     const sprite = createLabelSprite(text, isLight, fontScale);
     const p = latLonToVec3(lonLabelLat, lon, 1.06);
     sprite.position.set(p.x, p.y, p.z);
+    sprite.userData.geoLabelNormal = p.clone().normalize();
     group.add(sprite);
   });
 
@@ -545,6 +554,7 @@ const SphericalFieldCanvas = forwardRef(({
       if (sphereMeshRef.current && autoRotateRef.current) {
         sphereMeshRef.current.rotateY(0.001); // 绕模型本身的极点（局部 Y 轴）自转，即使手势倾斜了球体也始终按纬度线旋转
       }
+      updateGeoLabelVisibility(geoOverlayRef.current, sphereMeshRef.current, cameraRef.current);
       stars.rotateY(0.0003); // 星空背景微弱伴走
       if (rendererRef.current) rendererRef.current.render(scene, camera);
     };

@@ -26,3 +26,11 @@ test('seasonal sunlight updates do not rebuild static geo annotation overlays', 
   assert.ok(solarLightEffect, 'expected a dedicated solar light effect');
   assert.doesNotMatch(solarLightEffect.body, /buildGeoOverlay/);
 });
+
+test('geo labels avoid equator collisions and cull labels on the far hemisphere', () => {
+  assert.match(source, /const lonStep = 60;/);
+  assert.match(source, /const latLabels = \[-90, -60, -30, 30, 60, 90\];/);
+  assert.match(source, /function updateGeoLabelVisibility\(/);
+  assert.match(source, /updateGeoLabelVisibility\(geoOverlayRef\.current, sphereMeshRef\.current, cameraRef\.current\)/);
+  assert.doesNotMatch(source, /Mirror latitude labels on the opposite hemisphere/);
+});

@@ -1,5 +1,6 @@
 # Guard against accidentally mixing local workspace artifacts into the product repo
 /.planning/
+/output/
 /tmp/
 /scratch/
 /projects/
