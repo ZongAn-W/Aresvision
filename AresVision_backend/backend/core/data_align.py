@@ -20,13 +20,14 @@ def unwrap_ls(ls_array: np.ndarray) -> np.ndarray:
     Returns:
         单调递增的 Ls 数组
     """
-    ls = ls_array.copy().astype(np.float64)
+    source = np.asarray(ls_array, dtype=np.float64)
+    unwrapped = source.copy()
     offset = 0.0
-    for i in range(1, len(ls)):
-        if ls[i] - ls[i - 1] < -180:
+    for i in range(1, len(source)):
+        if source[i] - source[i - 1] < -180:
             offset += 360.0
-        ls[i] += offset
-    return ls
+        unwrapped[i] += offset
+    return unwrapped
 
 
 def interpolate_mcd_to_openmars(

@@ -13,6 +13,7 @@ from scripts.build_mcd_overview_dataset import (  # noqa: E402
     _default_reference_dir,
     build_overview_dataset,
     build_year,
+    interpolate_reference_ozone,
 )
 
 KG_M2_PER_UM_ATM_O3 = 2.14e-6
@@ -44,6 +45,16 @@ def test_build_overview_dataset_creates_backend_runtime_shape(tmp_path):
         assert float(ds["o3col"].isnull().mean()) < 0.05
     finally:
         ds.close()
+
+
+def test_interpolate_reference_ozone_preserves_samples_after_ls_wrap():
+    reference_ls = np.array([359.5, 0.5, 1.5, 2.5], dtype=np.float32)
+    reference_ozone = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32).reshape(-1, 1, 1)
+    target_ls = np.array([0.5, 1.5, 2.5], dtype=np.float32)
+
+    result = interpolate_reference_ozone(reference_ozone, reference_ls, target_ls)
+
+    np.testing.assert_allclose(result[:, 0, 0], [2.0, 3.0, 4.0], rtol=1e-6)
 
 
 def test_build_overview_from_reference_dataset_creates_direct_mcd_overview(tmp_path):
