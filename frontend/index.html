@@ -5,9 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AresVision 智绘赤星</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Sora:wght@500;600;700;800&display=swap" rel="stylesheet" />
+    <!-- 字体说明：原先引用 Google Fonts，国内直连不通且会阻塞首屏渲染（页面一直转圈）。
+         现改为使用 src/index.css 中已定义的系统字体兜底链：
+           --font-display: 'Sora','Space Grotesk','Segoe UI','PingFang SC','Microsoft YaHei',sans-serif
+           --font-body:    'Space Grotesk','Segoe UI','PingFang SC','Microsoft YaHei',sans-serif
+         如需恢复品牌字体，请自托管：下载 woff2 放到 public/fonts/ 并改用 @font-face 本地引用。 -->
   </head>
   <body>
     <script>
