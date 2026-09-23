@@ -860,6 +860,9 @@ const en = {
     logsFetchError: 'Error fetching logs or no logs available',
     historyTitle: 'Trained Models',
     historyEmpty: 'No training records found',
+    historyParameters: 'Training parameters',
+    showParameters: 'View parameters',
+    hideParameters: 'Hide parameters',
     tableId: 'ID',
     tableScript: 'Script',
     tableStatus: 'Status',
@@ -916,6 +919,10 @@ const en = {
     },
 
     hypers: {
+      training_dataset: 'Training dataset',
+      seed: 'Random seed',
+      custom_model_params: 'Custom model parameters',
+      model_source: 'Model source',
       epochs: 'EPOCHS',
       batch_size: 'BATCH SIZE',
       learning_rate: 'LEARNING RATE',

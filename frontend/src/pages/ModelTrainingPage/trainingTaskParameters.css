@@ -1,0 +1,17 @@
+.training-task-parameters { min-width: 0; }
+.training-task-parameters > summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; min-height: 36px; cursor: pointer; list-style: none; border-radius: 6px; }
+.training-task-parameters > summary::-webkit-details-marker { display: none; }
+.training-task-parameters > summary:focus-visible { outline: 2px solid var(--accent-blue, #4a9eff); outline-offset: 3px; }
+.training-task-summary { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: calc(11px * var(--font-scale, 1)); color: var(--text-60); }
+.training-task-summary-item { display: inline-flex; gap: 7px; align-items: baseline; }
+.training-task-summary-item strong { color: var(--text); font-size: calc(12px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
+.training-task-disclosure { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text); font-size: calc(12px * var(--font-scale, 1)); white-space: nowrap; }
+.training-task-parameters[open] .training-task-chevron { transform: rotate(180deg); }
+.training-task-parameter-content { padding: 12px 0 4px; cursor: text; }
+.training-task-parameter-content h4 { margin: 12px 0 8px; font-size: calc(12px * var(--font-scale, 1)); color: var(--text); }
+.training-task-parameter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); column-gap: 28px; margin: 0; }
+.training-task-parameter-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: calc(12px * var(--font-scale, 1)); line-height: 1.5; overflow-wrap: anywhere; }
+.training-task-parameter-row dt { color: var(--text-60); }
+.training-task-parameter-row dd { margin: 0; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+.training-task-parameter-row pre { margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; text-align: left; font-size: inherit; }
+.training-task-card button:focus-visible { outline: 2px solid var(--accent-blue, #4a9eff); outline-offset: 3px; }

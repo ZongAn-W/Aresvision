@@ -51,9 +51,9 @@ import {
 } from './ModelTrainingPage/uploadedModelParams';
 import {
   getModelTrainingControlVisibility,
-  getVisibleTrainingHyperparameters,
 } from './ModelTrainingPage/modelTrainingVisibility';
 import { formatBooleanHyperparameterValue } from './ModelTrainingPage/trainingHyperparameterFormatting';
+import TrainingTaskParameters from './ModelTrainingPage/TrainingTaskParameters';
 import {
   TRAINING_TASK_HANDOFF_KEY,
   buildTrainingTaskHandoff,
@@ -340,10 +340,6 @@ function TrainingTaskCard({
 }) {
   const statusMeta = getStatusMeta(task.status, t);
   const hyperparameters = useMemo(() => parseHyperparameters(task.hyperparameters), [task.hyperparameters]);
-  const visibleHyperparameters = useMemo(
-    () => getVisibleTrainingHyperparameters(hyperparameters),
-    [hyperparameters]
-  );
 
   const modelName = task.custom_model_name || t('modelTraining.unnamedModel');
   const scriptSummary = getScriptSummary(task, channelMap, channelOrder, baselineLabel);
@@ -366,6 +362,7 @@ function TrainingTaskCard({
 
   return (
     <div
+      className="training-task-card"
       onClick={() => onSelect(task.id)}
       style={{
         padding: '18px 20px',
@@ -475,42 +472,12 @@ function TrainingTaskCard({
         </div>
       </div>
 
-      <div className="training-history-metrics">
-        {visibleHyperparameters.map(([key, value]) => (
-          <div
-            key={key}
-            style={{
-              padding: '12px 14px',
-              borderRadius: 12,
-              background: isLight ? 'rgba(15,23,42,0.03)' : 'rgba(255,255,255,0.03)',
-              border: `1px solid ${C.border}`,
-              minWidth: 0,
-            }}
-          >
-            <div
-              style={{
-                fontSize: 'calc(10px * var(--font-scale, 1))',
-                color: C.ice50,
-                marginBottom: 5,
-                lineHeight: 1.4,
-              }}
-            >
-              {t(`modelTraining.hypers.${key}`)}
-            </div>
-            <div
-              style={{
-                fontSize: 'calc(13px * var(--font-scale, 1))',
-                fontWeight: 700,
-                color: C.ice,
-                lineHeight: 1.45,
-                wordBreak: 'break-word',
-              }}
-            >
-              {formatHyperValue(key, value, t)}
-            </div>
-          </div>
-        ))}
-      </div>
+      <TrainingTaskParameters
+        hyperparameters={hyperparameters}
+        modelName={modelName}
+        t={t}
+        formatValue={(key, value) => formatHyperValue(key, value, t)}
+      />
 
       <div
         style={{
@@ -1673,11 +1640,6 @@ export default function ModelTrainingPage() {
           gap: 12px;
           margin-top: 12px;
         }
-        .training-history-metrics {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-          gap: 10px;
-        }
         .model-training-stack {
           display: grid;
           gap: 12px;
@@ -1864,15 +1826,7 @@ export default function ModelTrainingPage() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
-        @media (max-width: 640px) {
-          .training-history-metrics {
-            grid-template-columns: 1fr 1fr;
-          }
-        }
         @media (max-width: 520px) {
-          .training-history-metrics {
-            grid-template-columns: 1fr;
-          }
           .model-training-channels-compact {
             grid-template-columns: 1fr;
           }

@@ -880,6 +880,9 @@ const zh = {
     logsFetchError: '获取日志出错或无日志',
     historyTitle: '已训练模型',
     historyEmpty: '暂无训练记录',
+    historyParameters: '训练参数',
+    showParameters: '查看参数',
+    hideParameters: '收起参数',
     tableId: 'ID',
     tableScript: '模型脚本',
     tableStatus: '状态',
@@ -936,6 +939,10 @@ const zh = {
     },
 
     hypers: {
+      training_dataset: '训练数据集',
+      seed: '随机种子',
+      custom_model_params: '自定义模型参数',
+      model_source: '模型来源',
       epochs: '训练轮数',
       batch_size: '批大小',
       learning_rate: '学习率',
