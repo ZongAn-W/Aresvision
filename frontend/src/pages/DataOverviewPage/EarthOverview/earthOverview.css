@@ -1,0 +1,479 @@
+/* 二维地球总览局部样式：作用域限定在 .earth-scene，不修改全局 body。 */
+
+.earth-scene {
+  padding-top: 86px;
+  min-height: 100vh;
+  width: 100%;
+  overflow-x: hidden;
+  color: var(--text-primary, #e7edf7);
+  background: var(--bg-page, #060a12);
+}
+
+.earth-scene.is-light {
+  color: var(--text-primary, #17212f);
+  background: var(--bg-page, #f4f7fb);
+}
+
+.earth-scene__inner {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 16px 20px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.earth-scene__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.earth-scene__header h1 {
+  margin: 0;
+  font-size: calc(20px * var(--font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.earth-scene__subtitle {
+  margin: 4px 0 0;
+  font-size: calc(12px * var(--font-scale, 1));
+  opacity: 0.72;
+}
+
+.earth-scene__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
+  border-radius: 14px;
+  background: var(--bg-card, rgba(12, 18, 28, 0.62));
+}
+
+.earth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: calc(11px * var(--font-scale, 1));
+  min-width: 0;
+}
+
+.earth-field > span {
+  opacity: 0.72;
+  font-weight: 600;
+}
+
+.earth-field select,
+.earth-field input,
+.earth-timeline input[type='date'] {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.3));
+  background: var(--bg-input, rgba(8, 12, 20, 0.9));
+  color: inherit;
+  font-size: calc(12px * var(--font-scale, 1));
+  min-width: 0;
+  max-width: 100%;
+}
+
+.earth-scene.is-light .earth-field select,
+.earth-scene.is-light .earth-field input,
+.earth-scene.is-light .earth-timeline input[type='date'] {
+  background: #ffffff;
+}
+
+.earth-field__static {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--border-subtle, rgba(148, 163, 184, 0.3));
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.earth-coord {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.earth-coord .earth-field input {
+  width: 104px;
+}
+
+.earth-btn {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.34));
+  background: var(--bg-card-strong, rgba(18, 26, 38, 0.92));
+  color: inherit;
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.earth-btn:hover:not(:disabled) {
+  border-color: #5eead4;
+}
+
+.earth-btn:focus-visible,
+.earth-field select:focus-visible,
+.earth-field input:focus-visible,
+.earth-timeline input:focus-visible {
+  outline: 2px solid #5eead4;
+  outline-offset: 2px;
+}
+
+.earth-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.earth-btn--primary {
+  border-color: #5eead4;
+  color: #04211d;
+  background: #5eead4;
+}
+
+.earth-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
+  border-radius: 14px;
+  background: var(--bg-card, rgba(12, 18, 28, 0.62));
+}
+
+.earth-timeline__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.earth-timeline__row input[type='range'] {
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+
+.earth-timeline__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+.earth-timeline__index,
+.earth-timeline__status,
+.earth-timeline__displayed {
+  font-size: calc(11px * var(--font-scale, 1));
+  opacity: 0.78;
+  white-space: nowrap;
+}
+
+.earth-scene__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+}
+
+.earth-scene__map {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.earth-scene__caption {
+  margin: 0;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.earth-scene__side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.earth-map2d {
+  position: relative;
+  width: 100%;
+}
+
+.earth-map2d__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 1;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.24));
+  border-radius: 12px;
+  background: var(--bg-card, rgba(8, 12, 20, 0.72));
+  touch-action: manipulation;
+}
+
+.earth-map2d__cell {
+  shape-rendering: crispEdges;
+  cursor: crosshair;
+}
+
+.earth-map2d__basemap-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: calc(11px * var(--font-scale, 1));
+  opacity: 0.8;
+  padding-top: 4px;
+}
+
+.earth-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+.earth-legend__ramp {
+  display: inline-block;
+  width: 160px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.3));
+}
+
+.earth-legend__note {
+  opacity: 0.72;
+}
+
+.earth-info {
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
+  border-radius: 14px;
+  background: var(--bg-card, rgba(12, 18, 28, 0.62));
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+.earth-info h3 {
+  margin: 0 0 8px;
+  font-size: calc(13px * var(--font-scale, 1));
+}
+
+.earth-info ul {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  line-height: 1.42;
+}
+
+.earth-info details {
+  margin-top: 10px;
+}
+
+.earth-info summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.earth-info dl {
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.earth-info dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.earth-info dt {
+  opacity: 0.7;
+}
+
+.earth-info dd {
+  margin: 0;
+  text-align: right;
+  word-break: break-all;
+}
+
+.earth-series {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.earth-series__summary {
+  grid-column: 1 / -1;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
+  border-radius: 14px;
+  background: var(--bg-card, rgba(12, 18, 28, 0.62));
+}
+
+.earth-series__summary h3 {
+  margin: 0 0 8px;
+  font-size: calc(14px * var(--font-scale, 1));
+}
+
+.earth-series__summary dl {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.earth-series__summary dt {
+  font-size: calc(10px * var(--font-scale, 1));
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.earth-series__summary dd {
+  margin: 2px 0 0;
+  font-size: calc(14px * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.earth-series__panel {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
+  border-radius: 14px;
+  background: var(--bg-card, rgba(12, 18, 28, 0.62));
+}
+
+.earth-series__panel h4 {
+  margin: 0 0 4px;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.earth-series__note,
+.earth-series__empty {
+  margin: 0 0 6px;
+  font-size: calc(11px * var(--font-scale, 1));
+  opacity: 0.75;
+  line-height: 1.4;
+}
+
+.earth-series__empty {
+  padding: 24px 8px;
+  text-align: center;
+}
+
+.earth-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.28));
+  background: var(--bg-card, rgba(12, 18, 28, 0.7));
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.earth-notice--error {
+  border-color: rgba(248, 113, 113, 0.6);
+}
+
+.earth-notice--warning {
+  border-color: rgba(251, 191, 36, 0.6);
+}
+
+.earth-notice code {
+  font-size: calc(11px * var(--font-scale, 1));
+  opacity: 0.8;
+}
+
+.earth-inline-error {
+  margin: 0;
+  color: #f87171;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.earth-scene__footnote {
+  margin: 0;
+  font-size: calc(11px * var(--font-scale, 1));
+  opacity: 0.68;
+  line-height: 1.5;
+}
+
+/* ─── 场景切换按钮 ─── */
+.planet-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.3));
+  background: var(--bg-card, rgba(12, 18, 28, 0.7));
+}
+
+.planet-switch__option {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.planet-switch__option.is-active {
+  background: #5eead4;
+  color: #04211d;
+}
+
+.planet-switch__option:focus-visible {
+  outline: 2px solid #5eead4;
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .earth-scene__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .earth-series {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .earth-scene__inner {
+    padding: 12px 12px 40px;
+  }
+}
+
+@media (max-width: 430px) {
+  .earth-scene__controls,
+  .earth-timeline {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .earth-coord .earth-field input {
+    width: 100%;
+  }
+
+  .earth-timeline__row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .earth-legend__ramp {
+    width: 100%;
+  }
+}

@@ -21,6 +21,8 @@ import netCDF4 as nc
 from sqlalchemy import delete, select, update
 
 from config import (
+    EARTH_MERRA2_DIR,
+    EARTH_MERRA2_V1_DIR,
     MCD_VARIABLES,
     TRAINING_RESULTS_DIR,
     TRAINING_SCRIPTS_DIR,
@@ -29,6 +31,8 @@ from config import (
 from database.engine import async_session_maker
 from database.models import ModelTrainingTask, PredictionAnalysisCache, TrainingTaskTag
 from services.data_service import DataService
+from services.dataset_identity import resolve_dataset_id, require_training_dataset
+from services.dataset_registry import DatasetRegistry
 from services.personal_data_source_service import PersonalDataSourceService
 from services.model_artifacts import is_valid_model_weight_file
 from services.training_failures import CUDA_OOM_ERROR_CODE, classify_training_log
@@ -89,6 +93,8 @@ class TrainingService:
         training_weight_service: Any | None = None,
         is_admin: bool = False,
         tag_ids: list[int] | None = None,
+        dataset_id: str | None = None,
+        dataset_registry: DatasetRegistry | None = None,
     ) -> ModelTrainingTask:
         model_source = (model_source or "official").strip().lower()
         if model_source not in ("official", "uploaded"):
@@ -96,6 +102,13 @@ class TrainingService:
 
         if not custom_model_name or not custom_model_name.strip():
             raise ValueError("模型命名不能为空")
+
+        # Dataset identity is resolved and authorized before any database write,
+        # uploaded package load or subprocess scheduling happens.
+        resolved_dataset_id = resolve_dataset_id(dataset_id, hyperparameters or {})
+        require_training_dataset(resolved_dataset_id)
+        registry = dataset_registry or DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2", legacy_earth_package_dir=EARTH_MERRA2_V1_DIR)
+        dataset_binding = registry.build_training_binding(resolved_dataset_id)
 
         source = _normalize_training_data_source(data_source)
 
@@ -140,6 +153,9 @@ class TrainingService:
                 "custom_model_params",
             ])
         preserved_hypers = {key: raw_hypers[key] for key in preserved_keys if key in raw_hypers}
+        # The resolved id is the authority; the legacy key is kept in sync so the
+        # training CLI and older readers see the same dataset.
+        raw_hypers = {**raw_hypers, "training_dataset": resolved_dataset_id}
         payload_hypers = normalize_training_hyperparameters(raw_hypers)
         payload_hypers.update(preserved_hypers)
         # Labels are organization metadata, never model/cache identity or runner arguments.
@@ -166,6 +182,7 @@ class TrainingService:
                 hyperparameters=json.dumps(payload_hypers),
                 custom_model_name=custom_model_name,
                 status="pending",
+                **dataset_binding,
             )
             session.add(task)
             await session.flush()

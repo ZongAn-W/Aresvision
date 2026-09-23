@@ -41,6 +41,7 @@ AresVision_backend/backend/.env
 *.db-wal
 
 # Backend runtime datasets and generated caches
+AresVision_backend/backend/data/earth/
 AresVision_backend/backend/data/approved/
 AresVision_backend/backend/data/aresvision.db
 AresVision_backend/backend/data/mcd/

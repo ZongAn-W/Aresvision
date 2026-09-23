@@ -19,8 +19,10 @@ import TimelineController from './DataOverviewPage/TimelineController';
 import AICopilotWidget from './DataOverviewPage/AICopilotWidget'; 
 import GlobeLegend from './DataOverviewPage/GlobeLegend';
 import PointProbeModal from './DataOverviewPage/PointProbeModal';
+import PlanetSceneSwitch from './DataOverviewPage/PlanetSceneSwitch';
+import EarthOverviewScene from './DataOverviewPage/EarthOverview/EarthOverviewScene.jsx';
 
-const DataOverviewPageContent = () => {
+const DataOverviewPageContent = ({ sceneSwitch = null }) => {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
@@ -309,7 +311,11 @@ const DataOverviewPageContent = () => {
   }, [gestureEnabled, handleClosePointProbe, handleGlobeClick, isZh, mapGesturePointerToClientPoint, pointProbe, setIsPlayingTimeline, setOnGesture]);
 
   useEffect(() => () => {
+    // 卸载时取消所有在途请求并清掉定时器，避免旧回包写入持久的 Mars provider。
+    if (mainAbortRef.current) mainAbortRef.current.abort();
+    if (overlayAbortRef.current) overlayAbortRef.current.abort();
     if (pointProbeAbortRef.current) pointProbeAbortRef.current.abort();
+    clearInterval(timerRef.current);
   }, []);
 
   useEffect(() => {
@@ -541,7 +547,7 @@ const DataOverviewPageContent = () => {
         </div>
 
         <div style={{ pointerEvents: 'auto' }}>
-          <SidebarMenu />
+          <SidebarMenu sceneSwitch={sceneSwitch} />
         </div>
 
         <div style={{ pointerEvents: 'auto' }}>
@@ -572,10 +578,40 @@ const DataOverviewPageContent = () => {
   );
 };
 
+/**
+ * 总览场景选择：默认火星，保留原有 Mars 实现文件与 provider。
+ *
+ * Mars 与 Earth 互斥挂载（不做 hidden 双挂载），切换前统一暂停 Mars 播放，
+ * Earth 的基础选择保存在本层，返回时按当前 descriptor fingerprint 重新校验加载。
+ */
+function OverviewSceneContent() {
+  const [planet, setPlanet] = useState('mars');
+  const [earthSelection, setEarthSelection] = useState({ date: null, variable: 'TO3', point: null });
+  const { setIsPlayingTimeline } = useDataOverview();
+
+  const switchPlanet = useCallback((next) => {
+    if (next === planet) return;
+    // 切换前暂停 Mars 播放；Mars content 卸载时会 abort 在途请求并取消 timer。
+    setIsPlayingTimeline(false);
+    setPlanet(next);
+  }, [planet, setIsPlayingTimeline]);
+
+  const sceneSwitch = <PlanetSceneSwitch value={planet} onChange={switchPlanet} />;
+
+  return planet === 'earth'
+    ? (
+      <EarthOverviewScene
+        selection={earthSelection}
+        onSelectionChange={setEarthSelection}
+        sceneSwitch={sceneSwitch}
+      />
+    )
+    : <DataOverviewPageContent sceneSwitch={sceneSwitch} />;}
+
 export default function DataOverviewPage() {
   return (
     <DataOverviewProvider>
-      <DataOverviewPageContent />
+      <OverviewSceneContent />
     </DataOverviewProvider>
   );
 }

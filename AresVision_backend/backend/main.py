@@ -24,6 +24,8 @@ from fastapi.responses import ORJSONResponse, FileResponse
 
 from config import (
     API_PREFIX,
+    EARTH_MERRA2_DIR,
+    EARTH_MERRA2_V1_DIR,
     OVERVIEW_MCD_VARIABLES,
     PENDING_REVIEW_DIR,
     TRAINING_WEIGHTS_DIR,
@@ -48,6 +50,8 @@ from services.training_weight_service import TrainingWeightService
 from services.user_data_service import UserDataService
 from services.personal_data_source_service import PersonalDataSourceService
 from services.data_governance_service import DataGovernanceService
+from services.dataset_registry import DatasetRegistry
+from services.earth_overview_service import EarthOverviewService
 from services.personal_data_source_service import SingleYearDataView
 from core.analysis_transforms import AnalysisTransforms
 from core.predict_transforms import PredictTransforms
@@ -61,6 +65,8 @@ from routers import user_data as user_data_router_module
 from routers import feedback as feedback_router_module
 from routers import training as training_router_module
 from routers import user_models as user_models_router_module
+from routers import datasets as datasets_router_module
+from routers import earth_overview as earth_overview_router_module
 
 # ─── 日志配置 ───
 logging.basicConfig(
@@ -330,6 +336,11 @@ async def lifespan(app: FastAPI):
     data_governance_service = DataGovernanceService()
     app.state.data_governance_service = data_governance_service
 
+    # 数据集注册表（只读目录；构造不读取文件，首次查询时才校验小包）
+    app.state.dataset_registry = DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2", legacy_earth_package_dir=EARTH_MERRA2_V1_DIR)
+    # 二维地球总览数值服务（复用同一注册表实例与已验证快照）
+    app.state.earth_overview_service = EarthOverviewService(app.state.dataset_registry)
+
     # 2. 领域服务：可视化与 ML 数据准备
     logger.info("[2/5] 初始化分析与 ML 准备服务...")
     analysis_service = AnalysisService(data_service)
@@ -449,6 +460,8 @@ app.include_router(user_data_router_module.router,     prefix=API_PREFIX)
 app.include_router(feedback_router_module.router,      prefix=API_PREFIX)
 app.include_router(training_router_module.router,        prefix=API_PREFIX)
 app.include_router(user_models_router_module.router,      prefix=API_PREFIX)
+app.include_router(datasets_router_module.router,         prefix=API_PREFIX)
+app.include_router(earth_overview_router_module.router,   prefix=API_PREFIX)
 
 
 # ─── 健康检查 ───

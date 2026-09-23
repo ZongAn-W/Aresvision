@@ -15,7 +15,7 @@ AresVision 面向火星大气数据分析与时空预测实验，以 OpenMARS �
 
 ## 快速接手：先读这一节
 
-文档最近核对日期：**2026-09-23**。本次根据源码核对架构与功能边界，未执行完整应用联调；这不是运行健康证明。分支、未提交修改、运行进程和数据是否齐备属于实时状态，每次接手都应重新检查。
+文档最近核对日期：**2026-09-24**。本次核对 Earth v2 原始数据预处理、全球网格、独立原始单元抽查和 DLinear CPU 冒烟；历史功能的测试范围见对应专题文档。Earth 网页训练与预测仍未开放。分支、未提交修改、运行进程和数据是否齐备属于实时状态，每次接手都应重新检查。
 
 | 需要先知道的事 | 当前约定 |
 | --- | --- |
@@ -51,6 +51,10 @@ AresVision 面向火星大气数据分析与时空预测实验，以 OpenMARS �
 - 支持 `.nc`、`.nc4`、`.netcdf` 文件上传、校验，以及数据贡献审核。
 - 区分默认数据、用户上传数据与管理员数据治理入口；训练使用服务器管理的数据集。
 - 包含 MCD 总览数据、NOMAD 网格数据和 MOLA 地形资源的构建脚本。
+- 提供 MERRA-2 地球臭氧日数据的小包构建、独立读取、预览和训练冒烟脚本；见 [地球小数据包](docs/earth-compact-dataset.md)。
+- 已注册服务器数据集目录：`GET /api/datasets` 与 `GET /api/datasets/{dataset_id}` 返回四个固定数据集（`openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v1`、`earth_merra2_daily_v2`）的元数据、版本、发布指纹、可用状态与能力声明。约定与状态解释见 [数据集注册表](docs/dataset-registry.md)。
+- 数据总览支持“火星 / 地球”切换：地球场景按真实日期查看 MERRA-2 五个变量的二维全球场、逐日播放、点位时间序列与覆盖区域加权均值，见 [二维地球数据总览](docs/earth-overview.md)。
+- 后续扩展见 [火星 / 地球共用分析工作台方案](docs/plans/2026-09-23-earth-shared-analysis-workbench.md)，覆盖三维地球、三类分析模式与共用图表；这是用户确认范围后的待实施方案，当前能力仍以已实现章节为准。
 
 ### 模型训练
 
@@ -60,6 +64,7 @@ AresVision 面向火星大气数据分析与时空预测实验，以 OpenMARS �
 - 支持上传单文件 PyTorch 模型，由平台统一负责数据加载、训练循环、评估和权重保存。
 - 支持账号私有的多标签分组：启动训练时选择标签，历史记录中搜索、按标签交集筛选，单条或批量添加、移除标签；标签可新建、重命名与删除。操作说明与接口见 [训练模型标签](docs/training-model-tags.md)。
 - 训练历史默认以摘要卡片展示关键参数；完整超参数按记录展开查看，长的自定义参数以键值列表呈现，避免单条记录占满页面。
+- Earth 训练的下一步见 [DLinear 地球训练接入实施方案](docs/plans/2026-09-23-earth-dlinear-training.md)：过去 7 天预测未来 3 天、训练任务复用及完整 checkpoint 契约；这是待实施计划，不代表地球训练已开放。
 
 ### 预测与模型对比
 
@@ -98,11 +103,11 @@ AresVision/
 │   ├── config.py              # 路径、数据、模型及环境配置
 │   ├── auth/                  # 认证与访问依赖
 │   ├── core/                  # 数据变换、预测模型与评估指标
-│   ├── routers/               # 数据、预测、训练、AI、用户等 API
+│   ├── routers/               # 数据、预测、训练、数据集目录、AI、用户等 API
 │   ├── schemas/               # 请求与响应结构
-│   ├── services/              # 业务编排、任务、缓存和数据治理
+│   ├── services/              # 业务编排、任务、数据集注册、缓存和数据治理
 │   ├── training_backbones/    # 模型注册、自定义模型执行器和实验架构
-│   ├── database/              # 数据模型与初始化
+│   ├── database/              # 数据模型、初始化与增量迁移
 │   ├── scripts/               # 数据导入与资源构建
 │   ├── tests/                 # 后端回归测试
 │   ├── data/                  # 运行时数据、上传文件与缓存
@@ -131,6 +136,8 @@ AresVision/
 | --- | --- | --- |
 | 页面路由、导航 | [App.jsx](frontend/src/App.jsx)、[Navbar.jsx](frontend/src/components/Navbar.jsx) | [main.py](AresVision_backend/backend/main.py) 注册 API 与静态文件服务 |
 | 数据总览、球面与时间轴 | [DataOverviewPage.jsx](frontend/src/pages/DataOverviewPage.jsx)、[SphericalFieldCanvas.jsx](frontend/src/components/SphericalFieldCanvas.jsx) | [analysis.py](AresVision_backend/backend/routers/analysis.py)、[mcd_overview_data_service.py](AresVision_backend/backend/services/mcd_overview_data_service.py) |
+| 二维地球总览 | [EarthOverviewScene.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthOverviewScene.jsx)、[EarthMap2D.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthMap2D.jsx)、[PlanetSceneSwitch.jsx](frontend/src/pages/DataOverviewPage/PlanetSceneSwitch.jsx) | [earth_overview.py](AresVision_backend/backend/routers/earth_overview.py)、[earth_overview_service.py](AresVision_backend/backend/services/earth_overview_service.py) |
+| 数据集注册与查询 | — | [datasets.py](AresVision_backend/backend/routers/datasets.py)、[dataset_registry.py](AresVision_backend/backend/services/dataset_registry.py)、[dataset_identity.py](AresVision_backend/backend/services/dataset_identity.py)、[earth_dataset_metadata.py](AresVision_backend/backend/services/earth_dataset_metadata.py) |
 | 上传数据、来源切换、治理 | [ExplorePage.jsx](frontend/src/pages/ExplorePage.jsx)、[rawDatasetUsage.js](frontend/src/pages/ExplorePage/rawDatasetUsage.js) | [upload.py](AresVision_backend/backend/routers/upload.py)、[user_overview_source_service.py](AresVision_backend/backend/services/user_overview_source_service.py)、[data_governance_service.py](AresVision_backend/backend/services/data_governance_service.py) |
 | 模型训练与任务管理 | [ModelTrainingPage.jsx](frontend/src/pages/ModelTrainingPage.jsx)、[TrainingContext.jsx](frontend/src/contexts/TrainingContext.jsx) | [training.py](AresVision_backend/backend/routers/training.py)、[training_service.py](AresVision_backend/backend/services/training_service.py) |
 | 模型架构、训练参数 | [DynamicModelParamsForm.jsx](frontend/src/pages/ModelTrainingPage/DynamicModelParamsForm.jsx) | [model_zoo.py](AresVision_backend/backend/training_backbones/model_zoo.py)、[training_channels.py](AresVision_backend/backend/services/training_channels.py) |
@@ -180,7 +187,27 @@ flowchart LR
 4. 任务进度、Loss、日志及产物路径写入任务记录；前端 `TrainingContext` 通过轮询与 WebSocket 接收更新。
 5. 训练完成后还需存在有效权重文件才会标记模型可用；预测使用任务元数据还原模型配置。
 
-`training_dataset` 当前区分 `openmars_mcd` 与 `mcd_overview`。迁移学习来源可为已有任务或上传权重，冻结策略为 `none`、`backbone`、`head`。参数兼容性以规范化逻辑和加载器为准，不能仅替换权重路径。
+`training_dataset` 当前区分 `openmars_mcd` 与 `mcd_overview`。请求可用顶层 `dataset_id` 或旧字段 `hyperparameters.training_dataset` 指定；两处冲突、未知 ID 和非字符串值在创建任务前拒绝，Earth 训练返回 409。迁移学习来源可为已有任务或上传权重，冻结策略为 `none`、`backbone`、`head`。参数兼容性以规范化逻辑和加载器为准，不能仅替换权重路径。
+
+### 数据集注册表与训练任务身份
+
+1. `main.py` 在 lifespan 中装配 `DatasetRegistry`；构造不读取文件，`GET /api/datasets` 首次查询时才校验已注册小包。
+2. Earth 描述符由 manifest 与 NetCDF 实际内容计算，并与固定发布指纹比对；不匹配时返回 `invalid` 状态而不是报错。
+3. 训练请求先解析并校验数据集身份，再执行数据库写入、上传模型加载和子进程调度；被拒绝的请求没有副作用。
+4. 任务身份写入 `model_training_tasks` 的五个独立列，不并入超参数，因此不会进入训练 CLI 参数。
+5. 旧任务在启动迁移中一次性回填来源与状态，已有绑定与旧 JSON 不被改写。
+
+固定 ID、状态含义、错误码与迁移规则见 [数据集注册表](docs/dataset-registry.md)。
+
+### 二维地球总览与场景切换
+
+1. `#/overview` 顶部持有 `planet` 选择，默认火星；火星与地球**互斥挂载**，地球不加载火星三维背景、摄像头与查询组件。
+2. 地球场景先查 `GET /api/datasets/earth_merra2_daily_v2` 取发布指纹与日期范围，再用 `expected_fingerprint` 请求区域场、区域序列与点位序列。
+3. 后端由 `EarthOverviewService` 从注册表的**已验证只读快照**取数：每个进程按发布 ID 各保留一份五场数组，不重复打开 NetCDF。
+4. 前端按请求身份（含 dataset、fingerprint、变量、日期、坐标）做 token + context 双重检查，迟到的回包不会覆盖新选择。
+5. 日期、变量与点位选择保存在页面层，Earth → Mars → Earth 保留选择；离开地球时暂停并清理全部请求与定时器。
+
+接口、区域均值公式、渲染边界、底图来源与错误码见 [二维地球数据总览](docs/earth-overview.md)。
 
 ### 已训练模型预测与缓存
 
@@ -202,7 +229,7 @@ flowchart LR
 | `McdCacheJob`、`McdCacheArtifact` | MCD 缓存构建任务和产物索引 |
 | `DatasetLineageEvent`、`DatasetQualitySnapshot` | 数据血缘与质量记录 |
 | `UserModelPackage`、`TrainingWeightFile` | 自定义模型包与上传权重 |
-| `ModelTrainingTask` | 训练配置、状态、指标、日志及权重路径 |
+| `ModelTrainingTask` | 训练配置、状态、指标、日志、权重路径及数据集身份五列（`dataset_id`、`dataset_version`、`dataset_fingerprint`、`dataset_identity_status`、`dataset_snapshot`） |
 | `TrainingModelTag`、`TrainingTaskTag` | 账号私有标签及其与训练任务的多对多关联，不属于模型超参数或预测缓存身份 |
 | `PredictionAnalysisCache` | 预测分析缓存索引与计算状态 |
 | `PersonalSourceBuildState` | 个人数据源构建状态 |
@@ -213,6 +240,7 @@ flowchart LR
 
 - **UI 开放范围与保留 API 不完全相同。** [predictModelModes.js](frontend/src/pages/PredictPage/predictModelModes.js) 当前只定义已训练模型与多模型对比；默认预测服务仍保留在后端，不能据此描述成三个前端模式。
 - **个人上传不是训练入口。** 当前训练请求固定使用服务器管理的数据源；预测的数据源校验也拒绝 `personal`。总览可使用上传来源，不代表同一来源可直接用于训练或预测。
+- **地球已开放二维日数据总览，但训练与预测仍未接通。** 数据总览可按真实日期查看 MERRA-2 五个变量的全球场、逐日播放、点位曲线与覆盖区域加权均值；**没有**三维地球、风场粒子、派生风速、自选多边形区域、重网格、平滑/插值、臭氧单位换算、导出、PFI、季节诊断或 Earth Copilot。地球训练与预测入口仍未开放，训练请求返回 409 `dataset_training_not_supported`。默认 v2 的全球均值按球面单元面积加权，旧 v1 仍保留区域抽样语义。地球日历、真实网格坐标和 DU 单位须保留，不能直接套用 MY/Ls 与火星单位。边界详情见 [二维地球数据总览](docs/earth-overview.md)。
 - **标签按账号私有。** 管理员可用自己的标签整理可访问任务，其他用户看不到这些标记。删除标签只移除该标签及关联，保留训练记录、参数、日志和权重；标签功能不提供参数预设、多级文件夹或共享标签。
 - **官方数据发布尚未启用。** 当前装配的是 `DisabledOfficialMcdSourcePublisher`；上传、审核与发布为官方 MCD 数据是不同阶段。
 - **以实际渲染为准。** 多模型比较的显示范围由可见性配置控制，存在比较接口或图表文件不代表所有面板均已在 UI 开放。
@@ -236,8 +264,11 @@ flowchart LR
 | 默认预测权重 | `models/predrnnv2/` | 使用默认预测链路时需准备与通道组合匹配的权重 |
 | 预处理张量 | `data/processed_tensors.pt` | 可选；预测数据服务在未找到该文件时回退读取原始 NetCDF |
 | 训练产物 | `models/training_results/` | 训练任务生成；已训练模型预测依赖有效权重和任务元数据 |
+| 地球臭氧小包 | `data/earth/merra2_daily_v2/` | 默认 Earth 发布；从 MERRA-2 原始 SLV/RAD 全量计算 UTC 日均与球面单元面积聚合。旧 `merra2_daily_v1/` 原样保留，Earth 训练与预测尚未接通；数据文件不在 Git 中 |
 
 具体字段与读取规则见 [数据服务](AresVision_backend/backend/services/data_service.py) 和 [预测数据服务](AresVision_backend/backend/services/predict_data_service.py)。文件名符合规则不代表数据结构一定兼容。
+
+默认 Earth v2 保留 2020–2021 年 731 天、36 × 72 全球 5° 网格的臭氧、风、温度与短波辐射，使用真实日期与原始物理单位。构建命令、范围限制、训练划分和校验入口见 [地球小数据包](docs/earth-compact-dataset.md)。
 
 ### 2. 启动后端
 
@@ -301,6 +332,16 @@ npm run dev
 
 访问 <http://localhost:5173>。Vite 将 `/api` 请求代理到 `http://localhost:8000`，开发时需同时运行前后端。
 
+### Windows 一键启动
+
+工作区根目录提供 `start-aresvision.cmd` / `start-aresvision.ps1`，可一次启动后端和前端并打开浏览器。默认使用生产前端服务：它从 `frontend/dist` 提供静态文件，并将 `/api` 转发到后端 `8000` 端口；修改前端源码后先在 `frontend/` 执行 `npm run build`。需要热更新时使用：
+
+```powershell
+.\start-aresvision.ps1 -FrontendMode Dev
+```
+
+生产模式使用 `frontend/dist`，开发模式使用 Vite 源码服务；两种模式的访问地址都是 `http://127.0.0.1:5173`。
+
 ## 环境配置
 
 配置文件位于 `AresVision_backend/backend/.env`，实际读取规则以 [config.py](AresVision_backend/backend/config.py) 为准。
@@ -315,6 +356,8 @@ npm run dev
 | `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASSWORD` | 邮件验证码服务配置 |
 | `ARESVISION_MCD_DIR` | 覆盖常规 MCD 数据目录 |
 | `MCD_RAW_3H_DIR` | MCD 原始数据目录 |
+| `ARESVISION_EARTH_MERRA2_V1_DIR` | 旧 v1 兼容包目录，默认 `data/earth/merra2_daily_v1`；不会重定向到 v2 |
+| `ARESVISION_EARTH_MERRA2_DIR` | 覆盖已注册的 Earth MERRA-2 小包目录，默认 `data/earth/merra2_daily_v2`；相对路径相对后端启动目录 |
 | `TRAINING_PYTHON_PATH` | 训练子进程使用的 Python，默认使用后端当前解释器 |
 | `ARESVISION_MOLA_TOPOGRAPHY_PATH` | MOLA 地形 NetCDF 路径，默认使用平台地形资源 |
 | `ARESVISION_MAX_UPLOAD_SIZE_MB` | 数据上传大小上限，默认 512 MB |
@@ -353,6 +396,8 @@ python -m pytest tests
 
 测试覆盖数据读取与对齐、模型接入、训练配置、预测步长、缓存隔离、请求一致性及前端交互逻辑。运行所需数据或依赖以各测试为准。
 
+数据集注册相关测试为 `tests/test_dataset_identity.py`、`tests/test_dataset_registry.py`、`tests/test_dataset_routes.py`、`tests/test_training_dataset_identity_migration.py` 和 `tests/test_training_dataset_identity.py`；二维地球总览为 `tests/test_earth_overview_service.py` 与 `tests/test_earth_overview_routes.py`。`tests/conftest.py` 提供显式引用的临时 Earth 发布 fixture（`earth_release`、`earth_spatial_release`），不读取生产数据。这些测试需要新的纯英文临时目录（`--basetemp`），并应避免在同一 pytest 会话中一次性收集全部测试文件。
+
 ## 部署与分发
 
 - **单服务部署**：执行前端 `npm run build` 后，重新启动后端。后端可检测 `frontend/dist` 并托管静态页面，此时通过 `8000` 端口访问完整应用。
@@ -374,6 +419,13 @@ python -m pytest tests
 | 切换模型后仍显示旧结果 | 请求协调器、任务选择、登录作用域、前后端缓存键与产物指纹 |
 | 跨年时间轴或球面样本不一致 | MY/Ls 的对应关系、数据源覆盖区间、排序与跨 360° 回绕逻辑 |
 | 训练立即失败或显存不足 | 训练日志、训练解释器与 PyTorch 环境、输入尺寸和 batch size；失败分类在 `training_failures.py` |
+| 训练请求返回 400/409 且提示数据集 | 顶层 `dataset_id` 与 `hyperparameters.training_dataset` 是否冲突、ID 是否已注册、是否请求了尚未开放的 Earth 训练；见 [数据集注册表](docs/dataset-registry.md) |
+| `/api/datasets` 中 Earth 不是 `available` | 检查默认 v2 的 `ARESVISION_EARTH_MERRA2_DIR`（旧 v1 为 `ARESVISION_EARTH_MERRA2_V1_DIR`）、目录内的 `manifest.json` 与 `earth_merra2_daily.nc`，以及 `availability_reason` 错误码 |
+| 地球地图只有区域一块着色 | 默认 v2 应覆盖全球；若仍显示 ±60°/±120°，检查是否访问旧 v1 或未重建前端。v1 区域边界保持原义 |
+| 地球页面提示版本已变化 | 数据包被替换过；刷新页面重新读取元信息与指纹，不要手工拼接旧链接 |
+| 地球日期播放不前进 | 场仍在加载或已到最后一天；确认 `/api/datasets/earth_merra2_daily_v2/overview/field` 是否返回 200 |
+| 地球底图缺失但数据仍在 | 本地 `frontend/public/earth/ne_110m_coastline.geojson` 是否可访问；底图失败不影响日期与数据查询 |
+| 旧训练任务缺少数据集身份 | 启动日志中的身份迁移记录；迁移失败会中止启动，修复数据库后可重试 |
 | 登录重启后失效、验证码失败 | 固定 `JWT_SECRET_KEY`，核对 SMTP 配置及具体接口错误 |
 | AI 仅返回固定回答 | `AI_API_KEY`、`AI_API_URL`、`AI_MODEL_NAME` 与外部接口响应 |
 | 部署后仍是旧页面 | 是否重新构建 `frontend/dist`、重启后端，以及 `ARESVISION_FRONTEND_DIST` 是否指向另一目录 |

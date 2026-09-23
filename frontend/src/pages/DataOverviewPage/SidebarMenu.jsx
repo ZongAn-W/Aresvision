@@ -574,7 +574,7 @@ function AdvancedToggleGroup({ title, open, onToggle, children, isLight = false,
   );
 }
 
-export default function SidebarMenu() {
+export default function SidebarMenu({ sceneSwitch = null }) {
   const { settings } = useSettings();
   const { user } = useAuth();
   const isLight = settings?.theme === 'light';
@@ -738,6 +738,13 @@ export default function SidebarMenu() {
           scrollbarGutter: 'stable',
         }}
       >
+        {sceneSwitch ? (
+          <section data-testid="planet-scene-switch-slot">
+            <SectionLabel>{isZh ? '数据总览星球' : 'Overview planet'}</SectionLabel>
+            {sceneSwitch}
+          </section>
+        ) : null}
+
         <section>
           <SectionLabel>{isZh ? '分析模式' : 'Analysis mode'}</SectionLabel>
           <div style={{ display: 'grid', gap: 8 }}>

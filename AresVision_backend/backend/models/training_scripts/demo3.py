@@ -20,6 +20,10 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from config import MCD_DIR, MCD_RAW_3H_DIR  # noqa: E402
+from services.dataset_identity import (  # noqa: E402
+    require_training_dataset,
+    resolve_dataset_id,
+)
 from services.ozone_units import normalize_ozone_column_units  # noqa: E402
 from services.training_channels import (  # noqa: E402
     ARCHITECTURE_FLOAT_PARAMS,
@@ -108,6 +112,12 @@ def parse_selected_channels(value: Any) -> list[str]:
 
 
 def normalize_training_dataset(value: Any) -> str:
+    """Legacy tolerant normalizer used by old task readers and inference.
+
+    New training runs must resolve their dataset through
+    ``require_training_dataset(resolve_dataset_id(...))`` in ``main()`` before any
+    data is loaded; this helper only keeps historical reads working.
+    """
     dataset = str(value or TRAINING_DATASET_OPENMARS_MCD).strip().lower()
     return dataset if dataset in TRAINING_DATASET_IDS else TRAINING_DATASET_OPENMARS_MCD
 
@@ -740,6 +750,11 @@ def _normalize_parsed_hyperparameters(args: argparse.Namespace) -> dict[str, Any
 
 def main() -> None:
     args, _unknown = _build_parser().parse_known_args()
+    # Strict entry point: an unknown or not yet supported dataset must fail here,
+    # before any data directory is touched.
+    args.training_dataset = require_training_dataset(
+        resolve_dataset_id(None, {"training_dataset": args.training_dataset})
+    )
     hyperparameters = _normalize_parsed_hyperparameters(args)
     epochs = max(1, int(args.epochs))
     batch_size = max(1, int(args.batch_size))
