@@ -2,106 +2,21 @@ import asyncio
 import json
 import sys
 import tempfile
-import types
 from pathlib import Path
+from unittest.mock import patch
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 
-def import_training_service_with_stubs():
-    if "sqlalchemy" not in sys.modules:
-        sqlalchemy = types.ModuleType("sqlalchemy")
-        sqlalchemy.delete = lambda *args, **kwargs: None
-        sqlalchemy.select = lambda *args, **kwargs: None
-        sqlalchemy.update = lambda *args, **kwargs: None
-        sys.modules["sqlalchemy"] = sqlalchemy
-
-    if "netCDF4" not in sys.modules:
-        netcdf4 = types.ModuleType("netCDF4")
-        netcdf4.Dataset = object
-        sys.modules["netCDF4"] = netcdf4
-
-    engine = types.ModuleType("database.engine")
-    engine.async_session_maker = None
-    sys.modules["database.engine"] = engine
-
-    models = types.ModuleType("database.models")
-    models.ModelTrainingTask = object
-    models.PredictionAnalysisCache = object
-    models.User = object
-    sys.modules["database.models"] = models
-
-    data_service = types.ModuleType("services.data_service")
-    data_service.DataService = object
-    sys.modules["services.data_service"] = data_service
-
-    personal_service = types.ModuleType("services.personal_data_source_service")
-    personal_service.PersonalDataSourceService = object
-    sys.modules["services.personal_data_source_service"] = personal_service
-
+def import_training_service():
     from services.training_service import TrainingService
-
     return TrainingService
 
 
-def import_training_router_with_stubs():
-    import_training_service_with_stubs()
-
-    if "fastapi" not in sys.modules:
-        fastapi = types.ModuleType("fastapi")
-
-        class HTTPException(Exception):
-            def __init__(self, status_code, detail):
-                super().__init__(detail)
-                self.status_code = status_code
-                self.detail = detail
-
-        class APIRouter:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def get(self, *args, **kwargs):
-                return lambda fn: fn
-
-            def post(self, *args, **kwargs):
-                return lambda fn: fn
-
-            def delete(self, *args, **kwargs):
-                return lambda fn: fn
-
-            def websocket(self, *args, **kwargs):
-                return lambda fn: fn
-
-        fastapi.APIRouter = APIRouter
-        fastapi.Depends = lambda dependency=None: dependency
-        fastapi.File = lambda default=None: default
-        fastapi.HTTPException = HTTPException
-        fastapi.Request = object
-        fastapi.UploadFile = object
-        fastapi.WebSocket = object
-        fastapi.WebSocketDisconnect = Exception
-        sys.modules["fastapi"] = fastapi
-
-    auth_dependencies = types.ModuleType("auth.dependencies")
-    auth_dependencies.get_current_user = lambda: None
-    sys.modules["auth.dependencies"] = auth_dependencies
-
-    schemas_training = types.ModuleType("schemas.training")
-    schemas_training.LogResponse = object
-    schemas_training.TrainingStartRequest = object
-    schemas_training.TrainingTaskResponse = object
-    schemas_training.TrainingWeightFileListResponse = object
-    schemas_training.TrainingWeightFileResponse = object
-    sys.modules["schemas.training"] = schemas_training
-
-    inference_service = types.ModuleType("services.inference_service")
-    inference_service.InferenceService = lambda: object()
-    sys.modules["services.inference_service"] = inference_service
-
+def import_training_router():
     from routers import training
-
     return training
 
 
@@ -242,30 +157,15 @@ class FakeTrainingWeightFile:
 
 
 async def test_training_weight_service_stores_valid_weight_and_rejects_bad_extension():
-    import importlib
-
-    if "config" in sys.modules:
-        sys.modules.pop("config")
-    if "database.engine" in sys.modules:
-        sys.modules.pop("database.engine")
-    models = types.ModuleType("database.models")
-    models.TrainingWeightFile = FakeTrainingWeightFile
-    sys.modules["database.models"] = models
-
-    engine = types.ModuleType("database.engine")
-    engine.async_session_maker = None
-    sys.modules["database.engine"] = engine
-
-    training_weight_service = importlib.import_module("services.training_weight_service")
+    from services import training_weight_service
 
     class FakeTorch:
         @staticmethod
         def load(path, map_location=None, weights_only=True):
             return {"layer.weight": object()}
 
-    training_weight_service.torch = FakeTorch
     fake_sessionmaker = FakeSessionMaker()
-    with tempfile.TemporaryDirectory(prefix="aresvision_weight_test_") as temp_dir:
+    with patch.object(training_weight_service, "torch", FakeTorch), tempfile.TemporaryDirectory(prefix="aresvision_weight_test_") as temp_dir:
         service = training_weight_service.TrainingWeightService(
             storage_root=Path(temp_dir),
             sessionmaker=fake_sessionmaker,
@@ -314,7 +214,7 @@ def _transfer_request_hypers():
 
 
 async def test_transfer_source_rejects_incomplete_source_task():
-    TrainingService = import_training_service_with_stubs()
+    TrainingService = import_training_service()
     training_module = sys.modules["services.training_service"]
     training_module.async_session_maker = FakeTransferSessionMaker(
         FakeTransferTask(status="running")
@@ -334,7 +234,7 @@ async def test_transfer_source_rejects_incomplete_source_task():
 
 
 async def test_transfer_source_task_injects_weight_path_for_compatible_completed_task():
-    TrainingService = import_training_service_with_stubs()
+    TrainingService = import_training_service()
     training_module = sys.modules["services.training_service"]
     with tempfile.TemporaryDirectory(prefix="aresvision_transfer_source_") as temp_dir:
         source_path = Path(temp_dir) / "source.pth"
@@ -354,7 +254,7 @@ async def test_transfer_source_task_injects_weight_path_for_compatible_completed
 
 
 async def test_uploaded_training_contract():
-    TrainingService = import_training_service_with_stubs()
+    TrainingService = import_training_service()
     service = TrainingService()
 
     official_script, official_hypers = service._resolve_training_entrypoint(
@@ -386,7 +286,7 @@ async def test_uploaded_training_contract():
 
 
 def test_official_entrypoint_strips_uploaded_private_fields():
-    TrainingService = import_training_service_with_stubs()
+    TrainingService = import_training_service()
     service = TrainingService()
 
     _script, hypers = service._resolve_training_entrypoint(
@@ -413,7 +313,7 @@ def test_official_entrypoint_strips_uploaded_private_fields():
 
 
 async def test_training_route_maps_permission_error_to_403():
-    training = import_training_router_with_stubs()
+    training = import_training_router()
 
     class PermissionDeniedTrainingService:
         async def start_training(self, **kwargs):
@@ -429,6 +329,7 @@ async def test_training_route_maps_permission_error_to_403():
         "data_source": "default",
         "model_source": "uploaded",
         "uploaded_model_id": FakePackage.id,
+        "tag_ids": [],
     })()
     current_user = type("User", (), {"id": 3})()
     original_service = training.training_service

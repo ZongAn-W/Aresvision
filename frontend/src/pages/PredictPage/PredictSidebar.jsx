@@ -10,6 +10,9 @@ import { buildTrainedModelParameterItems } from './trainedModelSelection';
 import { buildCompareModelSummary, getCompareSelectionState } from './CompareTrainingModels/compareTrainingModelsData';
 import { PREDICT_MODEL_MODE_COMPARE, PREDICT_MODEL_MODE_TRAINED } from './predictModelModes';
 import { clampPredictionHorizon } from './predictionHorizon';
+import { useTrainingTags } from '../../components/TrainingTags/useTrainingTags';
+import { TagChips, TagFilter } from '../../components/TrainingTags/TagControls';
+import { addVisibleSelection, filterTaggedTasks } from '../../components/TrainingTags/trainingTagFilters';
 
 const SHORTHAND_MAP = {
   Temperature: 'T',
@@ -96,6 +99,7 @@ function ActionButton({ children, secondary = false, disabled = false, onClick, 
 
 function TrainedModelDropdown({
   options,
+  currentOption,
   value,
   onChange,
   disabled,
@@ -105,7 +109,7 @@ function TrainedModelDropdown({
 }) {
   const rootRef = useRef(null);
   const [open, setOpen] = useState(false);
-  const selectedOption = options.find((option) => option.id === Number(value)) || null;
+  const selectedOption = options.find((option) => option.id === Number(value)) || currentOption || null;
   const hasOptions = options.length > 0;
   const isDisabled = disabled || loading || !hasOptions;
   const displayText = loading
@@ -254,6 +258,7 @@ function TrainedModelDropdown({
                   <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.ice40, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.45 }}>
                     {summary.modelSource} · W{summary.window || '--'} · H{summary.horizon || '--'} · {summary.dataSource}
                   </span>
+                  <TagChips tags={option.task.tags} />
                 </span>
                 {active ? (
                   <CheckRoundedIcon aria-hidden="true" sx={{ color: C.blue, fontSize: 16, flexShrink: 0 }} />
@@ -282,11 +287,22 @@ function ModelSourceControl({
   isZh,
 }) {
   const hasTrainingModels = trainingModelOptions.length > 0;
+  const tagState = useTrainingTags();
+  const [tagFilter, setTagFilter] = useState({ tagIds: [], untagged: false });
+  useEffect(() => {
+    if (tagState.loading || tagState.error) return;
+    const known = new Set(tagState.tags.map(tag => tag.id));
+    setTagFilter(prev => prev.tagIds.some(id => !known.has(id)) ? { ...prev, tagIds: prev.tagIds.filter(id => known.has(id)) } : prev);
+  }, [tagState.tags, tagState.loading, tagState.error]);
+  const taggedOptions = useMemo(() => {
+    const visible = new Set(filterTaggedTasks(trainingModelOptions.map(option => option.task), tagFilter).map(task => task.id));
+    return trainingModelOptions.filter(option => visible.has(option.id));
+  }, [trainingModelOptions, tagFilter]);
   const parameterItems = buildTrainedModelParameterItems(selectedTrainingOption?.task, { isZh });
   const [searchTerm, setSearchTerm] = useState('');
   const normalizedSearch = searchTerm.trim().toLowerCase();
   const filteredCompareOptions = useMemo(() => (
-    trainingModelOptions.filter((option) => {
+    taggedOptions.filter((option) => {
       if (!normalizedSearch) return true;
       const summary = buildCompareModelSummary(option.task);
       return [
@@ -297,7 +313,9 @@ function ModelSourceControl({
         summary.dataSource,
       ].join(' ').toLowerCase().includes(normalizedSearch);
     })
-  ), [normalizedSearch, trainingModelOptions]);
+  ), [normalizedSearch, taggedOptions]);
+  const selectedCompareOptions = trainingModelOptions.filter(option => selectedCompareTrainingTaskIds.includes(option.id));
+  const hiddenSelectedCount = selectedCompareOptions.filter(option => !filteredCompareOptions.some(visible => visible.id === option.id)).length;
   const compareSelection = getCompareSelectionState(selectedCompareTrainingTaskIds);
   const modeItems = [
     {
@@ -336,11 +354,16 @@ function ModelSourceControl({
         onChange={setModelMode}
         disabled={requestContextLocked}
       />
+      <TagFilter tags={tagState.tags} {...tagFilter} onChange={setTagFilter} isZh={isZh} disabled={tagState.loading || requestContextLocked} />
+      {tagState.error && <div role="alert" className="training-tag-toolbar" style={{ color: C.mars }}>
+        {tagState.error}<button className="training-tag-button" onClick={() => tagState.refresh().catch(() => {})}>{isZh ? '重试标签' : 'Retry tags'}</button>
+      </div>}
 
       {modelMode === PREDICT_MODEL_MODE_TRAINED ? (
         <div style={{ marginTop: 14, display: 'grid', gap: 8 }}>
           <TrainedModelDropdown
-            options={trainingModelOptions}
+            options={taggedOptions}
+            currentOption={selectedTrainingOption}
             value={selectedTrainingTaskId || ''}
             disabled={requestContextLocked || trainingTasksLoading || !hasTrainingModels}
             loading={trainingTasksLoading}
@@ -354,6 +377,11 @@ function ModelSourceControl({
               ? `${isZh ? '当前模型' : 'Current model'}: ${selectedTrainingOption?.label || '--'}`
               : (isZh ? '暂无可用于预测分析的已完成训练模型。' : 'No completed trained model is available for prediction analysis.')}
           </div>
+          <TagChips tags={selectedTrainingOption?.task.tags} />
+          {selectedTrainingOption && !taggedOptions.some(option => option.id === selectedTrainingOption.id) && (
+            <div className="training-tag-hint" role="status">{isZh ? '当前模型不在筛选结果内，仍保留选中。' : 'The current model is outside these filters and remains selected.'}</div>
+          )}
+          {hasTrainingModels && taggedOptions.length === 0 && <div className="training-tag-hint">{isZh ? '没有匹配标签的可用模型。' : 'No available models match these tags.'}</div>}
 
           {parameterItems.length > 0 ? (
             <div
@@ -433,8 +461,8 @@ function ModelSourceControl({
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <button
               type="button"
-              disabled={requestContextLocked || !hasTrainingModels}
-              onClick={() => setSelectedCompareTrainingTaskIds(filteredCompareOptions.map((option) => option.id))}
+              disabled={requestContextLocked || !filteredCompareOptions.length}
+              onClick={() => setSelectedCompareTrainingTaskIds(previous => addVisibleSelection(previous, filteredCompareOptions.map((option) => option.id)))}
               style={{
                 padding: '7px 11px',
                 borderRadius: 999,
@@ -446,7 +474,7 @@ function ModelSourceControl({
                 cursor: hasTrainingModels ? 'pointer' : 'not-allowed',
               }}
             >
-              {isZh ? '全选' : 'All'}
+              {isZh ? '全选当前结果' : 'Select visible'}
             </button>
             <button
               type="button"
@@ -463,12 +491,18 @@ function ModelSourceControl({
                 cursor: compareSelection.count > 0 ? 'pointer' : 'not-allowed',
               }}
             >
-              {isZh ? '清空' : 'Clear'}
+              {isZh ? '清空选择' : 'Clear selection'}
             </button>
             <span style={{ marginLeft: 'auto', color: compareSelection.canCompare ? C.green : C.ice50, fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 700 }}>
-              {isZh ? `已选 ${compareSelection.count}` : `${compareSelection.count} selected`}
+              {isZh ? `已选 ${compareSelection.count}，筛选外 ${hiddenSelectedCount}` : `${compareSelection.count} selected, ${hiddenSelectedCount} hidden`}
             </span>
           </div>
+
+          {selectedCompareOptions.length > 0 && <div className="training-tag-chips" aria-label={isZh ? '已选对比模型' : 'Selected comparison models'}>
+            {selectedCompareOptions.map(option => <button type="button" key={option.id} className="training-tag-button" disabled={requestContextLocked}
+              aria-label={isZh ? `取消选择 ${option.label}` : `Deselect ${option.label}`}
+              onClick={() => setSelectedCompareTrainingTaskIds(ids => ids.filter(id => id !== option.id))}>{option.label} ×</button>)}
+          </div>}
 
           <div style={{ maxHeight: 280, overflowY: 'auto', overflowX: 'hidden', paddingRight: 4, display: 'grid', gap: 8 }}>
             {filteredCompareOptions.map((option) => {
@@ -511,6 +545,7 @@ function ModelSourceControl({
                     <span style={{ display: 'block', color: C.ice40, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.55 }}>
                       {summary.modelSource} · W{summary.window || '--'} · H{summary.horizon || '--'} · {summary.dataSource}
                     </span>
+                    <TagChips tags={option.task.tags} />
                   </span>
                 </label>
               );

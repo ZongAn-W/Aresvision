@@ -10,102 +10,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 
-def install_service_import_stubs():
-    import types
-
-    if "netCDF4" not in sys.modules:
-        netcdf4 = types.ModuleType("netCDF4")
-        netcdf4.Dataset = object
-        sys.modules["netCDF4"] = netcdf4
-
-    if "sqlalchemy" not in sys.modules:
-        sqlalchemy = types.ModuleType("sqlalchemy")
-        sqlalchemy.delete = lambda *args, **kwargs: None
-        sqlalchemy.select = lambda *args, **kwargs: None
-        sqlalchemy.update = lambda *args, **kwargs: None
-        sys.modules["sqlalchemy"] = sqlalchemy
-
-    engine = types.ModuleType("database.engine")
-    engine.async_session_maker = None
-    sys.modules["database.engine"] = engine
-
-    models = types.ModuleType("database.models")
-    models.ModelTrainingTask = object
-    models.PredictionAnalysisCache = object
-    models.User = object
-    sys.modules["database.models"] = models
-
-    data_service = types.ModuleType("services.data_service")
-    data_service.DataService = object
-    sys.modules["services.data_service"] = data_service
-
-    personal_service = types.ModuleType("services.personal_data_source_service")
-    personal_service.PersonalDataSourceService = object
-    sys.modules["services.personal_data_source_service"] = personal_service
-
-    training_weight_service = types.ModuleType("services.training_weight_service")
-    training_weight_service.TrainingWeightService = object
-    sys.modules["services.training_weight_service"] = training_weight_service
-
-    prediction_cache_service = types.ModuleType(
-        "services.prediction_analysis_cache"
-    )
-    prediction_cache_service.PredictionAnalysisCacheService = object
-    sys.modules[
-        "services.prediction_analysis_cache"
-    ] = prediction_cache_service
-
-    if "fastapi" not in sys.modules:
-        fastapi = types.ModuleType("fastapi")
-
-        class HTTPException(Exception):
-            def __init__(self, status_code, detail):
-                super().__init__(detail)
-                self.status_code = status_code
-                self.detail = detail
-
-        class APIRouter:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def websocket(self, *args, **kwargs):
-                return lambda fn: fn
-
-            def get(self, *args, **kwargs):
-                return lambda fn: fn
-
-            def post(self, *args, **kwargs):
-                return lambda fn: fn
-
-            def delete(self, *args, **kwargs):
-                return lambda fn: fn
-
-        fastapi.APIRouter = APIRouter
-        fastapi.Depends = lambda *args, **kwargs: None
-        fastapi.File = lambda *args, **kwargs: None
-        fastapi.HTTPException = HTTPException
-        fastapi.Request = object
-        fastapi.UploadFile = object
-        fastapi.WebSocket = object
-        fastapi.WebSocketDisconnect = Exception
-        sys.modules["fastapi"] = fastapi
-
-    auth_dependencies = types.ModuleType("auth.dependencies")
-    auth_dependencies.get_current_user = lambda: None
-    sys.modules["auth.dependencies"] = auth_dependencies
-
-    schemas_training = types.ModuleType("schemas.training")
-    schemas_training.LogResponse = object
-    schemas_training.TrainingStartRequest = object
-    schemas_training.TrainingTaskResponse = object
-    schemas_training.TrainingWeightFileListResponse = object
-    schemas_training.TrainingWeightFileResponse = object
-    sys.modules["schemas.training"] = schemas_training
-
-
 def test_training_service_ignores_historical_personal_inference_data_env():
-    install_service_import_stubs()
-
     from services.training_service import TrainingService
 
     class RecordingTrainingService(TrainingService):
@@ -145,8 +50,6 @@ def test_training_service_ignores_historical_personal_inference_data_env():
 
 
 def test_training_service_uses_default_inference_env_for_default_tasks():
-    install_service_import_stubs()
-
     from services.training_service import TrainingService
 
     class RecordingTrainingService(TrainingService):
@@ -178,8 +81,6 @@ def test_training_service_uses_default_inference_env_for_default_tasks():
 
 
 def test_test_action_ignores_historical_personal_data_env():
-    install_service_import_stubs()
-
     from routers import training as training_router
 
     class FakeTrainingService:
@@ -252,8 +153,6 @@ def test_test_action_ignores_historical_personal_data_env():
 
 
 def test_inference_rebuild_passes_saved_architecture_params(monkeypatch, tmp_path):
-    install_service_import_stubs()
-
     import torch
     from services import inference_service as inference_module
 
@@ -343,8 +242,6 @@ def test_inference_rebuild_passes_saved_architecture_params(monkeypatch, tmp_pat
 
 
 def test_inference_test_action_passes_ls_even_without_sphere(monkeypatch, tmp_path):
-    install_service_import_stubs()
-
     import torch
     from services import inference_service as inference_module
 

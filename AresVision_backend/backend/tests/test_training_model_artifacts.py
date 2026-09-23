@@ -1,7 +1,6 @@
 import asyncio
 import json
 import sys
-import types
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,54 +12,6 @@ import pytest
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
-
-
-sqlalchemy = types.ModuleType("sqlalchemy")
-sqlalchemy.delete = lambda *args, **kwargs: None
-sqlalchemy.select = lambda *args, **kwargs: None
-sqlalchemy.update = lambda *args, **kwargs: None
-sys.modules.setdefault("sqlalchemy", sqlalchemy)
-
-sqlalchemy_exc = types.ModuleType("sqlalchemy.exc")
-sqlalchemy_exc.IntegrityError = type("IntegrityError", (Exception,), {})
-sys.modules.setdefault("sqlalchemy.exc", sqlalchemy_exc)
-
-engine = types.ModuleType("database.engine")
-engine.async_session_maker = None
-sys.modules["database.engine"] = engine
-
-models = types.ModuleType("database.models")
-models.ModelTrainingTask = object
-models.PredictionAnalysisCache = object
-sys.modules["database.models"] = models
-
-data_service = types.ModuleType("services.data_service")
-data_service.DataService = object
-sys.modules["services.data_service"] = data_service
-
-personal_service = types.ModuleType("services.personal_data_source_service")
-personal_service.PersonalDataSourceService = object
-sys.modules["services.personal_data_source_service"] = personal_service
-
-ws_manager = types.ModuleType("services.ws_manager")
-ws_manager.manager = None
-sys.modules["services.ws_manager"] = ws_manager
-
-metrics = types.ModuleType("core.metrics")
-metrics.compute_error_distribution = lambda *args, **kwargs: {}
-metrics.compute_metrics = lambda *args, **kwargs: {}
-metrics.compute_test_set_metrics = lambda *args, **kwargs: {}
-sys.modules["core.metrics"] = metrics
-
-predict_model = types.ModuleType("core.predict_model")
-predict_model.PredRNNv2 = object
-sys.modules["core.predict_model"] = predict_model
-
-model_zoo = types.ModuleType("training_backbones.model_zoo")
-model_zoo.build_forecaster = lambda *args, **kwargs: None
-model_zoo.normalize_model_architecture = lambda value: value
-model_zoo.normalize_use_sphere = lambda hypers: bool(hypers.get("use_sphere"))
-sys.modules["training_backbones.model_zoo"] = model_zoo
 
 
 from schemas.training import TrainingTaskResponse  # noqa: E402

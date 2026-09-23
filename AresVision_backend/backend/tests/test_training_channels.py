@@ -1,6 +1,5 @@
 import json
 import sys
-import types
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -16,47 +15,12 @@ from services.training_channels import (  # noqa: E402
 )
 
 
-def import_training_service_with_stubs():
-    if "sqlalchemy" not in sys.modules:
-        sqlalchemy = types.ModuleType("sqlalchemy")
-        sqlalchemy.delete = lambda *args, **kwargs: None
-        sqlalchemy.select = lambda *args, **kwargs: None
-        sqlalchemy.update = lambda *args, **kwargs: None
-        sys.modules["sqlalchemy"] = sqlalchemy
-
-    if "netCDF4" not in sys.modules:
-        netcdf4 = types.ModuleType("netCDF4")
-        netcdf4.Dataset = object
-        sys.modules["netCDF4"] = netcdf4
-
-    engine = types.ModuleType("database.engine")
-    engine.async_session_maker = None
-    sys.modules["database.engine"] = engine
-
-    models = types.ModuleType("database.models")
-    models.ModelTrainingTask = object
-    models.PredictionAnalysisCache = object
-    sys.modules["database.models"] = models
-
-    data_service = types.ModuleType("services.data_service")
-    data_service.DataService = object
-    sys.modules["services.data_service"] = data_service
-
-    personal_service = types.ModuleType("services.personal_data_source_service")
-    personal_service.PersonalDataSourceService = object
-    sys.modules["services.personal_data_source_service"] = personal_service
-
-    from services.training_service import TrainingService  # noqa: E402
-
-    return TrainingService
-
-
 def test_unified_script_contract_uses_single_entrypoint():
     assert UNIFIED_TRAINING_SCRIPT == "demo3.py"
 
 
 def test_available_scripts_exposes_only_unified_script():
-    TrainingService = import_training_service_with_stubs()
+    from services.training_service import TrainingService
 
     assert TrainingService().get_available_scripts() == [UNIFIED_TRAINING_SCRIPT]
 

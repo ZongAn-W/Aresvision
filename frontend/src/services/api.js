@@ -709,6 +709,7 @@ export async function startTrainingTask(
       data_source,
       model_source: options.modelSource || 'official',
       uploaded_model_id: options.uploadedModelId || null,
+      tag_ids: options.tagIds || [],
     }),
   });
   if (!res.ok) throw new Error(`${res.status}`);
@@ -811,6 +812,26 @@ export async function fetchLogs(taskId) {
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }
+
+async function trainingTagRequest(path, method = 'GET', body) {
+  const res = await authedFetch(`${BASE}/training${path}`, {
+    method,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (!res.ok) await throwResponseError(res);
+  return res.status === 204 ? null : res.json();
+}
+
+export const fetchTrainingTags = () => trainingTagRequest('/tags');
+export const createTrainingTag = (name) => trainingTagRequest('/tags', 'POST', { name });
+export const renameTrainingTag = (id, name) => trainingTagRequest(`/tags/${id}`, 'PATCH', { name });
+export const deleteTrainingTag = (id) => trainingTagRequest(`/tags/${id}`, 'DELETE');
+export const replaceTrainingTaskTags = (taskId, tagIds) => (
+  trainingTagRequest(`/tasks/${taskId}/tags`, 'PUT', { tag_ids: tagIds })
+);
+export const updateTrainingTaskTags = (taskIds, tagIds, operation) => (
+  trainingTagRequest('/task-tags', 'PATCH', { task_ids: taskIds, tag_ids: tagIds, operation })
+);
 
 export async function renameTrainingModel(taskId, modelName) {
   const res = await authedFetch(`${BASE}/training/tasks/${taskId}/name`, {

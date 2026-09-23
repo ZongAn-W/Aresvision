@@ -19,6 +19,7 @@ import {
   fetchTrainingWeights,
   deleteTrainingWeight,
   renameTrainingModel,
+  createTrainingTag,
 } from '../services/api';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ModelTestModal from '../components/ModelTestModal';
@@ -71,6 +72,9 @@ import {
 } from './ModelTrainingPage/transferSourceConfig';
 import RenameModelDialog from './ModelTrainingPage/RenameModelDialog';
 import { normalizeTrainedModelName } from './ModelTrainingPage/trainedModelRename';
+import TrainingHistory from '../components/TrainingTags/TrainingHistory';
+import { TagPicker } from '../components/TrainingTags/TagControls';
+import { useTrainingTags } from '../components/TrainingTags/useTrainingTags';
 
 const MONO_FONT = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
 const UNIFIED_TRAINING_SCRIPT = 'demo3.py';
@@ -332,6 +336,7 @@ function TrainingTaskCard({
   onTest,
   onAnalyze,
   onRename,
+  tagControls,
 }) {
   const statusMeta = getStatusMeta(task.status, t);
   const hyperparameters = useMemo(() => parseHyperparameters(task.hyperparameters), [task.hyperparameters]);
@@ -372,6 +377,7 @@ function TrainingTaskCard({
         transition: 'border-color 0.22s ease, box-shadow 0.22s ease, transform 0.22s ease',
       }}
     >
+      {tagControls}
       <div
         style={{
           display: 'flex',
@@ -645,6 +651,13 @@ export default function ModelTrainingPage() {
     setLogs,
     loadTasks,
   } = useTraining();
+  const tagState = useTrainingTags(loadTasks);
+  const [newTaskTagIds, setNewTaskTagIds] = useState([]);
+  useEffect(() => {
+    if (!tagState.loading && !tagState.error) {
+      setNewTaskTagIds(ids => ids.filter(id => tagState.tags.some(tag => tag.id === id)));
+    }
+  }, [tagState.tags, tagState.loading, tagState.error]);
 
   const [scripts, setScripts] = useState([]);
   const [scriptsLoading, setScriptsLoading] = useState(false);
@@ -953,7 +966,8 @@ export default function ModelTrainingPage() {
       transferStartBlocked ||
       !!modelNameError ||
       !customModelName.trim() ||
-      isProcessing
+      isProcessing || tagState.busy ||
+      (newTaskTagIds.length > 0 && (tagState.loading || Boolean(tagState.error)))
     : false;
   const controlVisibility = getModelTrainingControlVisibility(modelSource);
 
@@ -1496,6 +1510,7 @@ export default function ModelTrainingPage() {
         {
           modelSource,
           uploadedModelId: modelSource === 'uploaded' ? selectedUploadedModelId : null,
+          tagIds: newTaskTagIds,
         }
       );
 
@@ -1505,7 +1520,7 @@ export default function ModelTrainingPage() {
         return [task, ...previous];
       });
       setActiveTaskId(task.id);
-      loadTasks();
+      await loadTasks();
     } catch (error) {
       alert(t('modelTraining.startError') + error.message);
     } finally {
@@ -1518,7 +1533,7 @@ export default function ModelTrainingPage() {
     try {
       setIsProcessing(true);
       await stopTrainingTask(taskId);
-      loadTasks();
+      await loadTasks();
     } catch (error) {
       alert(t('modelTraining.stopError') + error.message);
     } finally {
@@ -1536,7 +1551,7 @@ export default function ModelTrainingPage() {
         setLogs([]);
       }
       setConfirmDeleteId(null);
-      loadTasks();
+      await loadTasks();
     } catch (error) {
       alert(t('modelTraining.deleteError') + error.message);
     } finally {
@@ -2082,6 +2097,16 @@ export default function ModelTrainingPage() {
                 {!modelNameError && customModelName.trim() ? (
                   <div style={{ ...fieldHintStyle, color: C.green }}>{copy.modelNameAvailable}</div>
                 ) : null}
+                <TagPicker
+                  tags={tagState.tags}
+                  value={newTaskTagIds}
+                  onChange={setNewTaskTagIds}
+                  onCreate={name => tagState.mutate(() => createTrainingTag(name))}
+                  disabled={!user || tagState.loading || tagState.busy || isProcessing || Boolean(tagState.error)}
+                  isZh={isZh}
+                  label={isZh ? '训练标签（可选）' : 'Training tags (optional)'}
+                />
+                {tagState.error && <div role="alert" className="training-tag-hint">{tagState.error}</div>}
               </div>
 
               <div style={{ ...summaryCardStyle, padding: '14px 16px' }}>
@@ -2994,56 +3019,34 @@ export default function ModelTrainingPage() {
             </div>
           </div>
 
-          {tasks.length === 0 ? (
-            <div
-              style={{
-                padding: '52px 20px',
-                textAlign: 'center',
-                borderRadius: 18,
-                background: C.bgMuted,
-                border: `1px dashed ${C.borderStrong}`,
-                color: C.ice50,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 'calc(15px * var(--font-scale, 1))',
-                  fontWeight: 600,
-                  color: C.ice60,
-                  marginBottom: 8,
-                }}
-              >
-                {t('modelTraining.historyEmpty')}
-              </div>
-              <div style={{ fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.65 }}>
-                {copy.noTaskSelectedHint}
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gap: 14 }}>
-              {tasks.map((task) => (
-                <TrainingTaskCard
-                  key={task.id}
-                  task={task}
-                  t={t}
-                  locale={locale}
-                  channelOrder={channelOrder}
-                  channelMap={channelMap}
-                  baselineLabel={baselineLabel}
-                  copy={copy}
-                  isLight={isLight}
-                  isActive={task.id === activeTaskId}
-                  isProcessing={isProcessing}
-                  onSelect={setActiveTaskId}
-                  onStop={handleStopTask}
-                  onDelete={setConfirmDeleteId}
-                  onTest={setTestTaskId}
-                  onAnalyze={handleAnalyzeTask}
-                  onRename={setRenameTask}
-                />
-              ))}
-            </div>
-          )}
+          <TrainingHistory
+            key={user?.id ?? 'guest'}
+            tasks={tasks}
+            tagState={tagState}
+            isZh={isZh}
+            renderTask={(task, tagControls) => (
+              <TrainingTaskCard
+                key={task.id}
+                task={task}
+                tagControls={tagControls}
+                t={t}
+                locale={locale}
+                channelOrder={channelOrder}
+                channelMap={channelMap}
+                baselineLabel={baselineLabel}
+                copy={copy}
+                isLight={isLight}
+                isActive={task.id === activeTaskId}
+                isProcessing={isProcessing}
+                onSelect={setActiveTaskId}
+                onStop={handleStopTask}
+                onDelete={setConfirmDeleteId}
+                onTest={setTestTaskId}
+                onAnalyze={handleAnalyzeTask}
+                onRename={setRenameTask}
+              />
+            )}
+          />
         </section>
 
         {confirmDeleteId && (

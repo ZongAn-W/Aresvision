@@ -1,0 +1,18 @@
+.training-tag-toolbar, .training-tag-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.training-tag-chips { display: inline-flex; min-width: 0; }
+.training-tag-chip { padding: 4px 9px; border: 1px solid var(--border); border-radius: 999px; background: rgba(74,158,255,.10); color: var(--text); font-size: calc(11px * var(--font-scale, 1)); overflow-wrap: anywhere; }
+.training-tag-button { min-height: 36px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--bg-muted); cursor: pointer; font: inherit; font-size: calc(12px * var(--font-scale, 1)); }
+.training-tag-button[aria-pressed="true"] { border-color: #4a9eff; background: rgba(74,158,255,.14); }
+.training-tag-button:disabled { cursor: not-allowed; opacity: .5; }
+.training-tag-button:focus-visible, .training-tag-input:focus-visible, .training-tag-option:focus-within { outline: 2px solid #4a9eff; outline-offset: 2px; }
+.training-tag-input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 40px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--bg-muted); font: inherit; font-size: calc(13px * var(--font-scale, 1)); }
+.training-tag-picker { min-width: 0; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; color: var(--text); }
+.training-tag-picker legend { padding: 0 5px; font-size: calc(12px * var(--font-scale, 1)); font-weight: 600; }
+.training-tag-options { display: flex; flex-wrap: wrap; gap: 6px 14px; max-height: 144px; overflow: auto; margin: 8px 0; }
+.training-tag-option { display: flex; align-items: center; gap: 7px; min-height: 32px; max-width: 100%; font-size: calc(12px * var(--font-scale, 1)); overflow-wrap: anywhere; cursor: pointer; }
+.training-tag-option input { accent-color: #4a9eff; flex-shrink: 0; }
+.training-tag-hint { font-size: calc(11px * var(--font-scale, 1)); color: var(--text-60); line-height: 1.6; }
+.training-tag-filter { margin: 12px 0; }
+.training-tag-dialog-body { display: grid; gap: 12px; padding: 20px; color: var(--text); }
+.training-tag-manager-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.training-tag-manager-row input { flex: 1 1 160px; }

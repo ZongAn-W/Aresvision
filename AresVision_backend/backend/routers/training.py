@@ -9,20 +9,101 @@ from database.models import ModelTrainingTask, User
 from schemas.training import (
     LogResponse,
     RenameTrainingModelRequest,
+    ReplaceTrainingTaskTagsRequest,
     TrainingStartRequest,
+    TrainingTagNameRequest,
+    TrainingTagResponse,
     TrainingTaskResponse,
+    UpdateTrainingTaskTagsRequest,
     TrainingWeightFileListResponse,
     TrainingWeightFileResponse,
 )
 from services.inference_service import InferenceService
 from services.training_service import TrainingService
 from services.training_weight_service import TrainingWeightService
+from services.training_tag_service import TagNameConflict, TrainingTagService
 
 router = APIRouter(tags=["Training"])
 
 training_service = TrainingService()
 inference_service = InferenceService()
 training_weight_service = TrainingWeightService()
+training_tag_service = TrainingTagService()
+
+
+async def _serialize_tasks(tasks, current_user: User) -> list[TrainingTaskResponse]:
+    task_tags = await training_tag_service.get_task_tags([task.id for task in tasks], current_user.id)
+    return [TrainingTaskResponse.model_validate(task).model_copy(update={
+        "tags": [TrainingTagResponse(**tag) for tag in task_tags[task.id]],
+    }) for task in tasks]
+
+
+def _tag_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, FileNotFoundError):
+        status = 404
+    elif isinstance(exc, PermissionError):
+        status = 403
+    elif isinstance(exc, TagNameConflict):
+        status = 409
+    else:
+        status = 400
+    return HTTPException(status_code=status, detail=str(exc))
+
+
+@router.get("/training/tags", response_model=list[TrainingTagResponse])
+async def list_training_tags(current_user: User = Depends(get_current_user)):
+    return await training_tag_service.list_tags(current_user.id)
+
+
+@router.post("/training/tags", response_model=TrainingTagResponse)
+async def create_training_tag(req: TrainingTagNameRequest, current_user: User = Depends(get_current_user)):
+    try:
+        return await training_tag_service.create_tag(current_user.id, req.name)
+    except ValueError as exc:
+        raise _tag_error(exc) from exc
+
+
+@router.patch("/training/tags/{tag_id}", response_model=TrainingTagResponse)
+async def rename_training_tag(tag_id: int, req: TrainingTagNameRequest, current_user: User = Depends(get_current_user)):
+    try:
+        return await training_tag_service.rename_tag(tag_id, current_user.id, req.name)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _tag_error(exc) from exc
+
+
+@router.delete("/training/tags/{tag_id}")
+async def delete_training_tag(tag_id: int, current_user: User = Depends(get_current_user)):
+    try:
+        await training_tag_service.delete_tag(tag_id, current_user.id)
+    except FileNotFoundError as exc:
+        raise _tag_error(exc) from exc
+    return {"status": "success"}
+
+
+@router.put("/training/tasks/{task_id}/tags", response_model=TrainingTaskResponse)
+async def replace_training_task_tags(
+    task_id: int, req: ReplaceTrainingTaskTagsRequest, current_user: User = Depends(get_current_user),
+):
+    try:
+        task = await training_tag_service.replace_task_tags(
+            task_id, req.tag_ids, current_user.id, is_admin=_is_admin(current_user),
+        )
+        return (await _serialize_tasks([task], current_user))[0]
+    except (FileNotFoundError, PermissionError, ValueError) as exc:
+        raise _tag_error(exc) from exc
+
+
+@router.patch("/training/task-tags", response_model=list[TrainingTaskResponse])
+async def update_training_task_tags(
+    req: UpdateTrainingTaskTagsRequest, current_user: User = Depends(get_current_user),
+):
+    try:
+        tasks = await training_tag_service.update_task_tags(
+            req.task_ids, req.tag_ids, req.operation, current_user.id, is_admin=_is_admin(current_user),
+        )
+        return await _serialize_tasks(tasks, current_user)
+    except (FileNotFoundError, PermissionError, ValueError) as exc:
+        raise _tag_error(exc) from exc
 
 
 def _is_admin(user: User) -> bool:
@@ -148,8 +229,9 @@ async def start_training(
             user_model_service=getattr(request.app.state, "user_model_service", None),
             training_weight_service=_service_weight(request),
             is_admin=_is_admin(current_user),
+            tag_ids=req.tag_ids,
         )
-        return task
+        return (await _serialize_tasks([task], current_user))[0]
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -163,9 +245,9 @@ async def start_training(
 @router.get("/training/tasks", response_model=List[TrainingTaskResponse])
 async def get_tasks(current_user: User = Depends(get_current_user)):
     tasks = await training_service.get_all_tasks()
-    if _is_admin(current_user):
-        return tasks
-    return [task for task in tasks if task.user_id == current_user.id]
+    if not _is_admin(current_user):
+        tasks = [task for task in tasks if task.user_id == current_user.id]
+    return await _serialize_tasks(tasks, current_user)
 
 
 @router.patch("/training/tasks/{task_id}/name", response_model=TrainingTaskResponse)
@@ -176,7 +258,8 @@ async def rename_training_model(
 ):
     await _get_task_with_access_check(task_id, current_user)
     try:
-        return await training_service.rename_model(task_id, req.model_name)
+        task = await training_service.rename_model(task_id, req.model_name)
+        return (await _serialize_tasks([task], current_user))[0]
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:

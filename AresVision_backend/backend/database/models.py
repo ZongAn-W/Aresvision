@@ -344,6 +344,30 @@ class ModelTrainingTask(Base):
         return f"<ModelTrainingTask id={self.id} script={self.model_script} status={self.status}>"
 
 
+class TrainingModelTag(Base):
+    __tablename__ = "training_model_tags"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name_key", name="uq_training_model_tag_owner_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    name_key: Mapped[str] = mapped_column(String(192), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+
+
+class TrainingTaskTag(Base):
+    __tablename__ = "training_task_tags"
+
+    task_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("model_training_tasks.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("training_model_tags.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+
+
 class PredictionAnalysisCache(Base):
     __tablename__ = "prediction_analysis_caches"
     __table_args__ = (

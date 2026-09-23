@@ -1,8 +1,36 @@
-from pydantic import BaseModel, Field, computed_field
-from typing import Dict, Any, Optional
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, computed_field, field_validator
+from typing import Annotated, Dict, Any, Literal, Optional
 from datetime import datetime
 
 from services.model_artifacts import is_valid_model_weight_file
+
+PositiveId = Annotated[StrictInt, Field(gt=0)]
+
+
+class TrainingTagResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+
+
+class TrainingTagNameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trim_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class ReplaceTrainingTaskTagsRequest(BaseModel):
+    tag_ids: list[PositiveId]
+
+
+class UpdateTrainingTaskTagsRequest(BaseModel):
+    task_ids: list[PositiveId]
+    tag_ids: list[PositiveId]
+    operation: Literal["add", "remove"]
 
 class TrainingStartRequest(BaseModel):
     model_script: str = Field(..., description="The script filename to execute")
@@ -11,6 +39,7 @@ class TrainingStartRequest(BaseModel):
     data_source: str = Field(default="default", description="server-managed training dataset source")
     model_source: str = Field(default="official", description="official | uploaded")
     uploaded_model_id: Optional[str] = Field(default=None, description="Validated uploaded model package id")
+    tag_ids: list[PositiveId] = Field(default_factory=list)
 
 
 class RenameTrainingModelRequest(BaseModel):
@@ -18,6 +47,7 @@ class RenameTrainingModelRequest(BaseModel):
 
 class TrainingTaskResponse(BaseModel):
     id: int
+    tags: list[TrainingTagResponse] = Field(default_factory=list)
     model_script: str
     model_source: str = "official"
     uploaded_model_id: Optional[str] = None

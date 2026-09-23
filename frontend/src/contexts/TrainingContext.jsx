@@ -3,6 +3,7 @@ import { fetchTasks, fetchLogs } from '../services/api';
 import { useAuth } from './AuthContext';
 import { reconcileActiveTrainingTaskId } from './trainingTaskSelection';
 import { requestNotificationRefresh } from '../notifications/notificationEvents';
+import { createScopedRequestGate } from '../components/TrainingTags/trainingTagFilters';
 
 const TrainingContext = createContext();
 
@@ -10,6 +11,10 @@ export const useTraining = () => useContext(TrainingContext);
 
 export const TrainingProvider = ({ children, enabled = true }) => {
   const { user } = useAuth();
+  return <UserTrainingProvider key={user?.id ?? 'guest'} user={user} enabled={enabled}>{children}</UserTrainingProvider>;
+};
+
+const UserTrainingProvider = ({ children, enabled, user }) => {
   const [tasks, setTasks] = useState([]);
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [progressData, setProgressData] = useState(null);
@@ -19,6 +24,13 @@ export const TrainingProvider = ({ children, enabled = true }) => {
   const pollingRef = useRef(null);
   const logPollingRef = useRef(null);
   const loadTasksRef = useRef(null);
+  const tasksGate = useRef(createScopedRequestGate());
+  tasksGate.current.setScope(enabled ? user?.id ?? null : null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; tasksGate.current.invalidate(); };
+  }, []);
 
   const clearTaskPolling = useCallback(() => {
     if (pollingRef.current) {
@@ -43,14 +55,17 @@ export const TrainingProvider = ({ children, enabled = true }) => {
 
   const loadTasks = useCallback(async () => {
     if (!enabled || !user) return;
+    const request = tasksGate.current.start();
     try {
       const data = await fetchTasks();
+      if (!mountedRef.current || !tasksGate.current.isCurrent(request)) return;
       setTasks(data);
       setActiveTaskId((currentTaskId) => (
         reconcileActiveTrainingTaskId(data, currentTaskId)
       ));
     } catch (err) {
       console.error('Failed to load tasks', err);
+      throw err;
     }
   }, [enabled, user]);
 
@@ -63,8 +78,8 @@ export const TrainingProvider = ({ children, enabled = true }) => {
     clearTaskPolling();
 
     if (enabled && user) {
-      loadTasks();
-      pollingRef.current = setInterval(loadTasks, 5000);
+      loadTasks().catch(() => {});
+      pollingRef.current = setInterval(() => loadTasks().catch(() => {}), 5000);
     } else if (!user) {
       setTasks([]);
       setActiveTaskId(null);
@@ -78,6 +93,7 @@ export const TrainingProvider = ({ children, enabled = true }) => {
   // Poll logs only when enabled and task is selected.
   useEffect(() => {
     clearLogPolling();
+    let active = true;
 
     if (!enabled || !activeTaskId || !user) {
       setLogs([]);
@@ -87,7 +103,7 @@ export const TrainingProvider = ({ children, enabled = true }) => {
     const pollLogs = async () => {
       try {
         const data = await fetchLogs(activeTaskId);
-        setLogs(data.lines || []);
+        if (active) setLogs(data.lines || []);
       } catch (err) {
         console.error('Error polling logs', err);
       }
@@ -96,7 +112,7 @@ export const TrainingProvider = ({ children, enabled = true }) => {
     pollLogs();
     logPollingRef.current = setInterval(pollLogs, 3000);
 
-    return () => clearLogPolling();
+    return () => { active = false; clearLogPolling(); };
   }, [enabled, activeTaskId, user, clearLogPolling]);
 
   // Sync progressData from active task row.
@@ -162,7 +178,7 @@ export const TrainingProvider = ({ children, enabled = true }) => {
             setProgressData((prev) => ({ ...prev, ...msg.data }));
           }
         } else if (msg.type === 'status_update') {
-          loadTasksRef.current?.();
+          loadTasksRef.current?.().catch(() => {});
           if (msg.status === 'failed') {
             requestNotificationRefresh();
           }

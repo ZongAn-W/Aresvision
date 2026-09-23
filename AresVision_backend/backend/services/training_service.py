@@ -27,7 +27,7 @@ from config import (
     USER_UPLOADS_DIR,
 )
 from database.engine import async_session_maker
-from database.models import ModelTrainingTask, PredictionAnalysisCache
+from database.models import ModelTrainingTask, PredictionAnalysisCache, TrainingTaskTag
 from services.data_service import DataService
 from services.personal_data_source_service import PersonalDataSourceService
 from services.model_artifacts import is_valid_model_weight_file
@@ -40,6 +40,7 @@ from services.training_channels import (
 )
 from services.training_notifications import ensure_cuda_oom_notification
 from services.training_paths import build_task_output_path
+from services.training_tag_service import add_task_tag_links, begin_tag_write, validate_owned_tags
 import config
 
 logger = logging.getLogger("aresvision.training")
@@ -87,6 +88,7 @@ class TrainingService:
         user_model_service: Any | None = None,
         training_weight_service: Any | None = None,
         is_admin: bool = False,
+        tag_ids: list[int] | None = None,
     ) -> ModelTrainingTask:
         model_source = (model_source or "official").strip().lower()
         if model_source not in ("official", "uploaded"):
@@ -98,6 +100,7 @@ class TrainingService:
         source = _normalize_training_data_source(data_source)
 
         async with async_session_maker() as session:
+            await validate_owned_tags(session, user_id, tag_ids or [])
             existing = await session.execute(
                 select(ModelTrainingTask).where(ModelTrainingTask.custom_model_name == custom_model_name.strip())
             )
@@ -139,6 +142,9 @@ class TrainingService:
         preserved_hypers = {key: raw_hypers[key] for key in preserved_keys if key in raw_hypers}
         payload_hypers = normalize_training_hyperparameters(raw_hypers)
         payload_hypers.update(preserved_hypers)
+        # Labels are organization metadata, never model/cache identity or runner arguments.
+        payload_hypers.pop("tag_ids", None)
+        payload_hypers.pop("tags", None)
         payload_hypers["_data_source"] = source
         transfer_env_overrides = await self._resolve_transfer_source(
             user_id=user_id,
@@ -148,6 +154,9 @@ class TrainingService:
         )
 
         async with async_session_maker() as session:
+            # Recheck in the same transaction that writes the task and its associations.
+            await begin_tag_write(session)
+            tags = await validate_owned_tags(session, user_id, tag_ids or [])
             task = ModelTrainingTask(
                 user_id=user_id,
                 model_script=model_script,
@@ -159,8 +168,7 @@ class TrainingService:
                 status="pending",
             )
             session.add(task)
-            await session.commit()
-            await session.refresh(task)
+            await session.flush()
 
             task_id = task.id
             log_file = LOGS_DIR / f"task_{task_id}.log"
@@ -173,6 +181,7 @@ class TrainingService:
 
             task.log_file_path = str(log_file)
             task.output_model_path = str(output_path)
+            await add_task_tag_links(session, [task_id], [tag.id for tag in tags])
 
             env_overrides: dict[str, str] = dict(transfer_env_overrides)
             temp_data_root: Path | None = None
@@ -812,6 +821,9 @@ class TrainingService:
                 delete(PredictionAnalysisCache).where(
                     PredictionAnalysisCache.training_task_id == task.id
                 )
+            )
+            await session.execute(
+                delete(TrainingTaskTag).where(TrainingTaskTag.task_id == task.id)
             )
             await session.delete(task)
             await session.commit()
