@@ -208,7 +208,7 @@ flowchart LR
 
 ### 共用分析工作台与场景切换
 
-1. `#/overview` 顶部持有 `planet` 选择，默认火星；火星与地球**互斥挂载**，地球不加载火星三维背景、纹理、摄像头或查询组件。
+1. `#/overview` 顶部持有 `planet` 选择，按钮按“地球 / 火星”排列，首次进入或刷新默认地球；火星与地球**互斥挂载**，地球不加载火星三维背景、纹理、摄像头或查询组件。
 2. 两个星球都经 `OverviewShell` 布局、`OverviewAnalysisPanel` 渲染卡片目录；差异全部由 adapter 声明（时间模型、单位、几何、能力、卡片），共用组件不读取任何星球数据。
 3. 地球由 `earthOverviewAdapter` 先查 `GET /api/datasets/earth_merra2_daily_v2` 取发布指纹与日期范围，再查 `/api/analysis/earth/overview/context` 取几何、能力与极区范围；区域场、区域序列与点位序列继续使用已实现的 `/overview/*` 接口。
 4. 年度分析走 Earth 专用接口 `/api/analysis/earth/overview/*`：`useEarthResearch`/`earthResearchClient` 按 `(fingerprint, year[, variable])` 去重缓存，多张卡片共享一次请求，逐日播放不重发年度数据。

@@ -586,13 +586,13 @@ const DataOverviewPageContent = ({ sceneSwitch = null }) => {
 };
 
 /**
- * 总览场景选择：默认火星，保留原有 Mars 实现文件与 provider。
+ * 总览场景选择：默认地球，保留原有 Mars 实现文件与 provider。
  *
  * Mars 与 Earth 互斥挂载（不做 hidden 双挂载），切换前统一暂停 Mars 播放，
  * Earth 的基础选择保存在本层，返回时按当前 descriptor fingerprint 重新校验加载。
  */
 function OverviewSceneContent() {
-  const [planet, setPlanet] = useState('mars');
+  const [planet, setPlanet] = useState('earth');
   const [earthSelection, setEarthSelection] = useState({ date: null, variable: 'TO3', point: null });
   const { setIsPlayingTimeline } = useDataOverview();
   const [earthWidths, setEarthWidths] = useState({ left: 300, right: 540 });
