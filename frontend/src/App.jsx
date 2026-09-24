@@ -15,6 +15,7 @@ import AIPage from './pages/AIPage';
 import AboutPage from './pages/AboutPage';
 import ModelTrainingPage from './pages/ModelTrainingPage';
 import ErrorBoundary from './components/ErrorBoundary';
+import BrandMark from './components/BrandMark';
 import { TrainingProvider } from './contexts/TrainingContext';
 import { getCurrentPageFromHash } from './router/hashRoute';
 
@@ -115,6 +116,7 @@ export default function App() {
 
       {/* Footer */}
       <footer
+        className={page === 'home' ? 'home-footer' : undefined}
         style={{
           position: 'relative',
           zIndex: 1,
@@ -125,8 +127,9 @@ export default function App() {
           alignItems: 'center',
         }}
       >
-        <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice30 }}>
-          {t('footer.copyright')}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice60 }}>
+          <BrandMark size={24} mono compact />
+          <span>{t('footer.copyright')}</span>
         </div>
         <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice30, fontFamily: "'Orbitron', sans-serif", letterSpacing: 1 }}>
           {t('footer.powered')}

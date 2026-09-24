@@ -6,6 +6,7 @@
 /projects/
 /Data/
 /docs/superpowers/
+/frontend/output/
 
 # IDE / local tooling
 .idea/

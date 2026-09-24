@@ -7,38 +7,11 @@ import { useToast } from '../contexts/ToastContext';
 import ConfirmDialog from './ConfirmDialog';
 import ChangePasswordModal from './ChangePasswordModal';
 import NotificationPanel from './NotificationPanel';
+import BrandMark from './BrandMark';
 import { getPendingReviews, getUnreadCount } from '../services/api';
 import { NOTIFICATION_REFRESH_EVENT } from '../notifications/notificationEvents';
 
 const NAV_IDS = ['home', 'overview', 'training', 'predict', 'explore', 'ai', 'about'];
-
-function MarsLogoIcon() {
-  return (
-    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <radialGradient id="navMarsGrad" cx="33%" cy="30%" r="70%">
-          <stop offset="0%"   stopColor="#ec9268" />
-          <stop offset="40%"  stopColor="#c75b39" />
-          <stop offset="78%"  stopColor="#8b3a25" />
-          <stop offset="100%" stopColor="#3a1208" />
-        </radialGradient>
-      </defs>
-      <ellipse
-        cx="18" cy="18" rx="17" ry="5.5"
-        stroke="rgba(199,91,57,0.42)" strokeWidth="1"
-        fill="none"
-        transform="rotate(-22, 18, 18)"
-      />
-      <circle cx="18" cy="18" r="11" fill="url(#navMarsGrad)" />
-      <ellipse cx="18" cy="9.2" rx="3.6" ry="1.5" fill="rgba(248,240,225,0.58)" />
-      <ellipse
-        cx="21" cy="16" rx="2.8" ry="2.1"
-        fill="rgba(40,14,4,0.35)"
-        transform="rotate(-10, 21, 16)"
-      />
-    </svg>
-  );
-}
 
 
 function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount }) {
@@ -352,7 +325,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
 
   return (
     <nav
-      className="nav-glass"
+      className={`nav-glass${current === 'home' ? ' home-nav' : ''}`}
       style={{
         position: 'fixed', top: 0, left: 0, right: 0,
         zIndex: 2000,
@@ -361,31 +334,33 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
         padding: '0 48px',
       }}
     >
-      {/* Logo */}
-      <div
-        style={{ display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
+      {/* Logo — 语义按钮，键盘 Enter / Space 返回首页 */}
+      <button
+        type="button"
+        className="home-nav__brand brand-home-button"
         onClick={() => onChange('home')}
+        aria-label={`AstraAtmos · ${t('nav.home')}`}
       >
-        <MarsLogoIcon />
+        <BrandMark />
         <div>
           <div style={{
             fontSize: 'calc(15px * var(--font-scale, 1))',
             fontWeight: 700,
             fontFamily: 'var(--font-display)',
             color: C.ice,
-            letterSpacing: 0.6,
+            letterSpacing: 0,
             lineHeight: 1.2,
           }}>
-            ASTRAATMOS
+            AstraAtmos
           </div>
           <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice60, letterSpacing: 0.4 }}>
             {t('nav.subtitle')}
           </div>
         </div>
-      </div>
+      </button>
 
       {/* Nav Links */}
-      <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+      <div className="home-nav__links" style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
         {NAV_IDS.map((id) => (
           <button
             key={id}

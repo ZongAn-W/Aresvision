@@ -117,6 +117,23 @@ const en = {
   },
 
   home: {
+    lab: {
+      titleFirst: 'Planetary Atmosphere Lab',
+      titleSecond: 'AstraAtmos',
+      description: 'Trace atmospheric patterns through space and time. Train forecasting models, compare their results, and take your next research idea from observation to experiment.',
+      enter: 'Open analysis workbench',
+      train: 'Train a model',
+      previewLabel: 'Earth preview illustration',
+      dataFoundation: 'RESEARCH DATA',
+      dataNote: 'Reanalysis & climate simulation',
+      workflow: 'THE EXPERIMENT WORKFLOW',
+      experimentsTitle: 'From observation to insight',
+      experimentsNote: 'Choose a starting point for your research.',
+      observe: { title: 'Explore atmospheric data', description: 'Explore Mars and Earth through global fields, seasonal patterns, and relationships between environmental drivers.', action: 'Explore data' },
+      training: { title: 'Train forecasting models', description: 'Choose a built-in architecture or bring your own model. Set temporal windows and follow each training run.', action: 'Create an experiment' },
+      evaluate: { title: 'Compare your results', description: 'Compare predictions with reference fields using residuals, error distributions, and metrics at each forecast step.', action: 'Open prediction analysis' },
+      boundary: 'Mars ozone training and prediction, and Earth data analysis are available. Earth training and prediction are not yet available. Card graphics are illustrative.',
+    },
     subtitle: 'Planetary Atmosphere Lab',
     desc: 'Planetary Atmosphere Prediction & Experiment Platform · Data analysis, model training, and 3D visualization',
     exploreBtn: 'Start Exploring',

@@ -49,7 +49,9 @@ const COMPRESSIBLE = new Set([
   '.html', '.js', '.mjs', '.css', '.json', '.svg', '.txt', '.map',
 ]);
 
-// 压缩结果缓存：filePath+size -> { gzip, br }
+// 压缩结果缓存：filePath+size+mtime -> { gzip, br }
+// 必须带 mtime：重新构建后文件长度可能恰好不变（例如 index.html 两次构建同为 1649 字节），
+// 只用 size 做键会把上一版的压缩结果发给客户端，导致 index.html 仍引用已删除的哈希资源。
 const compressCache = new Map();
 
 function getEncoding(req) {
@@ -59,10 +61,15 @@ function getEncoding(req) {
   return null;
 }
 
-async function buildCompressed(filePath, size) {
-  const key = `${filePath}:${size}`;
+async function buildCompressed(filePath, size, mtimeMs) {
+  const key = `${filePath}:${size}:${mtimeMs}`;
   const hit = compressCache.get(key);
   if (hit) return hit;
+  // 同一文件被重写后旧键不再命中，顺手清掉，避免缓存无限增长。
+  const prefix = `${filePath}:`;
+  for (const existing of compressCache.keys()) {
+    if (existing.startsWith(prefix) && existing !== key) compressCache.delete(existing);
+  }
   const raw = await readFile(filePath);
   const entry = {
     gzip: gzipSync(raw, { level: 6 }),
@@ -101,7 +108,7 @@ async function serveFile(req, res, filePath, statusCode = 200) {
   const enc = getEncoding(req);
   if (enc && COMPRESSIBLE.has(ext) && info.size >= COMPRESS_MIN) {
     try {
-      const packed = await buildCompressed(filePath, info.size);
+      const packed = await buildCompressed(filePath, info.size, info.mtimeMs);
       const buf = enc === 'br' ? packed.br : packed.gzip;
       headers['Content-Encoding'] = enc;
       headers['Content-Length'] = buf.length;
