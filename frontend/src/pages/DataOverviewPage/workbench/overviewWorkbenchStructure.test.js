@@ -95,6 +95,12 @@ test('the page routes both planets through the shared workbench shell', () => {
   assert.match(pageSource, /className="gesture-capture-hud"/);
 });
 
+test('Earth is the default overview planet and appears before Mars in the switch', () => {
+  const switchSource = readFileSync(new URL('../PlanetSceneSwitch.jsx', import.meta.url), 'utf8');
+  assert.match(switchSource, /\{ id: 'earth', label: t\('overviewPlanet\.earth'\) \},\s*\{ id: 'mars', label: t\('overviewPlanet\.mars'\) \}/s);
+  assert.match(pageSource, /const \[planet, setPlanet\] = useState\('earth'\)/);
+});
+
 test('the analysis panel drives cards from the adapter catalog', () => {
   assert.match(panelSource, /cards\.map/);
   assert.match(panelSource, /card\.state/);

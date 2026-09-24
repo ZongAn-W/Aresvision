@@ -7,8 +7,8 @@ import { useT } from '../../i18n/index.js';
 export default function PlanetSceneSwitch({ value, onChange, className = '' }) {
   const t = useT();
   const options = [
-    { id: 'mars', label: t('overviewPlanet.mars') },
     { id: 'earth', label: t('overviewPlanet.earth') },
+    { id: 'mars', label: t('overviewPlanet.mars') },
   ];
 
   return (
