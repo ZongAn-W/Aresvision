@@ -376,7 +376,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
             letterSpacing: 0.6,
             lineHeight: 1.2,
           }}>
-            ARESVISION
+            ASTRAATMOS
           </div>
           <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice60, letterSpacing: 0.4 }}>
             {t('nav.subtitle')}

@@ -1,5 +1,5 @@
 /**
- * AresVision 中文语言包
+ * AstraAtmos 中文语言包
  * 按模块/页面分组，key 命名遵循 module.section.item 层级
  */
 const zh = {
@@ -11,12 +11,12 @@ const zh = {
     training: '模型训练',
     ai: 'AI 解读',
     about: '关于',
-    subtitle: '智绘赤星',
+    subtitle: '行星大气实验室',
   },
 
   footer: {
-    copyright: '© 2025 AresVision 智绘赤星 · 全国大学生计算机应用能力大赛',
-    powered: '基于 OpenMARS · MCD 6.1 · PredRNNv2',
+    copyright: '© 2025 AstraAtmos 行星大气实验室 · 全国大学生计算机应用能力大赛',
+    powered: 'OpenMARS · MCD 6.1 · MERRA-2 · PyTorch',
   },
 
   common: {
@@ -118,14 +118,14 @@ const zh = {
   },
 
   home: {
-    subtitle: '智 绘 赤 星',
-    desc: '基于 PredRNNv2 深度学习框架的火星臭氧柱浓度预测与可视化系统',
+    subtitle: '行 星 大 气 实 验 室',
+    desc: '行星大气预测实验平台 · 数据分析、模型训练与三维可视化',
     exploreBtn: '开始探索',
     predictBtn: '预测分析 →',
     features: {
-      viz3d: { title: '三维可视化', desc: '火星球体实时渲染' },
-      ai: { title: 'AI 预测', desc: 'PredRNNv2 时空序列模型' },
-      chart: { title: '科学图表', desc: 'Ls-纬度热力图与多维分析' },
+      viz3d: { title: '三维可视化', desc: '行星大气场实时渲染' },
+      ai: { title: 'AI 预测', desc: '时空序列模型实验' },
+      chart: { title: '科学图表', desc: '时空场与多维大气分析' },
       insight: { title: '智能解读', desc: '大模型驱动的自然语言问答' },
     },
   },
@@ -350,7 +350,7 @@ const zh = {
     stepUseDesc: 'MCD 可在数据总览作为整页数据源；OpenMARS 与 NOMAD 仅用于三维臭氧多源展示。',
     defaultDataset: {
       header: '官方数据资产',
-      headerDesc: '这里不只是数据说明，而是 AresVision 的官方火星数据底座。页面围绕数据源覆盖、火星年覆盖、变量完备性、统一分辨率和分析能力标签展开，直接证明平台具备稳定的数据资产供给能力。',
+      headerDesc: '这里展示 AstraAtmos 的官方火星数据，涵盖数据源与火星年覆盖、变量完备性、统一分辨率和分析能力标签。',
       sourceTitle: '数据源说明',
       openmarsSubtitle: 'OpenMARS 再分析数据（臭氧核心）',
       openmarsBody: '提供官方 OpenMARS 臭氧柱浓度图层，统一到 5° x 5° 全球网格，主要用于数据总览三维臭氧多源显示与官方基线对照。',
@@ -501,7 +501,7 @@ const zh = {
       confirmDeleteMsg: '确定删除此数据集？此操作不可恢复。',
       confirmDeleteBtn: '确认删除',
       cancelBtn: '取消',
-      confirmContributeTitle: '贡献数据给 AresVision',
+      confirmContributeTitle: '贡献数据给 AstraAtmos',
       confirmContributeMsg: '您的数据将提交给管理员审核。审核通过后，数据将被添加到网站的默认数据集中，供所有用户使用。',
       confirmContributeBtn: '确认贡献',
       deleteSuccess: '数据集已删除',
@@ -563,7 +563,7 @@ const zh = {
     },
 
     contribute: {
-      bannerText: '帮助丰富 AresVision 数据库，让更多研究者受益',
+      bannerText: '帮助丰富 AstraAtmos 数据库，让更多研究者受益',
       bannerBtn: '贡献数据集',
       historyLink: '查看贡献记录 →',
       step1: '选择',
@@ -959,7 +959,7 @@ const zh = {
       '模型在哪些季节表现最差？',
       '昼夜变化规律是什么？',
     ],
-    welcome: '你好！我是 AresVision AI 助手，可以帮你解读火星臭氧预测结果。\n\n你可以问我：\n• 当前预测场中，哪些区域臭氧偏差最大？\n• 为什么极地在 Ls=200° 附近出现臭氧峰值？\n• 沙尘暴对臭氧分布有什么影响？',
+    welcome: '你好！我是 AstraAtmos AI 助手，可以帮你解读行星大气数据与预测结果。\n\n你可以问我：\n• 当前预测场中，哪些区域偏差最大？\n• 不同环境因子如何影响大气变量？\n• 如何比较不同模型的预测表现？',
   },
 
   modelTraining: {
@@ -1117,11 +1117,10 @@ const zh = {
 
   about: {
     title: '关于项目',
-    subtitle: '关于 AresVision',
+    subtitle: '关于 AstraAtmos',
     description:
-      '智绘赤星 (AresVision) 是一个面向火星大气科学研究的臭氧预测与可视化平台，' +
-      '基于 OpenMARS 再分析数据和 MCD 6.1 气候模拟数据，运用 PredRNNv2 时空深度学习模型' +
-      '实现火星全球臭氧柱浓度的多步预测。',
+      'AstraAtmos（行星大气实验室）是面向行星大气科学研究的数据分析、模型训练与预测实验平台，' +
+      '当前支持火星臭氧训练与预测，以及地球 MERRA-2 数据分析。地球训练与预测尚未开放，更多行星与变量预测任务将逐步扩展。',
     techCats: {
       frontend: '前端',
       backend: '后端',
@@ -1266,7 +1265,7 @@ const zh = {
     resolveBtn: '标记已处理',
     resolveSuccess: '已标记为已处理',
     title: '意见反馈',
-    subtitle: '帮助我们改进 AresVision',
+    subtitle: '帮助我们改进 AstraAtmos',
     typeLabel: '反馈类型',
     typeBug: 'Bug',
     typeSuggestion: '建议',

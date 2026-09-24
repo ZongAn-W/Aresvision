@@ -87,12 +87,12 @@ def send_verification_code(email: str, purpose: str = "register") -> dict:
         return {"success": True, "reason": "dev_log", "message": "验证码已发送（本地模式：请查看后端日志）"}
 
     purpose_text = "注册账号" if purpose == "register" else "重置密码"
-    subject = f"【AresVision】{purpose_text}验证码"
+    subject = f"【AstraAtmos】{purpose_text}验证码"
     html_body = f"""
     <div style="max-width:480px;margin:0 auto;font-family:'Segoe UI',sans-serif;color:#1a1a2e;">
       <div style="background:linear-gradient(135deg,#c75b39,#e8845a);padding:24px 32px;border-radius:12px 12px 0 0;">
-        <h2 style="margin:0;color:#fff;font-size:18px;letter-spacing:2px;">ARESVISION 智绘赤星</h2>
-        <p style="margin:4px 0 0;color:rgba(255,255,255,0.8);font-size:12px;">Mars Ozone Intelligence Platform</p>
+        <h2 style="margin:0;color:#fff;font-size:18px;letter-spacing:2px;">ASTRAATMOS 行星大气实验室</h2>
+        <p style="margin:4px 0 0;color:rgba(255,255,255,0.8);font-size:12px;">Planetary Atmosphere Experiment Platform</p>
       </div>
       <div style="background:#ffffff;padding:32px;border:1px solid #eee;border-top:none;border-radius:0 0 12px 12px;">
         <p style="font-size:14px;color:#333;">您正在进行<strong>{purpose_text}</strong>操作，验证码为：</p>

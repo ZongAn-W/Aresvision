@@ -127,7 +127,7 @@ export default function TopStatusBar() {
               letterSpacing: '-0.01em',
             }}
           >
-            AresVision
+            AstraAtmos
           </span>
         </div>
 

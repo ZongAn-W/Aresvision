@@ -1,4 +1,6 @@
-# Windows 一键分发说明
+# AstraAtmos Windows 一键分发说明
+
+平台原名 AresVision；分发脚本、包目录与运行配置沿用原名称，现有安装无需迁移。
 
 目标：把项目打成压缩包，接收方只需双击 `start-aresvision.bat` 即可启动。
 

@@ -1,15 +1,17 @@
-# AresVision 智绘赤星
+# AstraAtmos 行星大气实验室
 
 <div align="center">
-  <img src="./assets/images/logo.png" width="200" alt="AresVision Logo" />
-  <p><strong>Mars Ozone Column Prediction & Visualization System</strong><br />基于深度学习的火星臭氧柱浓度预测与交互可视化平台</p>
+  <img src="./frontend/public/favicon.svg" width="96" alt="AstraAtmos 行星图标" />
+  <p><strong>Planetary Atmosphere Prediction & Experiment Platform</strong><br />面向多行星大气数据分析、模型训练与时空预测实验的平台</p>
 </div>
 
 [项目仓库](https://github.com/Kafuu7No/AresVision) · [自定义模型接入](docs/uploaded-model-training.md) · [Linux 部署](scripts/deploy/README_DEPLOY_CN.md) · [Windows 分发](scripts/release/README_CN.md)
 
 ## 项目简介
 
-AresVision 面向火星大气数据分析与时空预测实验，以 OpenMARS 再分析数据和 MCD 气候模拟数据为主要数据源，将数据管理、模型训练、臭氧柱浓度预测、模型对比和三维可视化整合到同一个 Web 平台。
+AstraAtmos（行星大气实验室）定位为行星大气预测实验平台，从火星臭氧研究起步，以 OpenMARS 再分析数据、MCD 气候模拟数据和地球 MERRA-2 数据为当前数据基础，将数据管理、模型训练、预测、模型对比和三维可视化整合到同一个 Web 平台。当前已开放火星臭氧训练与预测、地球数据分析；地球网页训练与预测，以及更多行星和变量预测任务仍属后续扩展。
+
+产品原名为 AresVision（智绘赤星）。目录、仓库地址、启动脚本、`ARESVISION_*` 环境变量、数据库与浏览器存储键、数据格式标识沿用原名称以兼容已有部署；改名无需迁移数据或配置。
 
 平台提供 PredRNNv2、ConvLSTM、SimVP 及多种时间序列模型，也支持接入自定义 PyTorch 模型。预测结果可与数据集参考值进行对比，结合残差、误差分布和逐步指标评估模型表现。实际预测效果取决于数据质量、训练配置和模型权重。
 

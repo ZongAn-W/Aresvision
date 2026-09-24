@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
     - 关闭时：释放资源
     """
     logger.info("=" * 60)
-    logger.info("  AresVision 后端启动中 (已重构架构)...")
+    logger.info("  AstraAtmos 后端启动中 (已重构架构)...")
     logger.info("=" * 60)
 
     t0 = time.time()
@@ -453,8 +453,8 @@ async def lifespan(app: FastAPI):
 # ─── 创建 FastAPI 应用 ───
 
 app = FastAPI(
-    title="AresVision API",
-    description="智绘赤星 — 火星臭氧预测与可视化系统后端",
+    title="AstraAtmos API",
+    description="AstraAtmos — 行星大气预测实验平台后端",
     version="1.0.0",
     lifespan=lifespan,
     default_response_class=ORJSONResponse,
@@ -503,7 +503,7 @@ async def root():
     if FRONTEND_DIST_DIR is not None:
         return FileResponse(FRONTEND_DIST_DIR / "index.html")
     return {
-        "name": "AresVision API",
+        "name": "AstraAtmos API",
         "status": "running",
         "docs": "/docs",
     }
