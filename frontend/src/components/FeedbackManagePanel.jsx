@@ -318,7 +318,7 @@ function FeedbackManagePanelInner({ open, onClose }) {
           display: 'flex', flexDirection: 'column',
           transform: open ? 'translateX(0)' : 'translateX(100%)',
           transition: 'transform 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
-          boxShadow: isLight ? '-20px 0 60px rgba(0,0,0,0.12)' : '-20px 0 60px rgba(0,0,0,0.5)',
+          boxShadow: !open ? 'none' : isLight ? '-20px 0 60px rgba(0,0,0,0.12)' : '-20px 0 60px rgba(0,0,0,0.5)',
           ...panelVars,
         }}
       >

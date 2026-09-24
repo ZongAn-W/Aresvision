@@ -226,7 +226,7 @@ export default function SettingsPanel({ open, onClose }) {
           flexDirection: 'column',
           transform: open ? 'translateX(0)' : 'translateX(100%)',
           transition: 'transform 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
-          boxShadow: isLight
+          boxShadow: !open ? 'none' : isLight
             ? '-20px 0 60px rgba(15,23,42,0.10)'
             : '-20px 0 60px rgba(0,0,0,0.32)',
         }}

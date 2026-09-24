@@ -118,6 +118,23 @@ const zh = {
   },
 
   home: {
+    lab: {
+      titleFirst: '行星大气实验室',
+      titleSecond: 'AstraAtmos',
+      description: '从大气场的时空变化，到预测模型的训练与比较。在同一个工作台，观察数据、验证想法，推进你的下一次实验。',
+      enter: '进入分析工作台',
+      train: '训练模型',
+      previewLabel: '地球三维示意预览',
+      dataFoundation: '研究数据基础',
+      dataNote: '再分析数据与气候模拟',
+      workflow: '实验路径 / WORKFLOW',
+      experimentsTitle: '从观察到验证',
+      experimentsNote: '选择一个入口，开始你的研究。',
+      observe: { title: '分析大气数据', description: '在火星与地球之间切换，探索全球分布、季节演变与环境因子的关系。', action: '探索数据' },
+      evaluate: { title: '比较实验结果', description: '查看预测场与参考值，结合残差、误差分布和逐步指标评估模型表现。', action: '进入预测分析' },
+      training: { title: '训练预测模型', description: '选择内置架构或接入自己的模型，配置时空窗口，追踪每次训练的进展。', action: '创建训练实验' },
+      boundary: '当前开放火星臭氧训练与预测、地球数据分析；地球训练与预测尚未开放。卡片图形为流程示意。',
+    },
     subtitle: '行 星 大 气 实 验 室',
     desc: '行星大气预测实验平台 · 数据分析、模型训练与三维可视化',
     exploreBtn: '开始探索',

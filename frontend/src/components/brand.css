@@ -1,0 +1,76 @@
+/* ─── AstraAtmos「大气之 A」品牌色与导航品牌入口 ───
+   变量只定义在品牌命名空间 --brand-*，不替换 C.blue / C.mars、
+   科学图表色带或业务状态色。深色为主题默认值，与 index.css 的
+   [data-theme="light"] 约定一致。 */
+
+:root {
+  --brand-primary: #9ad9ef;
+  --brand-accent: #f19a78;
+  --brand-on-primary: #081c29;
+}
+
+[data-theme="light"] {
+  --brand-primary: #236387;
+  --brand-accent: #c76543;
+  --brand-on-primary: #ffffff;
+}
+
+.brand-mark {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* 完整形态：A 字母骨架与流线用品牌主色，观测点用品牌点缀色。
+   颜色只在这里声明，组件内不写 fill / stroke 呈现属性。 */
+.brand-mark__letter,
+.brand-mark__flow {
+  fill: var(--brand-primary);
+}
+
+.brand-mark__flow {
+  fill: none;
+  stroke: var(--brand-primary);
+}
+
+.brand-mark__accent {
+  fill: var(--brand-accent);
+}
+
+/* 单色形态：整体继承 currentColor，观测点不再单独着色 */
+.brand-mark--mono .brand-mark__letter,
+.brand-mark--mono .brand-mark__accent {
+  fill: currentColor;
+}
+
+.brand-mark--mono .brand-mark__flow {
+  stroke: currentColor;
+}
+
+/* 导航品牌入口：语义按钮，可 Tab 聚焦并用 Enter / Space 返回首页 */
+.brand-home-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.brand-home-button:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 4px;
+}
+
+@media (max-width: 430px) {
+  .brand-home-button .brand-mark {
+    width: 36px;
+    height: 36px;
+  }
+}

@@ -1,7 +1,10 @@
 # AstraAtmos 行星大气实验室
 
 <div align="center">
-  <img src="./frontend/public/favicon.svg" width="96" alt="AstraAtmos 行星图标" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/brand/astraatmos/astraatmos-mark-dark.png" />
+    <img src="./assets/brand/astraatmos/astraatmos-mark-light.png" width="96" alt="AstraAtmos 大气之 A 标志" />
+  </picture>
   <p><strong>Planetary Atmosphere Prediction & Experiment Platform</strong><br />面向多行星大气数据分析、模型训练与时空预测实验的平台</p>
 </div>
 
@@ -13,11 +16,13 @@ AstraAtmos（行星大气实验室）定位为行星大气预测实验平台，�
 
 产品原名为 AresVision（智绘赤星）。目录、仓库地址、启动脚本、`ARESVISION_*` 环境变量、数据库与浏览器存储键、数据格式标识沿用原名称以兼容已有部署；改名无需迁移数据或配置。
 
+AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 字母、上扬的弧形大气流线与橙色观测点。全站导航、首页强调色、关于页、页脚与浏览器图标已统一使用该标志，深浅主题分别使用对应配色。品牌组件为 [BrandMark.jsx](frontend/src/components/BrandMark.jsx)，资产规范与文件清单见[标识设计与使用说明](assets/brand/astraatmos/README.md)，接入范围见[品牌接入方案](docs/superpowers/plans/2026-09-24-atmospheric-a-brand-integration.md)。
+
 平台提供 PredRNNv2、ConvLSTM、SimVP 及多种时间序列模型，也支持接入自定义 PyTorch 模型。预测结果可与数据集参考值进行对比，结合残差、误差分布和逐步指标评估模型表现。实际预测效果取决于数据质量、训练配置和模型权重。
 
 ## 快速接手：先读这一节
 
-文档最近核对日期：**2026-09-24**。本次核对 Earth v2 原始数据预处理、全球网格、独立原始单元抽查、DLinear CPU 冒烟，以及火星/地球共用分析工作台的前后端实现；历史功能的测试范围见对应专题文档。Earth 网页训练与预测仍未开放。分支、未提交修改、运行进程和数据是否齐备属于实时状态，每次接手都应重新检查。
+文档最近核对日期：**2026-09-24**。本次核对「大气之 A」品牌接入（`BrandMark` 组件、导航/首页/关于页/页脚、浏览器图标与品牌资产说明）及前端构建与浏览器验收；此前核对 Earth v2 原始数据预处理、全球网格、独立原始单元抽查、DLinear CPU 冒烟，以及火星/地球共用分析工作台的前后端实现。历史功能的测试范围见对应专题文档。Earth 网页训练与预测仍未开放。分支、未提交修改、运行进程和数据是否齐备属于实时状态，每次接手都应重新检查。
 
 | 需要先知道的事 | 当前约定 |
 | --- | --- |
@@ -40,6 +45,15 @@ AstraAtmos（行星大气实验室）定位为行星大气预测实验平台，�
 快速导航：[功能](#主要功能) · [模块入口](#模块与代码入口) · [业务链路](#关键业务链路) · [功能边界](#当前功能边界) · [启动](#本地启动) · [测试](#测试与构建) · [排查](#常见问题与排查入口) · [维护约定](#readme-维护约定)
 
 ## 主要功能
+
+### 首页与实验入口
+
+- 首页采用左右分栏：平台介绍与操作入口、三维地球纹理预览；窄屏改为上下排列。
+- 全站导航左侧为「大气之 A」品牌图形（[BrandMark.jsx](frontend/src/components/BrandMark.jsx)）、`AstraAtmos` 字标与多语言副标题，整块为语义按钮，可用 Tab 聚焦并通过 Enter / Space 返回首页。
+- 预览仅显示地理纹理，不请求大气分析接口，也不代表实时数据或预测结果，遵循系统减少动态效果设置；使用 NASA Blue Marble 地球影像，星球固定为地球、不传递到数据总览。
+- 首页主标题为中英文名两行锁定：中文名 `行星大气实验室`（`frontend/src/i18n/zh.js` 的 `home.lab.titleFirst`）在上、英文名 `AstraAtmos`（`titleSecond`）在下并沿用强调色；语言切换英文界面时上行改为 `Planetary Atmosphere Lab`，英文名一行保持不变。标题第二行、主按钮与装饰线使用品牌强调色变量 `--brand-primary` / `--brand-on-primary`（定义在 `frontend/src/components/brand.css`），随深浅主题切换。
+- 首页不提供预览星球切换与旋转开关，也不展示预览说明、数据范围等辅助小字；“分析大气数据”“训练预测模型”“比较实验结果”分别进入数据总览、模型训练和预测分析，地球训练与预测尚未开放这一边界以当前功能边界章节为准。
+- 页面布局与预览实现见 [HomePage.jsx](frontend/src/pages/HomePage.jsx)、[homePage.css](frontend/src/pages/HomePage/homePage.css) 和 [PlanetPreview.jsx](frontend/src/pages/HomePage/PlanetPreview.jsx)。
 
 ### 数据总览与三维交互
 
@@ -85,6 +99,13 @@ AstraAtmos（行星大气实验室）定位为行星大气预测实验平台，�
 - 提供 AI 对话及结合当前数据视图的 Copilot 解读，通过可配置的外部模型接口生成回答。
 - 未配置 `AI_API_KEY` 时，AI 对话服务使用内置兜底回答。
 - 包含账号认证、邮件验证码、站内通知、反馈和管理员审核功能。
+
+### 界面品牌与浏览器图标
+
+- 品牌图形由唯一的 [BrandMark.jsx](frontend/src/components/BrandMark.jsx) 组件绘制，几何与 `assets/brand/astraatmos/` 的矢量交付一致：A 字母骨架、上扬弧形流线与橙色观测点；支持完整、单色（`mono`）和小尺寸简化（`compact`，省略观测点并加粗流线）三种形态。
+- 深浅主题配色定义在 [brand.css](frontend/src/components/brand.css)：深色背景使用冰蓝 `#9AD9EF` 与橙色 `#F19A78`，浅色背景使用深蓝 `#236387` 与赤陶色 `#C76543`。仅品牌与首页强调区域使用该配色，三维行星预览、科学图表色带与业务状态色保持原样。
+- 关于页标题上方使用 72 px 完整标志，页脚版权文字前使用 24 px 单色简化标志；图形为静态，无自转、呼吸或发光动效。
+- 浏览器图标为 `frontend/public/favicon.svg`（带深色圆角底的简化 A）、`favicon-32.png` 与 `favicon.ico`，`frontend/index.html` 以 `?v=atmospheric-a-1` 声明以替换旧火星图标缓存。
 
 ## 技术栈
 
@@ -140,6 +161,7 @@ AresVision/
 | 任务 | 前端入口 | 后端入口 |
 | --- | --- | --- |
 | 页面路由、导航 | [App.jsx](frontend/src/App.jsx)、[Navbar.jsx](frontend/src/components/Navbar.jsx) | [main.py](AresVision_backend/backend/main.py) 注册 API 与静态文件服务 |
+| 品牌标识与浏览器图标 | [BrandMark.jsx](frontend/src/components/BrandMark.jsx)、[brand.css](frontend/src/components/brand.css)、`frontend/public/favicon.svg`、`frontend/public/favicon-32.png`、`frontend/public/favicon.ico`、`frontend/public/brand/` | — |
 | 数据总览、球面与时间轴 | [DataOverviewPage.jsx](frontend/src/pages/DataOverviewPage.jsx)、[SphericalFieldCanvas.jsx](frontend/src/components/SphericalFieldCanvas.jsx) | [analysis.py](AresVision_backend/backend/routers/analysis.py)、[mcd_overview_data_service.py](AresVision_backend/backend/services/mcd_overview_data_service.py) |
 | 二维地球总览 | [EarthOverviewScene.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthOverviewScene.jsx)、[EarthMap2D.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthMap2D.jsx)、[PlanetSceneSwitch.jsx](frontend/src/pages/DataOverviewPage/PlanetSceneSwitch.jsx) | [earth_overview.py](AresVision_backend/backend/routers/earth_overview.py)、[earth_overview_service.py](AresVision_backend/backend/services/earth_overview_service.py) |
 | 共用分析工作台（Mars 与 Earth） | [workbench/](frontend/src/pages/DataOverviewPage/workbench/OverviewShell.jsx)（`OverviewShell`、`useOverviewController`、`OverviewAdapter`、`OverviewCard`、`OverviewScene`、两个 adapter 与请求协调器） | — |
@@ -442,6 +464,7 @@ python -m pytest tests
 | 登录重启后失效、验证码失败 | 固定 `JWT_SECRET_KEY`，核对 SMTP 配置及具体接口错误 |
 | AI 仅返回固定回答 | `AI_API_KEY`、`AI_API_URL`、`AI_MODEL_NAME` 与外部接口响应 |
 | 部署后仍是旧页面 | 是否重新构建 `frontend/dist`、重启后端，以及 `ARESVISION_FRONTEND_DIST` 是否指向另一目录 |
+| 重新构建后页面全白、控制台报模块 MIME 为 `text/html` | `scripts/serve-prod.mjs` 的压缩缓存需带文件修改时间：若新旧 `index.html` 字节数相同，只按路径与大小做键会把上一版的 gzip 结果发给浏览器，页面仍引用已删除的哈希资源。该脚本已按 `路径:大小:mtime` 缓存并清理旧键；如仍复现，确认服务已重启且 `index.html` 已更新 |
 
 选择测试时优先定位受影响模块，而不是只运行结构检查：预测变更参考 `test_trained_model_predict_contract.py`、`test_prediction_horizon_contract.py` 与 `predictRequestCoordinator.test.js`；总览变更参考 `test_analysis_overview_uploaded_sources.py`、`test_mcd_overview_service.py`；模型接入变更参考 `test_uploaded_model_runner.py`、`test_uploaded_model_ls_inference.py`。这些测试分别位于后端 `tests/` 和对应前端模块目录，完整测试命令见上文。
 
