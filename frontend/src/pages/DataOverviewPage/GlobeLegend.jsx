@@ -28,11 +28,11 @@ function formatMetric(value, digits = 3) {
   return Number.isFinite(value) ? Number(value).toFixed(digits) : '--';
 }
 
-export default function GlobeLegend({ ozoneData, sceneModel }) {
+export default function GlobeLegend({ ozoneData, sceneModel, embedded = true }) {
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
   const isZh = settings?.language !== 'en';
-  const { leftPanelWidth, gestureEnabled } = useDataOverview();
+  const { gestureEnabled } = useDataOverview();
   const variable = ozoneData?.variable || 'o3col';
   const varMeta = getGlobeVariableMeta(variable);
   const varLabel = settings?.language === 'en' ? varMeta.en : varMeta.zh;
@@ -79,18 +79,19 @@ export default function GlobeLegend({ ozoneData, sceneModel }) {
 
   return (
     <div
-      className="overview-globe-legend-compact"
+      className="overview-globe-legend-compact overview-overlay-anchor"
+      data-embedded={embedded ? 'true' : 'false'}
       style={{
         position: 'fixed',
-        bottom: `${panelBottom}px`,
-        left: `${leftPanelWidth + 14}px`,
+        bottom: `calc(var(--overview-timeline-bottom) + ${panelBottom - 20}px)`,
+        left: 'calc(var(--overview-scene-left) + var(--overview-overlay-gap))',
         width: `${panelWidth}px`,
         zIndex: 1000,
         pointerEvents: 'none',
         transition: 'left 0.2s ease, bottom 0.2s ease, width 0.2s ease',
       }}
     >
-      <GlowCard style={{ padding: '8px', background: isLight ? 'rgba(255,255,255,0.74)' : 'rgba(10,14,23,0.44)' }}>
+      <GlowCard style={{ padding: '8px', background: 'var(--overview-panel-bg-strong)', border: '1px solid var(--overview-panel-border)' }}>
         <div
           style={{
             display: 'flex',

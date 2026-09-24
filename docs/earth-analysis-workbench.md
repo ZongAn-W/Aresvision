@@ -13,7 +13,8 @@ Earth 的年度分析接口位于 `/api/analysis/earth/overview/*`，与火星 `
 
 | 能力 | 状态 |
 | --- | --- |
-| 共用工作台外壳 `OverviewShell`（左右可拖动面板、底部时间轴、≤900px 顺序布局） | 已实现 |
+| 共用工作台外壳 `OverviewShell`（左右可拖动面板、底部时间轴、≤1120px 顺序布局） | 已实现 |
+| 共用视觉契约（300px / 540px 栏宽、暗/亮面板 surface、时间轴/图例/Copilot 锚点） | 已实现 |
 | 共用控制器 `useOverviewController`（请求身份、取消、过期回包拒绝、播放、选择状态） | 已实现 |
 | 适配器契约 `OverviewAdapter`（`planet/sourceId/sourceFingerprint/time/variables/geometry/capabilities/cards`） | 已实现 |
 | `marsOverviewAdapter` / `earthOverviewAdapter` | 已实现 |
@@ -44,7 +45,7 @@ Earth 的年度分析接口位于 `/api/analysis/earth/overview/*`，与火星 `
 | 三维场景 | [OverviewScene.jsx](../frontend/src/pages/DataOverviewPage/workbench/OverviewScene.jsx)、[SphericalFieldCanvas.jsx](../frontend/src/components/SphericalFieldCanvas.jsx)、[sphericalRegionalGrid.js](../frontend/src/components/sphericalRegionalGrid.js)、[sphericalEarthBaseMap.js](../frontend/src/components/sphericalEarthBaseMap.js) |
 | Earth 场景与卡片 | [EarthWorkbenchScene.jsx](../frontend/src/pages/DataOverviewPage/EarthOverview/EarthWorkbenchScene.jsx)、[EarthResearchViews.jsx](../frontend/src/pages/DataOverviewPage/EarthOverview/EarthResearchViews.jsx)、[earthResearchModel.js](../frontend/src/pages/DataOverviewPage/EarthOverview/earthResearchModel.js)、[earthResearchClient.js](../frontend/src/pages/DataOverviewPage/EarthOverview/earthResearchClient.js)、[EarthInsightPanel.jsx](../frontend/src/pages/DataOverviewPage/EarthOverview/EarthInsightPanel.jsx) |
 | Earth 后端接口 | [earth_analysis.py](../AresVision_backend/backend/routers/earth_analysis.py)、[earth_research_service.py](../AresVision_backend/backend/services/earth_research_service.py)、[earth_research.py](../AresVision_backend/backend/schemas/earth_research.py) |
-| Mars 兼容入口 | [DataOverviewPage.jsx](../frontend/src/pages/DataOverviewPage.jsx)（`panelMode="external"`）、[SidebarMenu.jsx](../frontend/src/pages/DataOverviewPage/SidebarMenu.jsx)、[DetailPanel.jsx](../frontend/src/pages/DataOverviewPage/DetailPanel.jsx)、[TimelineController.jsx](../frontend/src/pages/DataOverviewPage/TimelineController.jsx) |
+| Mars 工作台入口 | [DataOverviewPage.jsx](../frontend/src/pages/DataOverviewPage.jsx)（`panelMode="slots"`）、[SidebarMenu.jsx](../frontend/src/pages/DataOverviewPage/SidebarMenu.jsx)、[DetailPanel.jsx](../frontend/src/pages/DataOverviewPage/DetailPanel.jsx)、[TimelineController.jsx](../frontend/src/pages/DataOverviewPage/TimelineController.jsx) |
 
 `EarthOverview/EarthOverviewScene.jsx`、`EarthMap2D.jsx`、`EarthTimeline.jsx`、`EarthSeriesPanel.jsx`、`useEarthOverview.js`
 作为**兼容保留实现**仍在仓库中：二维地图、受控时间轴与序列面板被新工作台直接复用；
@@ -56,7 +57,7 @@ Earth 的年度分析接口位于 `/api/analysis/earth/overview/*`，与火星 `
 
 | 能力 | 共用实现 | 说明 |
 | --- | --- | --- |
-| 三栏布局、可拖动面板、≤900px 顺序布局 | `OverviewShell` | Mars 走 `panelMode="external"`（面板自持 `position: fixed`），Earth 走外壳提供的固定面板容器 |
+| 三栏布局、可拖动面板、≤1120px 顺序布局 | `OverviewShell` + `overviewVisualContract.js` | Mars 与 Earth 都走 `panelMode="slots"`，外壳统一持有固定面板容器与拖拽宽度 |
 | 分析模式选择（1 基础总览 / 2 影响关系 / 3 高级空间诊断） | `AnalysisModePicker` → `OverviewModeCard` | **左栏**渲染，与 Mars 完全相同（radio 单选卡片、图标、标题、说明）。Mars 旧的就地副本 `RadioModeCard` 与 `SectionLabel` 已删除，避免两份实现漂移 |
 | 分区标题 | `SectionLabel` | 两侧同一份实现 |
 | 模式标题与说明文案 | `overviewChartLayout.MODE_DEFS` | 唯一来源；共用模块不再维护第二份副本 |
@@ -68,12 +69,12 @@ Earth 的年度分析接口位于 `/api/analysis/earth/overview/*`，与火星 `
 | 请求取消、过期回包拒绝、播放步进 | `useOverviewController` / `overviewRequestCoordinator` | Mars 播放仍由既有 `TimelineController` 驱动，共用的是身份与取消语义 |
 | 时间模型、单位、几何、能力、卡片目录 | `marsOverviewAdapter` / `earthOverviewAdapter` | **星球专属**：MY/Ls 与 ISO 日期、火星单位与原始单位、火星全球插值几何与 v2 真实单元几何 |
 | 左栏数据源区块内容 | SidebarMenu / EarthWorkbenchSidebar | **星球专属**：Mars 提供 MCD/OpenMARS/NOMAD 与上传来源选择；Earth 只有一个已注册发布，因此展示数据集身份、网格与聚合说明 |
-| 三维渲染细节 | `SphericalFieldCanvas` 的 planet 分支 | **星球专属**：Mars 保留纹理、粒子层与 `buildSeasonalSunLight(Ls)`；Earth 使用真实单元几何、本地海岸线与固定展示照明 |
+| 三维渲染细节 | `SphericalFieldCanvas` + `sphericalRegionalParticles.js` | **共享视觉、专属数据层**：两者共用连续球面材质、粒子密度/尺寸、相机基线与值到径向高度的表达；Mars 保留纹理与 `buildSeasonalSunLight(Ls)`，Earth 使用本地 NASA Blue Marble 彩色影像 CanvasTexture、真实单元粒子、默认自动旋转与固定展示照明 |
 | 卡片正文的指标定义 | 各星球视图与后端服务 | **星球专属**：Mars 用 Ls 与火星纬带；Earth 用 ISO 日期、单元面积权重与 5 条纬带 |
 
 仍然不同的地方（有意保留，不是复用缺口）：
 
-- Mars 的球面是纹理 + 粒子层，Earth 是真实单元色块与海岸线；两者共用相机、控制器、拾取与光照接口。
+- Mars 的球面是纹理 + 粒子层，Earth 是本地 NASA Blue Marble 彩色纹理 + 真实网格单元采样粒子 + 可切换海岸线；两者共用相机、控制器、拾取与粒子材质接口。
 - Mars 左栏有上传来源与 NOMAD/OpenMARS 叠加开关；Earth 没有第二个来源，因此不显示这些开关。
 - Mars 的卡片正文（季节变化、极区动力、波动诊断等）仍由既有 `OverviewCharts/*` 提供并自行请求数据；Earth 的卡片正文由 `EarthResearchViews.jsx` 提供。两者共用卡片外壳、模式头、状态与图表交互配置，但**不共用同一份 Plotly 视图组件**（`TemporalHeatmapView` 等七个共用视图仍属方案 Task 4 的剩余项）。
 
@@ -134,8 +135,8 @@ Earth 的年度分析接口位于 `/api/analysis/earth/overview/*`，与火星 `
 - **不跨越经度接缝**：最后一列在 +180 收口、第一列从 −180 开始，两者是不同顶点，不生成 `j=71 → j=0` 的接缝面。
 - **两极封盖**：第 0 行覆盖 −90°…−85°，第 35 行覆盖 85°…90°，极点处顶点退化但仍有面，
   不会出现 NaN 或空洞；单元格坐标仍是 −87.5° 与 87.5°。
-- 半径分层：底球 0.86、数据单元 0.872、海岸线 0.878、拾取球 0.90，避免 z-fighting。
-- 颜色只编码数值，不使用球壳高度；未着色区域表示没有数据。
+- 半径分层：连续纹理底球 0.86、数据单元基础半径 0.872、海岸线 0.878、拾取球 0.90。数据单元会按当前场值沿法向抬升，连续变量使用 `t × 0.225`，有符号风场使用以零为中心的高度。
+- 颜色与径向高度共同编码数值；未着色区域表示没有数据。
 - `geometry` 身份包含坐标与覆盖边界，形状相同但坐标不同会重建几何；切日只更新颜色缓冲。
 - Earth 光照是固定展示照明，**不调用** `buildSeasonalSunLight(Ls)`，不画晨昏线，日期不被当作某一时刻的太阳位置。
 - WebGL 不可用时自动切到二维地图并说明原因，日期、变量与点位选择保留。
@@ -351,9 +352,12 @@ npm run build
 - 外部 AI 服务的真实回答质量与可用性（本环境未配置 `AI_API_KEY`，验证的是内置摘要回答与协议）。
 - 390px / 900px 窄屏与浅色主题的地球三维工作台布局（本轮浏览器验收仅覆盖 1440×900 深色主题；二维页面的窄屏与主题验收见 [二维地球数据总览](earth-overview.md)）。
 
+### 彩色地球底图
+
+2026-09-24 接入本地 `frontend/public/earth/blue-marble-2048.png`（NASA Blue Marble，2048 × 1024）。影像呈现蓝色海洋、绿色植被、棕黄色干旱地表与白色冰雪，仅作静态地理参考，不代表当前数据日期的地表状态。浅色、深色主题共用同一自然色影像；地球球面的纹理 U 方向适配经度正方向，与数据单元及海岸线对齐。三维海岸线默认显示，可通过左栏开关隐藏；二维降级地图也保留海岸线。影像加载失败时保留渐变海洋，独立海岸线仍可显示。来源、许可与校验值见 [地球底图资源](../frontend/public/earth/README.md)。
+
 ## 后续计划
 
 - 手势交互接入摄像头识别，复用控制器已预留的 `gestureActions`（旋转/缩放/播放/步进/选点/重置）。
 - 窄屏（≤900px）与浅色主题的共用工作台浏览器验收。
 - Earth 训练与预测页（独立交付项，见 [DLinear 地球训练方案](plans/2026-09-23-earth-dlinear-training.md)）。
-- 若后续提供真实地球影像纹理，作为独立资源增强并单独记录来源与许可。

@@ -44,6 +44,7 @@ AresVision 面向火星大气数据分析与时空预测实验，以 OpenMARS �
 - 在三维火星球面上展示臭氧及气象变量，支持 Ls（太阳黄经）时间轴播放、色带与单位设置。
 - 提供球面点位探查、季节变化、极区动力学、变量相关性及波动诊断等分析视图。
 - 支持手势交互、全屏展示及中英文界面。
+- 地球三维底球使用随项目提供的 NASA Blue Marble 彩色影像，呈现海洋、陆地与冰雪，并可通过海岸线开关控制轮廓叠加；影像仅作地理参考，来源与许可见 [地球底图资源](frontend/public/earth/README.md)。
 - 数据总览顶部可切换“火星 / 地球”，两者**互斥挂载**并共用同一套三栏分析工作台：左侧控件栏、中央三维球体与时间轴、右侧分析卡片与 AI 解读。Earth 使用三维全球球体、ISO 日期、原始物理单位与 v2 全球 5°×5° 单元，Mars 继续使用 MY/Ls、火星纹理与太阳光照。共用适配器、卡片状态与能力声明见 [共用分析工作台](docs/earth-analysis-workbench.md)。
 
 ### 数据管理
@@ -209,7 +210,7 @@ flowchart LR
 2. 两个星球都经 `OverviewShell` 布局、`OverviewAnalysisPanel` 渲染卡片目录；差异全部由 adapter 声明（时间模型、单位、几何、能力、卡片），共用组件不读取任何星球数据。
 3. 地球由 `earthOverviewAdapter` 先查 `GET /api/datasets/earth_merra2_daily_v2` 取发布指纹与日期范围，再查 `/api/analysis/earth/overview/context` 取几何、能力与极区范围；区域场、区域序列与点位序列继续使用已实现的 `/overview/*` 接口。
 4. 年度分析走 Earth 专用接口 `/api/analysis/earth/overview/*`：`useEarthResearch`/`earthResearchClient` 按 `(fingerprint, year[, variable])` 去重缓存，多张卡片共享一次请求，逐日播放不重发年度数据。
-5. `SphericalFieldCanvas` 接收显式 `planet`/`field`/`geometry`/`selection`/`lighting`：地球用 v2 真实单元边界绘制 2592 个单元（不跨经度接缝、封盖两极），火星保持原有纹理、粒子与太阳光照。
+5. `SphericalFieldCanvas` 接收显式 `planet`/`field`/`geometry`/`selection`/`lighting` 与共享粒子视觉参数：地球用 v2 真实单元边界采样 2592 个单元粒子（不跨经度接缝、封盖两极），默认自动旋转，并按当前场值更新粒子径向高度；火星保持原有纹理、粒子与太阳光照；两者共享相机、粒子密度/尺寸、面板锚点与暗/亮 surface 语义。
 6. 切星球时按固定顺序重置：取消旧星球请求 → 清空场/曲线/播放/选点 → 载入新星球默认变量与时间 → 重置相机与几何；回包需同时通过 epoch、通道 token 与请求身份检查。
 7. 日期、变量与点位选择保存在页面层，Earth → Mars → Earth 保留各自选择。
 

@@ -493,7 +493,7 @@ function AdvancedToggleGroup({ title, open, onToggle, children, isLight = false,
   );
 }
 
-export default function SidebarMenu({ sceneSwitch = null }) {
+export default function SidebarMenu({ sceneSwitch = null, embedded = false }) {
   const { settings } = useSettings();
   const { user } = useAuth();
   const isLight = settings?.theme === 'light';
@@ -621,7 +621,15 @@ export default function SidebarMenu({ sceneSwitch = null }) {
 
   return (
     <div
-      style={{
+      className={embedded ? 'overview-sidebar overview-sidebar--embedded' : undefined}
+      style={embedded ? {
+        height: '100%',
+        minHeight: 0,
+        padding: leftPanelWidth <= 300 ? '18px 14px' : '22px 18px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      } : {
         position: 'fixed',
         left: 0,
         top: `${NAVBAR_HEIGHT}px`,
@@ -855,6 +863,7 @@ export default function SidebarMenu({ sceneSwitch = null }) {
       <div
         onMouseDown={handleMouseDown}
         style={{
+          display: embedded ? 'none' : undefined,
           position: 'absolute',
           right: -3,
           top: 0,

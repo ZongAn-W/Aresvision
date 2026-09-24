@@ -14,7 +14,7 @@ test('gesture camera preview is a compact edge HUD instead of a large scene over
 });
 
 test('globe legend uses compact edge styling and avoids the tall source-row legend', () => {
-  assert.match(globeLegendSource, /className="overview-globe-legend-compact"/);
+  assert.match(globeLegendSource, /className="overview-globe-legend-compact[^\"]*"/);
   assert.match(globeLegendSource, /const panelWidth = gestureEnabled \? 150 : 158/);
   assert.match(globeLegendSource, /source-dot-strip/);
   assert.doesNotMatch(globeLegendSource, /display:\s*'grid',\s*gap:\s*8/);

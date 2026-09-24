@@ -13,19 +13,21 @@ import {
   updatePointParticleBuffers,
 } from './sphericalFieldParticles';
 import {
-  buildRegionalCellGeometry,
   buildRegionalCellSampleValues,
   buildCoastlineSphereLines,
   geographicToCartesian,
   mapRegionalRgb,
-  updateRegionalCellColors,
 } from './sphericalRegionalGrid';
 import {
-  EARTH_COASTLINE_RADIUS,
   EARTH_GLOBE_RADIUS,
   createEarthGlobeMaterial,
   fetchCoastlineGeoJson,
 } from './sphericalEarthBaseMap';
+import { OVERVIEW_GLOBE } from '../pages/DataOverviewPage/workbench/overviewVisualContract.js';
+import {
+  buildRegionalParticleGeometry,
+  updateRegionalParticlePositions,
+} from './sphericalRegionalParticles.js';
 
 /** 场单元壳层半径：略高于地球底球与海岸线以外的可分层级由调用方决定。 */
 const EARTH_FIELD_RADIUS = 0.872;
@@ -52,8 +54,73 @@ export function dropCameraPose(poseKey) {
 // --- 全局缓存贴图 ---
 let cachedMarsTexture = null;
 let cachedCircleTexture = null;
-// 地球海岸线只解析一次；几何仍在每个场景内按半径重建与释放。
+const earthTextureCache = new Map();
 let cachedCoastlineGeoJson = null;
+
+function paintEarthTexture(entry, isLight) {
+  if (!entry?.context || !entry?.canvas) return;
+  const { canvas, context } = entry;
+  const width = canvas.width;
+  const height = canvas.height;
+  // Local NASA Blue Marble imagery supplies land/ocean colours independently of data.
+  if (entry.image) {
+    context.clearRect(0, 0, width, height);
+    context.globalAlpha = 1;
+    context.drawImage(entry.image, 0, 0, width, height);
+    entry.texture.needsUpdate = true;
+    return;
+  }
+  const oceanTop = isLight ? '#a9c9e0' : '#06182b';
+  const oceanBottom = isLight ? '#dbeaf3' : '#0c3d63';
+  const ocean = context.createLinearGradient(0, 0, 0, height);
+  ocean.addColorStop(0, oceanTop);
+  ocean.addColorStop(0.48, isLight ? '#cfe4ef' : '#0a2b49');
+  ocean.addColorStop(1, oceanBottom);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = ocean;
+  context.fillRect(0, 0, width, height);
+
+  // Soft latitude bands keep the continuous texture readable behind the data shell.
+  context.globalAlpha = isLight ? 0.16 : 0.2;
+  for (let latitude = -60; latitude <= 60; latitude += 30) {
+    const y = ((90 - latitude) / 180) * height;
+    context.fillStyle = latitude % 60 === 0
+      ? (isLight ? '#f4fbff' : '#4da5c7')
+      : (isLight ? '#ffffff' : '#164b6d');
+    context.fillRect(0, Math.max(0, y - height * 0.045), width, height * 0.09);
+  }
+
+  context.globalAlpha = 1;
+  entry.texture.needsUpdate = true;
+}
+
+function getEarthTexture(isLight) {
+  if (typeof document === 'undefined') return null;
+  const key = isLight ? 'light' : 'dark';
+  const cached = earthTextureCache.get(key);
+  if (cached) return cached.texture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 2048;
+  canvas.height = 1024;
+  const context = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  // SphereGeometry's U increases toward -Z; geographic east increases toward +Z.
+  texture.repeat.x = -1;
+  texture.offset.x = 1;
+  const entry = { canvas, context, texture };
+  earthTextureCache.set(key, entry);
+  paintEarthTexture(entry, isLight);
+  const image = new Image();
+  image.onload = () => {
+    entry.image = image;
+    paintEarthTexture(entry, isLight);
+  };
+  // Keep the generated ocean texture if the optional imagery cannot load.
+  image.onerror = () => {};
+  image.src = '/earth/blue-marble-2048.png';
+  return texture;
+}
 
 function latLonToVec3(latDeg, lonDeg, radius) {
   const phi = (90 - latDeg) * (Math.PI / 180);
@@ -201,7 +268,12 @@ function disposeObject3D(root) {
     if (node.material) {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       materials.forEach((material) => {
-        if (material?.map && material.map !== cachedMarsTexture && material.map !== cachedCircleTexture) {
+        if (
+          material?.map
+          && material.map !== cachedMarsTexture
+          && material.map !== cachedCircleTexture
+          && !Array.from(earthTextureCache.values()).some((entry) => entry.texture === material.map)
+        ) {
           material.map.dispose();
         }
         material?.dispose?.();
@@ -275,6 +347,7 @@ const SphericalFieldCanvas = forwardRef(({
   showMars = true,
   showConcentration = true,
   showGeoAnnotations = true,
+  showBaseMap = true,
   offsetX = 0,
   solarLongitudeLs = 0,
   onGlobeClick,
@@ -285,7 +358,12 @@ const SphericalFieldCanvas = forwardRef(({
   geometry = null,
   selection = null,
   lighting = null,
-  showBaseMap = true,
+  particlePalette = null,
+  particleDensity = OVERVIEW_GLOBE.particleDensity,
+  particleSize = OVERVIEW_GLOBE.particleSize,
+  pointParticleSize = OVERVIEW_GLOBE.pointParticleSize,
+  globeMaterial = 'shared',
+  lightingMode = null,
   // 视角记忆：同一个 poseKey 重新挂载时恢复上次的相机与球体朝向。
   poseKey = null,
   restoreCameraPose = true,
@@ -374,18 +452,22 @@ const SphericalFieldCanvas = forwardRef(({
     pickingMeshRef.current = pickingMesh;
   };
 
-  // ── 地球：底球、海岸线、真实单元场与选中点 ───────────────────────────
-  // 底球颜色不参与数据色带；未着色区域表示该位置没有数据，而不是"零值"。
+  // ── 地球：连续彩色纹理底球、真实单元场与选中点 ────────────────
+  // 底球纹理不参与数据色带；未着色区域表示该位置没有数据，而不是"零值"。
   const addEarthGlobe = (globeGroup) => {
     if (!globeGroup || earthGlobeRef.current) return;
     const options = createEarthGlobeMaterial({ isLight }) || {};
     const globeGeometry = new THREE.SphereGeometry(EARTH_GLOBE_RADIUS, 96, 64);
-    const globeMaterial = new THREE.MeshPhongMaterial({
-      color: options.color ?? (isLight ? 0xcddff2 : 0x14304f),
-      shininess: 6,
+    const earthTexture = getEarthTexture(isLight);
+    const material = new THREE.MeshPhongMaterial({
+      map: earthTexture,
+      color: earthTexture ? 0xffffff : (options.color ?? (isLight ? OVERVIEW_GLOBE.lightGlobeColor : OVERVIEW_GLOBE.darkGlobeColor)),
+      emissive: options.emissive,
+      emissiveIntensity: options.emissiveIntensity,
+      shininess: globeMaterial === 'shared' ? OVERVIEW_GLOBE.globeShininess : 6,
       transparent: false,
     });
-    const globeMesh = new THREE.Mesh(globeGeometry, globeMaterial);
+    const globeMesh = new THREE.Mesh(globeGeometry, material);
     globeMesh.name = 'earth-globe-base';
     globeGroup.add(globeMesh);
     earthGlobeRef.current = globeMesh;
@@ -406,15 +488,19 @@ const SphericalFieldCanvas = forwardRef(({
   const applyEarthGlobeColor = () => {
     if (!earthGlobeRef.current) return;
     const options = createEarthGlobeMaterial({ isLight }) || {};
-    earthGlobeRef.current.material.color.setHex(options.color ?? (isLight ? 0xcddff2 : 0x14304f));
+    const earthTexture = getEarthTexture(isLight);
+    earthGlobeRef.current.material.map = earthTexture;
+    earthGlobeRef.current.material.color.setHex(earthTexture ? 0xffffff : (options.color ?? (isLight ? OVERVIEW_GLOBE.lightGlobeColor : OVERVIEW_GLOBE.darkGlobeColor)));
+    earthGlobeRef.current.material.emissive.set(options.emissive || '#000000');
+    earthGlobeRef.current.material.emissiveIntensity = options.emissiveIntensity ?? 0;
+    if (earthTexture) earthTexture.needsUpdate = true;
     earthGlobeRef.current.material.needsUpdate = true;
   };
 
   const ensureEarthCoastline = (globeGroup, isActive) => {
     if (!globeGroup || earthCoastlineRef.current) return;
-    const source = cachedCoastlineGeoJson;
     const build = (geojson) => {
-      if (!isActive() || !geojson) return;
+      if (!isActive() || !geojson || earthCoastlineRef.current) return;
       const lines = buildCoastlineSphereLines(geojson, { radius: EARTH_COASTLINE_LINE_RADIUS });
       const group = new THREE.Group();
       group.name = 'earth-coastline';
@@ -428,16 +514,14 @@ const SphericalFieldCanvas = forwardRef(({
         const lineGeometry = new THREE.BufferGeometry();
         lineGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         const line = new THREE.Line(lineGeometry, material);
-        // 场单元是透明层且 renderOrder 更高，海岸线必须在它之后绘制才不会被
-        // 半透明颜色盖住；半径仍大于场壳层，深度测试可以通过。
         line.renderOrder = 3;
         group.add(line);
       }
       globeGroup.add(group);
       earthCoastlineRef.current = group;
     };
-    if (source) {
-      build(source);
+    if (cachedCoastlineGeoJson) {
+      build(cachedCoastlineGeoJson);
       return;
     }
     fetchCoastlineGeoJson({})
@@ -445,83 +529,64 @@ const SphericalFieldCanvas = forwardRef(({
         cachedCoastlineGeoJson = geojson;
         build(geojson);
       })
-      .catch(() => {
-        // 底图失败不影响经纬网与有效数据格；保留可重试的静默降级。
-      });
+      .catch(() => {});
   };
 
   const ensureRegionalMesh = (globeGroup, geometrySpec) => {
     if (!globeGroup || !geometrySpec) return null;
-    const key = [
-      geometrySpec.latCenters.length,
-      geometrySpec.lonCenters.length,
-      geometrySpec.latCenters[0],
-      geometrySpec.lonCenters[0],
-      geometrySpec.latBounds.join(','),
-      geometrySpec.lonBounds.join(','),
-      geometrySpec.wrapLongitude ? 'w' : 'n',
-    ].join('|');
-    if (regionalGeometryRef.current?.key === key && regionalMeshRef.current) {
-      return regionalMeshRef.current;
+    const key = JSON.stringify([
+      geometrySpec.latCenters, geometrySpec.lonCenters,
+      geometrySpec.latBounds, geometrySpec.lonBounds, particleDensity,
+    ]);
+    if (regionalGeometryRef.current?.key !== key || !regionalMeshRef.current) {
+      if (regionalMeshRef.current) {
+        globeGroup.remove(regionalMeshRef.current);
+        disposeParticleMesh(regionalMeshRef.current);
+      }
+      const built = buildRegionalParticleGeometry({ ...geometrySpec, particleDensity, radius: EARTH_FIELD_RADIUS });
+      const buffer = new THREE.BufferGeometry();
+      buffer.setAttribute('position', new THREE.BufferAttribute(built.positions, 3));
+      buffer.setAttribute('color', new THREE.BufferAttribute(new Float32Array(built.vertexCount * 3), 3));
+      const material = new THREE.PointsMaterial({
+        vertexColors: true, map: createCircleTexture(), transparent: true, depthWrite: false,
+      });
+      const mesh = new THREE.Points(buffer, material);
+      mesh.name = 'earth-regional-particles';
+      mesh.renderOrder = 2;
+      globeGroup.add(mesh);
+      regionalMeshRef.current = mesh;
+      regionalGeometryRef.current = { key, built };
     }
-    if (regionalMeshRef.current) {
-      globeGroup.remove(regionalMeshRef.current);
-      disposeParticleMesh(regionalMeshRef.current);
-      regionalMeshRef.current = null;
-      regionalGeometryRef.current = null;
-    }
-    const built = buildRegionalCellGeometry({
-      latCenters: geometrySpec.latCenters,
-      lonCenters: geometrySpec.lonCenters,
-      latBounds: geometrySpec.latBounds,
-      lonBounds: geometrySpec.lonBounds,
-      wrapLongitude: geometrySpec.wrapLongitude,
-      radius: EARTH_FIELD_RADIUS,
+    Object.assign(regionalMeshRef.current.material, {
+      size: particleSize,
+      opacity: isLight ? 0.7 : 0.9,
+      blending: isLight ? THREE.NormalBlending : THREE.AdditiveBlending,
     });
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(built.positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(
-      new Float32Array(built.vertexCount * 3).fill(1), 3,
-    ));
-    geometry.setIndex(new THREE.BufferAttribute(built.indices, 1));
-    const material = new THREE.MeshBasicMaterial({
-      // 固定半径的平面着色：数值只映射到颜色，不编码成球壳高度。
-      vertexColors: true,
-      transparent: true,
-      opacity: isLight ? 0.92 : 0.88,
-      side: THREE.FrontSide,
-      depthWrite: false,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = 'earth-regional-cells';
-    mesh.renderOrder = 2;
-    globeGroup.add(mesh);
-    regionalMeshRef.current = mesh;
-    regionalGeometryRef.current = { key, built };
-    return mesh;
+    regionalMeshRef.current.material.needsUpdate = true;
+    return regionalMeshRef.current;
   };
 
-  const applyRegionalColors = (fieldSpec) => {
-    const entry = regionalGeometryRef.current;
+  const applyRegionalField = (fieldSpec) => {
+    const built = regionalGeometryRef.current?.built;
     const mesh = regionalMeshRef.current;
-    if (!entry || !mesh || !fieldSpec?.values) return;
-    const { built } = entry;
+    if (!built || !mesh || !fieldSpec?.values) return;
     const values = buildRegionalCellSampleValues(fieldSpec.values, built.cellCount);
-    const colors = updateRegionalCellColors({
+    const position = mesh.geometry.getAttribute('position');
+    const color = mesh.geometry.getAttribute('color');
+    updateRegionalParticlePositions({
       geometry: built,
       values,
       colorRange: fieldSpec.colorRange || { min: 0, max: 1 },
-      // mapRegionalRgb 返回 0..255；mapParticleColor 返回 0..1，只用于顶点色
-      // 由 Three 直接消费的 Points 材质。两者不可互换，否则单元会变成近黑。
-      colorMapper: (t) => mapRegionalRgb(
-        fieldSpec.colorMode || colorMode,
-        settings.colormap,
-        t,
-      ),
+      positions: position.array,
+      colors: color.array,
+      colorMapper: (t) => mapRegionalRgb(colorMode, colorMode === 'rdbu' ? settings.colormap : colorMode, t),
+      baseRadius: EARTH_FIELD_RADIUS,
+      heightScale: 0.225,
+      signed: colorMode === 'rdbu',
     });
-    const attribute = mesh.geometry.getAttribute('color');
-    attribute.array.set(colors);
-    attribute.needsUpdate = true;
+    position.needsUpdate = true;
+    color.needsUpdate = true;
+    mesh.geometry.computeBoundingSphere();
   };
 
   const applySelectionMarker = (globeGroup, point) => {
@@ -815,6 +880,7 @@ const SphericalFieldCanvas = forwardRef(({
       if (!containerRef.current || !rendererRef.current) return;
       const w = containerRef.current.clientWidth;
       const h2 = containerRef.current.clientHeight;
+      if (!w || !h2) return;
       camera.aspect = w / h2;
       if (offsetXRef.current !== 0) {
         camera.setViewOffset(w, h2, offsetXRef.current, 0, w, h2);
@@ -827,15 +893,20 @@ const SphericalFieldCanvas = forwardRef(({
       }
       rendererRef.current.setSize(w, h2);
     };
+    const sceneObserver = new ResizeObserver(handleResize);
+    sceneObserver.observe(containerRef.current);
     window.addEventListener('resize', handleResize);
 
     return () => {
+      sceneObserver.disconnect();
+      controls.dispose();
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointerup', handlePointerUp);
       cancelAnimationFrame(reqId);
       if (rendererRef.current) {
         rendererRef.current.dispose();
+        rendererRef.current.forceContextLoss();
       }
       starGeometry.dispose();
       starMaterial.dispose();
@@ -861,7 +932,7 @@ const SphericalFieldCanvas = forwardRef(({
   }, [isLight]);
 
   useEffect(() => {
-    if (isEarth) {
+    if (isEarth || lightingMode === 'fixed') {
       // Earth 使用固定展示照明，Ls 不参与光照。
       if (directionalLightRef.current) {
         directionalLightRef.current.intensity = isLight ? 1.0 : 1.5;
@@ -879,7 +950,7 @@ const SphericalFieldCanvas = forwardRef(({
         seasonalSunlight.position.z,
       );
     }
-  }, [isEarth, isLight, solarLongitudeLs]);
+  }, [isEarth, isLight, solarLongitudeLs, lightingMode]);
 
   useEffect(() => {
     if (sphereMeshRef.current) {
@@ -956,11 +1027,17 @@ const SphericalFieldCanvas = forwardRef(({
     const globeGroup = sphereMeshRef.current;
 
     if (isEarth) {
-      // Earth 走显式区域图层：永不调用旧全球插值/经度环绕分支，
-      // 也不加载火星纹理或粒子层。
+      // Earth particles keep their true coordinates; only visual height/colour interpolate.
       removeMarsMesh(globeGroup);
       addEarthGlobe(globeGroup);
-      if (showBaseMap) ensureEarthCoastline(globeGroup, () => isEarthRef.current);
+      if (showBaseMap) ensureEarthCoastline(globeGroup, () => isEarthRef.current && sphereMeshRef.current === globeGroup);
+      if (earthCoastlineRef.current) {
+        earthCoastlineRef.current.visible = showBaseMap;
+        earthCoastlineRef.current.children.forEach((line) => {
+          line.material.color.setHex(isLight ? 0x2f4a68 : 0xcfe4ff);
+          line.material.opacity = isLight ? 0.72 : 0.62;
+        });
+      }
       ensurePickingMesh(globeGroup);
       particleLayerCacheRef.current.forEach((entry) => { entry.mesh.visible = false; });
       particleLayersRef.current = [];
@@ -969,7 +1046,7 @@ const SphericalFieldCanvas = forwardRef(({
       const mesh = ensureRegionalMesh(globeGroup, geometry);
       if (mesh) {
         mesh.visible = Boolean(showConcentration && field?.values);
-        if (mesh.visible) applyRegionalColors({ ...field, colorMode });
+        if (mesh.visible) applyRegionalField(field);
       }
       applySelectionMarker(globeGroup, selection?.point || null);
       return;
@@ -1019,7 +1096,7 @@ const SphericalFieldCanvas = forwardRef(({
           samples,
           globeGroup,
           materialOptions: {
-            size: 0.024,
+            size: pointParticleSize,
             opacity: isLight ? 0.86 : 0.96,
             blending: isLight ? THREE.NormalBlending : THREE.AdditiveBlending,
           },
@@ -1032,7 +1109,7 @@ const SphericalFieldCanvas = forwardRef(({
           positions: entry.positions,
           colors: entry.colors,
           colorMapper: mapParticleColor,
-          tint: '#34d399',
+          tint: particlePalette?.pointTint || '#34d399',
           radiusOffset,
         });
         entry.mesh.geometry.attributes.position.needsUpdate = true;
@@ -1045,13 +1122,13 @@ const SphericalFieldCanvas = forwardRef(({
       const layerFieldData = layerConfig.fieldData;
       const layerColorMode = layerConfig.colorMode || colorMode;
       const radiusOffset = layerConfig.radiusOffset || 0;
-      const particleDensity = isLayeredMode ? 55 : 120;
-      const signature = getGridLayerSignature(layerFieldData, particleDensity, radiusOffset);
+      const layerParticleDensity = isLayeredMode ? Math.max(24, Math.round(particleDensity * 0.46)) : particleDensity;
+      const signature = getGridLayerSignature(layerFieldData, layerParticleDensity, radiusOffset);
       const cachedEntry = particleLayerCacheRef.current.get(key);
       const samples = cachedEntry?.signature === signature
         ? cachedEntry.samples
         : buildGridParticleSamples(layerFieldData.field, {
-          particleDensity,
+          particleDensity: layerParticleDensity,
           radiusOffset,
           seed: getParticleSeed(key),
         });
@@ -1061,7 +1138,7 @@ const SphericalFieldCanvas = forwardRef(({
         samples,
         globeGroup,
         materialOptions: {
-          size: 0.01,
+          size: particleSize,
           opacity: isLayeredMode ? (isLight ? 0.58 : 0.78) : (isLight ? 0.7 : 0.9),
           blending: isLight ? THREE.NormalBlending : THREE.AdditiveBlending,
         },
@@ -1075,7 +1152,7 @@ const SphericalFieldCanvas = forwardRef(({
         positions: entry.positions,
         colors: entry.colors,
         colorMapper: mapParticleColor,
-        tint: layerConfig.tint || null,
+        tint: layerConfig.tint || particlePalette?.fieldTint || null,
         radiusOffset,
         equatorHighlight: !isLayeredMode,
       });
@@ -1088,7 +1165,7 @@ const SphericalFieldCanvas = forwardRef(({
     removeUnusedParticleEntries(activeKeys, globeGroup);
     particleLayersRef.current = nextLayers;
     particlesMeshRef.current = nextLayers[0] || null;
-  }, [field, fieldData, fieldLayers, colorMode, geometry, isEarth, selection, settings.colormap, showBaseMap, showConcentration, showMars, isLight, fontScale, showGeoAnnotations]);
+  }, [field, fieldData, fieldLayers, colorMode, geometry, isEarth, selection, settings.colormap, showBaseMap, showConcentration, showMars, isLight, fontScale, showGeoAnnotations, particleDensity, particlePalette, particleSize, pointParticleSize]);
 
 
   // 组件完全卸载时，清空 sphereMeshRef / 材质资源
@@ -1139,14 +1216,14 @@ const SphericalFieldCanvas = forwardRef(({
   if (forceFullscreen) {
     return (
       <div
-        ref={containerRef}
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100vw',
-          height: '100vh',
-        }}
+      ref={containerRef}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+      }}
       />
     );
   }

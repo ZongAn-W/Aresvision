@@ -105,7 +105,7 @@ function EarthWorkbenchSidebar({
   })();
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 20, padding: 20, overflowY: 'auto' }}>
+    <div className="overview-sidebar overview-sidebar--embedded" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 16, padding: '18px 14px', overflowY: 'auto', boxSizing: 'border-box' }}>
       <div>
         <h1 style={{ margin: 0, color: C.ice, fontFamily: 'var(--font-display)', fontSize: 'calc(17px * var(--font-scale, 1))', fontWeight: 800 }}>
           {isZh ? '分析工作台' : 'Analysis workbench'}
@@ -286,7 +286,13 @@ function ToggleRow({ label, value, onChange }) {
   );
 }
 
-export default function EarthWorkbenchScene({ selection, onSelectionChange, sceneSwitch }) {
+export default function EarthWorkbenchScene({
+  selection,
+  onSelectionChange,
+  sceneSwitch,
+  panelWidths = { left: 300, right: 540 },
+  onPanelWidthsChange = () => {},
+}) {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
@@ -305,7 +311,7 @@ export default function EarthWorkbenchScene({ selection, onSelectionChange, scen
   const [showField, setShowField] = useState(true);
   const [showGeo, setShowGeo] = useState(true);
   const [showBaseMap, setShowBaseMap] = useState(true);
-  const [autoRotate, setAutoRotate] = useState(false);
+  const [autoRotate, setAutoRotate] = useState(true);
   const [bandId, setBandId] = useState('global');
   const [normalized, setNormalized] = useState(false);
 
@@ -459,12 +465,13 @@ export default function EarthWorkbenchScene({ selection, onSelectionChange, scen
 
   const timeline = (
     <div
+      className="overview-timeline-anchor"
       style={{
         // 底部时间轴只占中央区域，避免盖住右侧分析栏里的按钮。
         position: 'fixed',
-        left: 330,
-        right: 540,
-        bottom: 0,
+        left: 'var(--overview-scene-left)',
+        right: 'var(--overview-scene-right)',
+        bottom: 'var(--overview-timeline-bottom)',
         zIndex: 1150,
         padding: '0 8px 14px',
         pointerEvents: 'none',
@@ -497,10 +504,11 @@ export default function EarthWorkbenchScene({ selection, onSelectionChange, scen
 
   const legend = controller.field ? (
     <div
+      className="overview-overlay-anchor overview-earth-legend"
       style={{
         position: 'fixed',
-        right: 552,
-        bottom: 150,
+        right: 'calc(var(--overview-scene-right) + var(--overview-overlay-gap))',
+        bottom: 'calc(var(--overview-timeline-bottom) + 132px)',
         zIndex: 1150,
         width: 232,
         padding: '10px 12px',
@@ -557,6 +565,7 @@ export default function EarthWorkbenchScene({ selection, onSelectionChange, scen
       geometry={controller.geometry}
       selection={{ point: controller.point }}
       lighting="fixed"
+      colormap={colormap}
       showField={showField}
       showGeoAnnotations={showGeo}
       showBaseMap={showBaseMap}
@@ -664,9 +673,9 @@ export default function EarthWorkbenchScene({ selection, onSelectionChange, scen
         <>
           {scene}
           {map2d}
-          {legend}
         </>
       )}
+      overlay={legend}
       timeline={timeline}
       sidebar={(
         <EarthWorkbenchSidebar
@@ -688,8 +697,10 @@ export default function EarthWorkbenchScene({ selection, onSelectionChange, scen
         />
       )}
       analysis={analysis}
-      leftWidth={330}
-      rightWidth={540}
+      leftWidth={panelWidths.left}
+      rightWidth={panelWidths.right}
+      onLeftWidthChange={(left) => onPanelWidthsChange((current) => ({ ...current, left }))}
+      onRightWidthChange={(right) => onPanelWidthsChange((current) => ({ ...current, right }))}
     />
   );
 }

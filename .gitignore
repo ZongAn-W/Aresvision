@@ -12,6 +12,7 @@
 .vscode/
 .cursor/
 .claude/
+.playwright-cli/
 *.swp
 *.swo
 

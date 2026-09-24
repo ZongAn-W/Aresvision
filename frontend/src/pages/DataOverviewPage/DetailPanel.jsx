@@ -19,7 +19,7 @@ import { CARD_STATUS } from './workbench/OverviewAdapter.js';
 
 const NAVBAR_HEIGHT = 70;
 
-export default function DetailPanel({ sliceData, overviewSourceParams = {} }) {
+export default function DetailPanel({ sliceData, overviewSourceParams = {}, embedded = false }) {
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
   const isZh = settings?.language !== 'en';
@@ -208,7 +208,19 @@ export default function DetailPanel({ sliceData, overviewSourceParams = {} }) {
 
   return (
     <div
-      style={{
+      className={embedded ? 'overview-analysis overview-analysis--embedded' : undefined}
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        minHeight: 0,
+        background: 'transparent',
+        padding: '24px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '16px',
+        boxSizing: 'border-box',
+      } : {
         position: 'fixed',
         top: `${NAVBAR_HEIGHT}px`,
         right: isVisible ? '0' : `-${rightPanelWidth + 20}px`,
@@ -271,6 +283,7 @@ export default function DetailPanel({ sliceData, overviewSourceParams = {} }) {
       <div
         onMouseDown={handleMouseDown}
         style={{
+          display: embedded ? 'none' : undefined,
           position: 'absolute',
           left: -3,
           top: 0,

@@ -36,10 +36,12 @@ test('the shared shell provides three columns, drag handles and a compact fallba
   assert.match(shellSource, /overview-shell__analysis/);
   assert.match(shellSource, /overview-shell__scene/);
   assert.match(shellSource, /role="separator"/);
-  assert.match(shellSource, /col-resize/);
+  assert.match(shellSource, /overview-resizer--left/);
+  assert.match(shellSource, /overview-resizer--right/);
   assert.match(shellSource, /MIN_SCENE_WIDTH/);
-  assert.match(shellSource, /width <= 900/);
-  assert.match(shellSource, /panelMode === 'external'/);
+  assert.match(shellSource, /shouldUseCompactOverview/);
+  assert.doesNotMatch(shellSource, /panelMode === 'external'/);
+  assert.match(shellSource, /overviewVisualContract/);
 });
 
 test('the shared card renders every unified state explicitly', () => {
@@ -79,15 +81,16 @@ test('Earth workbench declares fixed lighting and no Mars Ls handling', () => {
   assert.match(earthSceneSource, /OverviewShell/);
   assert.match(earthSceneSource, /OverviewAnalysisPanel/);
   assert.match(earthSceneSource, /EarthInsightPanel/);
+  assert.match(earthSceneSource, /const \[autoRotate, setAutoRotate\] = useState\(true\)/);
 });
 
-test('the page routes Earth to the shared workbench and keeps Mars on the external shell', () => {
+test('the page routes both planets through the shared workbench shell', () => {
   assert.match(pageSource, /EarthWorkbenchScene/);
   assert.match(pageSource, /OverviewShell/);
-  assert.match(pageSource, /panelMode="external"/);
-  // Mars legacy behaviour stays reachable through the same page.
-  assert.match(pageSource, /<SidebarMenu sceneSwitch=\{sceneSwitch\} \/>/);
-  assert.match(pageSource, /<TimelineController \/>/);
+  assert.doesNotMatch(pageSource, /panelMode="external"/);
+  assert.match(pageSource, /<SidebarMenu embedded sceneSwitch=\{sceneSwitch\} \/>/);
+  assert.match(pageSource, /<DetailPanel embedded/);
+  assert.match(pageSource, /<TimelineController embedded \/>/);
   // The gesture HUD stays in the page so its structure contract is unchanged.
   assert.match(pageSource, /className="gesture-capture-hud"/);
 });

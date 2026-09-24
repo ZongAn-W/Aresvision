@@ -49,7 +49,7 @@ export const DataOverviewProvider = ({ children }) => {
   const [ozoneOverlayPayload, setOzoneOverlayPayload] = useState(null);
   const [timeRange, setTimeRange] = useState({ start: 0, end: 360 });
   const [selectedVariables, setSelectedVariables] = useState(['o3col', 'temperature', 'pressure']);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(280);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(300);
   const [rightPanelWidth, setRightPanelWidth] = useState(540);
   const [expandedCard, setExpandedCard] = useState('');
   const aiInsightProvidersRef = useRef(new Map());

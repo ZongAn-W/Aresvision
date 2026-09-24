@@ -13,7 +13,6 @@ import { filterOzoneOverlayBySourceModes } from './DataOverviewPage/uploadedSour
 import TopStatusBar from './DataOverviewPage/TopStatusBar';
 import SidebarMenu from './DataOverviewPage/SidebarMenu';
 import DetailPanel from './DataOverviewPage/DetailPanel';
-import DeepSpaceBackdrop from './DataOverviewPage/DeepSpaceBackdrop';
 import Mars3DBackground from './DataOverviewPage/Mars3DBackground';
 import TimelineController from './DataOverviewPage/TimelineController';
 import AICopilotWidget from './DataOverviewPage/AICopilotWidget'; 
@@ -55,7 +54,9 @@ const DataOverviewPageContent = ({ sceneSwitch = null }) => {
     ozoneOverlayPayload,
     setOzoneOverlayPayload,
     leftPanelWidth,
-    rightPanelWidth
+    setLeftPanelWidth,
+    rightPanelWidth,
+    setRightPanelWidth,
   } = useDataOverview();
 
   const [loadingGlobe, setLoadingGlobe] = useState(false);
@@ -388,10 +389,12 @@ const DataOverviewPageContent = ({ sceneSwitch = null }) => {
     <OverviewShell
       planet="mars"
       isLight={isLight}
-      panelMode="external"
+      leftWidth={leftPanelWidth}
+      rightWidth={rightPanelWidth}
+      onLeftWidthChange={setLeftPanelWidth}
+      onRightWidthChange={setRightPanelWidth}
       scene={(
-        <div className="space-scene" style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative' }}>
-          <DeepSpaceBackdrop />
+        <div className="space-scene" style={{ width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}>
 
           {/* 绝对底层的 3D 背景 */}
           <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 0 }}>
@@ -420,7 +423,7 @@ const DataOverviewPageContent = ({ sceneSwitch = null }) => {
         <div className="gesture-capture-hud" title={gestureError || gestureStatus?.text || t('overview.controls.cameraTracking')} style={{
           position: 'fixed',
           top: '82px',
-          left: `${leftPanelWidth + 18}px`,
+          left: 'calc(var(--overview-scene-left) + 18px)',
           width: `${GESTURE_WINDOW_WIDTH}px`,
           height: `${GESTURE_WINDOW_HEIGHT}px`,
           zIndex: 1450,
@@ -551,7 +554,7 @@ const DataOverviewPageContent = ({ sceneSwitch = null }) => {
       )}
 
       {/* HUD UI 层：仅保留状态栏、AI 与图例；控件栏/分析栏/时间轴由共用工作台外壳承载 */}
-      <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100, pointerEvents: 'none' }}>
+      <div className="overview-mars-hud">
 
         <div style={{ pointerEvents: 'auto' }}>
           <TopStatusBar />
@@ -562,14 +565,14 @@ const DataOverviewPageContent = ({ sceneSwitch = null }) => {
         </div>
 
         <div style={{ pointerEvents: 'auto' }}>
-          <GlobeLegend ozoneData={sceneModel.layers[0] || mcdMainSlice} sceneModel={sceneModel} />
+          <GlobeLegend ozoneData={sceneModel.layers[0] || mcdMainSlice} sceneModel={sceneModel} embedded />
         </div>
       </div>
         </>
       )}
-      sidebar={<SidebarMenu sceneSwitch={sceneSwitch} />}
-      analysis={<DetailPanel sliceData={mcdMainSlice} overviewSourceParams={overviewSourceParams} />}
-      timeline={<TimelineController />}
+      sidebar={<SidebarMenu embedded sceneSwitch={sceneSwitch} />}
+      analysis={<DetailPanel embedded sliceData={mcdMainSlice} overviewSourceParams={overviewSourceParams} />}
+      timeline={<TimelineController embedded />}
       notification={(
         <PointProbeModal
           probe={pointProbe}
@@ -592,6 +595,7 @@ function OverviewSceneContent() {
   const [planet, setPlanet] = useState('mars');
   const [earthSelection, setEarthSelection] = useState({ date: null, variable: 'TO3', point: null });
   const { setIsPlayingTimeline } = useDataOverview();
+  const [earthWidths, setEarthWidths] = useState({ left: 300, right: 540 });
 
   const switchPlanet = useCallback((next) => {
     if (next === planet) return;
@@ -605,6 +609,8 @@ function OverviewSceneContent() {
   return planet === 'earth'
     ? (
       <EarthWorkbenchScene
+        panelWidths={earthWidths}
+        onPanelWidthsChange={setEarthWidths}
         selection={earthSelection}
         onSelectionChange={setEarthSelection}
         sceneSwitch={sceneSwitch}

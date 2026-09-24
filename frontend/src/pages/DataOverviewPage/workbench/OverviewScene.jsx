@@ -11,13 +11,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import C from '../../../constants/colors';
 import SphericalFieldCanvas from '../../../components/SphericalFieldCanvas';
+import { useOverviewLayout } from './OverviewShell.jsx';
+import { OVERVIEW_GLOBE } from './overviewVisualContract.js';
 
 export function detectWebglSupport() {
   if (typeof document === 'undefined') return false;
   try {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('webgl2') || canvas.getContext('webgl');
-    return Boolean(context);
+    const supported = Boolean(context);
+    context?.getExtension('WEBGL_lose_context')?.loseContext();
+    return supported;
   } catch {
     return false;
   }
@@ -40,6 +44,7 @@ export default function OverviewScene({
   geometry = null,
   selection = null,
   lighting = 'fixed',
+  colormap = 'inferno',
   showField = true,
   showGeoAnnotations = true,
   showBaseMap = true,
@@ -54,6 +59,7 @@ export default function OverviewScene({
   isLight = false,
   isZh = true,
 }) {
+  const { offsetX } = useOverviewLayout();
   const [webglOk, setWebglOk] = useState(true);
 
   useEffect(() => {
@@ -103,15 +109,23 @@ export default function OverviewScene({
           geometry={geometry}
           selection={selection}
           lighting={lighting}
+          colorMode={colormap}
+          offsetX={offsetX}
           showGeoAnnotations={showGeoAnnotations}
           showBaseMap={showBaseMap}
           autoRotate={autoRotate}
-          zoom={4.2}
+          zoom={OVERVIEW_GLOBE.zoom}
           forceFullscreen
           poseKey={poseKey}
           restoreCameraPose={restoreCameraPose}
           showConcentration={showField}
           showMars={false}
+          particleDensity={OVERVIEW_GLOBE.particleDensity}
+          particleSize={OVERVIEW_GLOBE.particleSize}
+          pointParticleSize={OVERVIEW_GLOBE.pointParticleSize}
+          particlePalette={OVERVIEW_GLOBE.palette}
+          globeMaterial="shared"
+          lightingMode="fixed"
           onGlobeClick={onGlobeClick}
         />
         {children}
