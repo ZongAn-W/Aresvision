@@ -1,0 +1,88 @@
+/**
+ * 共用分析工作台外壳样式。
+ *
+ * 桌面为全屏三维场景 + 左右固定面板 + 底部时间轴；窄屏（≤900px）改为
+ * 顺序布局，避免固定面板挤掉球体，并保证 390px 无横向溢出。
+ */
+
+.overview-shell {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.overview-shell--external {
+  width: 100vw;
+  height: 100vh;
+}
+
+.overview-shell__scene {
+  position: absolute;
+  inset: 0;
+}
+
+.overview-shell--compact {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: auto;
+  padding: 12px;
+  overflow-x: hidden;
+}
+
+.overview-shell__scene--compact {
+  position: relative;
+  inset: auto;
+  height: 46vh;
+  min-height: 280px;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.overview-shell__compact-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overview-shell__compact-panel {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+@media (max-width: 900px) {
+  .overview-shell--compact .overview-shell__compact-panel :is(table, pre, code) {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+/* 卡片图表的 Plotly 模式栏：与火星卡片一致，挪到右下角并统一配色。 */
+.overview-card-plot .modebar {
+  top: auto !important;
+  bottom: 0 !important;
+  right: 18px !important;
+  left: auto !important;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  padding: 2px 4px;
+  display: flex !important;
+  background: transparent;
+}
+
+.overview-card-plot .modebar-group {
+  display: flex !important;
+  margin-bottom: 0 !important;
+}
+
+.overview-card-plot .modebar-btn svg {
+  fill: rgba(148, 163, 184, 0.78) !important;
+}
+
+.overview-card-plot .modebar-btn:hover svg,
+.overview-card-plot .modebar-btn.active svg {
+  fill: #ff6b35 !important;
+}

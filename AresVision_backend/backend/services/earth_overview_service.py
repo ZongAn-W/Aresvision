@@ -19,6 +19,7 @@ import numpy as np
 
 from services.dataset_registry import DatasetRegistry
 from services.earth_dataset_metadata import VerifiedEarthRelease
+from services.earth_scales import color_range
 
 VARIABLE_IDS = ("TO3", "U10M", "V10M", "T2M", "SWGDN")
 WIND_VARIABLE_IDS = ("U10M", "V10M")
@@ -311,20 +312,10 @@ class EarthOverviewService:
             key = ("color_range", variable)
             cached = cache.get(key)
             if cached is None:
-                field = np.asarray(release.fields[variable], dtype="float32")
-                low, high = float(field.min()), float(field.max())
-                centered = variable in WIND_VARIABLE_IDS
-                if centered:
-                    # Wind components are signed: keep zero in the middle of the
-                    # scale so east/west and north/south read consistently.
-                    bound = max(abs(low), abs(high))
-                    low, high = -bound, bound
-                cached = {
-                    "min": low,
-                    "max": high,
-                    "scope": "dataset",
-                    "centered_on_zero": centered,
-                }
+                # Single shared rule; see services.earth_scales.color_range.
+                cached = color_range(
+                    np.asarray(release.fields[variable], dtype="float32"), variable
+                )
                 cache[key] = cached
             return dict(cached)
 

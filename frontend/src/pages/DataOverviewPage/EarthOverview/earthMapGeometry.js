@@ -146,3 +146,61 @@ export function pointInsideCoverage(coverage, lat, lon) {
     && lat >= south && lat <= north
     && lon >= west && lon <= east;
 }
+
+/**
+ * 经度规范化到 [-180, 180)，只表达同一个子午线的等价写法。
+ *
+ * 这只用于**全球**网格：`wrap_longitude === true` 时 −180 与 +180 是同一条子午线，
+ * 三维球体拾取可能返回两种等价写法。它不是把区域外的查询绕回数据范围内——
+ * 区域发布（`wrap_longitude === false`）必须保持原样并由 coverage 判断拒绝。
+ */
+export function normalizeLongitudeDegrees(lon) {
+  if (!Number.isFinite(lon)) return null;
+  const normalized = ((((lon + 180) % 360) + 360) % 360) - 180;
+  return Object.is(normalized, -0) ? 0 : normalized;
+}
+
+/**
+ * 纬度单元边界的球面面积权重 `Δsin(φ)`。
+ *
+ * 与后端 `regional_cell_area_mean` 使用同一公式：前端只用它标注图例与
+ * 面积解释，实际均值仍由服务端按已验证发布计算，避免两份实现各自漂移。
+ */
+export function cellAreaWeights(latEdges) {
+  if (!Array.isArray(latEdges) || latEdges.length < 2) {
+    throw new Error('Invalid latitude edges');
+  }
+  const weights = [];
+  for (let index = 1; index < latEdges.length; index += 1) {
+    const south = latEdges[index - 1];
+    const north = latEdges[index];
+    if (!Number.isFinite(south) || !Number.isFinite(north) || north <= south) {
+      throw new Error('Invalid latitude edges');
+    }
+    weights.push(
+      Math.sin((north * Math.PI) / 180) - Math.sin((south * Math.PI) / 180),
+    );
+  }
+  return weights;
+}
+
+/** 面积加权全球均值；权重和为 0 或输入非法时返回 null，不填零。 */
+export function areaWeightedMean(field, latEdges) {
+  if (!Array.isArray(field) || field.length === 0) return null;
+  const weights = cellAreaWeights(latEdges);
+  if (weights.length !== field.length) return null;
+  const total = weights.reduce((sum, value) => sum + value, 0);
+  if (!(total > 0)) return null;
+  let sum = 0;
+  for (let row = 0; row < field.length; row += 1) {
+    const values = field[row];
+    if (!Array.isArray(values) || values.length === 0) return null;
+    let rowSum = 0;
+    for (const value of values) {
+      if (!Number.isFinite(value)) return null;
+      rowSum += value;
+    }
+    sum += (rowSum / values.length) * weights[row];
+  }
+  return sum / total;
+}

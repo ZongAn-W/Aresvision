@@ -2,12 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  areaWeightedMean,
+  cellAreaWeights,
   clippedCellEdges,
   coastlinePaths,
   coverageRect,
   gridCellRect,
   nearestIndex,
   normalizeColorValue,
+  normalizeLongitudeDegrees,
   pointInsideCoverage,
   project,
   segmentsToPath,
@@ -180,4 +183,42 @@ test('global cells meet poles and dateline and permit edge picking', () => {
   assert.equal(nearestIndex(lon, -180, [-180, 180]), 0);
   assert.equal(nearestIndex(lon, 180, [-180, 180]), 71);
   assert.equal(nearestIndex(lon, 181, [-180, 180]), null);
+});
+
+test('global v2 cell area weights match the backend spherical formula', () => {
+  const edges = [-90, -85, 0, 85, 90];
+  const weights = cellAreaWeights(edges);
+  assert.equal(weights.length, 4);
+  const expected = edges.slice(1).map((north, index) => (
+    Math.sin((north * Math.PI) / 180) - Math.sin((edges[index] * Math.PI) / 180)
+  ));
+  weights.forEach((value, index) => assert.ok(Math.abs(value - expected[index]) < 1e-12));
+  // Polar cells carry far less area than the equatorial cells.
+  assert.ok(weights[0] < weights[1]);
+  assert.throws(() => cellAreaWeights([10, 5]), /Invalid latitude edges/);
+  assert.throws(() => cellAreaWeights([0]), /Invalid latitude edges/);
+});
+
+test('area weighted mean keeps missing values as a failure instead of zero', () => {
+  const edges = [-90, 0, 90];
+  const mean = areaWeightedMean([[10, 10], [20, 20]], edges);
+  assert.ok(Math.abs(mean - 15) < 1e-12);
+  assert.equal(areaWeightedMean([[10, null], [20, 20]], edges), null);
+  assert.equal(areaWeightedMean([[10, 10]], edges), null);
+  assert.equal(areaWeightedMean([], edges), null);
+});
+
+test('longitude normalisation is a representation change only, never a coverage wrap', () => {
+  assert.equal(normalizeLongitudeDegrees(180), -180);
+  assert.equal(normalizeLongitudeDegrees(-180), -180);
+  assert.equal(normalizeLongitudeDegrees(540), -180);
+  assert.equal(normalizeLongitudeDegrees(-177.5), -177.5);
+  assert.equal(normalizeLongitudeDegrees(Number.NaN), null);
+  // The regional v1 release keeps its own coverage test: the raw 240 is rejected,
+  // and callers must not normalise before the coverage check on a regional release
+  // (normalising 240 would silently land on -120 inside the box).
+  const regional = { latitude_range: [-60, 60], longitude_range: [-120, 120] };
+  assert.equal(pointInsideCoverage(regional, 0, 120), true);
+  assert.equal(pointInsideCoverage(regional, 0, 240), false);
+  assert.equal(pointInsideCoverage(regional, 0, normalizeLongitudeDegrees(240)), true);
 });

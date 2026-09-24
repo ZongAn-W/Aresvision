@@ -121,3 +121,74 @@ export function fetchEarthPointSeries(datasetId, {
     end,
   }), { signal });
 }
+
+// ── Earth 分析工作台接口（/analysis/earth/overview/*） ─────────────────
+// 与 Mars 的 /analysis/overview/* 完全分离：Earth 请求不会进入 Mars 服务或缓存。
+
+const EARTH_ANALYSIS_PATH = `${BASE}/analysis/earth/overview`;
+
+async function postJson(url, body, { signal } = {}) {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error;
+    throw new DatasetApiError('Network request failed', { code: 'network_error' });
+  }
+  if (!response.ok) throw await readError(response);
+  try {
+    return await response.json();
+  } catch {
+    throw new DatasetApiError('Invalid JSON response', {
+      code: 'invalid_response',
+      status: response.status,
+    });
+  }
+}
+
+export function fetchEarthOverviewContext(datasetId, { fingerprint, signal } = {}) {
+  return readJson(withQuery(`${EARTH_ANALYSIS_PATH}/context`, {
+    dataset_id: datasetId,
+    expected_fingerprint: fingerprint,
+  }), { signal });
+}
+
+export function fetchEarthResearchSuite(datasetId, { year, fingerprint, signal } = {}) {
+  return readJson(withQuery(`${EARTH_ANALYSIS_PATH}/research-suite`, {
+    dataset_id: datasetId,
+    year,
+    expected_fingerprint: fingerprint,
+  }), { signal });
+}
+
+export function fetchEarthSpatialDiagnostics(datasetId, {
+  year, variable, fingerprint, signal,
+} = {}) {
+  return readJson(withQuery(`${EARTH_ANALYSIS_PATH}/spatial-diagnostics`, {
+    dataset_id: datasetId,
+    year,
+    variable,
+    expected_fingerprint: fingerprint,
+  }), { signal });
+}
+
+export function fetchEarthPolarDynamics(datasetId, { year, fingerprint, signal } = {}) {
+  return readJson(withQuery(`${EARTH_ANALYSIS_PATH}/polar-dynamics`, {
+    dataset_id: datasetId,
+    year,
+    expected_fingerprint: fingerprint,
+  }), { signal });
+}
+
+/**
+ * AI 解读只发送统计摘要，不发送整幅原始场。
+ * 服务端会重新从已验证发布计算摘要，客户端数字仅作补充说明。
+ */
+export function postEarthOverviewInsight(payload, { signal } = {}) {
+  return postJson(`${EARTH_ANALYSIS_PATH}/insight`, payload, { signal });
+}

@@ -20,6 +20,9 @@ const Mars3DBackground = forwardRef(({
   rightPanelWidth,
   solarLongitudeLs,
   onGlobeClick,
+  // 视角记忆：与 Earth 共用同一套缓存，切回火星时恢复上次视角。
+  poseKey = null,
+  restoreCameraPose = true,
 }, ref) => {
   const layerFields = useMemo(() => {
     const layers = sceneModel?.layers?.length ? sceneModel.layers : [ozoneData].filter(Boolean);
@@ -75,6 +78,8 @@ const Mars3DBackground = forwardRef(({
         solarLongitudeLs={solarLongitudeLs}
         zoom={3.75} // reduce initial globe size by ~1/3 (visual size becomes ~2/3)
         offsetX={(rightPanelWidth - leftPanelWidth) / 2} // shift object to center it in remaining viewport space
+        poseKey={poseKey}
+        restoreCameraPose={restoreCameraPose}
         onGlobeClick={onGlobeClick}
       />
     </div>

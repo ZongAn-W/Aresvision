@@ -7,27 +7,11 @@ import { GLOBE_VARIABLE_OPTIONS } from '../../constants/globeVariables';
 import { getMyUploads } from '../../services/api';
 import { buildOverviewUploadOptions, buildUploadYearOptions } from './uploadedSourceOptions';
 import { MODE_DEFS as SHARED_MODE_DEFS } from './overviewChartLayout';
+import AnalysisModePicker, { SectionLabel } from './workbench/OverviewSidebarParts.jsx';
 
 export { SHARED_MODE_DEFS as MODE_DEFS };
 
 const NAVBAR_HEIGHT = 70;
-
-function SectionLabel({ children }) {
-  return (
-    <div
-      style={{
-        color: C.ice50,
-        fontSize: 'calc(10px * var(--font-scale, 1))',
-        fontWeight: 700,
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        marginBottom: 10,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
 
 function SelectField({ label, value, onChange, options, disabled = false, isLight = false }) {
   const optionBg = isLight ? '#ffffff' : '#111827';
@@ -421,71 +405,6 @@ function OzoneSourceModePicker({
   );
 }
 
-function RadioModeCard({ mode, selected, onSelect, isZh, isLight }) {
-  return (
-    <label
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '20px minmax(0, 1fr)',
-        gap: 10,
-        alignItems: 'start',
-        padding: '13px 12px',
-        borderRadius: 14,
-        border: `1px solid ${selected ? `${mode.color}55` : isLight ? 'rgba(15,23,42,0.10)' : 'rgba(255,255,255,0.08)'}`,
-        background: selected
-          ? (isLight ? `${mode.color}10` : 'rgba(255,255,255,0.05)')
-          : (isLight ? 'rgba(255,255,255,0.82)' : 'rgba(255,255,255,0.02)'),
-        cursor: 'pointer',
-        transition: 'all 0.2s ease',
-      }}
-    >
-      <input
-        type="radio"
-        name="overview-mode"
-        checked={selected}
-        onChange={() => onSelect(mode.id)}
-        style={{ marginTop: 3, accentColor: mode.color }}
-      />
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <span
-            style={{
-              width: 22,
-              height: 22,
-              borderRadius: 999,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: selected ? `${mode.color}1a` : C.bgMuted,
-              color: selected ? mode.color : C.ice40,
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              fontWeight: 800,
-              flexShrink: 0,
-            }}
-          >
-            {mode.icon}
-          </span>
-          <div
-            style={{
-              color: selected ? mode.color : C.ice,
-              fontSize: 'calc(13px * var(--font-scale, 1))',
-              fontWeight: 700,
-              fontFamily: 'var(--font-display)',
-              lineHeight: 1.35,
-              letterSpacing: '-0.01em',
-            }}
-          >
-            {isZh ? mode.title.zh : mode.title.en}
-          </div>
-        </div>
-        <div style={{ color: selected ? C.ice70 : C.ice40, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55 }}>
-          {isZh ? mode.desc.zh : mode.desc.en}
-        </div>
-      </div>
-    </label>
-  );
-}
-
 function InlineSwitch({ label, checked, onChange, accent = C.blue, isLight = false }) {
   return (
     <label
@@ -747,18 +666,13 @@ export default function SidebarMenu({ sceneSwitch = null }) {
 
         <section>
           <SectionLabel>{isZh ? '分析模式' : 'Analysis mode'}</SectionLabel>
-          <div style={{ display: 'grid', gap: 8 }}>
-            {SHARED_MODE_DEFS.map((mode) => (
-              <RadioModeCard
-                key={mode.id}
-                mode={mode}
-                selected={activeAnalysisMode === mode.id}
-                onSelect={setActiveAnalysisMode}
-                isZh={isZh}
-                isLight={isLight}
-              />
-            ))}
-          </div>
+          <AnalysisModePicker
+            mode={activeAnalysisMode}
+            onSelect={setActiveAnalysisMode}
+            isZh={isZh}
+            isLight={isLight}
+            name="overview-mode"
+          />
         </section>
 
         <section>

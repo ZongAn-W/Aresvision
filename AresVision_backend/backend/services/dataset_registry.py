@@ -389,6 +389,11 @@ class DatasetRegistry:
     def _available_earth_descriptor(self, dataset_id: str, metadata: dict) -> dict:
         descriptor = self._base_earth_descriptor(dataset_id, "available", None)
         descriptor.update(copy.deepcopy(metadata))
+        # ``manifest`` is verified provenance that the analysis services read from
+        # the release, not part of the public descriptor: it lists source files
+        # and is far larger than the descriptor contract. The response model would
+        # drop it anyway, so it never reaches a client.
+        descriptor.pop("manifest", None)
         descriptor["limitations"] = _physical_limitations(metadata.get("limitations"))
         descriptor["limitations"].extend(EARTH_APPLICATION_LIMITATIONS)
         return descriptor

@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useLayoutEffect, useCallback, useRef, useState } from 'react';
-import GlowCard from '../../components/GlowCard';
 import C from '../../constants/colors';
 import { useDataOverview } from '../../contexts/DataOverviewContext';
 import { useSettings } from '../../contexts/SettingsContext';
@@ -15,6 +14,8 @@ import WaveExplorer from './OverviewCharts/WaveExplorer';
 import SeasonalExtremesChart from './OverviewCharts/SeasonalExtremesChart';
 import GlobalTrendLinesChart from './OverviewCharts/GlobalTrendLinesChart';
 import { getCardTitle, getModeCardKeys, MODE_DEFS } from './overviewChartLayout';
+import OverviewAnalysisPanel from './workbench/OverviewAnalysisPanel.jsx';
+import { CARD_STATUS } from './workbench/OverviewAdapter.js';
 
 const NAVBAR_HEIGHT = 70;
 
@@ -165,6 +166,27 @@ export default function DetailPanel({ sliceData, overviewSourceParams = {} }) {
     correlation: { title: getCardTitle('correlation', isZh), component: correlationComponent, color: C.blue },
   };
 
+  // Mars 卡片沿用原有请求与单位逻辑，只把卡片外壳换成共用组件。
+  const panelCards = activeCards.map((key) => {
+    const cardDef = cardsMap[key];
+    if (!cardDef) return null;
+    return {
+      key,
+      title: { zh: cardDef.title, en: cardDef.title },
+      color: cardDef.color,
+      state: {
+        status: CARD_STATUS.READY,
+        reason: null,
+        message: null,
+        data: null,
+        errorCode: null,
+        updatedAt: null,
+      },
+      component: cardDef.component,
+      mounted: renderedCards.has(key),
+    };
+  }).filter(Boolean);
+
   const currentModeInfo = selectedCoordinate
     ? {
       icon: 'P',
@@ -204,158 +226,47 @@ export default function DetailPanel({ sliceData, overviewSourceParams = {} }) {
         gap: '16px',
       }}
     >
-      <GlowCard style={{ padding: '18px 20px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <span
-              style={{
-                width: 30,
-                height: 30,
-                marginRight: 14,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 999,
-                background: `${currentModeInfo.color}18`,
-                color: currentModeInfo.color,
-                fontSize: 'calc(13px * var(--font-scale, 1))',
-                fontWeight: 800,
-                fontFamily: 'var(--font-display)',
-                flexShrink: 0,
-              }}
-            >
-              {currentModeInfo.icon}
-            </span>
-            <div>
-              <h3
-                style={{
-                  color: currentModeInfo.color,
-                  fontFamily: 'var(--font-display)',
-                  fontSize: 'calc(16px * var(--font-scale, 1))',
-                  fontWeight: 800,
-                  margin: 0,
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                {currentModeInfo.title}
-              </h3>
-            </div>
-          </div>
-
-          {selectedCoordinate && (
-            <button
-              onClick={resetView}
-              style={{
-                background: subtleBg,
-                border: `1px solid ${subtleBorder}`,
-                color: C.ice,
-                padding: '6px 12px',
-                borderRadius: 999,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-body)',
-                fontSize: 'calc(11px * var(--font-scale, 1))',
-                fontWeight: 600,
-                transition: '0.2s',
-              }}
-              onMouseEnter={(event) => { event.currentTarget.style.background = isLight ? 'rgba(15,23,42,0.14)' : 'rgba(255,255,255,0.18)'; }}
-              onMouseLeave={(event) => { event.currentTarget.style.background = subtleBg; }}
-            >
-              {isZh ? '返回全局' : 'Back to globe'}
-            </button>
-          )}
-        </div>
-
-        <p style={{ color: C.ice60, fontFamily: 'var(--font-body)', fontSize: 'calc(12px * var(--font-scale, 1))', margin: 0, lineHeight: 1.65 }}>
-          {currentModeInfo.desc}
-        </p>
-      </GlowCard>
-
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          overflowX: 'hidden',
-          overflowY: 'auto',
-          scrollbarGutter: 'stable',
-          paddingRight: 4,
+      <OverviewAnalysisPanel
+        mode={activeAnalysisMode}
+        showModePicker={false}
+        cards={panelCards}
+        expandedCard={expandedCard}
+        onExpandedCardChange={setExpandedCard}
+        isZh={isZh}
+        isLight={isLight}
+        headerOverride={{
+          icon: currentModeInfo.icon,
+          title: currentModeInfo.title,
+          desc: currentModeInfo.desc,
+          color: currentModeInfo.color,
         }}
-      >
-        {activeCards.map((key) => {
-          const cardDef = cardsMap[key];
-          if (!cardDef) return null;
-          const isExpanded = expandedCard === key;
-          const shouldRender = renderedCards.has(key);
-
-          return (
-            <GlowCard
-              key={key}
-              style={{
-                padding: 0,
-                overflow: 'hidden',
-                flexShrink: 0,
-                transition: 'box-shadow 0.3s ease, border-color 0.3s ease, background 0.3s ease',
-              }}
-            >
-              <div
-                onClick={() => setExpandedCard(isExpanded ? '' : key)}
-                style={{
-                  padding: '14px 20px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  background: isExpanded ? `linear-gradient(90deg, ${cardDef.color}15, transparent)` : 'transparent',
-                  borderBottom: isExpanded ? `1px solid ${C.border}` : 'none',
-                }}
-              >
-                <span
-                  style={{
-                    color: isExpanded ? cardDef.color : C.ice60,
-                    fontFamily: 'var(--font-display)',
-                    fontSize: 'calc(13px * var(--font-scale, 1))',
-                    fontWeight: isExpanded ? 700 : 600,
-                    letterSpacing: '-0.01em',
-                  }}
-                >
-                  {cardDef.title}
-                </span>
-
-                <span
-                  style={{
-                    color: isExpanded ? cardDef.color : C.ice30,
-                    fontSize: 'calc(16px * var(--font-scale, 1))',
-                    transition: 'transform 0.3s',
-                    transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                  }}
-                >
-                  ▾
-                </span>
-              </div>
-
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateRows: isExpanded ? '1fr' : '0fr',
-                  opacity: isExpanded ? 1 : 0,
-                  transition: 'grid-template-rows 0.35s ease, opacity 0.25s ease',
-                }}
-              >
-                <div style={{ overflow: 'hidden' }}>
-                  <div style={{ padding: 20, boxSizing: 'border-box' }}>
-                    {shouldRender ? cardDef.component : (
-                      <div style={{ color: C.ice40, fontSize: 'calc(11px * var(--font-scale, 1))', fontFamily: 'var(--font-body)' }}>
-                        {isZh ? '展开后加载该分析模块。' : 'Expand to load this analysis module.'}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </GlowCard>
-          );
-        })}
-      </div>
+        headerExtra={selectedCoordinate ? (
+          <button
+            onClick={resetView}
+            style={{
+              background: subtleBg,
+              border: `1px solid ${subtleBorder}`,
+              color: C.ice,
+              padding: '6px 12px',
+              borderRadius: 999,
+              cursor: 'pointer',
+              fontFamily: 'var(--font-body)',
+              fontSize: 'calc(11px * var(--font-scale, 1))',
+              fontWeight: 600,
+              transition: '0.2s',
+            }}
+            onMouseEnter={(event) => { event.currentTarget.style.background = isLight ? 'rgba(15,23,42,0.14)' : 'rgba(255,255,255,0.18)'; }}
+            onMouseLeave={(event) => { event.currentTarget.style.background = subtleBg; }}
+          >
+            {isZh ? '返回全局' : 'Back to globe'}
+          </button>
+        ) : null}
+        renderCard={(card) => (card.mounted ? card.component : (
+          <div style={{ color: C.ice40, fontSize: 'calc(11px * var(--font-scale, 1))', fontFamily: 'var(--font-body)' }}>
+            {isZh ? '展开后加载该分析模块。' : 'Expand to load this analysis module.'}
+          </div>
+        ))}
+      />
 
       <div
         onMouseDown={handleMouseDown}

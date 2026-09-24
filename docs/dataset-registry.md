@@ -18,13 +18,16 @@
 | `GET /api/datasets/{dataset_id}/overview/*` 三个地球总览接口 | 已实现，见 [二维地球数据总览](earth-overview.md) |
 | 训练任务五个身份列、旧任务幂等回填 | 已实现 |
 | 新训练请求严格校验数据集；未知 ID 与 Earth 训练在创建任务前拒绝 | 已实现 |
-| 地球总览页面（区域热力图、逐日播放、点位与区域曲线） | 已实现，见 [二维地球数据总览](earth-overview.md) |
-| 三维地球、风场粒子、派生风速 | 未实现 |
+| 地球总览页面（三维全球球体、逐日播放、点位与区域曲线） | 已实现，见 [共用分析工作台](earth-analysis-workbench.md) |
+| `GET /api/analysis/earth/overview/*` 四个地球分析接口（`context`、`research-suite`、`spatial-diagnostics`、`polar-dynamics`）与 `POST .../insight` | 已实现，见 [共用分析工作台](earth-analysis-workbench.md) |
+| 地球年度分析、极区统计（`\|latitude\| >= 60°`）与图表 AI 解读 | 已实现 |
+| 地球昼夜变化 | 未实现且当前数据不可支持：日平均没有日内采样 |
+| 风场粒子、派生风速 | 未实现 |
 | Earth 训练、可选 Earth 通道、checkpoint 内容改造 | 未实现 |
 | 日期预测 API、历史回测、持久性基线、模型比较 | 未实现 |
 | 用户上传数据注册、在线下载、数据集管理后台 | 未实现 |
 
-**地球总览已接入，训练仍未接通。** `capabilities.web_overview=true` 表示二维总览入口已适配，`capabilities.training=false`、`trained_prediction=false` 表示这两条路径仍未开放；metadata 与训练能力必须分开理解。
+**地球总览已接入，训练仍未接通。** `capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=false`、`trained_prediction=false` 表示这两条路径仍未开放；metadata 与训练能力必须分开理解。分析接口的 `capabilities.diurnal=false` 是**数据能力**声明：日平均数据没有日内采样，与接口是否实现无关。
 
 ## 注册身份：ID、版本与指纹分开
 

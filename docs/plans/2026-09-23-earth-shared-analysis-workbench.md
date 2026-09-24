@@ -1,9 +1,16 @@
 # 火星 / 地球共用分析工作台 Implementation Plan
 
-> **2026-09-24 契约更新（优先于下文历史假设）**：默认 Earth 数据已经切换到 `earth_merra2_daily_v2` / `v2`，全球 36×72、5°×5°；中心纬度 −87.5…87.5、经度 −177.5…177.5，单元边界 ±90°/±180°，`coverage=global`、`wrap_longitude=true`，球面单元面积均值标识 `spherical_cell_area_mean`。v1 原包及 API 保留，不可将 v1 请求映射到新网格。
+> **2026-09-24 实施状态（优先于下文历史假设）**：本方案首期范围**已实现**，实现说明与协议见 [共用分析工作台](../earth-analysis-workbench.md)。
 >
-> 本计划仍待实施。下文所有 v1 的 31×49、区域限制、无极区、8/15/8 纬带行数和“不周期拼接”假设均已失效，实施前按 [v2 数据契约](../earth-compact-dataset.md) 与实际 descriptor 改写。全球地图按真实 cell bounds 绘制，不按中心裁边；纬带覆盖必须重新分配全部 36 行。训练划分仍为 366/181/184 天、7→3 窗口 357/172/175，归一化仍只拟合训练期。已有三维工作台和 Earth 网页训练/预测没有因数据替换而开放。
-
+> 已完成：共用工作台壳层与控制器（`OverviewShell` / `useOverviewController` / `OverviewAdapter` / `OverviewCard` / `OverviewScene`）、`marsOverviewAdapter` 与 `earthOverviewAdapter`、统一卡片状态（`idle/loading/ready/unsupported/error`）、`SphericalFieldCanvas` 的显式 `planet/field/geometry/selection/lighting` 接口与 Earth 全球单元图层、Earth 三维工作台（日期播放、五变量原始单位、经纬度点选、点位曲线、覆盖均值）、三种分析模式、Earth 年度分析接口 `/api/analysis/earth/overview/*`、极区统计（`|latitude| >= 60°`）、昼夜能力说明与图表 AI 解读。
+>
+> 与下文的差异（以实际实现为准）：
+> - **极区已开放**：v2 覆盖全球 ±90°，极区统计使用日平均数据并返回实际采样纬度；下文“极区不可用”的假设来自 v1 的 ±60° 覆盖，已失效。
+> - **昼夜仍不可用**：日平均数据没有日内采样，卡片固定显示原因码 `daily_data_has_no_diurnal_samples`，不请求 Mars 昼夜接口。
+> - **接口路径**：Earth 分析接口位于 `/api/analysis/earth/overview/*`（`context`、`research-suite`、`spatial-diagnostics`、`polar-dynamics`、`insight`），不是 `/api/datasets/{id}/overview/*` 的扩展；`/overview/*` 的三个二维接口保持原样。
+> - **年度与日期联动**：年度分析年份跟随当前日期所在年份，切换年份把日期平移到目标年同月同日；播放范围是完整发布区间（2020-01-01 ~ 2021-12-31），不是单年。
+> - **手势仍在第二阶段**：控制器已导出 `gestureActions`（旋转/缩放/播放/步进/选点/清除/模式/重置视角），未接入摄像头识别。
+> - 下文按 v1 网格写出的 31×49、1519 个单元、±60°/±120°、8/15/8 纬带行数等数值全部失效；实际为 36×72、2592 个单元、±90°/±180°、6/6/12/6/6 行。
 
 > **For agentic workers:** 使用 `executing-plans` 逐项实施。本方案根据用户确认的“整个工作台，包括三维地球和右侧分析图表”编制，交给另一对话执行。默认顺序实施，保留已有修改；不自动提交、推送、创建额外对话或批量删除文件。
 

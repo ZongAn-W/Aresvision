@@ -52,6 +52,7 @@ from services.personal_data_source_service import PersonalDataSourceService
 from services.data_governance_service import DataGovernanceService
 from services.dataset_registry import DatasetRegistry
 from services.earth_overview_service import EarthOverviewService
+from services.earth_research_service import EarthResearchService
 from services.personal_data_source_service import SingleYearDataView
 from core.analysis_transforms import AnalysisTransforms
 from core.predict_transforms import PredictTransforms
@@ -67,6 +68,7 @@ from routers import training as training_router_module
 from routers import user_models as user_models_router_module
 from routers import datasets as datasets_router_module
 from routers import earth_overview as earth_overview_router_module
+from routers import earth_analysis as earth_analysis_router_module
 
 # ─── 日志配置 ───
 logging.basicConfig(
@@ -340,6 +342,30 @@ async def lifespan(app: FastAPI):
     app.state.dataset_registry = DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2", legacy_earth_package_dir=EARTH_MERRA2_V1_DIR)
     # 二维地球总览数值服务（复用同一注册表实例与已验证快照）
     app.state.earth_overview_service = EarthOverviewService(app.state.dataset_registry)
+    # 地球科研分析服务（季节/纬带/空间异常/极区动力学，同一注册表与快照）
+    app.state.earth_research_service = EarthResearchService(app.state.dataset_registry)
+    # 同步处理器通过它把 Copilot 协程调度回事件循环（AI 解读端点使用）
+    app.state.event_loop = asyncio.get_running_loop()
+
+    # 后台预热已注册的 Earth 发布：注册表构造不读文件，首次查询才会校验
+    # manifest 与 NetCDF 的 SHA-256（全球 v2 包约 29 MB，约半秒）。
+    # 放在后台线程里，既不阻塞启动，也让用户第一次切到地球时不必等校验。
+    async def _prewarm_earth_release() -> None:
+        registry = app.state.dataset_registry
+        for dataset_id in ("earth_merra2_daily_v2", "earth_merra2_daily_v1"):
+            try:
+                descriptor = await asyncio.to_thread(registry.get_dataset, dataset_id)
+            except Exception:  # pragma: no cover - 预热失败只记录，不影响服务
+                logger.warning("Earth dataset prewarm failed for %s", dataset_id, exc_info=True)
+                continue
+            logger.info(
+                "Earth dataset prewarmed: id=%s availability=%s version=%s",
+                descriptor.get("dataset_id"),
+                descriptor.get("availability"),
+                descriptor.get("dataset_version"),
+            )
+
+    app.state.earth_prewarm_task = asyncio.create_task(_prewarm_earth_release())
 
     # 2. 领域服务：可视化与 ML 数据准备
     logger.info("[2/5] 初始化分析与 ML 准备服务...")
@@ -415,6 +441,11 @@ async def lifespan(app: FastAPI):
         worker_task.cancel()
         with suppress(asyncio.CancelledError):
             await worker_task
+    earth_prewarm_task = getattr(app.state, "earth_prewarm_task", None)
+    if earth_prewarm_task is not None:
+        earth_prewarm_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await earth_prewarm_task
     await ai_service.close()
     await copilot_service.close()
 
@@ -462,6 +493,7 @@ app.include_router(training_router_module.router,        prefix=API_PREFIX)
 app.include_router(user_models_router_module.router,      prefix=API_PREFIX)
 app.include_router(datasets_router_module.router,         prefix=API_PREFIX)
 app.include_router(earth_overview_router_module.router,   prefix=API_PREFIX)
+app.include_router(earth_analysis_router_module.router,   prefix=API_PREFIX)
 
 
 # ─── 健康检查 ───

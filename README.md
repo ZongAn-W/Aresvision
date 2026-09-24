@@ -15,7 +15,7 @@ AresVision 面向火星大气数据分析与时空预测实验，以 OpenMARS �
 
 ## 快速接手：先读这一节
 
-文档最近核对日期：**2026-09-24**。本次核对 Earth v2 原始数据预处理、全球网格、独立原始单元抽查和 DLinear CPU 冒烟；历史功能的测试范围见对应专题文档。Earth 网页训练与预测仍未开放。分支、未提交修改、运行进程和数据是否齐备属于实时状态，每次接手都应重新检查。
+文档最近核对日期：**2026-09-24**。本次核对 Earth v2 原始数据预处理、全球网格、独立原始单元抽查、DLinear CPU 冒烟，以及火星/地球共用分析工作台的前后端实现；历史功能的测试范围见对应专题文档。Earth 网页训练与预测仍未开放。分支、未提交修改、运行进程和数据是否齐备属于实时状态，每次接手都应重新检查。
 
 | 需要先知道的事 | 当前约定 |
 | --- | --- |
@@ -44,6 +44,7 @@ AresVision 面向火星大气数据分析与时空预测实验，以 OpenMARS �
 - 在三维火星球面上展示臭氧及气象变量，支持 Ls（太阳黄经）时间轴播放、色带与单位设置。
 - 提供球面点位探查、季节变化、极区动力学、变量相关性及波动诊断等分析视图。
 - 支持手势交互、全屏展示及中英文界面。
+- 数据总览顶部可切换“火星 / 地球”，两者**互斥挂载**并共用同一套三栏分析工作台：左侧控件栏、中央三维球体与时间轴、右侧分析卡片与 AI 解读。Earth 使用三维全球球体、ISO 日期、原始物理单位与 v2 全球 5°×5° 单元，Mars 继续使用 MY/Ls、火星纹理与太阳光照。共用适配器、卡片状态与能力声明见 [共用分析工作台](docs/earth-analysis-workbench.md)。
 
 ### 数据管理
 
@@ -53,8 +54,9 @@ AresVision 面向火星大气数据分析与时空预测实验，以 OpenMARS �
 - 包含 MCD 总览数据、NOMAD 网格数据和 MOLA 地形资源的构建脚本。
 - 提供 MERRA-2 地球臭氧日数据的小包构建、独立读取、预览和训练冒烟脚本；见 [地球小数据包](docs/earth-compact-dataset.md)。
 - 已注册服务器数据集目录：`GET /api/datasets` 与 `GET /api/datasets/{dataset_id}` 返回四个固定数据集（`openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v1`、`earth_merra2_daily_v2`）的元数据、版本、发布指纹、可用状态与能力声明。约定与状态解释见 [数据集注册表](docs/dataset-registry.md)。
-- 数据总览支持“火星 / 地球”切换：地球场景按真实日期查看 MERRA-2 五个变量的二维全球场、逐日播放、点位时间序列与覆盖区域加权均值，见 [二维地球数据总览](docs/earth-overview.md)。
-- 后续扩展见 [火星 / 地球共用分析工作台方案](docs/plans/2026-09-23-earth-shared-analysis-workbench.md)，覆盖三维地球、三类分析模式与共用图表；这是用户确认范围后的待实施方案，当前能力仍以已实现章节为准。
+- 数据总览支持“火星 / 地球”切换：地球场景按真实日期查看 MERRA-2 五个变量的三维全球球体、逐日播放、点位时间序列与全球单元面积加权均值，见 [二维地球数据总览](docs/earth-overview.md) 与 [共用分析工作台](docs/earth-analysis-workbench.md)。
+- 地球年度分析按 2020、2021 分开计算，覆盖季节结构、年内变化、季节极值、环境因子、辐射/温度与臭氧关系、变量相关、空间距平与极区统计；昼夜变化卡片固定显示“日平均数据没有日内采样”的能力说明，不请求火星昼夜接口。
+- 后续扩展见 [火星 / 地球共用分析工作台方案](docs/plans/2026-09-23-earth-shared-analysis-workbench.md)；其首期范围（共用工作台、三维地球、年度分析、极区、图表 AI 解读）已实现，手势交互与跨星球数值比较仍属后续计划。
 
 ### 模型训练
 
@@ -137,6 +139,8 @@ AresVision/
 | 页面路由、导航 | [App.jsx](frontend/src/App.jsx)、[Navbar.jsx](frontend/src/components/Navbar.jsx) | [main.py](AresVision_backend/backend/main.py) 注册 API 与静态文件服务 |
 | 数据总览、球面与时间轴 | [DataOverviewPage.jsx](frontend/src/pages/DataOverviewPage.jsx)、[SphericalFieldCanvas.jsx](frontend/src/components/SphericalFieldCanvas.jsx) | [analysis.py](AresVision_backend/backend/routers/analysis.py)、[mcd_overview_data_service.py](AresVision_backend/backend/services/mcd_overview_data_service.py) |
 | 二维地球总览 | [EarthOverviewScene.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthOverviewScene.jsx)、[EarthMap2D.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthMap2D.jsx)、[PlanetSceneSwitch.jsx](frontend/src/pages/DataOverviewPage/PlanetSceneSwitch.jsx) | [earth_overview.py](AresVision_backend/backend/routers/earth_overview.py)、[earth_overview_service.py](AresVision_backend/backend/services/earth_overview_service.py) |
+| 共用分析工作台（Mars 与 Earth） | [workbench/](frontend/src/pages/DataOverviewPage/workbench/OverviewShell.jsx)（`OverviewShell`、`useOverviewController`、`OverviewAdapter`、`OverviewCard`、`OverviewScene`、两个 adapter 与请求协调器） | — |
+| 三维地球工作台与年度分析 | [EarthWorkbenchScene.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthWorkbenchScene.jsx)、[EarthResearchViews.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthResearchViews.jsx)、[earthResearchModel.js](frontend/src/pages/DataOverviewPage/EarthOverview/earthResearchModel.js)、[sphericalRegionalGrid.js](frontend/src/components/sphericalRegionalGrid.js) | [earth_analysis.py](AresVision_backend/backend/routers/earth_analysis.py)、[earth_research_service.py](AresVision_backend/backend/services/earth_research_service.py)、[earth_research.py](AresVision_backend/backend/schemas/earth_research.py) |
 | 数据集注册与查询 | — | [datasets.py](AresVision_backend/backend/routers/datasets.py)、[dataset_registry.py](AresVision_backend/backend/services/dataset_registry.py)、[dataset_identity.py](AresVision_backend/backend/services/dataset_identity.py)、[earth_dataset_metadata.py](AresVision_backend/backend/services/earth_dataset_metadata.py) |
 | 上传数据、来源切换、治理 | [ExplorePage.jsx](frontend/src/pages/ExplorePage.jsx)、[rawDatasetUsage.js](frontend/src/pages/ExplorePage/rawDatasetUsage.js) | [upload.py](AresVision_backend/backend/routers/upload.py)、[user_overview_source_service.py](AresVision_backend/backend/services/user_overview_source_service.py)、[data_governance_service.py](AresVision_backend/backend/services/data_governance_service.py) |
 | 模型训练与任务管理 | [ModelTrainingPage.jsx](frontend/src/pages/ModelTrainingPage.jsx)、[TrainingContext.jsx](frontend/src/contexts/TrainingContext.jsx) | [training.py](AresVision_backend/backend/routers/training.py)、[training_service.py](AresVision_backend/backend/services/training_service.py) |
@@ -199,15 +203,17 @@ flowchart LR
 
 固定 ID、状态含义、错误码与迁移规则见 [数据集注册表](docs/dataset-registry.md)。
 
-### 二维地球总览与场景切换
+### 共用分析工作台与场景切换
 
-1. `#/overview` 顶部持有 `planet` 选择，默认火星；火星与地球**互斥挂载**，地球不加载火星三维背景、摄像头与查询组件。
-2. 地球场景先查 `GET /api/datasets/earth_merra2_daily_v2` 取发布指纹与日期范围，再用 `expected_fingerprint` 请求区域场、区域序列与点位序列。
-3. 后端由 `EarthOverviewService` 从注册表的**已验证只读快照**取数：每个进程按发布 ID 各保留一份五场数组，不重复打开 NetCDF。
-4. 前端按请求身份（含 dataset、fingerprint、变量、日期、坐标）做 token + context 双重检查，迟到的回包不会覆盖新选择。
-5. 日期、变量与点位选择保存在页面层，Earth → Mars → Earth 保留选择；离开地球时暂停并清理全部请求与定时器。
+1. `#/overview` 顶部持有 `planet` 选择，默认火星；火星与地球**互斥挂载**，地球不加载火星三维背景、纹理、摄像头或查询组件。
+2. 两个星球都经 `OverviewShell` 布局、`OverviewAnalysisPanel` 渲染卡片目录；差异全部由 adapter 声明（时间模型、单位、几何、能力、卡片），共用组件不读取任何星球数据。
+3. 地球由 `earthOverviewAdapter` 先查 `GET /api/datasets/earth_merra2_daily_v2` 取发布指纹与日期范围，再查 `/api/analysis/earth/overview/context` 取几何、能力与极区范围；区域场、区域序列与点位序列继续使用已实现的 `/overview/*` 接口。
+4. 年度分析走 Earth 专用接口 `/api/analysis/earth/overview/*`：`useEarthResearch`/`earthResearchClient` 按 `(fingerprint, year[, variable])` 去重缓存，多张卡片共享一次请求，逐日播放不重发年度数据。
+5. `SphericalFieldCanvas` 接收显式 `planet`/`field`/`geometry`/`selection`/`lighting`：地球用 v2 真实单元边界绘制 2592 个单元（不跨经度接缝、封盖两极），火星保持原有纹理、粒子与太阳光照。
+6. 切星球时按固定顺序重置：取消旧星球请求 → 清空场/曲线/播放/选点 → 载入新星球默认变量与时间 → 重置相机与几何；回包需同时通过 epoch、通道 token 与请求身份检查。
+7. 日期、变量与点位选择保存在页面层，Earth → Mars → Earth 保留各自选择。
 
-接口、区域均值公式、渲染边界、底图来源与错误码见 [二维地球数据总览](docs/earth-overview.md)。
+接口、年度统计公式、极区范围与能力限制见 [共用分析工作台](docs/earth-analysis-workbench.md)；二维基础协议见 [二维地球数据总览](docs/earth-overview.md)。
 
 ### 已训练模型预测与缓存
 
@@ -240,7 +246,7 @@ flowchart LR
 
 - **UI 开放范围与保留 API 不完全相同。** [predictModelModes.js](frontend/src/pages/PredictPage/predictModelModes.js) 当前只定义已训练模型与多模型对比；默认预测服务仍保留在后端，不能据此描述成三个前端模式。
 - **个人上传不是训练入口。** 当前训练请求固定使用服务器管理的数据源；预测的数据源校验也拒绝 `personal`。总览可使用上传来源，不代表同一来源可直接用于训练或预测。
-- **地球已开放二维日数据总览，但训练与预测仍未接通。** 数据总览可按真实日期查看 MERRA-2 五个变量的全球场、逐日播放、点位曲线与覆盖区域加权均值；**没有**三维地球、风场粒子、派生风速、自选多边形区域、重网格、平滑/插值、臭氧单位换算、导出、PFI、季节诊断或 Earth Copilot。地球训练与预测入口仍未开放，训练请求返回 409 `dataset_training_not_supported`。默认 v2 的全球均值按球面单元面积加权，旧 v1 仍保留区域抽样语义。地球日历、真实网格坐标和 DU 单位须保留，不能直接套用 MY/Ls 与火星单位。边界详情见 [二维地球数据总览](docs/earth-overview.md)。
+- **地球已开放三维日数据分析工作台，但训练与预测仍未接通。** 数据总览可切换地球，按 ISO 日期使用与火星共用的三栏工作台查看全球 36 × 72 三维球体、逐日播放（2020-01-01 ~ 2021-12-31）、五变量原始单位、经纬度点选与点位曲线、全球单元面积加权均值，以及 2020/2021 年度分析、极区统计（`|latitude| >= 60°`）和图表 AI 解读。**没有**的是：地球昼夜变化（数据是 UTC 日平均，卡片固定显示能力说明）、地球训练入口、地球预测入口、Earth/Mars 数值叠加或跨星球比较、自选多边形区域、重网格、平滑/插值、臭氧单位换算与导出。首期手势交互未接入摄像头识别，仅预留动作接口。默认 v2 的全球均值按球面单元面积加权，旧 v1 仍保留区域抽样语义。地球日历、真实网格坐标和 DU 单位须保留，不能直接套用 MY/Ls 与火星单位。边界详情见 [共用分析工作台](docs/earth-analysis-workbench.md) 与 [二维地球数据总览](docs/earth-overview.md)。
 - **标签按账号私有。** 管理员可用自己的标签整理可访问任务，其他用户看不到这些标记。删除标签只移除该标签及关联，保留训练记录、参数、日志和权重；标签功能不提供参数预设、多级文件夹或共享标签。
 - **官方数据发布尚未启用。** 当前装配的是 `DisabledOfficialMcdSourcePublisher`；上传、审核与发布为官方 MCD 数据是不同阶段。
 - **以实际渲染为准。** 多模型比较的显示范围由可见性配置控制，存在比较接口或图表文件不代表所有面板均已在 UI 开放。
@@ -396,7 +402,7 @@ python -m pytest tests
 
 测试覆盖数据读取与对齐、模型接入、训练配置、预测步长、缓存隔离、请求一致性及前端交互逻辑。运行所需数据或依赖以各测试为准。
 
-数据集注册相关测试为 `tests/test_dataset_identity.py`、`tests/test_dataset_registry.py`、`tests/test_dataset_routes.py`、`tests/test_training_dataset_identity_migration.py` 和 `tests/test_training_dataset_identity.py`；二维地球总览为 `tests/test_earth_overview_service.py` 与 `tests/test_earth_overview_routes.py`。`tests/conftest.py` 提供显式引用的临时 Earth 发布 fixture（`earth_release`、`earth_spatial_release`），不读取生产数据。这些测试需要新的纯英文临时目录（`--basetemp`），并应避免在同一 pytest 会话中一次性收集全部测试文件。
+数据集注册相关测试为 `tests/test_dataset_identity.py`、`tests/test_dataset_registry.py`、`tests/test_dataset_routes.py`、`tests/test_training_dataset_identity_migration.py` 和 `tests/test_training_dataset_identity.py`；地球总览与分析为 `tests/test_earth_overview_service.py`、`tests/test_earth_overview_routes.py`、`tests/test_earth_research_service.py` 与 `tests/test_earth_research_routes.py`。共用工作台前端测试位于 `frontend/src/pages/DataOverviewPage/workbench/` 与 `frontend/src/pages/DataOverviewPage/EarthOverview/`。`tests/conftest.py` 提供显式引用的临时 Earth 发布 fixture（`earth_release`、`earth_spatial_release`、`earth_global_release`），不读取生产数据；该文件在 Windows 上把 `tempfile` 临时目录的 POSIX 权限位从 `0o700` 放宽到 `0o777`（POSIX 行为不变），否则受限文件策略会拒绝写入 `tmp_path`。这些测试需要新的纯英文临时目录（`--basetemp`），并应避免在同一 pytest 会话中一次性收集全部测试文件。
 
 ## 部署与分发
 
@@ -422,6 +428,10 @@ python -m pytest tests
 | 训练请求返回 400/409 且提示数据集 | 顶层 `dataset_id` 与 `hyperparameters.training_dataset` 是否冲突、ID 是否已注册、是否请求了尚未开放的 Earth 训练；见 [数据集注册表](docs/dataset-registry.md) |
 | `/api/datasets` 中 Earth 不是 `available` | 检查默认 v2 的 `ARESVISION_EARTH_MERRA2_DIR`（旧 v1 为 `ARESVISION_EARTH_MERRA2_V1_DIR`）、目录内的 `manifest.json` 与 `earth_merra2_daily.nc`，以及 `availability_reason` 错误码 |
 | 地球地图只有区域一块着色 | 默认 v2 应覆盖全球；若仍显示 ±60°/±120°，检查是否访问旧 v1 或未重建前端。v1 区域边界保持原义 |
+| 地球三维球体空白或只有底球 | WebGL 是否可用（不可用会自动切二维并给出说明）、`/api/analysis/earth/overview/context` 是否返回 200、`geometry` 是否含 36/72 个单元中心 |
+| 地球年度卡片一直加载 | `/api/analysis/earth/overview/research-suite`（或 `spatial-diagnostics`、`polar-dynamics`）的年份是否在发布范围内、`dataset_id` 与 `expected_fingerprint` 是否与当前描述符一致 |
+| 地球昼夜卡片显示不可用 | 预期行为：日平均数据没有日内采样，原因码为 `daily_data_has_no_diurnal_samples`，不会回退到火星昼夜接口 |
+| 地球请求出现火星接口或火星纹理 | 场景切换未清理旧请求或页面未重建；核对 `planet` 与 `useOverviewController` 的取消流程，以及 `SphericalFieldCanvas` 的 `planet` 参数 |
 | 地球页面提示版本已变化 | 数据包被替换过；刷新页面重新读取元信息与指纹，不要手工拼接旧链接 |
 | 地球日期播放不前进 | 场仍在加载或已到最后一天；确认 `/api/datasets/earth_merra2_daily_v2/overview/field` 是否返回 200 |
 | 地球底图缺失但数据仍在 | 本地 `frontend/public/earth/ne_110m_coastline.geojson` 是否可访问；底图失败不影响日期与数据查询 |

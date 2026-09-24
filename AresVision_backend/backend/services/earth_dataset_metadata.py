@@ -378,6 +378,11 @@ def _extract_metadata(
         ),
         "manifest_sha256": manifest_sha256,
         "data_sha256": data_sha256,
+        # The verified manifest itself, so downstream services can report the
+        # published provenance (source digest, processing description) without
+        # re-reading the package. It carries no server path: the manifest may
+        # only name the fixed data file, which was already checked above.
+        "manifest": dict(manifest),
         "schema": SCHEMA,
         "time": {
             "kind": "date",
