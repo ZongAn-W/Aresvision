@@ -24,6 +24,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from config import MCD_DIR, MCD_RAW_3H_DIR, MOLA_TOPOGRAPHY_PATH
+from services.dataset_identity import require_training_dataset, resolve_dataset_id
 from services.ozone_units import normalize_ozone_column_units
 from services.transfer_learning_strategy import apply_freeze_strategy
 from training_backbones.uploaded_model_contract import (
@@ -83,6 +84,12 @@ def parse_bool(value: Any) -> bool:
 
 
 def normalize_training_dataset(value: Any) -> str:
+    """Legacy tolerant normalizer used by old task readers and inference.
+
+    New training runs must resolve their dataset through
+    ``require_training_dataset(resolve_dataset_id(...))`` in ``main()`` before any
+    data is loaded; this helper only keeps historical reads working.
+    """
     dataset = str(value or TRAINING_DATASET_OPENMARS_MCD).strip().lower()
     return dataset if dataset in TRAINING_DATASET_IDS else TRAINING_DATASET_OPENMARS_MCD
 
@@ -1058,6 +1065,11 @@ def main() -> None:
     parser.add_argument("--freeze_mode", type=str, default="none")
     parser.add_argument("--finetune_learning_rate", type=float, default=None)
     args, _unknown = parser.parse_known_args()
+    # Strict entry point: an unknown or not yet supported dataset must fail here,
+    # before any data directory is touched.
+    args.training_dataset = require_training_dataset(
+        resolve_dataset_id(None, {"training_dataset": args.training_dataset})
+    )
 
     epochs = max(1, int(args.epochs))
     batch_size = max(1, int(args.batch_size))

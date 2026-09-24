@@ -330,6 +330,7 @@ async def test_training_route_maps_permission_error_to_403():
         "model_source": "uploaded",
         "uploaded_model_id": FakePackage.id,
         "tag_ids": [],
+        "dataset_id": None,
     })()
     current_user = type("User", (), {"id": 3})()
     original_service = training.training_service

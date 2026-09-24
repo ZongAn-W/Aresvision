@@ -14,7 +14,7 @@ import {
 } from './timelineCoverage.js';
 import { formatTimelineLs } from './timelineFormatting.js';
 
-export default function TimelineController() {
+export default function TimelineController({ embedded = true }) {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
@@ -27,11 +27,9 @@ export default function TimelineController() {
     overviewTimeline,
     overviewOzoneCapabilities,
     marsYear,
-    leftPanelWidth,
-    rightPanelWidth,
   } = useDataOverview();
 
-  const playerWidth = `clamp(380px, calc(100vw - ${leftPanelWidth + rightPanelWidth + 180}px), 680px)`;
+  const playerWidth = 'clamp(380px, calc(100vw - var(--overview-scene-left) - var(--overview-scene-right) - 180px), 680px)';
 
   const seasonName =
     globalTimeLs < 90 ? t('common.season.spring') :
@@ -73,10 +71,12 @@ export default function TimelineController() {
 
   return (
     <div
+      className="overview-timeline-anchor"
+      data-embedded={embedded ? 'true' : 'false'}
       style={{
         position: 'fixed',
-        bottom: 20,
-        left: `calc(50% + ${(leftPanelWidth - rightPanelWidth) / 2}px)`,
+        bottom: 'var(--overview-timeline-bottom)',
+        left: 'calc(var(--overview-scene-left) + (100vw - var(--overview-scene-left) - var(--overview-scene-right)) / 2)',
         transform: 'translateX(-50%)',
         width: playerWidth,
         zIndex: 1500,

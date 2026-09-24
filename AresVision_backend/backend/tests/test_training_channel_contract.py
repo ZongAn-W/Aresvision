@@ -1,10 +1,13 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from services.dataset_identity import DatasetRequestError  # noqa: E402
 from services.training_channels import (  # noqa: E402
     UNIFIED_TRAINING_SCRIPT,
     build_hyperparameter_args,
@@ -49,11 +52,22 @@ def test_hyperparameter_args_pass_selected_channels_to_unified_script():
 def test_normalize_training_hyperparameters_sanitizes_training_dataset():
     defaulted = normalize_training_hyperparameters({})
     selected = normalize_training_hyperparameters({"training_dataset": "mcd_overview"})
-    invalid = normalize_training_hyperparameters({"training_dataset": "unknown"})
 
     assert defaulted["training_dataset"] == "openmars_mcd"
     assert selected["training_dataset"] == "mcd_overview"
-    assert invalid["training_dataset"] == "openmars_mcd"
+
+
+@pytest.mark.parametrize("value,code", [
+    ("unknown", "unknown_dataset"),
+    ("earth_merra2_daily_v1", "dataset_training_not_supported"),
+    ("", "invalid_dataset_id"),
+    (7, "invalid_dataset_id"),
+])
+def test_normalize_training_hyperparameters_rejects_unsupported_training_dataset(value, code):
+    """New training configurations must not silently fall back to openmars_mcd."""
+    with pytest.raises(DatasetRequestError) as exc:
+        normalize_training_hyperparameters({"training_dataset": value})
+    assert exc.value.code == code
 
 
 def test_normalize_training_hyperparameters_clamps_invalid_numeric_values():

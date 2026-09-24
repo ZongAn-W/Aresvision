@@ -1,5 +1,5 @@
 /**
- * AresVision English Language Pack
+ * AstraAtmos English Language Pack
  * Organized by module/page, mirroring the zh.js structure exactly.
  */
 const en = {
@@ -11,12 +11,12 @@ const en = {
     training: 'Train Model',
     ai: 'AI Insight',
     about: 'About',
-    subtitle: 'Mars Vision',
+    subtitle: 'Planetary Atmosphere Lab',
   },
 
   footer: {
-    copyright: '© 2025 AresVision · National College Computer Application Ability Competition',
-    powered: 'Powered by OpenMARS · MCD 6.1 · PredRNNv2',
+    copyright: '© 2025 AstraAtmos · National College Computer Application Ability Competition',
+    powered: 'OpenMARS · MCD 6.1 · MERRA-2 · PyTorch',
   },
 
   common: {
@@ -117,14 +117,14 @@ const en = {
   },
 
   home: {
-    subtitle: 'M A R S   V I S I O N',
-    desc: 'Mars Ozone Column Concentration Prediction & Visualization powered by PredRNNv2',
+    subtitle: 'Planetary Atmosphere Lab',
+    desc: 'Planetary Atmosphere Prediction & Experiment Platform · Data analysis, model training, and 3D visualization',
     exploreBtn: 'Start Exploring',
     predictBtn: 'Run Prediction →',
     features: {
-      viz3d:   { title: '3D Visualization', desc: 'Real-time WebGL Mars sphere rendering' },
-      ai:      { title: 'AI Prediction',    desc: 'PredRNNv2 spatiotemporal sequence model' },
-      chart:   { title: 'Scientific Charts', desc: 'Ls-latitude heatmaps & multi-dim analysis' },
+      viz3d:   { title: '3D Visualization', desc: 'Real-time planetary atmosphere fields' },
+      ai:      { title: 'AI Prediction',    desc: 'Spatiotemporal model experiments' },
+      chart:   { title: 'Scientific Charts', desc: 'Atmospheric fields and multi-dimensional analysis' },
       insight: { title: 'AI Insight',        desc: 'LLM-powered natural language Q&A' },
     },
   },
@@ -236,6 +236,106 @@ const en = {
     },
   },
 
+  overviewPlanet: {
+    label: 'Overview planet',
+    mars: 'Mars',
+    earth: 'Earth',
+  },
+
+  earthOverview: {
+    title: 'Earth daily data overview',
+    subtitle: 'MERRA-2 daily global fields · real dates · original units',
+    loading: 'Loading the Earth dataset…',
+    scopeNote: 'Earth currently exposes the daily data overview only: the 3D globe, training and prediction stay closed. Global means use spherical cell-area weights.',
+    variables: {
+      TO3: 'Total column ozone',
+      U10M: 'Eastward wind',
+      V10M: 'Northward wind',
+      T2M: '2 m temperature',
+      SWGDN: 'Surface shortwave radiation',
+    },
+    controls: {
+      variable: 'Variable',
+      units: 'Original units',
+      latitude: 'Latitude',
+      longitude: 'Longitude',
+    },
+    actions: {
+      retry: 'Retry',
+      dismiss: 'Dismiss',
+      viewPoint: 'View point',
+    },
+    timeline: {
+      label: 'Date and daily playback',
+      dataDate: 'Data date',
+      previousDay: 'Previous day',
+      nextDay: 'Next day',
+      play: 'Play',
+      pause: 'Pause',
+      replayFromFirst: 'Replay from first day',
+      loadingSelectedDate: 'Loading selected date',
+      showing: 'Showing',
+    },
+    map: {
+      label: 'Earth regional field 2D map',
+      showingDate: 'Showing date',
+      noDataOutside: 'No data outside coverage',
+      centeredOnZero: 'Centered on zero (signed direction)',
+      basemapLoading: 'Loading local basemap…',
+      basemapFailed: 'Basemap failed to load; data and graticule still work',
+      noField: 'No data yet — pick a date and retry',
+    },
+    legend: {
+      range: 'Colour range',
+    },
+    series: {
+      currentPoint: 'Current point value',
+      coverageMean: 'Global coverage mean (spherical cell-area weighted)',
+      displayedDate: 'Displayed date',
+      pointTitle: 'Selected grid point · daily series',
+      regionalTitle: 'Coverage mean · daily series',
+      regionalNote: 'Spherical cell-area weighted mean, not a total atmospheric mass',
+      pickPointHint: 'Pick a point on the map or enter coordinates to see its daily series',
+      loading: 'Loading series…',
+      requested: 'Requested location',
+      gridPoint: 'Selected grid point',
+    },
+    info: {
+      title: 'Dataset notes',
+      source: 'Source: NASA MERRA-2 daily ozone derivative',
+      dateRange: 'Date range',
+      grid: 'Grid',
+      coverage: 'Coverage',
+      units: 'Original units',
+      dailyMean: 'Daily means; hourly variation is not retained',
+      pointSampled: 'Point-subsampled grid, not area averaged',
+      areaWeighted: 'Aggregated by spherical cell-overlap area',
+      globalCoverage: 'Global coverage, including polar cells',
+      notGlobal: 'Not global coverage; polar regions are outside the data',
+      details: 'Dataset details',
+      datasetId: 'Dataset id',
+      version: 'Version',
+      calendar: 'Calendar',
+    },
+    errors: {
+      unknown_dataset: 'Dataset is not registered',
+      dataset_overview_not_supported: 'This dataset has no Earth overview',
+      dataset_version_changed: 'Dataset version changed; refresh',
+      dataset_unavailable: 'Dataset unavailable',
+      invalid_date: 'Use the YYYY-MM-DD date format',
+      date_out_of_range: 'Date is outside the available range',
+      invalid_date_range: 'Start date must not be after the end date',
+      unsupported_variable: 'Unsupported variable',
+      point_outside_coverage: 'That location is outside the coverage',
+      invalid_response: 'Response validation failed',
+      network_error: 'Network request failed',
+      invalid_request: 'Invalid request',
+      invalidCoordinates: 'Enter valid numeric coordinates',
+      outsideCoverage: 'That location is outside the coverage',
+      datasetUnavailable: 'Dataset unavailable',
+    },
+  },
+
   explore: {
     title: 'Data Management',
     subtitle: 'DATA MANAGEMENT',
@@ -248,7 +348,7 @@ const en = {
     stepUseDesc: 'MCD can be selected as the full Data Overview page source; OpenMARS and NOMAD are only used for the 3D ozone multi-source display.',
     defaultDataset: {
       header: 'OFFICIAL DATA ASSETS',
-      headerDesc: 'This is not just a dataset description page. It is the official Mars data foundation of AresVision, organized around source coverage, Mars-year coverage, variable completeness, unified resolution, and analysis-ready capability tags.',
+      headerDesc: 'Explore the official Mars data in AstraAtmos, including source and Mars-year coverage, variable completeness, unified resolution, and analysis capability tags.',
       sourceTitle: 'DATA SOURCE DESCRIPTION',
       openmarsSubtitle: 'OpenMARS Reanalysis (Ozone Core)',
       openmarsBody: 'Provides the official OpenMARS ozone column layer aligned to a 5° x 5° global grid, mainly for the Data Overview 3D multi-source ozone display and official baseline comparison.',
@@ -399,7 +499,7 @@ const en = {
       confirmDeleteMsg: 'Delete this dataset? This action cannot be undone.',
       confirmDeleteBtn: 'Delete',
       cancelBtn: 'Cancel',
-      confirmContributeTitle: 'Contribute to AresVision',
+      confirmContributeTitle: 'Contribute to AstraAtmos',
       confirmContributeMsg: "Your data will be submitted for admin review. If approved, it will be added to the site's default datasets for all users.",
       confirmContributeBtn: 'Confirm',
       deleteSuccess: 'Dataset deleted',
@@ -461,7 +561,7 @@ const en = {
     },
 
     contribute: {
-      bannerText: 'Help enrich the AresVision database and benefit more researchers',
+      bannerText: 'Help enrich the AstraAtmos database and benefit more researchers',
       bannerBtn: 'Contribute Datasets',
       historyLink: 'View contributions →',
       step1: 'Select',
@@ -839,7 +939,7 @@ const en = {
       'In which seasons does the model perform worst?',
       'What is the pattern of diurnal variation?',
     ],
-    welcome: 'Hello! I am the AresVision AI assistant, ready to help you interpret Mars ozone prediction results.\n\nYou can ask me:\n• Which regions show the largest ozone bias in the current prediction?\n• Why does polar ozone peak near Ls=200°?\n• How do dust storms affect ozone distribution?',
+    welcome: 'Hello! I am the AstraAtmos AI assistant, ready to help you interpret planetary atmosphere data and prediction results.\n\nYou can ask me:\n• Which regions show the largest bias in the current prediction?\n• How do environmental drivers affect atmospheric variables?\n• How do different models compare?',
   },
 
   modelTraining: {
@@ -997,11 +1097,10 @@ const en = {
 
   about: {
     title: 'About',
-    subtitle: 'ABOUT ARESVISION',
+    subtitle: 'ABOUT ASTRAATMOS',
     description:
-      'AresVision is an ozone prediction and visualization platform for Mars atmospheric science research. ' +
-      'Built on OpenMARS reanalysis data and MCD 6.1 climate simulation data, it employs the PredRNNv2 ' +
-      'spatiotemporal deep learning model to achieve multi-step prediction of global Mars ozone column concentration.',
+      'AstraAtmos is a planetary atmosphere platform for data analysis, model training, and spatiotemporal prediction experiments. ' +
+      'It currently supports Mars ozone training and prediction, alongside Earth MERRA-2 data analysis. Earth training and prediction are not yet available; more planets and prediction targets are planned.',
     techCats: {
       frontend: 'Frontend',
       backend:  'Backend',
@@ -1146,7 +1245,7 @@ const en = {
     resolveBtn: 'Mark Resolved',
     resolveSuccess: 'Marked as resolved',
     title: 'Feedback',
-    subtitle: 'Help us improve AresVision',
+    subtitle: 'Help us improve AstraAtmos',
     typeLabel: 'Type',
     typeBug: 'Bug',
     typeSuggestion: 'Suggestion',

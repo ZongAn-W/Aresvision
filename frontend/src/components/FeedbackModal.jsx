@@ -141,7 +141,7 @@ function FeedbackModalInner({ open, onClose }) {
             fontFamily: "'Orbitron', sans-serif",
             color: C.blue, textTransform: 'uppercase', marginBottom: 6,
           }}>
-            ARESVISION
+            ASTRAATMOS
           </div>
           <div style={{
             fontSize: 'calc(20px * var(--font-scale, 1))', fontWeight: 700,

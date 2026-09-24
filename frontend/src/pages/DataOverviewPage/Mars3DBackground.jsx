@@ -1,6 +1,8 @@
 import React, { forwardRef, useMemo } from 'react';
 import SphericalFieldCanvas from '../../components/SphericalFieldCanvas';
 import { pointsToFieldData } from './fieldGrid';
+import { useOverviewLayout } from './workbench/OverviewShell.jsx';
+import { OVERVIEW_GLOBE } from './workbench/overviewVisualContract.js';
 
 const SOURCE_TINTS = {
   mcd: '#f97316',
@@ -16,11 +18,13 @@ const Mars3DBackground = forwardRef(({
   showConcentration3D,
   showGeoAnnotations,
   showMarsTexture,
-  leftPanelWidth,
-  rightPanelWidth,
   solarLongitudeLs,
   onGlobeClick,
+  // 视角记忆：与 Earth 共用同一套缓存，切回火星时恢复上次视角。
+  poseKey = null,
+  restoreCameraPose = true,
 }, ref) => {
+  const { offsetX } = useOverviewLayout();
   const layerFields = useMemo(() => {
     const layers = sceneModel?.layers?.length ? sceneModel.layers : [ozoneData].filter(Boolean);
     return layers
@@ -63,6 +67,8 @@ const Mars3DBackground = forwardRef(({
     }}>
       <SphericalFieldCanvas
         ref={ref}
+        planet="mars"
+        showBaseMap={false}
         fieldData={fieldData}
         fieldLayers={layerFields}
         colorMode={sceneModel?.colorMode || 'inferno'}
@@ -73,8 +79,16 @@ const Mars3DBackground = forwardRef(({
         showGeoAnnotations={showGeoAnnotations}
         showMars={showMarsTexture}
         solarLongitudeLs={solarLongitudeLs}
-        zoom={3.75} // reduce initial globe size by ~1/3 (visual size becomes ~2/3)
-        offsetX={(rightPanelWidth - leftPanelWidth) / 2} // shift object to center it in remaining viewport space
+        zoom={OVERVIEW_GLOBE.zoom} // shared overview framing with the Earth particle globe
+        offsetX={offsetX} // shift object to center it in remaining viewport space
+        poseKey={poseKey}
+        restoreCameraPose={restoreCameraPose}
+        particleDensity={OVERVIEW_GLOBE.particleDensity}
+        particleSize={OVERVIEW_GLOBE.particleSize}
+        pointParticleSize={OVERVIEW_GLOBE.pointParticleSize}
+        particlePalette={OVERVIEW_GLOBE.palette}
+        globeMaterial="shared"
+        lightingMode="seasonal"
         onGlobeClick={onGlobeClick}
       />
     </div>

@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const pageSource = readFileSync(new URL('../DataOverviewPage.jsx', import.meta.url), 'utf8');
+const shellSource = readFileSync(new URL('./workbench/OverviewShell.jsx', import.meta.url), 'utf8');
 const cssSource = readFileSync(new URL('../../index.css', import.meta.url), 'utf8');
 
-test('DataOverviewPage renders the dedicated deep space backdrop behind Mars', () => {
-  assert.match(pageSource, /import DeepSpaceBackdrop/);
-  assert.match(pageSource, /<DeepSpaceBackdrop \/>[\s\S]*<Mars3DBackground/);
+test('the shared overview shell renders the dedicated deep space backdrop behind both planets', () => {
+  assert.match(shellSource, /import DeepSpaceBackdrop/);
+  assert.match(shellSource, /<DeepSpaceBackdrop \/>/);
+  assert.match(pageSource, /<OverviewShell[\s\S]*<Mars3DBackground/);
 });
 
 test('deep space backdrop CSS defines only clean deep-space layers', () => {

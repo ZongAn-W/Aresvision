@@ -11,6 +11,10 @@ from pathlib import Path
 from sqlalchemy import select, text
 
 from config import DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD, TRAINING_RESULTS_DIR
+from database.dataset_identity_migration import (
+    DatasetIdentityMigrationError,
+    migrate_dataset_identity,
+)
 from database.engine import Base, engine, async_session_maker
 from database.models import (
     User,
@@ -180,6 +184,15 @@ async def init_database() -> None:
                 await _patch_notification_table_columns(conn)
             except Exception as exc:
                 logger.warning("Could not auto-patch notifications schema: %s", exc)
+            # Dataset identity is required for every task query. It runs outside
+            # the best-effort legacy patches above: a failure here must stop
+            # startup instead of serving a database with an incomplete schema.
+            migrated_identities = await migrate_dataset_identity(conn)
+            if migrated_identities:
+                logger.info(
+                    "Backfilled dataset identity for %s historical training tasks",
+                    migrated_identities,
+                )
 
         logger.info("Database schema initialization complete")
 
@@ -201,6 +214,10 @@ async def init_database() -> None:
                 logger.info("Default admin created: %s", DEFAULT_ADMIN_EMAIL)
             else:
                 logger.info("Users already exist; skip default admin creation")
+
+    except DatasetIdentityMigrationError:
+        logger.exception("Required dataset identity migration failed")
+        raise
 
     except Exception as exc:
         logger.warning("Database initialization failed (startup continues): %s", exc)

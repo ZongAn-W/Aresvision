@@ -13,14 +13,16 @@ import { filterOzoneOverlayBySourceModes } from './DataOverviewPage/uploadedSour
 import TopStatusBar from './DataOverviewPage/TopStatusBar';
 import SidebarMenu from './DataOverviewPage/SidebarMenu';
 import DetailPanel from './DataOverviewPage/DetailPanel';
-import DeepSpaceBackdrop from './DataOverviewPage/DeepSpaceBackdrop';
 import Mars3DBackground from './DataOverviewPage/Mars3DBackground';
 import TimelineController from './DataOverviewPage/TimelineController';
 import AICopilotWidget from './DataOverviewPage/AICopilotWidget'; 
 import GlobeLegend from './DataOverviewPage/GlobeLegend';
 import PointProbeModal from './DataOverviewPage/PointProbeModal';
+import PlanetSceneSwitch from './DataOverviewPage/PlanetSceneSwitch';
+import EarthWorkbenchScene from './DataOverviewPage/EarthOverview/EarthWorkbenchScene.jsx';
+import OverviewShell from './DataOverviewPage/workbench/OverviewShell.jsx';
 
-const DataOverviewPageContent = () => {
+const DataOverviewPageContent = ({ sceneSwitch = null }) => {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
@@ -52,7 +54,9 @@ const DataOverviewPageContent = () => {
     ozoneOverlayPayload,
     setOzoneOverlayPayload,
     leftPanelWidth,
-    rightPanelWidth
+    setLeftPanelWidth,
+    rightPanelWidth,
+    setRightPanelWidth,
   } = useDataOverview();
 
   const [loadingGlobe, setLoadingGlobe] = useState(false);
@@ -309,7 +313,11 @@ const DataOverviewPageContent = () => {
   }, [gestureEnabled, handleClosePointProbe, handleGlobeClick, isZh, mapGesturePointerToClientPoint, pointProbe, setIsPlayingTimeline, setOnGesture]);
 
   useEffect(() => () => {
+    // 卸载时取消所有在途请求并清掉定时器，避免旧回包写入持久的 Mars provider。
+    if (mainAbortRef.current) mainAbortRef.current.abort();
+    if (overlayAbortRef.current) overlayAbortRef.current.abort();
     if (pointProbeAbortRef.current) pointProbeAbortRef.current.abort();
+    clearInterval(timerRef.current);
   }, []);
 
   useEffect(() => {
@@ -378,32 +386,44 @@ const DataOverviewPageContent = () => {
   }, [isPlayingTimeline, overviewTimeline, setGlobalTimeLs, setIsPlayingTimeline]);
 
   return (
-    <div className="space-scene" style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative' }}>
-      <DeepSpaceBackdrop />
-      
-      {/* 绝对底层的 3D 背景 */}
-      <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 0 }}>
-        <Mars3DBackground
-          ref={globeCanvasRef}
-          ozoneData={sceneModel.layers[0] || mcdMainSlice}
-          sceneModel={sceneModel}
-          is3DMode={true}
-          autoRotate={autoRotate}
-          showConcentration3D={showConcentration3D}
-          showGeoAnnotations={showGeoAnnotations}
-          showMarsTexture={showMarsTexture}
-          leftPanelWidth={leftPanelWidth}
-          rightPanelWidth={rightPanelWidth}
-          solarLongitudeLs={globalTimeLs}
-          onGlobeClick={handleGlobeClick}
-        />
-      </div>
+    <OverviewShell
+      planet="mars"
+      isLight={isLight}
+      leftWidth={leftPanelWidth}
+      rightWidth={rightPanelWidth}
+      onLeftWidthChange={setLeftPanelWidth}
+      onRightWidthChange={setRightPanelWidth}
+      scene={(
+        <div className="space-scene" style={{ width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}>
+
+          {/* 绝对底层的 3D 背景 */}
+          <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 0 }}>
+            <Mars3DBackground
+              ref={globeCanvasRef}
+              ozoneData={sceneModel.layers[0] || mcdMainSlice}
+              sceneModel={sceneModel}
+              is3DMode={true}
+              autoRotate={autoRotate}
+              showConcentration3D={showConcentration3D}
+              showGeoAnnotations={showGeoAnnotations}
+              showMarsTexture={showMarsTexture}
+              leftPanelWidth={leftPanelWidth}
+              rightPanelWidth={rightPanelWidth}
+              solarLongitudeLs={globalTimeLs}
+              poseKey="mars"
+              onGlobeClick={handleGlobeClick}
+            />
+          </div>
+        </div>
+      )}
+      overlay={(
+        <>
 
       {gestureEnabled && (
         <div className="gesture-capture-hud" title={gestureError || gestureStatus?.text || t('overview.controls.cameraTracking')} style={{
           position: 'fixed',
           top: '82px',
-          left: `${leftPanelWidth + 18}px`,
+          left: 'calc(var(--overview-scene-left) + 18px)',
           width: `${GESTURE_WINDOW_WIDTH}px`,
           height: `${GESTURE_WINDOW_HEIGHT}px`,
           zIndex: 1450,
@@ -533,49 +553,75 @@ const DataOverviewPageContent = () => {
         </div>
       )}
 
-      {/* HUD UI 层 */}
-      <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100, pointerEvents: 'none' }}>
-        
+      {/* HUD UI 层：仅保留状态栏、AI 与图例；控件栏/分析栏/时间轴由共用工作台外壳承载 */}
+      <div className="overview-mars-hud">
+
         <div style={{ pointerEvents: 'auto' }}>
           <TopStatusBar />
         </div>
 
         <div style={{ pointerEvents: 'auto' }}>
-          <SidebarMenu />
-        </div>
-
-        <div style={{ pointerEvents: 'auto' }}>
-          <DetailPanel sliceData={mcdMainSlice} overviewSourceParams={overviewSourceParams} />
-        </div>
-
-        <div style={{ pointerEvents: 'auto' }}>
-          <TimelineController />
-        </div>
-        
-        <div style={{ pointerEvents: 'auto' }}>
           <AICopilotWidget />
         </div>
 
         <div style={{ pointerEvents: 'auto' }}>
-          <GlobeLegend ozoneData={sceneModel.layers[0] || mcdMainSlice} sceneModel={sceneModel} />
+          <GlobeLegend ozoneData={sceneModel.layers[0] || mcdMainSlice} sceneModel={sceneModel} embedded />
         </div>
       </div>
-
-      <PointProbeModal
-        probe={pointProbe}
-        loading={pointProbeLoading}
-        error={pointProbeError}
-        onClose={handleClosePointProbe}
-      />
-
-    </div>
+        </>
+      )}
+      sidebar={<SidebarMenu embedded sceneSwitch={sceneSwitch} />}
+      analysis={<DetailPanel embedded sliceData={mcdMainSlice} overviewSourceParams={overviewSourceParams} />}
+      timeline={<TimelineController embedded />}
+      notification={(
+        <PointProbeModal
+          probe={pointProbe}
+          loading={pointProbeLoading}
+          error={pointProbeError}
+          onClose={handleClosePointProbe}
+        />
+      )}
+    />
   );
 };
+
+/**
+ * 总览场景选择：默认火星，保留原有 Mars 实现文件与 provider。
+ *
+ * Mars 与 Earth 互斥挂载（不做 hidden 双挂载），切换前统一暂停 Mars 播放，
+ * Earth 的基础选择保存在本层，返回时按当前 descriptor fingerprint 重新校验加载。
+ */
+function OverviewSceneContent() {
+  const [planet, setPlanet] = useState('mars');
+  const [earthSelection, setEarthSelection] = useState({ date: null, variable: 'TO3', point: null });
+  const { setIsPlayingTimeline } = useDataOverview();
+  const [earthWidths, setEarthWidths] = useState({ left: 300, right: 540 });
+
+  const switchPlanet = useCallback((next) => {
+    if (next === planet) return;
+    // 切换前暂停 Mars 播放；Mars content 卸载时会 abort 在途请求并取消 timer。
+    setIsPlayingTimeline(false);
+    setPlanet(next);
+  }, [planet, setIsPlayingTimeline]);
+
+  const sceneSwitch = <PlanetSceneSwitch value={planet} onChange={switchPlanet} />;
+
+  return planet === 'earth'
+    ? (
+      <EarthWorkbenchScene
+        panelWidths={earthWidths}
+        onPanelWidthsChange={setEarthWidths}
+        selection={earthSelection}
+        onSelectionChange={setEarthSelection}
+        sceneSwitch={sceneSwitch}
+      />
+    )
+    : <DataOverviewPageContent sceneSwitch={sceneSwitch} />;}
 
 export default function DataOverviewPage() {
   return (
     <DataOverviewProvider>
-      <DataOverviewPageContent />
+      <OverviewSceneContent />
     </DataOverviewProvider>
   );
 }

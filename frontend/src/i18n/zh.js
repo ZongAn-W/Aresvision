@@ -1,5 +1,5 @@
 /**
- * AresVision 中文语言包
+ * AstraAtmos 中文语言包
  * 按模块/页面分组，key 命名遵循 module.section.item 层级
  */
 const zh = {
@@ -11,12 +11,12 @@ const zh = {
     training: '模型训练',
     ai: 'AI 解读',
     about: '关于',
-    subtitle: '智绘赤星',
+    subtitle: '行星大气实验室',
   },
 
   footer: {
-    copyright: '© 2025 AresVision 智绘赤星 · 全国大学生计算机应用能力大赛',
-    powered: '基于 OpenMARS · MCD 6.1 · PredRNNv2',
+    copyright: '© 2025 AstraAtmos 行星大气实验室 · 全国大学生计算机应用能力大赛',
+    powered: 'OpenMARS · MCD 6.1 · MERRA-2 · PyTorch',
   },
 
   common: {
@@ -118,14 +118,14 @@ const zh = {
   },
 
   home: {
-    subtitle: '智 绘 赤 星',
-    desc: '基于 PredRNNv2 深度学习框架的火星臭氧柱浓度预测与可视化系统',
+    subtitle: '行 星 大 气 实 验 室',
+    desc: '行星大气预测实验平台 · 数据分析、模型训练与三维可视化',
     exploreBtn: '开始探索',
     predictBtn: '预测分析 →',
     features: {
-      viz3d: { title: '三维可视化', desc: '火星球体实时渲染' },
-      ai: { title: 'AI 预测', desc: 'PredRNNv2 时空序列模型' },
-      chart: { title: '科学图表', desc: 'Ls-纬度热力图与多维分析' },
+      viz3d: { title: '三维可视化', desc: '行星大气场实时渲染' },
+      ai: { title: 'AI 预测', desc: '时空序列模型实验' },
+      chart: { title: '科学图表', desc: '时空场与多维大气分析' },
       insight: { title: '智能解读', desc: '大模型驱动的自然语言问答' },
     },
   },
@@ -238,6 +238,106 @@ const zh = {
     },
   },
 
+  overviewPlanet: {
+    label: '数据总览星球',
+    mars: '火星',
+    earth: '地球',
+  },
+
+  earthOverview: {
+    title: '地球日数据总览',
+    subtitle: 'MERRA-2 日平均全球场 · 真实日期 · 原始单位',
+    loading: '正在加载地球数据集…',
+    scopeNote: '地球仅开放日数据总览：三维球体、训练与预测仍未开放。全球平均按球面单元面积加权。',
+    variables: {
+      TO3: '臭氧柱浓度',
+      U10M: '东向风',
+      V10M: '北向风',
+      T2M: '2 米温度',
+      SWGDN: '地表短波辐射',
+    },
+    controls: {
+      variable: '变量',
+      units: '原始单位',
+      latitude: '纬度',
+      longitude: '经度',
+    },
+    actions: {
+      retry: '重试',
+      dismiss: '知道了',
+      viewPoint: '查看点位',
+    },
+    timeline: {
+      label: '日期与逐日播放',
+      dataDate: '数据日期',
+      previousDay: '前一天',
+      nextDay: '后一天',
+      play: '播放',
+      pause: '暂停',
+      replayFromFirst: '从首日重播',
+      loadingSelectedDate: '正在加载所选日期',
+      showing: '当前展示',
+    },
+    map: {
+      label: '地球区域场二维地图',
+      showingDate: '当前展示日期',
+      noDataOutside: '区域外无数据',
+      centeredOnZero: '零点居中（正负方向）',
+      basemapLoading: '正在加载本地底图…',
+      basemapFailed: '底图加载失败，数据与经纬网仍可使用',
+      noField: '暂无数据，请选择日期后重试',
+    },
+    legend: {
+      range: '色带范围',
+    },
+    series: {
+      currentPoint: '当前点位值',
+      coverageMean: '全球覆盖平均（球面单元面积加权）',
+      displayedDate: '已展示日期',
+      pointTitle: '所选网格点 · 逐日序列',
+      regionalTitle: '覆盖区域平均 · 逐日序列',
+      regionalNote: '球面单元面积加权均值，不是全球总量',
+      pickPointHint: '在地图点选或输入经纬度以查看点位时间序列',
+      loading: '正在加载序列…',
+      requested: '请求位置',
+      gridPoint: '所选网格点',
+    },
+    info: {
+      title: '数据说明',
+      source: '来源：NASA MERRA-2 日平均臭氧衍生数据',
+      dateRange: '日期范围',
+      grid: '网格',
+      coverage: '覆盖范围',
+      units: '原始单位',
+      dailyMean: '日平均场，不保留逐小时变化',
+      pointSampled: '空间点抽样网格，不是面积平均',
+      areaWeighted: '按球面单元重叠面积加权聚合',
+      globalCoverage: '全球覆盖，包含两极单元',
+      notGlobal: '非全球覆盖，极区不在数据范围内',
+      details: '数据集详情',
+      datasetId: '数据集 ID',
+      version: '版本',
+      calendar: '日历',
+    },
+    errors: {
+      unknown_dataset: '数据集未注册',
+      dataset_overview_not_supported: '该数据集没有地球总览',
+      dataset_version_changed: '版本已变化，请刷新',
+      dataset_unavailable: '数据包不可用',
+      invalid_date: '日期格式应为 YYYY-MM-DD',
+      date_out_of_range: '日期不在可用范围内',
+      invalid_date_range: '开始日期不能晚于结束日期',
+      unsupported_variable: '不支持的变量',
+      point_outside_coverage: '该位置在覆盖范围之外',
+      invalid_response: '返回数据校验失败',
+      network_error: '网络请求失败',
+      invalid_request: '请求无效',
+      invalidCoordinates: '请输入有效的经纬度数值',
+      outsideCoverage: '该位置在覆盖范围之外',
+      datasetUnavailable: '数据包不可用',
+    },
+  },
+
   explore: {
     title: '数据管理',
     subtitle: '数据管理与接入',
@@ -250,7 +350,7 @@ const zh = {
     stepUseDesc: 'MCD 可在数据总览作为整页数据源；OpenMARS 与 NOMAD 仅用于三维臭氧多源展示。',
     defaultDataset: {
       header: '官方数据资产',
-      headerDesc: '这里不只是数据说明，而是 AresVision 的官方火星数据底座。页面围绕数据源覆盖、火星年覆盖、变量完备性、统一分辨率和分析能力标签展开，直接证明平台具备稳定的数据资产供给能力。',
+      headerDesc: '这里展示 AstraAtmos 的官方火星数据，涵盖数据源与火星年覆盖、变量完备性、统一分辨率和分析能力标签。',
       sourceTitle: '数据源说明',
       openmarsSubtitle: 'OpenMARS 再分析数据（臭氧核心）',
       openmarsBody: '提供官方 OpenMARS 臭氧柱浓度图层，统一到 5° x 5° 全球网格，主要用于数据总览三维臭氧多源显示与官方基线对照。',
@@ -401,7 +501,7 @@ const zh = {
       confirmDeleteMsg: '确定删除此数据集？此操作不可恢复。',
       confirmDeleteBtn: '确认删除',
       cancelBtn: '取消',
-      confirmContributeTitle: '贡献数据给 AresVision',
+      confirmContributeTitle: '贡献数据给 AstraAtmos',
       confirmContributeMsg: '您的数据将提交给管理员审核。审核通过后，数据将被添加到网站的默认数据集中，供所有用户使用。',
       confirmContributeBtn: '确认贡献',
       deleteSuccess: '数据集已删除',
@@ -463,7 +563,7 @@ const zh = {
     },
 
     contribute: {
-      bannerText: '帮助丰富 AresVision 数据库，让更多研究者受益',
+      bannerText: '帮助丰富 AstraAtmos 数据库，让更多研究者受益',
       bannerBtn: '贡献数据集',
       historyLink: '查看贡献记录 →',
       step1: '选择',
@@ -859,7 +959,7 @@ const zh = {
       '模型在哪些季节表现最差？',
       '昼夜变化规律是什么？',
     ],
-    welcome: '你好！我是 AresVision AI 助手，可以帮你解读火星臭氧预测结果。\n\n你可以问我：\n• 当前预测场中，哪些区域臭氧偏差最大？\n• 为什么极地在 Ls=200° 附近出现臭氧峰值？\n• 沙尘暴对臭氧分布有什么影响？',
+    welcome: '你好！我是 AstraAtmos AI 助手，可以帮你解读行星大气数据与预测结果。\n\n你可以问我：\n• 当前预测场中，哪些区域偏差最大？\n• 不同环境因子如何影响大气变量？\n• 如何比较不同模型的预测表现？',
   },
 
   modelTraining: {
@@ -1017,11 +1117,10 @@ const zh = {
 
   about: {
     title: '关于项目',
-    subtitle: '关于 AresVision',
+    subtitle: '关于 AstraAtmos',
     description:
-      '智绘赤星 (AresVision) 是一个面向火星大气科学研究的臭氧预测与可视化平台，' +
-      '基于 OpenMARS 再分析数据和 MCD 6.1 气候模拟数据，运用 PredRNNv2 时空深度学习模型' +
-      '实现火星全球臭氧柱浓度的多步预测。',
+      'AstraAtmos（行星大气实验室）是面向行星大气科学研究的数据分析、模型训练与预测实验平台，' +
+      '当前支持火星臭氧训练与预测，以及地球 MERRA-2 数据分析。地球训练与预测尚未开放，更多行星与变量预测任务将逐步扩展。',
     techCats: {
       frontend: '前端',
       backend: '后端',
@@ -1166,7 +1265,7 @@ const zh = {
     resolveBtn: '标记已处理',
     resolveSuccess: '已标记为已处理',
     title: '意见反馈',
-    subtitle: '帮助我们改进 AresVision',
+    subtitle: '帮助我们改进 AstraAtmos',
     typeLabel: '反馈类型',
     typeBug: 'Bug',
     typeSuggestion: '建议',

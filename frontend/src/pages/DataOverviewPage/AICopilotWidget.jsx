@@ -150,8 +150,6 @@ Requirements:
   const {
     globalTimeLs,
     activeAnalysisMode,
-    leftPanelWidth,
-    rightPanelWidth,
     marsYear,
     selectedCoordinate,
     expandedCard,
@@ -160,8 +158,8 @@ Requirements:
     getAiInsight,
   } = useDataOverview();
 
-  const bubbleWidth = `clamp(300px, calc(100vw - ${leftPanelWidth + rightPanelWidth + 220}px), 420px)`;
-  const bubbleBg = isLight ? 'rgba(255,255,255,0.9)' : 'rgba(10, 14, 23, 0.85)';
+  const bubbleWidth = 'clamp(300px, calc(100vw - var(--overview-scene-left) - var(--overview-scene-right) - 220px), 420px)';
+  const bubbleBg = 'var(--overview-panel-bg-strong)';
   const bubbleShadow = isLight
     ? '0 12px 28px rgba(15,23,42,0.16), inset 0 0 10px rgba(74, 158, 255, 0.08)'
     : '0 8px 32px rgba(74, 158, 255, 0.2), inset 0 0 10px rgba(74, 158, 255, 0.1)';
@@ -246,10 +244,11 @@ Requirements:
 
   return (
     <div
+      className="overview-copilot-anchor overview-overlay-anchor"
       style={{
         position: 'fixed',
-        bottom: '100px',
-        right: `${rightPanelWidth + 40}px`,
+        bottom: 'calc(var(--overview-timeline-bottom) + 82px)',
+        right: 'calc(var(--overview-scene-right) + var(--overview-overlay-gap))',
         zIndex: 2500,
         display: 'flex',
         alignItems: 'flex-end',

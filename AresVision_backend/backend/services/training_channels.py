@@ -1,6 +1,7 @@
 import json
 from typing import Any, Optional
 
+from services.dataset_identity import resolve_dataset_id, require_training_dataset
 from training_backbones.model_zoo import normalize_model_architecture, normalize_use_sphere
 
 
@@ -127,8 +128,10 @@ def _freeze_mode(value: Any) -> str:
 
 
 def _training_dataset(value: Any) -> str:
-    dataset = _safe_string(value, TRAINING_DATASET_OPENMARS_MCD).lower()
-    return dataset if dataset in TRAINING_DATASET_IDS else TRAINING_DATASET_OPENMARS_MCD
+    # New training configurations are parsed strictly: unknown or not yet
+    # supported datasets are rejected instead of silently falling back.
+    dataset_id = resolve_dataset_id(None, {"training_dataset": value})
+    return require_training_dataset(dataset_id)
 
 
 def _positive_float(

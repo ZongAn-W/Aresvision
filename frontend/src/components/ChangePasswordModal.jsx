@@ -142,7 +142,7 @@ function ModalContent({ onClose }) {
 
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 700, letterSpacing: '0.12em', color: C.blue, fontFamily: 'Orbitron, sans-serif', marginBottom: 4 }}>
-              ARESVISION
+              ASTRAATMOS
             </div>
             <div style={{ fontSize: 'calc(18px * var(--font-scale, 1))', fontWeight: 700, color: titleColor, fontFamily: 'Orbitron, sans-serif' }}>
               {t('auth.changePassword')}

@@ -113,7 +113,7 @@ export default function HomePage({ onNavigate }) {
           transform: showTitle ? 'translateY(0)' : 'translateY(30px)',
           transition: 'all 1s cubic-bezier(0.22,1,0.36,1)',
         }}>
-          ARESVISION
+          ASTRAATMOS
         </h1>
 
         <div style={{

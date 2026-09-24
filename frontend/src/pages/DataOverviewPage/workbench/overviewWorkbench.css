@@ -1,0 +1,247 @@
+/**
+ * 共用分析工作台外壳样式。
+ *
+ * 桌面为全屏三维场景 + 左右固定面板 + 底部时间轴；窄屏（≤1120px）改为
+ * 顺序布局，避免固定面板挤掉球体，并保证 390px 无横向溢出。
+ */
+
+.overview-shell {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  overflow: hidden;
+  --overview-left-width: 300px;
+  --overview-right-width: 540px;
+  --overview-navbar-height: 70px;
+  --overview-panel-bg: rgba(10, 12, 18, 0.62);
+  --overview-panel-bg-strong: rgba(10, 12, 18, 0.82);
+  --overview-panel-border: rgba(255, 255, 255, 0.08);
+  --overview-panel-blur: 20px;
+  --overview-card-radius: 16px;
+  --overview-control-radius: 12px;
+  --overview-accent: #ff6b35;
+  --overview-scene-left: 300px;
+  --overview-scene-right: 540px;
+  --overview-timeline-bottom: 18px;
+  --overview-overlay-gap: 14px;
+  --overview-scene-offset: 0px;
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse at 50% 48%, rgba(20, 48, 79, 0.22), transparent 44%),
+    radial-gradient(ellipse at 70% 30%, rgba(56, 189, 248, 0.08), transparent 30%),
+    linear-gradient(180deg, #030711 0%, #060a12 58%, #02040a 100%);
+}
+
+.overview-shell.is-light {
+  --overview-panel-bg: rgba(255, 255, 255, 0.86);
+  --overview-panel-bg-strong: rgba(255, 255, 255, 0.94);
+  --overview-panel-border: rgba(15, 23, 42, 0.10);
+  background:
+    radial-gradient(ellipse at 50% 48%, rgba(148, 190, 226, 0.2), transparent 44%),
+    linear-gradient(180deg, #e8f0f8 0%, #dce7f3 58%, #c9d8e8 100%);
+}
+
+.overview-shell--external {
+  width: 100vw;
+  height: 100vh;
+}
+
+.overview-shell__scene {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+}
+
+.overview-panel-surface {
+  background: var(--overview-panel-bg);
+  border-color: var(--overview-panel-border);
+  backdrop-filter: blur(var(--overview-panel-blur));
+  -webkit-backdrop-filter: blur(var(--overview-panel-blur));
+}
+
+.overview-shell__sidebar,
+.overview-shell__analysis {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.overview-shell__sidebar {
+  position: fixed;
+  left: 0;
+  top: var(--overview-navbar-height);
+  width: var(--overview-left-width);
+  height: calc(100vh - var(--overview-navbar-height));
+  z-index: 1000;
+  border-right: 1px solid var(--overview-panel-border);
+}
+
+.overview-shell__analysis {
+  position: fixed;
+  right: 0;
+  top: var(--overview-navbar-height);
+  width: var(--overview-right-width);
+  height: calc(100vh - var(--overview-navbar-height));
+  z-index: 1000;
+  border-left: 1px solid var(--overview-panel-border);
+}
+
+.overview-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 20;
+  cursor: col-resize;
+}
+
+.overview-resizer--left { right: -4px; }
+.overview-resizer--right { left: -4px; }
+
+.overview-overlay-anchor,
+.overview-timeline-anchor {
+  --overview-anchor-left: var(--overview-scene-left);
+  --overview-anchor-right: var(--overview-scene-right);
+}
+
+.overview-copilot-anchor {
+  max-width: calc(100vw - var(--overview-scene-left) - var(--overview-scene-right) - 28px);
+}
+
+.overview-shell--compact {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: auto;
+  padding: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.overview-shell--compact .overview-shell__sidebar,
+.overview-shell--compact .overview-shell__analysis {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: auto;
+  border: 0;
+  z-index: auto;
+}
+
+.overview-shell--compact .overview-shell__scene {
+  position: relative;
+  inset: auto;
+  order: 0;
+  height: 42vh;
+  min-height: 280px;
+  border-radius: var(--overview-card-radius);
+  overflow: hidden;
+}
+
+.overview-shell--compact .overview-shell__sidebar { order: 1; }
+.overview-shell--compact .overview-shell__timeline { order: 2; }
+.overview-shell--compact .overview-shell__analysis { order: 3; }
+.overview-shell--compact .overview-shell__overlays { position: absolute; inset: 0; z-index: 15; pointer-events: none; }
+
+.overview-shell__scene--compact {
+  position: relative;
+  inset: auto;
+  height: 46vh;
+  min-height: 280px;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.overview-shell__compact-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overview-shell__compact-panel {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+@media (max-width: 1120px) {
+  .overview-shell--compact .overview-timeline-anchor {
+    position: relative !important;
+    inset: auto !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  .overview-shell--compact .overview-copilot-anchor {
+    position: absolute !important;
+    left: auto !important;
+    right: var(--overview-overlay-gap) !important;
+    bottom: var(--overview-overlay-gap) !important;
+    width: auto !important;
+  }
+
+  .overview-shell--compact .overview-globe-legend-compact,
+  .overview-shell--compact .overview-earth-legend {
+    position: absolute !important;
+    left: auto !important;
+    right: var(--overview-overlay-gap) !important;
+    bottom: var(--overview-overlay-gap) !important;
+    width: max-content !important;
+    max-width: calc(100% - 2 * var(--overview-overlay-gap));
+  }
+
+  .overview-shell--compact .overview-copilot-anchor {
+    right: var(--overview-overlay-gap) !important;
+    bottom: var(--overview-overlay-gap) !important;
+    max-width: calc(100% - 2 * var(--overview-overlay-gap));
+  }
+
+  .overview-shell--compact .overview-shell__compact-panel :is(table, pre, code) {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .overview-shell--compact {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .overview-shell__scene--compact {
+    height: 42vh;
+    min-height: 250px;
+    border-radius: var(--overview-card-radius);
+  }
+}
+
+/* 卡片图表的 Plotly 模式栏：与火星卡片一致，挪到右下角并统一配色。 */
+.overview-card-plot .modebar {
+  top: auto !important;
+  bottom: 0 !important;
+  right: 18px !important;
+  left: auto !important;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  padding: 2px 4px;
+  display: flex !important;
+  background: transparent;
+}
+
+.overview-card-plot .modebar-group {
+  display: flex !important;
+  margin-bottom: 0 !important;
+}
+
+.overview-card-plot .modebar-btn svg {
+  fill: rgba(148, 163, 184, 0.78) !important;
+}
+
+.overview-card-plot .modebar-btn:hover svg,
+.overview-card-plot .modebar-btn.active svg {
+  fill: #ff6b35 !important;
+}

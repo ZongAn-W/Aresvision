@@ -1,4 +1,6 @@
-# AresVision Linux 一键部署说明
+# AstraAtmos Linux 一键部署说明
+
+平台原名 AresVision；部署目录、脚本和服务名沿用原名称，现有配置无需迁移。
 
 适用环境：Ubuntu 22.04 GPU 服务器，不依赖 Docker。
 

@@ -510,13 +510,13 @@ export default function AuthModal() {
           {/* Header */}
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 700, letterSpacing: '0.12em', color: C.blue, fontFamily: 'Orbitron, sans-serif', marginBottom: 4 }}>
-              ARESVISION
+              ASTRAATMOS
             </div>
             <div style={{ fontSize: 'calc(20px * var(--font-scale, 1))', fontWeight: 700, color: titleColor, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.02em' }}>
               {forgotMode ? t('auth.forgotTitle') : (tab === 'login' ? t('auth.loginTitle') : t('auth.registerTitle'))}
             </div>
             <div style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: subtitleClr, marginTop: 4 }}>
-              Mars Ozone Intelligence Platform
+              {t('home.desc')}
             </div>
           </div>
 

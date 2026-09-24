@@ -19,6 +19,7 @@ from schemas.training import (
     TrainingWeightFileResponse,
 )
 from services.inference_service import InferenceService
+from services.dataset_identity import DatasetRequestError
 from services.training_service import TrainingService
 from services.training_weight_service import TrainingWeightService
 from services.training_tag_service import TagNameConflict, TrainingTagService
@@ -230,8 +231,14 @@ async def start_training(
             training_weight_service=_service_weight(request),
             is_admin=_is_admin(current_user),
             tag_ids=req.tag_ids,
+            dataset_id=req.dataset_id,
+            dataset_registry=getattr(request.app.state, "dataset_registry", None),
         )
         return (await _serialize_tasks([task], current_user))[0]
+    except DatasetRequestError as e:
+        raise HTTPException(status_code=e.status_code, detail={
+            "code": e.code, "message": str(e),
+        })
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:

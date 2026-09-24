@@ -42,6 +42,16 @@ MCD_RAW_3H_DIR = Path(os.getenv(
     DATA_DIR / "MCD_Output_global_10m_ls_lst",
 ))
 NOMAD_DIR = DATA_DIR / "nomad"
+# Registered Earth compact release directory; a relative value resolves against
+# the backend start directory. The path itself is never returned by the API.
+EARTH_MERRA2_DIR = Path(os.getenv(
+    "ARESVISION_EARTH_MERRA2_DIR",
+    DATA_DIR / "earth" / "merra2_daily_v2",
+)).expanduser()
+EARTH_MERRA2_V1_DIR = Path(os.getenv(
+    "ARESVISION_EARTH_MERRA2_V1_DIR",
+    DATA_DIR / "earth" / "merra2_daily_v1",
+)).expanduser()
 MODEL_DIR = BASE_DIR / "models" / "predrnnv2"
 TRAINING_SCRIPTS_DIR = BASE_DIR / "models" / "training_scripts"
 TRAINING_RESULTS_DIR = BASE_DIR / "models" / "training_results"
