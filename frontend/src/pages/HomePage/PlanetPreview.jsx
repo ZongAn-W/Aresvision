@@ -1,14 +1,112 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import {
+  FULL_CAPABILITIES,
+  HOME_DRAG,
+  applyDragRotation,
+  clampVelocity,
+  decayVelocity,
+  dragRotation,
+  isInertiaStopKey,
+  rotationForKey,
+  shouldStartDrag,
+  shouldStopInertia,
+} from './homePointerInteraction';
 
 const TEXTURE = '/earth/blue-marble-2048.png';
+const BASE_TILT = 0.16;
+const BASE_YAW = 2.8;
+const BASE_ROLL = 0.12;
+const AUTO_ROTATE_SPEED = 0.045; // rad / s
+const RELEASE_IDLE_MS = 120; // 松手前停顿超过该时长就不再保留惯性
 
 // A texture-only illustration: no analytical field or live measurements are shown.
-export default function PlanetPreview({ rotating, label }) {
+// 旋转状态保存在 ref 中，动画循环直接读取，指针移动不触发 React 重新渲染。
+export default function PlanetPreview({ rotating, label, capabilities = FULL_CAPABILITIES }) {
   const mountRef = useRef(null);
   const rotatingRef = useRef(rotating);
+  const capabilitiesRef = useRef(capabilities);
+  const rotationRef = useRef({ yaw: 0, pitch: 0 });
+  const dragRef = useRef({ active: false, pointerId: null, lastX: 0, lastY: 0, lastTime: 0, velocity: 0 });
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => { rotatingRef.current = rotating; }, [rotating]);
+  useEffect(() => { capabilitiesRef.current = capabilities; }, [capabilities]);
+
+  const endDrag = useCallback((pointerId) => {
+    const drag = dragRef.current;
+    if (!drag.active) return;
+    if (pointerId != null && drag.pointerId !== pointerId) return;
+    drag.active = false;
+    drag.pointerId = null;
+    // 减少动态效果或粗指针设备不保留惯性。
+    if (!capabilitiesRef.current.inertia) drag.velocity = 0;
+    setDragging(false);
+  }, []);
+
+  const handlePointerDown = (event) => {
+    if (!shouldStartDrag(event, capabilitiesRef.current)) return;
+    const drag = dragRef.current;
+    drag.active = true;
+    drag.pointerId = event.pointerId;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    drag.lastTime = event.timeStamp;
+    drag.velocity = 0;
+    // 指针捕获保证拖出地球后仍能连续接收事件。
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDragging(true);
+  };
+
+  const handlePointerMove = (event) => {
+    const drag = dragRef.current;
+    if (!drag.active || event.pointerId !== drag.pointerId) return;
+    const delta = dragRotation(event.clientX - drag.lastX, event.clientY - drag.lastY);
+    const elapsed = Math.max((event.timeStamp - drag.lastTime) / 1000, 1 / 240);
+    rotationRef.current = applyDragRotation(rotationRef.current, delta);
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    drag.lastTime = event.timeStamp;
+    // 换算成 60 fps 基准的每帧角度，作为松手后的惯性初速度。
+    drag.velocity = clampVelocity(delta.yaw / (elapsed * 60));
+  };
+
+  const handlePointerEnd = (event) => {
+    const drag = dragRef.current;
+    if (!drag.active || event.pointerId !== drag.pointerId) return;
+    if (event.timeStamp - drag.lastTime > RELEASE_IDLE_MS) drag.velocity = 0;
+    endDrag(event.pointerId);
+  };
+
+  const handlePointerCancel = (event) => {
+    dragRef.current.velocity = 0;
+    handlePointerEnd(event);
+  };
+
+  const handleLostPointerCapture = (event) => {
+    // 正常松手已经结束拖拽；此处仍在拖拽说明捕获异常丢失，不再保留惯性。
+    if (dragRef.current.active) dragRef.current.velocity = 0;
+    handlePointerEnd(event);
+  };
+
+  const handlePointerLeave = (event) => {
+    // 未成功捕获指针时的兜底：松开按键后离开元素也要结束拖拽。
+    if (event.buttons === 0) endDrag(event.pointerId);
+  };
+
+  const handleKeyDown = (event) => {
+    if (!capabilitiesRef.current.keyboard) return;
+    if (isInertiaStopKey(event.key)) {
+      dragRef.current.velocity = 0;
+      event.preventDefault();
+      return;
+    }
+    const delta = rotationForKey(event.key);
+    if (!delta) return;
+    event.preventDefault();
+    dragRef.current.velocity = 0;
+    rotationRef.current = applyDragRotation(rotationRef.current, delta);
+  };
 
   useEffect(() => {
     const container = mountRef.current;
@@ -38,7 +136,7 @@ export default function PlanetPreview({ rotating, label }) {
       });
       resources.push(geometry, material);
       const globe = new THREE.Mesh(geometry, material);
-      globe.rotation.set(0.16, 2.8, 0.12);
+      globe.rotation.set(BASE_TILT, BASE_YAW, BASE_ROLL);
       scene.add(globe);
 
       // A thin decorative atmosphere follows the sphere, not a measured field.
@@ -105,7 +203,22 @@ export default function PlanetPreview({ rotating, label }) {
         const delta = Math.min((now - previous) / 1000, 0.05);
         previous = now;
         if (visible && !document.hidden) {
-          if (rotatingRef.current && !motion.matches) globe.rotation.y += delta * 0.045;
+          const drag = dragRef.current;
+          if (drag.active) {
+            // 拖拽期间暂停自动旋转，朝向只跟随指针。
+          } else if (!shouldStopInertia(drag.velocity)) {
+            rotationRef.current = applyDragRotation(rotationRef.current, { yaw: drag.velocity, pitch: 0 });
+            drag.velocity = capabilitiesRef.current.inertia
+              ? decayVelocity(drag.velocity, HOME_DRAG.damping, delta)
+              : 0;
+          } else {
+            if (drag.velocity !== 0) drag.velocity = 0;
+            if (rotatingRef.current && !motion.matches) {
+              rotationRef.current = applyDragRotation(rotationRef.current, { yaw: delta * AUTO_ROTATE_SPEED, pitch: 0 });
+            }
+          }
+          const rotation = rotationRef.current;
+          globe.rotation.set(BASE_TILT + rotation.pitch, BASE_YAW + rotation.yaw, BASE_ROLL);
           renderer.render(scene, camera);
         }
         frame = requestAnimationFrame(render);
@@ -128,8 +241,28 @@ export default function PlanetPreview({ rotating, label }) {
     };
   }, []);
 
+  const className = [
+    'home-planet',
+    capabilities.drag ? 'home-planet--interactive' : '',
+    dragging ? 'home-planet--dragging' : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <div className="home-planet" role="img" aria-label={label}>
+    <div
+      className={className}
+      role="img"
+      aria-label={label}
+      aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
+      tabIndex={0}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerCancel}
+      onLostPointerCapture={handleLostPointerCapture}
+      onPointerLeave={handlePointerLeave}
+      onKeyDown={handleKeyDown}
+    >
+      <div className="home-orbit" aria-hidden="true" />
       <div className="home-planet__fallback" aria-hidden="true" />
       <div className="home-planet__canvas" ref={mountRef} />
     </div>
