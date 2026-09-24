@@ -40,11 +40,45 @@ export default function PlanetPreview({ rotating, label }) {
       const globe = new THREE.Mesh(geometry, material);
       globe.rotation.set(0.16, 2.8, 0.12);
       scene.add(globe);
-      scene.add(new THREE.AmbientLight(0xd8eaff, 1.6));
-      const sun = new THREE.DirectionalLight(0xfff7ec, 2.5);
-      sun.position.set(-3, 3, 5);
+
+      // A thin decorative atmosphere follows the sphere, not a measured field.
+      const atmosphereMaterial = new THREE.ShaderMaterial({
+        uniforms: { atmosphereColor: { value: new THREE.Color(0x9ad9ef) } },
+        vertexShader: `
+          varying vec3 vNormal;
+          varying vec3 vViewPosition;
+          void main() {
+            vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+            vNormal = normalize(normalMatrix * normal);
+            vViewPosition = -viewPosition.xyz;
+            gl_Position = projectionMatrix * viewPosition;
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 atmosphereColor;
+          varying vec3 vNormal;
+          varying vec3 vViewPosition;
+          void main() {
+            float facing = clamp(dot(normalize(vNormal), normalize(vViewPosition)), 0.0, 1.0);
+            float edge = pow(1.0 - facing, 5.0);
+            gl_FragColor = vec4(atmosphereColor, edge * 0.3);
+            #include <colorspace_fragment>
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      resources.push(atmosphereMaterial);
+      const atmosphere = new THREE.Mesh(geometry, atmosphereMaterial);
+      atmosphere.scale.setScalar(1.012);
+      globe.add(atmosphere);
+
+      scene.add(new THREE.AmbientLight(0xe6f3ff, 1.9));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.9);
+      sun.position.set(-3, 4, 6);
       scene.add(sun);
-      const rim = new THREE.DirectionalLight(0x82c5ff, 1.2);
+      const rim = new THREE.DirectionalLight(0x9ad9ef, 0.65);
       rim.position.set(3, 1, -2);
       scene.add(rim);
 
@@ -53,7 +87,7 @@ export default function PlanetPreview({ rotating, label }) {
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
         material.map = texture;
-        material.color.set(0xffffff);
+        material.color.set(0xe2f2ff);
         material.needsUpdate = true;
         resources.push(texture);
       });

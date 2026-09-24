@@ -121,9 +121,9 @@ const zh = {
     lab: {
       titleFirst: '行星大气实验室',
       titleSecond: 'AstraAtmos',
-      description: '从大气场的时空变化，到预测模型的训练与比较。在同一个工作台，观察数据、验证想法，推进你的下一次实验。',
+      description: '从地球到火星，追寻大气变化的时空规律。\n让数据启发思考，让想法在实验中得到验证。',
       enter: '进入分析工作台',
-      train: '训练模型',
+      train: '训练火星模型',
       previewLabel: '地球三维示意预览',
       dataFoundation: '研究数据基础',
       dataNote: '再分析数据与气候模拟',

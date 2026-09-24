@@ -120,9 +120,9 @@ const en = {
     lab: {
       titleFirst: 'Planetary Atmosphere Lab',
       titleSecond: 'AstraAtmos',
-      description: 'Trace atmospheric patterns through space and time. Train forecasting models, compare their results, and take your next research idea from observation to experiment.',
+      description: 'From Earth to Mars, uncover atmospheric patterns across space and time. Let data spark new questions, and put your ideas to the test.',
       enter: 'Open analysis workbench',
-      train: 'Train a model',
+      train: 'Train a Mars model',
       previewLabel: 'Earth preview illustration',
       dataFoundation: 'RESEARCH DATA',
       dataNote: 'Reanalysis & climate simulation',

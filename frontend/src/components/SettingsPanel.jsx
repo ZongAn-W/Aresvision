@@ -210,6 +210,8 @@ export default function SettingsPanel({ open, onClose }) {
       {/* 面板主体 */}
       <div
         ref={panelRef}
+        inert={!open}
+        aria-hidden={!open}
         style={{
           position: 'fixed',
           top: 0,
