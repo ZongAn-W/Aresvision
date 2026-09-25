@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from config import MOLA_TOPOGRAPHY_PATH
+from services.netcdf_read_lock import netcdf_read_lock
 
 
 def _as_finite_1d(values: Any, name: str, context: str) -> np.ndarray:
@@ -67,7 +68,7 @@ def load_mola_asset(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         raise FileNotFoundError(f"MOLA topography asset not found: {asset_path}")
 
     try:
-        with netCDF4.Dataset(str(asset_path)) as dataset:
+        with netcdf_read_lock(), netCDF4.Dataset(str(asset_path)) as dataset:
             missing = [
                 name
                 for name in ("elevation", "latitude", "longitude")

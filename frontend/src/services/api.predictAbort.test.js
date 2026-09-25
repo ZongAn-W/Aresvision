@@ -6,8 +6,6 @@ import {
   compareTrainingModelPfi,
   compareTrainingModels,
   fetchErrorDistribution,
-  fetchPerformanceComparison,
-  fetchPerformanceCurve,
   fetchPermutationImportance,
   fetchPredictMetrics,
   runPrediction,
@@ -57,14 +55,8 @@ test('all protected prediction analysis APIs pass AbortSignal to fetch', async (
   await compareTrainingModels([42, 43], { horizon: 3, signal: controller.signal });
   await compareTrainingModelErrorDistributions([42, 43], { horizon: 3, signal: controller.signal });
   await compareTrainingModelPfi([42, 43], { horizon: 3, signal: controller.signal });
-  await fetchPerformanceCurve(body, { dataSource: 'default', signal: controller.signal });
-  await fetchPerformanceComparison([['Temperature']], {
-    dataSource: 'default',
-    marsYear: 27,
-    signal: controller.signal,
-  });
 
-  assert.equal(calls.length, 9);
+  assert.equal(calls.length, 7);
   calls.forEach(({ options }) => {
     assert.equal(options.signal, controller.signal);
   });

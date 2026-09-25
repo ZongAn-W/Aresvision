@@ -4,7 +4,6 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 SCHEMA_SOURCE = (BACKEND_DIR / "schemas" / "predict.py").read_text(encoding="utf-8")
 ROUTER_SOURCE = (BACKEND_DIR / "routers" / "predict.py").read_text(encoding="utf-8")
 SERVICE_SOURCE = (BACKEND_DIR / "services" / "inference_service.py").read_text(encoding="utf-8")
-PREDICT_SERVICE_SOURCE = (BACKEND_DIR / "services" / "predict_service.py").read_text(encoding="utf-8")
 
 
 def test_prediction_schemas_and_queries_allow_the_training_range():
@@ -32,16 +31,6 @@ def test_trained_analysis_routes_preserve_horizon_validation_as_bad_requests():
         assert "raise HTTPException(status_code=400, detail=str(e))" in route_source
 
 
-def test_prediction_routes_offload_heavy_sync_work_to_threads():
-    assert "import asyncio" in ROUTER_SOURCE
-    assert ROUTER_SOURCE.count("await asyncio.to_thread(") >= 6
-    assert "await asyncio.to_thread(ps.predict," in ROUTER_SOURCE
-    assert "await asyncio.to_thread(ps.get_ablation_results," in ROUTER_SOURCE
-    assert "await asyncio.to_thread(ps.get_performance_curve," in ROUTER_SOURCE
-    assert "await asyncio.to_thread(ps.get_error_distribution," in ROUTER_SOURCE
-    assert "await asyncio.to_thread(ps.get_permutation_importance," in ROUTER_SOURCE
-
-
 def test_training_inference_cache_paths_offload_sync_work_to_threads():
     assert "import asyncio" in SERVICE_SOURCE
     assert SERVICE_SOURCE.count("await asyncio.to_thread(") >= 4
@@ -49,14 +38,3 @@ def test_training_inference_cache_paths_offload_sync_work_to_threads():
     assert "await asyncio.to_thread(self._official_task_test_set_metrics," in SERVICE_SOURCE
     assert "await asyncio.to_thread(self._official_task_test_set_arrays," in SERVICE_SOURCE
     assert "await asyncio.to_thread(self._task_permutation_importance_with_context," in SERVICE_SOURCE
-
-
-def test_prediction_service_does_not_mutate_shared_transform_state():
-    assert "self.transforms.y_mean =" not in PREDICT_SERVICE_SOURCE
-    assert "self.transforms.y_std =" not in PREDICT_SERVICE_SOURCE
-    assert "self.transforms.postprocess_output(pred_scaled, y_mean=y_mean, y_std=y_std)" in PREDICT_SERVICE_SOURCE
-
-
-def test_prediction_service_protects_shared_result_cache_with_a_lock():
-    assert "self._result_cache_lock" in PREDICT_SERVICE_SOURCE
-    assert PREDICT_SERVICE_SOURCE.count("with self._result_cache_lock:") >= 2

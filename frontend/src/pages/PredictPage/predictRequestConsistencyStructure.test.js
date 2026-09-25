@@ -7,10 +7,6 @@ import { fileURLToPath } from 'node:url';
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const pageSource = fs.readFileSync(path.join(currentDir, '..', 'PredictPage.jsx'), 'utf8');
 const sidebarSource = fs.readFileSync(path.join(currentDir, 'PredictSidebar.jsx'), 'utf8');
-const workflowSource = fs.readFileSync(
-  path.join(currentDir, 'WorkflowCanvas', 'WorkflowCanvas.jsx'),
-  'utf8'
-);
 
 test('prediction page owns request coordination and context-aware cache restoration', () => {
   assert.match(pageSource, /useRef/);
@@ -89,7 +85,6 @@ test('rendering uses only single-model results matching the current context', ()
   assert.match(pageSource, /metrics=\{activeMetrics\}/);
   assert.match(pageSource, /data=\{activeErrorDistData\}/);
   assert.match(pageSource, /data=\{activePfiData\}/);
-  assert.match(pageSource, /performanceData=\{activePerformanceData\}/);
 });
 
 test('request-owned analysis cache is written only in guarded completion paths', () => {
@@ -109,9 +104,4 @@ test('loading locks every control that can change prediction request context', (
   assert.match(sidebarSource, /disabled=\{requestContextLocked \|\| isSwitchingSource\}/);
   assert.match(sidebarSource, /type="range"[\s\S]*disabled=\{requestContextLocked\}/);
   assert.match(sidebarSource, /type="checkbox"[\s\S]*disabled=\{requestContextLocked\}/);
-});
-
-test('workflow canvas reuses run metrics without a second metrics request', () => {
-  assert.match(workflowSource, /predResult\.metrics/);
-  assert.doesNotMatch(workflowSource, /fetchPredictMetrics/);
 });

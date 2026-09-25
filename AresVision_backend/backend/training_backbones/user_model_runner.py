@@ -26,6 +26,7 @@ if str(BACKEND_DIR) not in sys.path:
 from config import MCD_DIR, MCD_RAW_3H_DIR, MOLA_TOPOGRAPHY_PATH
 from services.dataset_identity import require_training_dataset, resolve_dataset_id
 from services.ozone_units import normalize_ozone_column_units
+from services.netcdf_read_lock import netcdf_read_lock
 from services.transfer_learning_strategy import apply_freeze_strategy
 from training_backbones.uploaded_model_contract import (
     attach_uploaded_model_contract,
@@ -388,7 +389,7 @@ def _load_openmars(
     spatial_shape: Optional[tuple[int, int]] = None
     coordinates_complete = True
     for file_path in sorted(Path(openmars_dir).glob("*.nc"), key=natural_sort_key):
-        with netCDF4.Dataset(str(file_path)) as dataset:
+        with netcdf_read_lock(), netCDF4.Dataset(str(file_path)) as dataset:
             if "o3col" not in dataset.variables:
                 continue
             o3 = _clean_array(dataset.variables["o3col"][:])
@@ -474,7 +475,7 @@ def _load_mcd_features(
     first_var = MCD_VARS_MAP[selected_channels[0]][0]
 
     for file_path in sorted(Path(mcd_dir).glob("*.nc"), key=natural_sort_key):
-        with netCDF4.Dataset(str(file_path)) as dataset:
+        with netcdf_read_lock(), netCDF4.Dataset(str(file_path)) as dataset:
             if first_var not in dataset.variables:
                 continue
             missing = [
@@ -552,7 +553,7 @@ def _load_mcd_overview(
     coordinates_complete = True
 
     for file_path in sorted(Path(mcd_overview_dir).glob("*.nc"), key=natural_sort_key):
-        with netCDF4.Dataset(str(file_path)) as dataset:
+        with netcdf_read_lock(), netCDF4.Dataset(str(file_path)) as dataset:
             if "o3col" not in dataset.variables:
                 raise ValueError(f"MCD overview file {file_path} is missing o3col")
             y = _clean_array(dataset.variables["o3col"][:])
@@ -694,7 +695,7 @@ def _load_raw_3h_mcd(
     coordinates_complete = True
 
     for file_path in sorted(Path(raw_dir).glob("*.nc"), key=natural_sort_key):
-        with netCDF4.Dataset(str(file_path)) as dataset:
+        with netcdf_read_lock(), netCDF4.Dataset(str(file_path)) as dataset:
             if "O3COL" not in dataset.variables:
                 continue
             if "lat" not in dataset.variables:
@@ -785,7 +786,7 @@ def _load_mcd_full_training_dataset(
 ]:
     has_raw_files = False
     for file_path in sorted(Path(data_dir).glob("*.nc"), key=natural_sort_key):
-        with netCDF4.Dataset(str(file_path)) as dataset:
+        with netcdf_read_lock(), netCDF4.Dataset(str(file_path)) as dataset:
             if "O3COL" in dataset.variables:
                 has_raw_files = True
                 break
@@ -815,7 +816,15 @@ def prepare_tensors(
     return_ls: bool = False,
     return_coordinates: bool = False,
     require_coordinates: Optional[bool] = None,
+    return_scaled_volume: bool = False,
 ):
+    """加载并标准化数据。
+
+    默认返回按样本展开的滑窗张量（训练需要全部样本）。``return_scaled_volume=True``
+    时改为返回 :class:`~services.prediction_volume_cache.ScaledVolume`：包含标准化后的
+    连续体积与统计量，由调用方按需切出单个窗口。数值内容与默认模式一致，只是不再
+    物化 ``sample_count`` 份滑窗。
+    """
     selected = parse_selected_channels(selected_channels)
     dataset = normalize_training_dataset(training_dataset)
     window = int(window)
@@ -919,6 +928,24 @@ def prepare_tensors(
     y_mean = float(y_train_part.mean())
     y_std = float(y_train_part.std())
     y_scaled = (y_raw - y_mean) / (y_std + 1e-6)
+
+    if return_scaled_volume:
+        # 预测路径只需要一个滑窗：返回连续体积，由调用方切出所需窗口，
+        # 避免为整条时间轴物化全部滑窗样本（会放大到数 GB）。
+        from services.prediction_volume_cache import ScaledVolume
+
+        return ScaledVolume(
+            values=x_scaled,
+            y_scaled=y_scaled,
+            ls=None if ls_raw is None else ls_raw,
+            y_mean=y_mean,
+            y_std=y_std,
+            height=height,
+            width=width,
+            latitude=None if target_latitude is None else target_latitude.astype(np.float32),
+            longitude=None if target_longitude is None else target_longitude.astype(np.float32),
+            split_idx=split_idx,
+        )
 
     x_seq: list[np.ndarray] = []
     y_seq: list[np.ndarray] = []

@@ -14,15 +14,6 @@ import { useTrainingTags } from '../../components/TrainingTags/useTrainingTags';
 import { TagChips, TagFilter } from '../../components/TrainingTags/TagControls';
 import { addVisibleSelection, filterTaggedTasks } from '../../components/TrainingTags/trainingTagFilters';
 
-const SHORTHAND_MAP = {
-  Temperature: 'T',
-  Dust_Optical_Depth: 'D',
-  Surface_Pressure: 'P',
-  Solar_Flux_DN: 'S',
-  U_Wind: 'U',
-  V_Wind: 'V',
-};
-
 function SectionTitle({ title, subtitle, accent = C.ice }) {
   return (
     <div style={{ marginBottom: 14 }}>
@@ -571,51 +562,6 @@ function ModelSourceControl({
   );
 }
 
-function SelectionPerformance({ currentMetrics, perfLoading, handleFetchPerformance, precision, t, isZh }) {
-  const metrics = [
-    { label: t('predict.globalR2'), val: currentMetrics?.global_r2, color: C.green },
-    { label: t('predict.globalRMSE'), val: currentMetrics?.global_rmse, color: C.mars },
-    { label: t('predict.globalMAE'), val: currentMetrics?.global_mae, color: C.mars },
-    { label: t('predict.globalSSIM'), val: currentMetrics?.global_ssim, color: C.green },
-  ];
-
-  return (
-    <GlowCard style={{ padding: 20 }}>
-      <SectionTitle
-        title={t('predict.selectionPerfTitle')}
-        subtitle={isZh ? '当前变量组合对应的全局评估结果。' : 'Global metrics for the current variable selection.'}
-      />
-
-      {perfLoading ? (
-        <div style={{ padding: '8px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 14, height: 14, border: `2px solid ${C.border}`, borderTop: `2px solid ${C.green}`, borderRadius: '50%', animation: 'spin-slow 0.8s linear infinite' }} />
-          <span style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50 }}>{isZh ? '正在计算…' : 'Computing...'}</span>
-        </div>
-      ) : currentMetrics ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          {metrics.map((m) => (
-            <div key={m.label} style={{ padding: 12, background: `${m.color}10`, borderRadius: 12, border: `1px solid ${m.color}33` }}>
-              <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice40, fontWeight: 600 }}>{m.label}</div>
-              <div style={{ fontSize: 'calc(18px * var(--font-scale, 1))', color: m.color, fontWeight: 800, fontFamily: 'var(--font-display)', marginTop: 6 }}>
-                {fmtNum(m.val || 0, precision)}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gap: 12 }}>
-          <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50, lineHeight: 1.6 }}>
-            {t('predict.perfEmptyHintSidebar')}
-          </div>
-          <ActionButton secondary onClick={handleFetchPerformance}>
-            {t('predict.generateBtn')}
-          </ActionButton>
-        </div>
-      )}
-    </GlowCard>
-  );
-}
-
 function ModelHyperparams({ t, isZh }) {
   const params = [
     { label: 'Epochs', val: '30', color: C.mars },
@@ -678,21 +624,12 @@ export default function PredictSidebar({
   toggleVar,
   VARIABLES,
   handlePredict,
-  compareConfigs,
-  selectedCompareIds,
-  setSelectedCompareIds,
-  setCompareConfigs,
-  currentMetrics,
-  perfLoading,
-  handleFetchPerformance,
   precision,
 }) {
   const t = useT();
   const { settings } = useSettings();
   const isZh = settings?.language !== 'en';
   const canShowInputVariables = analysisVisibility.inputVariables !== false;
-  const canShowPerformanceComparison = analysisVisibility.performanceComparison !== false;
-  const canShowSelectionPerformance = analysisVisibility.selectionPerformance !== false;
   const canShowSystemHyperparams = analysisVisibility.systemHyperparams !== false;
   const isCompareMode = modelMode === PREDICT_MODEL_MODE_COMPARE;
   const compareSelection = getCompareSelectionState(selectedCompareTrainingTaskIds);
@@ -700,32 +637,6 @@ export default function PredictSidebar({
   const years = Array.isArray(availableMarsYears) && availableMarsYears.length > 0
     ? availableMarsYears
     : [27, 28];
-
-  const handleSeed32 = () => {
-    const vars = ['Temperature', 'Dust_Optical_Depth', 'Solar_Flux_DN', 'U_Wind', 'V_Wind'];
-    const combinations = [];
-    for (let i = 0; i < (1 << vars.length); i += 1) {
-      const combo = [];
-      for (let j = 0; j < vars.length; j += 1) {
-        if ((i >> j) & 1) combo.push(vars[j]);
-      }
-      combinations.push(combo);
-    }
-    const newConfigs = combinations.map((combo, idx) => {
-      const shorthand = combo.map((v) => SHORTHAND_MAP[v] || v[0]).sort().join('') || 'Baseline';
-      return { id: `seed_${idx}`, label: shorthand, vars: combo };
-    });
-    setCompareConfigs(newConfigs);
-    setSelectedCompareIds(newConfigs.map((c) => c.id));
-  };
-
-  const handleSelectAll = () => {
-    if (selectedCompareIds.length === compareConfigs.length && compareConfigs.length > 0) {
-      setSelectedCompareIds([]);
-    } else {
-      setSelectedCompareIds(compareConfigs.map((c) => c.id));
-    }
-  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -905,124 +816,8 @@ export default function PredictSidebar({
         </GlowCard>
       ) : null}
 
-      {canShowSelectionPerformance ? (
-        <SelectionPerformance
-          currentMetrics={currentMetrics}
-          perfLoading={perfLoading}
-          handleFetchPerformance={handleFetchPerformance}
-          precision={precision}
-          t={t}
-          isZh={isZh}
-        />
-      ) : null}
-
       {canShowSystemHyperparams ? <ModelHyperparams t={t} isZh={isZh} /> : null}
 
-      {canShowPerformanceComparison ? (
-        <GlowCard style={{ padding: 20 }}>
-        <SectionTitle
-          title={t('predict.matrix.title')}
-          subtitle={isZh ? '管理用于性能比较的变量组合。' : 'Manage the variable combinations used for performance comparison.'}
-          accent={C.green}
-        />
-
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-          <button
-            onClick={handleSelectAll}
-            style={{ padding: '7px 12px', background: 'rgba(74,207,172,0.12)', border: `1px solid rgba(74,207,172,0.30)`, borderRadius: 999, color: C.green, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700, cursor: 'pointer' }}
-          >
-            {t('predict.matrix.selectAll')}
-          </button>
-          <button
-            onClick={handleSeed32}
-            style={{ padding: '7px 12px', background: 'rgba(156,123,234,0.12)', border: `1px solid rgba(156,123,234,0.30)`, borderRadius: 999, color: C.purple, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700, cursor: 'pointer' }}
-          >
-            {t('predict.matrix.seed32')}
-          </button>
-        </div>
-
-        <div style={{ maxHeight: 280, overflowY: 'auto', overflowX: 'hidden', marginBottom: 12, paddingRight: 4, background: C.bgMuted, borderRadius: 12, border: `1px solid ${C.border}` }}>
-          {compareConfigs.map((c) => {
-            const active = selectedCompareIds.includes(c.id);
-            return (
-              <div
-                key={c.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '8px 12px',
-                  borderBottom: `1px solid ${C.border}`,
-                  background: active ? 'rgba(74,207,172,0.08)' : 'transparent',
-                }}
-              >
-                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', flex: 1 }}>
-                  <input
-                    type="checkbox"
-                    checked={active}
-                    onChange={() => {
-                      setSelectedCompareIds((prev) => (
-                        prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id]
-                      ));
-                    }}
-                    style={{ accentColor: C.green }}
-                  />
-                  <span style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: active ? C.ice : C.ice60 }}>
-                    {c.label}
-                  </span>
-                </label>
-
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setCompareConfigs((prev) => prev.filter((pc) => pc.id !== c.id));
-                    setSelectedCompareIds((prev) => prev.filter((pid) => pid !== c.id));
-                  }}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: C.ice40,
-                    fontSize: 'calc(16px * var(--font-scale, 1))',
-                    cursor: 'pointer',
-                    padding: '4px 6px',
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
-
-          {compareConfigs.length === 0 ? (
-            <div style={{ padding: 20, textAlign: 'center', fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50, lineHeight: 1.6 }}>
-              {t('predict.matrix.emptyHint')}
-            </div>
-          ) : null}
-        </div>
-
-        <button
-          onClick={() => {
-            const sortedVars = [...selectedVars].sort();
-            const exists = compareConfigs.find((c) => {
-              const cVars = [...c.vars].sort();
-              return cVars.length === sortedVars.length && cVars.every((v, i) => v === sortedVars[i]);
-            });
-            if (exists) {
-              if (!selectedCompareIds.includes(exists.id)) setSelectedCompareIds((prev) => [...prev, exists.id]);
-              return;
-            }
-            const newId = `custom_${Date.now()}`;
-            const prefix = selectedVars.length === 0 ? 'Baseline' : selectedVars.map((v) => SHORTHAND_MAP[v] || v[0]).sort().join('');
-            setCompareConfigs((prev) => [...prev, { id: newId, label: prefix, vars: [...selectedVars] }]);
-            setSelectedCompareIds((prev) => [...prev, newId]);
-          }}
-          style={{ width: '100%', padding: '11px 0', background: C.bgMuted, border: `1px dashed ${C.borderStrong}`, borderRadius: 12, color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 600, cursor: 'pointer' }}
-        >
-          {t('predict.matrix.addBtn')}
-        </button>
-        </GlowCard>
-      ) : null}
     </div>
   );
 }

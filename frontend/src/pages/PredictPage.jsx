@@ -17,8 +17,6 @@ import SectionTitle from '../components/SectionTitle';
 import {
   runPrediction,
   fetchPredictMetrics,
-  fetchPerformanceCurve,
-  fetchPerformanceComparison,
   fetchErrorDistribution,
   fetchPermutationImportance,
   fetchDataInfo,
@@ -32,7 +30,6 @@ import { VARIABLE_DEFS, VIEW_MODE_IDS, TRIPTYCH_PANEL_DEFS } from './PredictPage
 import PredictSidebar from './PredictPage/PredictSidebar';
 import PredictDisplay from './PredictPage/PredictDisplay';
 import PredictMetrics from './PredictPage/PredictMetrics';
-import PredictBarChart from './PredictPage/PredictBarChart';
 import PredictFullscreenHUD from './PredictPage/PredictFullscreenHUD';
 import ErrorDistributionChart from './PredictPage/ErrorDistributionChart';
 import PermutationImportanceChart from './PredictPage/PermutationImportanceChart';
@@ -69,20 +66,6 @@ import {
   resolvePredictionHorizonLimit,
 } from './PredictPage/predictionHorizon';
 import { validatePredictCacheTrainingTasks } from './PredictPage/predictCacheTaskValidation';
-
-const SHORTHAND_MAP = {
-  Temperature: 'T',
-  Dust_Optical_Depth: 'D',
-  Surface_Pressure: 'P',
-  Solar_Flux_DN: 'S',
-  U_Wind: 'U',
-  V_Wind: 'V',
-};
-
-const getShorthands = (vars) => {
-  if (!vars || vars.length === 0) return 'baseline';
-  return vars.map((v) => SHORTHAND_MAP[v] || v[0]).sort().join('');
-};
 
 export default function PredictPage() {
   const t = useT();
@@ -159,11 +142,9 @@ export default function PredictPage() {
 
   const [performanceData, setPerformanceData] = useState(null);
   const [performanceKey, setPerformanceKey] = useState(null);
-  const [perfLoading, setPerfLoading] = useState(false);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [errorDistLoading, setErrorDistLoading] = useState(false);
   const [pfiLoading, setPfiLoading] = useState(false);
-  const [activePerfMetric, setActivePerfMetric] = useState('r2');
 
   const [compareConfigs, setCompareConfigs] = useState([]);
   const [selectedCompareIds, setSelectedCompareIds] = useState([]);
@@ -280,10 +261,6 @@ export default function PredictPage() {
   const activeMetrics = hasCurrentSingleResult ? metrics : null;
   const activeErrorDistData = hasCurrentSingleResult ? errorDistData : null;
   const activePfiData = hasCurrentSingleResult ? pfiData : null;
-  const activePerformanceData = hasCurrentSingleResult
-    && performanceKey === currentPerformanceContextKey
-    ? performanceData
-    : null;
   const activeError = previousRequestContextKeyRef.current === currentPageRequestContextKey
     ? error
     : null;
@@ -291,7 +268,6 @@ export default function PredictPage() {
     || metricsLoading
     || errorDistLoading
     || pfiLoading
-    || perfLoading
     || compareTrainingLoading
     || compareTrainingErrorLoading
     || compareTrainingPfiLoading;
@@ -341,7 +317,6 @@ export default function PredictPage() {
     setMetricsLoading(false);
     setErrorDistLoading(false);
     setPfiLoading(false);
-    setPerfLoading(false);
     setCompareTrainingLoading(false);
     setCompareTrainingErrorLoading(false);
     setCompareTrainingPfiLoading(false);
@@ -582,7 +557,6 @@ export default function PredictPage() {
     setMetricsLoading(false);
     setErrorDistLoading(false);
     setPfiLoading(false);
-    setPerfLoading(false);
     setCompareTrainingLoading(false);
     setCompareTrainingErrorLoading(false);
     setCompareTrainingPfiLoading(false);
@@ -1048,78 +1022,6 @@ export default function PredictPage() {
     setPfiData(null);
   }, [modelMode]);
 
-  const handleFetchPerformance = useCallback(async () => {
-    if (!analysisVisibility.performanceComparison) return;
-
-    const requestContextKey = currentPerformanceContextKey;
-    const requestToken = {
-      ...requestCoordinator.start(PREDICT_REQUEST_CHANNELS.performance, requestContextKey),
-      scope: predictScopeRef.current,
-    };
-    setPerfLoading(true);
-    try {
-      let nextPerformanceData;
-      if (selectedCompareIds.length > 0) {
-        const configs = compareConfigs
-          .filter((c) => selectedCompareIds.includes(c.id))
-          .map((c) => c.vars);
-
-        let res = { results: {} };
-        if (configs.length > 0) {
-          res = await fetchPerformanceComparison(configs, {
-            dataSource: dataSourceMode,
-            marsYear,
-            signal: requestToken.signal,
-          });
-          console.log('fetchPerformanceComparison RAW:', res);
-        }
-
-        nextPerformanceData = res;
-      } else {
-        const body = {
-          selected_variables: selectedVars,
-          horizon: predStep,
-          ls_start: lsStart,
-          mars_year: marsYear,
-        };
-        const res = await fetchPerformanceCurve(body, {
-          dataSource: dataSourceMode,
-          signal: requestToken.signal,
-        });
-        console.log('fetchPerformanceCurve RAW (current):', res);
-        const key = selectedVars.length === 0 ? 'baseline' : 'current';
-        nextPerformanceData = { results: { [key]: res } };
-      }
-      if (!isRequestCurrent(requestToken, requestContextKey)) return;
-      setPerformanceData(nextPerformanceData);
-      setPerformanceKey(requestContextKey);
-      writePredictCache({
-        performanceData: nextPerformanceData,
-        performanceKey: requestContextKey,
-      });
-    } catch (e) {
-      if (!isRequestLatest(requestToken, requestContextKey) || isAbortError(e)) return;
-      console.error('Fetch performance error:', e);
-    } finally {
-      if (isRequestCurrent(requestToken, requestContextKey)
-        && requestCoordinator.finish(requestToken, requestContextKey)) {
-        setPerfLoading(false);
-      }
-    }
-  }, [
-    analysisVisibility.performanceComparison,
-    compareConfigs,
-    currentPerformanceContextKey,
-    dataSourceMode,
-    lsStart,
-    marsYear,
-    predStep,
-    requestCoordinator,
-    selectedCompareIds,
-    selectedVars,
-    writePredictCache,
-  ]);
-
   const step = activeResults ? Math.min(activeHorizon, (activeResults.horizon || 1) - 1) : 0;
   const truthField = activeResults?.ground_truth?.[step] ?? null;
   const predField = activeResults?.prediction?.[step] ?? null;
@@ -1127,12 +1029,6 @@ export default function PredictPage() {
   const stepLs = activeResults?.ls_values?.[step];
 
   const stepLabel = (ls) => (ls != null ? ` · Ls=${ls.toFixed(3)}°` : '');
-
-  const currentSelectionShorthand = getShorthands(selectedVars);
-  const currentSelectionMetrics = activePerformanceData?.results?.[currentSelectionShorthand]
-    || activePerformanceData?.results?.current
-    || activePerformanceData?.results?.baseline
-    || null;
 
   return (
     <div className="page-enter" style={{ padding: '100px 40px 60px', maxWidth: 1400, margin: '0 auto' }}>
@@ -1167,13 +1063,6 @@ export default function PredictPage() {
           toggleVar={toggleVar}
           VARIABLES={VARIABLES}
           handlePredict={handlePredict}
-          compareConfigs={compareConfigs}
-          selectedCompareIds={selectedCompareIds}
-          setSelectedCompareIds={setSelectedCompareIds}
-          setCompareConfigs={setCompareConfigs}
-          currentMetrics={currentSelectionMetrics}
-          perfLoading={perfLoading}
-          handleFetchPerformance={handleFetchPerformance}
           precision={precision}
         />
 
@@ -1225,23 +1114,6 @@ export default function PredictPage() {
               plotTextColor={plotTextColor}
               plotText60={plotText60}
               plotGridColor={plotGridColor}
-            />
-          ) : null}
-
-          {analysisVisibility.performanceComparison ? (
-            <PredictBarChart
-              isLight={isLight}
-              performanceData={activePerformanceData}
-              compareConfigs={compareConfigs}
-              selectedCompareIds={selectedCompareIds}
-              activeMetric={activePerfMetric}
-              setActiveMetric={setActivePerfMetric}
-              plotTextColor={plotTextColor}
-              plotText60={plotText60}
-              plotGridColor={plotGridColor}
-              precision={precision}
-              handleFetchPerformance={handleFetchPerformance}
-              perfLoading={perfLoading}
             />
           ) : null}
 

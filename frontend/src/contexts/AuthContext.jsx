@@ -6,7 +6,6 @@ import {
   apiChangePassword,
   fetchDataInfo,
   fetchGlobeData,
-  prewarmPredictSource,
 } from '../services/api';
 import {
   beginAuthenticatedPredictionSession,
@@ -64,7 +63,6 @@ export function AuthProvider({ children }) {
     // Personal-source warmups are intentionally skipped here to avoid blocking
     // default-source pages immediately after login.
     const warmups = [
-      prewarmPredictSource(27, { dataSource: 'default' }),
       fetchDataInfo({ dataSource: 'default' }),
       fetchGlobeData(27, 0, 'o3col', null, { dataSource: 'default' }),
     ];

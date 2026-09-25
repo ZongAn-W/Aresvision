@@ -52,11 +52,9 @@ EARTH_MERRA2_V1_DIR = Path(os.getenv(
     "ARESVISION_EARTH_MERRA2_V1_DIR",
     DATA_DIR / "earth" / "merra2_daily_v1",
 )).expanduser()
-MODEL_DIR = BASE_DIR / "models" / "predrnnv2"
 TRAINING_SCRIPTS_DIR = BASE_DIR / "models" / "training_scripts"
 TRAINING_RESULTS_DIR = BASE_DIR / "models" / "training_results"
 TRAINING_LOGS_DIR = BASE_DIR / "models" / "training_logs"
-PERF_CACHE_DIR = DATA_DIR / "perf_cache"
 PERSONAL_CACHE_DIR = DATA_DIR / "personal_cache"
 MCD_CACHE_DIR = DATA_DIR / "mcd_cache"
 MOLA_TOPOGRAPHY_PATH = Path(os.getenv(
@@ -92,30 +90,6 @@ VARIABLE_NAMES_CN = {
     "o3col": "臭氧柱浓度", "U_Wind": "纬向风", "V_Wind": "经向风",
     "Temperature": "温度",
     "Dust_Optical_Depth": "沙尘光学厚度", "Solar_Flux_DN": "太阳下行辐射通量",
-}
-
-# 变量文件名映射 (简写)
-VARIABLE_SHORTHANDS = {
-    "U_Wind": "U",
-    "V_Wind": "V",
-    "Temperature": "T",
-    "Dust_Optical_Depth": "D",
-    "Solar_Flux_DN": "S",
-}
-DEFAULT_MODEL_SUFFIX = "UVDST"
-
-# ─── 模型 ───
-MODEL_CONFIG = {
-    "total_channels": 6,
-    "img_height": N_LAT,
-    "img_width": N_LON,
-    "input_window": 3,
-    "pred_horizon": 3,
-    "num_hidden": [64, 64, 64],
-    "filter_size": 3,
-    "stride": 1,
-    "patch_size": 1,
-    "layer_norm": False,
 }
 
 # ─── 缓存 ───

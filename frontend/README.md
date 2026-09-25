@@ -81,7 +81,6 @@ AresVision/
 │       │   ├── user_data_service.py 用户数据按需读取 + 热更新
 │       │   ├── email_service.py     QQ SMTP 发送验证码
 │       │   ├── analysis_service.py  内置数据分析
-│       │   ├── predict_service.py   PredRNNv2 预测编排
 │       │   └── ai_service.py        LLM 对话
 │       └── core/                ← ML 核心模块
 │
@@ -138,7 +137,7 @@ AresVision/
         │   ├── HomePage.jsx          ← 首页（3D 火星 + feature cards）
         │   ├── DataOverviewPage.jsx  ← 数据中心（react-globe.gl + 6 数据窗口）
         │   ├── ExplorePage.jsx       ← 数据探索（含 MyDataTab 用户数据管理）
-        │   ├── PredictPage.jsx       ← PredRNNv2 预测（Canvas 场可视化）
+        │   ├── PredictPage.jsx       ← 已训练模型预测与多模型对比（Canvas 场可视化）
         │   ├── AIPage.jsx            ← AI 对话助手
         │   └── AboutPage.jsx         ← 关于页面
         │

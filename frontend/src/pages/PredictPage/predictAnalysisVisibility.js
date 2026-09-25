@@ -3,8 +3,6 @@ const FULL_VISIBILITY = {
   metrics: true,
   errorDistribution: true,
   permutationImportance: true,
-  performanceComparison: true,
-  selectionPerformance: true,
   inputVariables: true,
   systemHyperparams: true,
   trainedModelParameters: true,
@@ -24,8 +22,6 @@ export function getPredictAnalysisVisibility(modelMode = 'system') {
       metrics: false,
       errorDistribution: false,
       permutationImportance: false,
-      performanceComparison: false,
-      selectionPerformance: false,
       inputVariables: false,
       systemHyperparams: false,
       trainedModelParameters: false,
@@ -39,8 +35,6 @@ export function getPredictAnalysisVisibility(modelMode = 'system') {
 
   return {
     ...FULL_VISIBILITY,
-    performanceComparison: false,
-    selectionPerformance: false,
     inputVariables: false,
     systemHyperparams: false,
     trainedModelParameters: true,

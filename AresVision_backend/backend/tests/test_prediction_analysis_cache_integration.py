@@ -5,10 +5,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import config as config_module
 from services import inference_service as inference_module
 from services.inference_service import InferenceService
-from services.predict_service import PredictOrchestratorService
 
 
 def _metric(value):
@@ -121,69 +119,6 @@ def test_single_trained_analyses_use_effective_cache_parameters(monkeypatch):
         "error_distribution",
         "pfi",
     ]
-
-
-def test_prediction_analysis_paths_request_slim_prediction_payload(monkeypatch, tmp_path):
-    service = PredictOrchestratorService(
-        SimpleNamespace(),
-        SimpleNamespace(
-            processed_data={"om_ls_raw": np.linspace(0.0, 355.0, 20)},
-            processed_data_mtime="mtime",
-        ),
-        SimpleNamespace(),
-        SimpleNamespace(),
-    )
-    calls = []
-
-    def fake_predict(mars_year, ls_start, selected_variables, horizon=3, include_points=True):
-        calls.append(include_points)
-        field = [[1.0, 2.0], [3.0, 4.0]]
-        return {
-            "ground_truth": [
-                {
-                    "field": field,
-                    "points": [],
-                    "lat": [0.0, 1.0],
-                    "lon": [0.0, 1.0],
-                    "minVal": 1.0,
-                    "maxVal": 4.0,
-                }
-            ],
-            "prediction": [
-                {
-                    "field": field,
-                    "points": [],
-                    "lat": [0.0, 1.0],
-                    "lon": [0.0, 1.0],
-                    "minVal": 1.0,
-                    "maxVal": 4.0,
-                }
-            ],
-            "residual": [
-                {
-                    "field": field,
-                    "points": [],
-                    "lat": [0.0, 1.0],
-                    "lon": [0.0, 1.0],
-                    "minVal": 0.0,
-                    "maxVal": 1.0,
-                }
-            ],
-            "selected_variables": selected_variables,
-            "horizon": 1,
-            "ls_values": [ls_start],
-            "model_info": {"model_source": "official"},
-            "metrics": _metric(1.0),
-        }
-
-    monkeypatch.setattr(service, "predict", fake_predict)
-    monkeypatch.setattr(config_module, "PERF_CACHE_DIR", tmp_path)
-
-    service.get_performance_curve(["Temperature"])
-    service.get_error_distribution(["Temperature"])
-
-    assert calls
-    assert all(include_points is False for include_points in calls)
 
 
 def test_comparisons_reuse_per_task_cached_primitives(monkeypatch):

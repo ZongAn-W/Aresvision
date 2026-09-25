@@ -37,8 +37,6 @@ from database.engine import async_session_maker
 from services.data_service import DataService
 from services.analysis_service import AnalysisService
 from services.mcd_overview_data_service import McdOverviewDataService
-from services.predict_data_service import PredictDataService
-from services.predict_service import PredictOrchestratorService
 from services.inference_service import InferenceService
 from services.ai_service import AIService
 from services.copilot_service import CopilotService
@@ -55,8 +53,6 @@ from services.earth_overview_service import EarthOverviewService
 from services.earth_research_service import EarthResearchService
 from services.personal_data_source_service import SingleYearDataView
 from core.analysis_transforms import AnalysisTransforms
-from core.predict_transforms import PredictTransforms
-from core.predict_inference import PredictInference
 from routers import analysis, predict, ai, copilot
 from routers import auth
 from routers import upload as upload_router_module
@@ -128,7 +124,7 @@ async def lifespan(app: FastAPI):
     t0 = time.time()
 
     # 0. 数据库初始化（建表 + 默认管理员账号）
-    logger.info("[0/5] 初始化数据库...")
+    logger.info("[0/4] 初始化数据库...")
     await init_database()
     app.state.db_session = async_session_maker
 
@@ -139,7 +135,7 @@ async def lifespan(app: FastAPI):
     TRAINING_WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # 1. 基础服务：数据加载
-    logger.info("[1/5] 初始化基础数据加载服务...")
+    logger.info("[1/4] 初始化基础数据加载服务...")
     data_service = DataService()
     app.state.data_service = data_service
 
@@ -255,53 +251,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("personal analysis cache warm failed for user %s", user_id)
 
-            await personal_source_service._upsert_build_state(
-                user_id=user_id,
-                signature_hash=status.get("signature_hash") or "",
-                status="building",
-                stage="warming_predict",
-                progress=88.0,
-                stage_message=personal_source_service._build_stage_message("warming_predict"),
-                error=None,
-                duration_ms=status.get("duration_ms"),
-                built_at=None,
-            )
-
-            predict_cache = getattr(app.state, "personal_predict_service_cache", None)
-            if predict_cache is None:
-                from cachetools import LRUCache
-                predict_cache = LRUCache(maxsize=16)
-                app.state.personal_predict_service_cache = predict_cache
-
-            predict_key = (
-                int(user_id),
-                int(resolution.mars_year),
-                str(resolution.effective_source),
-                str(getattr(resolution, "signature_hash", "") or ""),
-            )
-            predict_service_cached = predict_cache.get(predict_key)
-            if predict_service_cached is None:
-                data_view = SingleYearDataView(
-                    mars_year=resolution.mars_year,
-                    openmars_data=resolution.openmars_data,
-                    aligned_mcd_data=resolution.aligned_mcd_data,
-                    mcd_raw_data=resolution.mcd_raw_data,
-                )
-                personal_prep = PredictDataService(data_view, use_processed_tensor=False)
-                predict_service_cached = PredictOrchestratorService(
-                    data_service=data_view,
-                    ml_data_prep=personal_prep,
-                    transforms=app.state.predict_transforms,
-                    inference=app.state.predict_inference,
-                )
-                predict_cache[predict_key] = predict_service_cached
-            try:
-                ml_data_prep = getattr(predict_service_cached, "ml_data_prep", None)
-                if ml_data_prep is not None and hasattr(ml_data_prep, "prewarm_for_year"):
-                    await asyncio.to_thread(ml_data_prep.prewarm_for_year, resolution.mars_year)
-            except Exception:
-                logger.exception("personal predict cache warm failed for user %s", user_id)
-
         final_status = await personal_source_service.get_build_status(user_id)
         await personal_source_service._upsert_build_state(
             user_id=user_id,
@@ -368,7 +317,7 @@ async def lifespan(app: FastAPI):
     app.state.earth_prewarm_task = asyncio.create_task(_prewarm_earth_release())
 
     # 2. 领域服务：可视化与 ML 数据准备
-    logger.info("[2/5] 初始化分析与 ML 准备服务...")
+    logger.info("[2/4] 初始化分析与 ML 准备服务...")
     analysis_service = AnalysisService(data_service)
     app.state.analysis_service = analysis_service
 
@@ -378,52 +327,25 @@ async def lifespan(app: FastAPI):
     )
     app.state.mcd_overview_analysis_service = mcd_overview_analysis_service
 
-    predict_data_prep = PredictDataService(data_service)
-    app.state.predict_data_prep = predict_data_prep
-
-    # 3. 核心计算模型：预处理、推理模型
-    logger.info("[3/5] 初始化预测模型计算流...")
-    # 分析专用分量
+    # 3. 核心计算模型：分析变换与训练模型推理
+    logger.info("[3/4] 初始化分析变换与训练模型推理服务...")
     analysis_transforms = AnalysisTransforms(data_service)
     app.state.analysis_transforms = analysis_transforms
-    
-    # 预测专用分量 (严格遵循 demo3)
-    predict_transforms = PredictTransforms(data_service)
-    app.state.predict_transforms = predict_transforms
 
-    predict_inference = PredictInference()
-    app.state.predict_inference = predict_inference
-
-    predict_orchestrator = PredictOrchestratorService(
-        data_service=data_service,
-        ml_data_prep=predict_data_prep,
-        transforms=predict_transforms,
-        inference=predict_inference,
-    )
-    app.state.predict_service = predict_orchestrator
     app.state.training_inference_service = InferenceService()
 
     # 4. 初始化 AI 服务
-    logger.info("[4/5] 初始化 AI 解读与 Copilot 服务...")
+    logger.info("[4/4] 初始化 AI 解读与 Copilot 服务...")
     ai_service = AIService()
     app.state.ai_service = ai_service
     copilot_service = CopilotService()
     app.state.copilot_service = copilot_service
 
-    # 5. 后台预生成性能分析缓存 (不阻塞启动)
-    # 默认关闭，避免在开发态(尤其 --reload)触发长时间计算与频繁文件写入导致接口卡顿。
-    warmup_on_startup = os.getenv("ARESVISION_WARMUP_ON_STARTUP", "0").strip() == "1"
-    if warmup_on_startup:
-        logger.info("[5/5] 启动后台性能缓存预生成检查...")
-        asyncio.create_task(predict_orchestrator.ensure_performance_caches())
-    else:
-        logger.info("[5/5] 跳过启动期性能缓存预生成 (ARESVISION_WARMUP_ON_STARTUP!=1)")
-
     elapsed = time.time() - t0
     logger.info("=" * 60)
     logger.info(f"  启动完成! 耗时 {elapsed:.1f}s")
     logger.info(f"  数据: {data_service.get_available_years()}")
-    logger.info(f"  设备: {predict_inference.device}")
+    logger.info(f"  设备: {app.state.training_inference_service.device}")
     logger.info(f"  API 文档: http://localhost:8000/docs")
     logger.info("=" * 60)
 
