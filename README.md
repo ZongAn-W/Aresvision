@@ -16,7 +16,7 @@ AstraAtmos（行星大气实验室）定位为行星大气预测实验平台，�
 
 产品原名为 AresVision（智绘赤星）。目录、仓库地址、启动脚本、`ARESVISION_*` 环境变量、数据库与浏览器存储键、数据格式标识沿用原名称以兼容已有部署；改名无需迁移数据或配置。
 
-AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 字母、上扬的弧形大气流线与橙色观测点。全站导航、首页强调色、关于页、页脚与浏览器图标已统一使用该标志，深浅主题分别使用对应配色。品牌组件为 [BrandMark.jsx](frontend/src/components/BrandMark.jsx)，资产规范与文件清单见[标识设计与使用说明](assets/brand/astraatmos/README.md)，接入范围见[品牌接入方案](docs/superpowers/plans/2026-09-24-atmospheric-a-brand-integration.md)。
+AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 字母、上扬的弧形大气流线与橙色观测点。全站导航、首页强调色、关于页、页脚与浏览器图标已统一使用该标志，深浅主题分别使用对应配色。品牌组件为 [BrandMark.jsx](frontend/src/components/BrandMark.jsx)，资产规范与文件清单见[标识设计与使用说明](assets/brand/astraatmos/README.md)，接入范围见[品牌接入方案](docs/plans/2026-09-24-atmospheric-a-brand-integration.md)。
 
 平台提供 PredRNNv2、ConvLSTM、SimVP 及多种时间序列模型，也支持接入自定义 PyTorch 模型。预测结果可与数据集参考值进行对比，结合残差、误差分布和逐步指标评估模型表现。实际预测效果取决于数据质量、训练配置和模型权重。
 
@@ -153,7 +153,7 @@ AresVision/
 │   │   ├── stores/            # 预测缓存与会话状态
 │   │   └── i18n/              # 中英文文案
 │   └── vite.config.js         # 开发服务及 API 代理
-├── docs/                      # 模型接入、资源及设计说明
+├── docs/                      # 专题说明；plans/ 实施方案，specs/ 设计文档
 ├── scripts/deploy/            # Linux 部署
 ├── scripts/release/           # Windows 分发
 └── assets/                    # 项目标识与静态资源
