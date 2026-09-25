@@ -3,6 +3,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -24,10 +26,6 @@ sys.modules["services.analysis_service"] = analysis_service
 personal_service = types.ModuleType("services.personal_data_source_service")
 personal_service.SingleYearDataView = object
 sys.modules["services.personal_data_source_service"] = personal_service
-
-predict_data_service = types.ModuleType("services.predict_data_service")
-predict_data_service.PredictDataService = object
-sys.modules["services.predict_data_service"] = predict_data_service
 
 from routers import predict  # noqa: E402
 from schemas.predict import PredictRequest  # noqa: E402
@@ -142,50 +140,6 @@ class FakeTrainingInferenceService:
         }
 
 
-class FakePredictService:
-    def __init__(self):
-        self.calls = []
-
-    def predict(self, **kwargs):
-        self.calls.append(kwargs)
-        include_points = kwargs.get("include_points", True)
-        points = [{"lat": 0.0, "lng": 0.0, "val": 1.0}] if include_points else []
-        return {
-            "ground_truth": [_field(1.0) if include_points else {
-                "points": points,
-                "lat": [0.0],
-                "lon": [0.0],
-                "field": [[1.0]],
-                "minVal": 1.0,
-                "maxVal": 1.0,
-            }],
-            "prediction": [_field(2.0) if include_points else {
-                "points": points,
-                "lat": [0.0],
-                "lon": [0.0],
-                "field": [[2.0]],
-                "minVal": 2.0,
-                "maxVal": 2.0,
-            }],
-            "residual": [_field(1.0) if include_points else {
-                "points": points,
-                "lat": [0.0],
-                "lon": [0.0],
-                "field": [[1.0]],
-                "minVal": 1.0,
-                "maxVal": 1.0,
-            }],
-            "selected_variables": ["U_Wind"],
-            "horizon": 1,
-            "ls_values": [95.0],
-            "model_info": {"model_source": "official"},
-            "metrics": {
-                "overall": {"step": 0, "rmse": 1.0, "mae": 1.0, "ssim": 0.0, "r2": 0.9},
-                "per_step": [{"step": 1, "rmse": 1.0, "mae": 1.0, "ssim": 0.0, "r2": 0.9}],
-            },
-        }
-
-
 def _field(value):
     return {
         "points": [{"lat": 0.0, "lng": 0.0, "val": value}],
@@ -197,33 +151,28 @@ def _field(value):
     }
 
 
-def _request(service=None, *, predict_service=None):
+def _request(service=None):
     state = type("State", (), {})()
     if service is not None:
         state.training_inference_service = service
-    if predict_service is not None:
-        state.predict_service = predict_service
     app = type("App", (), {"state": state})()
     return type("Request", (), {"app": app})()
 
 
-def test_predict_run_uses_prediction_metrics_when_task_id_is_absent():
-    service = FakePredictService()
+def test_predict_run_rejects_a_request_without_task_id():
     body = PredictRequest(selected_variables=["U_Wind"], horizon=3, ls_start=90, mars_year=27)
 
-    payload = asyncio.run(
-        predict.run_prediction(
-            _request(predict_service=service),
-            body,
-            data_source="default",
-            current_user=None,
+    with pytest.raises(predict.HTTPException) as exc:
+        asyncio.run(
+            predict.run_prediction(
+                _request(),
+                body,
+                current_user=None,
+            )
         )
-    )
 
-    assert payload["metrics"]["overall"]["r2"] == 0.9
-    assert payload["ground_truth"][0]["points"] == []
-    assert payload["prediction"][0]["points"] == []
-    assert service.calls[0].get("include_points") is False
+    assert exc.value.status_code == 400
+    assert "training_task_id" in exc.value.detail
 
 
 def test_predict_run_uses_training_task_inference_when_task_id_is_present():
@@ -232,7 +181,7 @@ def test_predict_run_uses_training_task_inference_when_task_id_is_present():
 
     payload = asyncio.run(
         predict.run_prediction(
-            _request(service), body, data_source="default", current_user=AUTHENTICATED_USER
+            _request(service), body, current_user=AUTHENTICATED_USER
         )
     )
 
@@ -248,7 +197,7 @@ async def test_predict_metrics_uses_training_task_test_set_metrics_when_task_id_
     body = PredictRequest(training_task_id=42, selected_variables=["U_Wind"], horizon=3, ls_start=90, mars_year=27)
 
     payload = await predict.get_eval_metrics(
-        _request(service), body, data_source="default", current_user=AUTHENTICATED_USER
+        _request(service), body, current_user=AUTHENTICATED_USER
     )
 
     assert payload["overall"]["rmse"] == 3.47
@@ -260,7 +209,7 @@ async def test_trained_model_request_fails_when_training_inference_service_is_mi
     body = PredictRequest(training_task_id=42, ls_start=90, mars_year=27)
     try:
         await predict.run_prediction(
-            _request(), body, data_source="default", current_user=AUTHENTICATED_USER
+            _request(), body, current_user=AUTHENTICATED_USER
         )
     except predict.HTTPException as exc:
         assert exc.status_code == 500
@@ -281,7 +230,6 @@ def test_trained_model_request_returns_model_file_detail_when_weight_disappears(
             predict.run_prediction(
                 _request(MissingWeightInferenceService()),
                 body,
-                data_source="default",
                 current_user=AUTHENTICATED_USER,
             )
         )
@@ -310,7 +258,6 @@ def test_predict_metrics_wraps_unexpected_training_errors():
             predict.get_eval_metrics(
                 _request(FailingMetricsInferenceService()),
                 body,
-                data_source="default",
                 current_user=AUTHENTICATED_USER,
             )
         )

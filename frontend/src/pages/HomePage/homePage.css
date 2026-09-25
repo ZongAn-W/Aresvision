@@ -1,4 +1,21 @@
-.atmos-home { --home-accent: var(--brand-primary); --home-accent-ink: var(--brand-on-primary); --home-line: color-mix(in srgb, var(--text) 13%, transparent); max-width: 1320px; min-height: calc(100svh - 70px); margin: 0 auto; padding: 112px 64px 40px; color: var(--text); display: flex; flex-direction: column; gap: 32px; }
+.atmos-home { --home-accent: var(--brand-primary); --home-accent-ink: var(--brand-on-primary); --home-line: color-mix(in srgb, var(--text) 13%, transparent); position: relative; isolation: isolate; overflow-x: clip; max-width: 1320px; min-height: calc(100svh - 70px); margin: 0 auto; padding: 112px 64px 40px; color: var(--text); display: flex; flex-direction: column; gap: 32px; }
+/* 背景星点层：只随鼠标做约 4px 的视差位移，标题与按钮不参与。 */
+.home-stars { position: absolute; inset: 0; z-index: -1; color: var(--text-60); opacity: .55; pointer-events: none; will-change: transform; transform: translate3d(var(--home-parallax-stars-x, 0px), var(--home-parallax-stars-y, 0px), 0); transition: transform .2s ease-out;
+  background-repeat: repeat;
+  background-image:
+    radial-gradient(1.6px 1.6px at 18% 22%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1.1px 1.1px at 72% 14%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1.4px 1.4px at 44% 63%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1px 1px at 86% 47%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1.7px 1.7px at 12% 78%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1.2px 1.2px at 58% 34%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1px 1px at 30% 88%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1.5px 1.5px at 92% 72%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1.1px 1.1px at 64% 52%, currentColor 0 70%, transparent 71%),
+    radial-gradient(1.3px 1.3px at 6% 44%, currentColor 0 70%, transparent 71%);
+  background-size: 520px 520px, 340px 340px, 460px 460px, 300px 300px, 620px 620px, 400px 400px, 280px 280px, 560px 560px, 360px 360px, 480px 480px;
+  background-position: 0 0, 30px 60px, 80px 20px, 10px 90px, 40px 10px, 120px 40px, 70px 30px, 20px 110px, 150px 80px, 90px 140px; }
+[data-theme="light"] .home-stars { opacity: .2; }
 .home-hero { flex: 1; min-height: 460px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.04fr); align-items: center; gap: 5%; }
 .home-hero__copy { min-width: 0; padding-bottom: 12px; }
 .home-hero h1 { margin: 0 0 28px; font-size: calc(clamp(40px, 4.5vw, 64px) * var(--font-scale)); line-height: 1.16; letter-spacing: .02em; font-weight: 600; font-family: var(--font-display); text-wrap: balance; overflow-wrap: anywhere; }
@@ -16,11 +33,17 @@
 .home-observatory { position: relative; min-width: 0; }
 .home-micro { color: var(--text-40); font-size: calc(11px * var(--font-scale)); letter-spacing: .1em; }
 .home-orbital-stage { display: grid; place-items: center; padding: 24px 0; }
-.home-planet { position: relative; width: min(92%, 550px); aspect-ratio: 1; }
-.home-planet::after { content: ''; position: absolute; inset: -4%; border: 1px solid color-mix(in srgb, var(--home-accent) 17%, transparent); border-radius: 50%; pointer-events: none; }
+.home-planet { position: relative; width: min(92%, 550px); aspect-ratio: 1; cursor: default; touch-action: pan-y pinch-zoom; -webkit-user-select: none; user-select: none; }
+.home-planet--interactive { cursor: grab; }
+.home-planet--dragging, .home-planet--interactive:active { cursor: grabbing; }
+.home-planet:focus-visible { outline: 2px solid var(--home-accent); outline-offset: 6px; border-radius: 50%; }
+/* 轨道装饰圈：比地球多约 3px 的视差位移，保持低对比。 */
+.home-orbit { position: absolute; inset: -4%; z-index: 1; border: 1px solid color-mix(in srgb, var(--home-accent) 17%, transparent); border-radius: 50%; pointer-events: none; will-change: transform; transform: translate3d(var(--home-parallax-orbit-x, 0px), var(--home-parallax-orbit-y, 0px), 0); transition: transform .2s ease-out; }
 .home-planet__canvas { position: absolute; inset: 0; }
 .home-planet__canvas canvas { display: block; width: 100%; height: 100%; }
 .home-planet__fallback { position: absolute; inset: 8.2%; border-radius: 50%; background: radial-gradient(circle at 30% 28%, #6cabc5, #22516e 48%, #0a1b2a 82%); box-shadow: 0 0 30px rgba(115,198,243,.14); }
+/* 地球本体：约 5px 的视差位移，拖拽旋转发生在 WebGL 网格内部。 */
+.home-planet__fallback, .home-planet__canvas { transform: translate3d(var(--home-parallax-globe-x, 0px), var(--home-parallax-globe-y, 0px), 0); transition: transform .2s ease-out; }
 .home-workflow { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; border-top: 1px solid var(--home-line); padding-top: 16px; }
 .home-experiments { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
 .home-experiment { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; max-width: 100%; padding: 10px 12px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-60); text-align: left; cursor: pointer; font-size: calc(13px * var(--font-scale)); line-height: 1.5; transition: background .2s, color .2s, border-color .2s; }
@@ -33,7 +56,9 @@
 @media (max-width: 960px) { .atmos-home { padding: 112px 24px 32px; gap: 24px; } .home-hero { display: block; min-height: auto; } .home-hero__copy { padding-bottom: 24px; } .home-hero h1 { font-size: calc(clamp(32px, 7.4vw, 46px) * var(--font-scale)); } .home-hero__name-en { font-size: calc(clamp(24px, 5.4vw, 32px) * var(--font-scale)); } .home-hero__description { max-width: 520px; } .home-observatory { max-width: 520px; margin: 0 auto; } .home-planet { width: min(80%, 360px); } .home-workflow { display: block; } .home-experiments { margin-top: 10px; gap: 4px 12px; } }
 @media (max-width: 1100px) { .atmos-home { padding-top: calc(110px + 40px * var(--font-scale)); } }
 @media (max-width: 430px) { .atmos-home { padding-left: 20px; padding-right: 20px; } .home-actions { gap: 12px; margin-top: 24px; } .home-button, .home-text-button { padding: 11px 14px; gap: 12px; } .home-experiments { display: grid; gap: 4px; } .home-experiment { width: 100%; } .home-experiment svg { margin-left: auto; } }
-@media (prefers-reduced-motion: reduce) { .atmos-home *, .atmos-home *::before { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .atmos-home *, .atmos-home *::before { transition: none !important; } .home-stars, .home-orbit, .home-planet__canvas, .home-planet__fallback { transform: none !important; } }
+/* 粗指针设备（手机 / 平板）：不提供抓取光标，交互降级为滚动与键盘。 */
+@media (pointer: coarse) { .home-planet { cursor: default; } .home-stars { opacity: .4; } }
 @media (max-width: 1100px) { .home-nav { padding-left: 24px !important; padding-right: 24px !important; } .home-nav .home-nav__links button { padding-left: 9px !important; padding-right: 9px !important; } }
 @media (max-width: 1100px) { .home-nav { height: calc(78px + 40px * var(--font-scale)) !important; align-items: flex-start !important; padding-top: 18px !important; } .home-nav .home-nav__brand { gap: 8px !important; } .home-nav .home-nav__links { position: absolute; left: 16px; right: 16px; bottom: 7px; overflow-x: auto; } .home-nav .home-nav__links button { flex-shrink: 0; min-height: 40px; } .home-nav .home-nav__links span { white-space: nowrap; } }
 @media (max-width: 900px) { .home-footer { flex-direction: column; gap: 12px; text-align: center; padding: 24px 20px !important; } }

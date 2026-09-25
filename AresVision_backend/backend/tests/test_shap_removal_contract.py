@@ -18,7 +18,6 @@ def _text(relative_path: str) -> str:
 def test_backend_and_release_sources_have_no_shap_dependency_or_surface():
     paths = [
         "AresVision_backend/backend/requirements.txt",
-        "AresVision_backend/backend/services/predict_service.py",
         "AresVision_backend/backend/routers/predict.py",
         "AresVision_backend/backend/schemas/predict.py",
         "scripts/release/build_portable_windows.ps1",
@@ -38,7 +37,6 @@ def blocked_import(name, *args, **kwargs):
         raise ModuleNotFoundError('blocked shap import')
     return original_import(name, *args, **kwargs)
 builtins.__import__ = blocked_import
-import services.predict_service
 import routers.predict
 """
     result = subprocess.run(

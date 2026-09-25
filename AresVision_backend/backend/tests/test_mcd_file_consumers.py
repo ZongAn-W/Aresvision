@@ -28,26 +28,6 @@ def _load_data_service_module(monkeypatch):
     return module
 
 
-def _load_predict_data_service_module(monkeypatch):
-    netcdf4 = types.ModuleType("netCDF4")
-    scipy = types.ModuleType("scipy")
-    scipy_interpolate = types.ModuleType("scipy.interpolate")
-    scipy_interpolate.interp1d = object
-
-    with monkeypatch.context() as import_context:
-        import_context.setitem(sys.modules, "netCDF4", netcdf4)
-        import_context.setitem(sys.modules, "scipy", scipy)
-        import_context.setitem(sys.modules, "scipy.interpolate", scipy_interpolate)
-        spec = importlib.util.spec_from_file_location(
-            "_mcd_predict_data_service_under_test",
-            BACKEND_DIR / "services" / "predict_data_service.py",
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-    return module
-
-
 class _FakeXarrayDataset(dict):
     def close(self):
         return None
@@ -96,46 +76,3 @@ def test_data_service_does_not_fall_back_to_a_different_mars_year(
 
     assert opened == []
     assert 28 not in service.mcd
-
-
-def test_predict_data_service_finds_uppercase_mcd_file_on_linux_semantics(
-    tmp_path: Path, monkeypatch
-):
-    module = _load_predict_data_service_module(monkeypatch)
-    my28 = tmp_path / "MCD_MY28_Lat-90-90_real.NC"
-    my28.touch()
-    opened = []
-    field = np.zeros((1, 1, module.N_LAT, module.N_LON), dtype=np.float32)
-    variables = {
-        name: _FakeNetcdfVariable(field) for name in module.MCD_VARIABLES
-    }
-    variables["Ls"] = _FakeNetcdfVariable(np.array([28.0]))
-
-    def open_dataset(path):
-        opened.append(Path(path))
-        return _FakeNetcdfDataset(variables)
-
-    monkeypatch.setattr(module, "MCD_DIR", tmp_path)
-    monkeypatch.setattr(module.glob, "glob", lambda pattern: [])
-    monkeypatch.setattr(module.nc, "Dataset", open_dataset, raising=False)
-    service = module.PredictDataService.__new__(module.PredictDataService)
-    service.data_service = None
-
-    data, ls = service._load_raw_mcd(28)
-
-    assert opened == [my28]
-    assert set(data) == set(module.MCD_VARIABLES)
-    assert ls.tolist() == [28.0]
-
-
-def test_predict_data_service_raises_when_requested_year_is_missing(
-    tmp_path: Path, monkeypatch
-):
-    module = _load_predict_data_service_module(monkeypatch)
-    (tmp_path / "MCD_MY27_Lat-90-90_real.nc").touch()
-    monkeypatch.setattr(module, "MCD_DIR", tmp_path)
-    service = module.PredictDataService.__new__(module.PredictDataService)
-    service.data_service = None
-
-    with pytest.raises(FileNotFoundError, match="Missing MCD data for MY28"):
-        service._load_raw_mcd(28)

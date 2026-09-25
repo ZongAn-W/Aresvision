@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import torch
 
 
@@ -12,6 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from services import inference_service as inference_module  # noqa: E402
 from services.inference_service import InferenceService  # noqa: E402
+from services.prediction_volume_cache import ScaledVolume  # noqa: E402
 from training_backbones import user_model_runner  # noqa: E402
 from training_backbones.uploaded_model_contract import (  # noqa: E402
     attach_uploaded_model_contract,
@@ -69,9 +71,25 @@ class RecordingLsTopographyModel(RecordingLsModel):
 def _setup_uploaded_inference(monkeypatch, *, with_topography=False):
     window = 4
     horizon = 2
-    x = torch.arange(10 * window * 4, dtype=torch.float32).reshape(10, window, 1, 2, 2)
-    y = torch.zeros(10, horizon, 1, 2, 2)
-    ls = torch.arange(10 * window, dtype=torch.float32).reshape(10, window)
+    sample_count = 10
+    total_time = sample_count + window + horizon - 1
+    # 预测路径现在接收连续体积并自行切窗；夹具从同一份连续数组派生
+    # x / ls，使断言中的 ls[i:j] 切片语义与旧的逐样本展开完全一致。
+    volume_values = np.arange(total_time * 4, dtype=np.float32).reshape(total_time, 2, 2, 1)
+    # ls[t] = t，使 ls[i:j] 与逐样本展开的窗口一一对应（与原夹具取值一致）。
+    volume_ls = np.arange(total_time, dtype=np.float32).reshape(total_time, 1)
+    x = torch.from_numpy(
+        np.stack([
+            np.ascontiguousarray(volume_values[i:i + window]).transpose(0, 3, 1, 2)
+            for i in range(sample_count)
+        ])
+    ).float()
+    y = torch.zeros(sample_count, horizon, 1, 2, 2)
+    ls = torch.from_numpy(
+        np.stack([volume_ls[i:i + window, 0] for i in range(sample_count)])
+    ).float()
+    assert x.shape == (sample_count, window, 1, 2, 2)
+    assert ls.shape == (sample_count, window)
     if with_topography:
         model = attach_uploaded_model_contract(
             RecordingLsTopographyModel(horizon),
@@ -89,8 +107,21 @@ def _setup_uploaded_inference(monkeypatch, *, with_topography=False):
         assert kwargs.get("return_ls") is True
         assert kwargs.get("return_coordinates") is True
         assert kwargs.get("require_coordinates") is False
+        assert kwargs.get("return_scaled_volume") is True
         prepare_calls.append((args, kwargs))
-        return x, y, ls, 0.0, 1.0, 2, 2, latitude, longitude
+        return ScaledVolume(
+            values=volume_values,
+            # 目标通道为单通道，与生产实现一致（y_scaled 为 3D）。
+            y_scaled=volume_values[..., 0],
+            ls=volume_ls[:, 0].copy(),
+            y_mean=0.0,
+            y_std=1.0,
+            height=2,
+            width=2,
+            latitude=latitude,
+            longitude=longitude,
+            split_idx=8,
+        )
 
     def fake_prepare_topography(target_latitude, target_longitude, **kwargs):
         topography_calls.append((target_latitude, target_longitude))

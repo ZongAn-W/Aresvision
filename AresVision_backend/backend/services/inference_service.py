@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 import torch
 import numpy as np
 import glob
@@ -21,6 +20,7 @@ from services.training_channels import (
     get_task_channel_suffix,
 )
 from services.prediction_horizon import validate_prediction_horizon
+from services.netcdf_read_lock import netcdf_read_lock
 from services.model_artifacts import is_valid_model_weight_file
 from services.prediction_analysis_cache import PredictionAnalysisCacheService
 from training_backbones.model_zoo import (
@@ -34,8 +34,6 @@ from training_backbones.uploaded_model_contract import (
     run_uploaded_model,
     uploaded_model_requires_topography,
 )
-
-_NETCDF_READ_LOCK = threading.RLock()
 
 
 class InferenceService:
@@ -627,15 +625,26 @@ class InferenceService:
             'T': ('Temperature', 'temp')
         }
         used_mcd_vars = [mcd_vars_map[channel] for channel in active_vars if channel in mcd_vars_map]
-        x_torch, y_torch, ls_torch, y_mean, y_std = self._prepare_data(
+        # 取连续体积并按需切出单个滑窗，避免为整条时间轴物化全部滑窗。
+        volume = self._load_official_task_volume(
             used_mcd_vars,
             window,
             task_horizon,
             data_dirs=data_dirs,
         )
-        sample_idx = self._nearest_sequence_index(ls_torch, ls_start)
-        x_sample = x_torch[sample_idx: sample_idx + 1].to(self.device)
-        ls_sample = ls_torch[sample_idx: sample_idx + 1].to(self.device)
+        sample_idx = self._nearest_sequence_index(
+            torch.as_tensor(volume.ls, dtype=torch.float32).unsqueeze(1),
+            ls_start,
+        )
+        x_sample = self._window_slice(
+            volume.values, sample_idx, window
+        ).unsqueeze(0).to(self.device)
+        ls_sample = self._window_slice(
+            np.asarray(volume.ls, dtype=np.float32).reshape(-1, 1), sample_idx, window
+        ).unsqueeze(0).transpose(1, 2).to(self.device)
+        truth_sample = self._window_slice(
+            volume.y_scaled, sample_idx + window, task_horizon
+        )
 
         model, uses_legacy_loader = self._load_official_task_model(
             task=task,
@@ -643,8 +652,8 @@ class InferenceService:
             input_channels=1 + len(used_mcd_vars),
             selected_channels=list(active_vars),
             hidden_dims=hidden_dims,
-            height=int(x_torch.shape[-2]),
-            width=int(x_torch.shape[-1]),
+            height=int(volume.values.shape[1]),
+            width=int(volume.values.shape[2]),
             window=window,
             horizon=task_horizon,
             use_sphere=use_sphere,
@@ -658,16 +667,106 @@ class InferenceService:
                 ls_sample,
                 uses_legacy_loader,
             )[0, :, 0].cpu().numpy()
-        truth = y_torch[sample_idx, :, 0].cpu().numpy()
-        return pred, truth, y_mean, y_std, list(active_vars)
+        # 官方模型输出为 (horizon, H, W)（单通道不再保留通道维），
+        # 与 `y_torch[idx, :, 0]` 的原始语义一致。
+        truth = truth_sample.squeeze(1).numpy()
+        return pred, truth, volume.y_mean, volume.y_std, list(active_vars)
 
-    def _prepare_uploaded_task_tensors(
+    @staticmethod
+    def _window_slice(volume: np.ndarray, start: int, length: int) -> torch.Tensor:
+        """从连续体积切出 ``length`` 步窗口，并转换为训练时使用的张量布局。
+
+        支持与 :meth:`_window_stack` 相同的三种输入布局：
+
+        - ``[time, height, width]`` / ``[time, height, width, channels]``
+          -> ``[length, channels, height, width]``（单通道目标为 ``[length, 1, h, w]``）
+        - ``[time, features]``（如 Ls）-> ``[length, features]``
+
+        与逐样本滑窗展开后的切片逐元素一致。
+        """
+        end = min(int(start) + int(length), int(volume.shape[0]))
+        window = np.ascontiguousarray(volume[int(start):end])
+        tensor = torch.from_numpy(window).float()
+        if window.ndim == 2:
+            return tensor
+        if window.ndim == 3:
+            window = window[..., None]
+        return torch.from_numpy(np.ascontiguousarray(window)).permute(0, 3, 1, 2).float()
+
+    @staticmethod
+    def _window_stack(volume: np.ndarray, start: int, count: int, length: int) -> torch.Tensor:
+        """把 ``count`` 个连续滑窗一次性转成张量。
+
+        支持两种输入布局，输出与 ``prepare_tensors`` 逐样本展开后的切片堆叠一致：
+
+        - ``[time, height, width]`` / ``[time, height, width, channels]``
+          -> ``[count, length, channels, height, width]``
+        - ``[time, features]``（如 Ls）-> ``[count, length, features]``；
+          单列特征降为 ``[count, length]``，与 ``ls_seq`` 的展开结果一致。
+        """
+        if count <= 0:
+            raise ValueError("window count must be positive")
+        region = np.ascontiguousarray(
+            volume[int(start): int(start) + int(count) + int(length) - 1]
+        )
+        if region.shape[0] != int(count) + int(length) - 1:
+            raise ValueError("Not enough time steps to build the requested windows")
+        if region.ndim == 3:
+            region = region[..., None]
+        elif region.ndim != 4 and region.ndim != 2:
+            raise ValueError(f"Unsupported volume layout: {region.shape}")
+        windows = np.lib.stride_tricks.sliding_window_view(region, int(length), axis=0)
+        # 4D 输入: [count, height, width, channels, length] -> [count, length, channels, h, w]
+        # 2D 输入: [count, features, length]               -> [count, length, features]
+        order = (0, 4, 3, 1, 2) if region.ndim == 4 else (0, 2, 1)
+        stacked = torch.from_numpy(np.ascontiguousarray(windows)).permute(*order).float()
+        if region.ndim == 2 and region.shape[1] == 1:
+            # 单列特征（Ls）展开后是 [count, length]，不带尾维。
+            return stacked.reshape(stacked.shape[0], stacked.shape[1])
+        return stacked
+
+    def _uploaded_task_test_windows(self, volume, window: int, horizon: int):
+        """按与训练一致的 80/20 划分取测试分区滑窗。
+
+        样本数口径与 ``prepare_tensors`` 的逐样本展开相同：
+        ``sample_count = total_time - window - horizon + 1``，
+        测试分区起点为 ``int(0.8 * sample_count)``。
+        """
+        sample_count = int(volume.values.shape[0]) - int(window) - int(horizon) + 1
+        if sample_count <= 0:
+            raise ValueError("Not enough time steps to build the requested windows")
+        test_count = sample_count - int(0.8 * sample_count)
+        if test_count <= 0:
+            return torch.empty(0), torch.empty(0), None
+        test_start = sample_count - test_count
+        x_test = self._window_stack(volume.values, test_start, test_count, window)
+        y_test = self._window_stack(volume.y_scaled, test_start + window, test_count, horizon)
+        ls_test = (
+            None
+            if volume.ls is None
+            else self._window_stack(
+                np.asarray(volume.ls, dtype=np.float32).reshape(-1, 1),
+                test_start,
+                test_count,
+                window,
+            )
+        )
+        return x_test, y_test, ls_test
+
+    def _prepare_uploaded_task_volume(
         self,
         hypers: dict,
         window: int,
         horizon: int,
         data_dirs=None,
     ):
+        """取上传模型所需的标准化体积：优先命中进程内缓存。"""
+        from services.prediction_volume_cache import (
+            ScaledVolume,
+            get_scaled_volume,
+            put_scaled_volume,
+            volume_signature,
+        )
         from training_backbones.user_model_runner import (
             parse_selected_channels,
             prepare_tensors,
@@ -675,6 +774,7 @@ class InferenceService:
 
         directories = data_dirs or {}
         selected_channels = parse_selected_channels(hypers.get("selected_channels", []))
+        training_dataset = hypers.get("training_dataset", "openmars_mcd")
         openmars_dir = Path(directories.get("ARESVISION_OPENMARS_DIR") or self.openmars_dir)
         mcd_dir = Path(directories.get("ARESVISION_MCD_DIR") or self.mcd_dir)
         mcd_overview_dir = Path(
@@ -682,19 +782,39 @@ class InferenceService:
             or directories.get("ARESVISION_MCD_RAW_3H_DIR")
             or MCD_RAW_3H_DIR
         )
-        tensors = prepare_tensors(
-            openmars_dir,
-            mcd_dir,
-            selected_channels,
-            window,
-            horizon,
-            training_dataset=hypers.get("training_dataset", "openmars_mcd"),
+
+        def load():
+            return prepare_tensors(
+                openmars_dir,
+                mcd_dir,
+                selected_channels,
+                window,
+                horizon,
+                training_dataset=training_dataset,
+                mcd_overview_dir=mcd_overview_dir,
+                return_ls=True,
+                return_coordinates=True,
+                require_coordinates=False,
+                return_scaled_volume=True,
+            )
+
+        if data_dirs:
+            # 个人/临时数据源目录随时可能被清理，不进入进程内缓存。
+            return selected_channels, load()
+
+        signature = volume_signature(
+            openmars_dir=openmars_dir,
+            mcd_dir=mcd_dir,
+            selected_channels=selected_channels,
+            training_dataset=str(training_dataset),
             mcd_overview_dir=mcd_overview_dir,
-            return_ls=True,
-            return_coordinates=True,
-            require_coordinates=False,
+            cache_prefix="uploaded",
         )
-        return selected_channels, tensors
+        cached = get_scaled_volume(signature)
+        if not isinstance(cached, ScaledVolume):
+            cached = load()
+            put_scaled_volume(signature, cached)
+        return selected_channels, cached
 
     def _prepare_uploaded_topography(self, model, latitude, longitude):
         if not uploaded_model_requires_topography(model):
@@ -738,30 +858,25 @@ class InferenceService:
 
         window = int(hypers.get("window", 3))
         task_horizon = int(hypers.get("horizon", horizon or 3))
-        selected_channels, tensors = self._prepare_uploaded_task_tensors(
+        selected_channels, volume = self._prepare_uploaded_task_volume(
             hypers,
             window,
             task_horizon,
             data_dirs,
         )
-        (
-            x_torch,
-            y_torch,
-            ls_torch,
-            y_mean,
-            y_std,
-            height,
-            width,
-            target_latitude,
-            target_longitude,
-        ) = tensors
-        sample_idx = min(max(0, int(round(float(ls_start) / 360.0 * max(1, len(x_torch) - 1)))), len(x_torch) - 1)
+        # 保留原有 ls_start -> 样本下标的按比例映射（与滑窗展开后的下标语义一致）。
+        sample_count = max(1, int(volume.values.shape[0]) - window - task_horizon + 1)
+        sample_idx = min(
+            max(0, int(round(float(ls_start) / 360.0 * max(1, sample_count - 1)))),
+            sample_count - 1,
+        )
+        channel_count = int(volume.values.shape[-1])
         config = build_uploaded_model_config(
-            in_channels=int(x_torch.shape[2]),
+            in_channels=channel_count,
             window=window,
             horizon=task_horizon,
-            height=height,
-            width=width,
+            height=volume.height,
+            width=volume.width,
             selected_channels=selected_channels,
             custom_model_params=hypers.get("custom_model_params", {}),
             param_schema=hypers.get("_uploaded_model_param_schema", {}),
@@ -775,13 +890,22 @@ class InferenceService:
         model.eval()
         topography_grid = self._prepare_uploaded_topography(
             model,
-            target_latitude,
-            target_longitude,
+            volume.latitude,
+            volume.longitude,
         )
 
-        x_sample = x_torch[sample_idx: sample_idx + 1].to(self.device)
-        ls_sample = ls_torch[sample_idx: sample_idx + 1].to(self.device) if ls_torch is not None else None
-        truth_tensor = y_torch[sample_idx: sample_idx + 1]
+        x_window = self._window_slice(volume.values, sample_idx, window)
+        x_sample = x_window.unsqueeze(0).to(self.device)
+        if volume.ls is not None:
+            ls_window = self._window_slice(
+                np.asarray(volume.ls, dtype=np.float32).reshape(-1, 1), sample_idx, window
+            ).unsqueeze(0).transpose(1, 2)
+            ls_sample = ls_window.squeeze(1).to(self.device)
+        else:
+            ls_sample = None
+        truth_tensor = self._window_slice(
+            volume.y_scaled, sample_idx + window, task_horizon
+        ).unsqueeze(0)
         with torch.no_grad():
             pred_tensor = self._run_uploaded_task_model(
                 model,
@@ -793,7 +917,7 @@ class InferenceService:
             assert_prediction_shape(pred_tensor, truth_tensor.to(self.device), "uploaded prediction")
         pred = pred_tensor[0, :, 0].cpu().numpy()
         truth = truth_tensor[0, :, 0].cpu().numpy()
-        return pred, truth, y_mean, y_std, selected_channels
+        return pred, truth, volume.y_mean, volume.y_std, selected_channels
 
     def _official_task_test_set_metrics(self, task, hypers: dict, horizon: int, data_dirs=None):
         truth_raw, pred_raw, actual_horizon = self._official_task_test_set_arrays(
@@ -890,29 +1014,18 @@ class InferenceService:
 
         window = int(hypers.get("window", 3))
         task_horizon = int(hypers.get("horizon", horizon or 3))
-        selected_channels, tensors = self._prepare_uploaded_task_tensors(
+        selected_channels, volume = self._prepare_uploaded_task_volume(
             hypers,
             window,
             task_horizon,
             data_dirs,
         )
-        (
-            x_torch,
-            y_torch,
-            ls_torch,
-            y_mean,
-            y_std,
-            height,
-            width,
-            target_latitude,
-            target_longitude,
-        ) = tensors
         config = build_uploaded_model_config(
-            in_channels=int(x_torch.shape[2]),
+            in_channels=int(volume.values.shape[-1]),
             window=window,
             horizon=task_horizon,
-            height=height,
-            width=width,
+            height=volume.height,
+            width=volume.width,
             selected_channels=selected_channels,
             custom_model_params=hypers.get("custom_model_params", {}),
             param_schema=hypers.get("_uploaded_model_param_schema", {}),
@@ -926,14 +1039,11 @@ class InferenceService:
         model.eval()
         topography_grid = self._prepare_uploaded_topography(
             model,
-            target_latitude,
-            target_longitude,
+            volume.latitude,
+            volume.longitude,
         )
 
-        split = int(0.8 * len(x_torch))
-        x_test = x_torch[split:]
-        y_test = y_torch[split:]
-        ls_test = ls_torch[split:] if ls_torch is not None else None
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
         if len(x_test) == 0:
             raise ValueError("No uploaded model test samples are available")
 
@@ -955,9 +1065,9 @@ class InferenceService:
                 )
                 assert_prediction_shape(pred, truth_tensor, "uploaded test-set metrics")
                 pred_np = pred.cpu().numpy()
-                pred_batches.append(pred_np[:, :actual_horizon, 0] * (y_std + 1e-6) + y_mean)
+                pred_batches.append(pred_np[:, :actual_horizon, 0] * (volume.y_std + 1e-6) + volume.y_mean)
                 truth_batches.append(
-                    truth_tensor[:, :actual_horizon, 0].cpu().numpy() * (y_std + 1e-6) + y_mean
+                    truth_tensor[:, :actual_horizon, 0].cpu().numpy() * (volume.y_std + 1e-6) + volume.y_mean
                 )
 
         return (
@@ -1097,29 +1207,18 @@ class InferenceService:
 
         window = int(hypers.get("window", 3))
         task_horizon = int(hypers.get("horizon", horizon or 3))
-        selected_channels, tensors = self._prepare_uploaded_task_tensors(
+        selected_channels, volume = self._prepare_uploaded_task_volume(
             hypers,
             window,
             task_horizon,
             data_dirs,
         )
-        (
-            x_torch,
-            y_torch,
-            ls_torch,
-            y_mean,
-            y_std,
-            height,
-            width,
-            target_latitude,
-            target_longitude,
-        ) = tensors
         config = build_uploaded_model_config(
-            in_channels=int(x_torch.shape[2]),
+            in_channels=int(volume.values.shape[-1]),
             window=window,
             horizon=task_horizon,
-            height=height,
-            width=width,
+            height=volume.height,
+            width=volume.width,
             selected_channels=selected_channels,
             custom_model_params=hypers.get("custom_model_params", {}),
             param_schema=hypers.get("_uploaded_model_param_schema", {}),
@@ -1133,14 +1232,12 @@ class InferenceService:
         model.eval()
         topography_grid = self._prepare_uploaded_topography(
             model,
-            target_latitude,
-            target_longitude,
+            volume.latitude,
+            volume.longitude,
         )
 
-        split = int(0.8 * len(x_torch))
-        x_test = x_torch[split:].clone()
-        y_test = y_torch[split:]
-        ls_test = ls_torch[split:] if ls_torch is not None else None
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
+        x_test = x_test.clone()
         if len(x_test) == 0:
             return {"items": [], "baseline_metric": "r2", "baseline_value": 0.0}
         sample_size = min(40, len(x_test))
@@ -1161,8 +1258,8 @@ class InferenceService:
                 assert_prediction_shape(pred, y_sample.to(self.device), "uploaded permutation importance")
                 pred_np = pred.cpu().numpy()
             truth = y_sample.numpy()
-            pred_raw = pred_np[:, :horizon, 0] * (y_std + 1e-6) + y_mean
-            truth_raw = truth[:, :horizon, 0] * (y_std + 1e-6) + y_mean
+            pred_raw = pred_np[:, :horizon, 0] * (volume.y_std + 1e-6) + volume.y_mean
+            truth_raw = truth[:, :horizon, 0] * (volume.y_std + 1e-6) + volume.y_mean
             valid = np.isfinite(truth_raw) & np.isfinite(pred_raw)
             if np.count_nonzero(valid) < 10:
                 return 0.0
@@ -1416,30 +1513,20 @@ class InferenceService:
 
         window = int(hypers.get("window", 3))
         horizon = int(hypers.get("horizon", 3))
+        task_horizon = horizon
 
-        selected_channels, tensors = self._prepare_uploaded_task_tensors(
+        selected_channels, volume = self._prepare_uploaded_task_volume(
             hypers,
             window,
-            horizon,
+            task_horizon,
             data_dirs,
         )
-        (
-            x_torch,
-            y_torch,
-            ls_torch,
-            y_mean,
-            y_std,
-            height,
-            width,
-            target_latitude,
-            target_longitude,
-        ) = tensors
         config = build_uploaded_model_config(
-            in_channels=int(x_torch.shape[2]),
+            in_channels=int(volume.values.shape[-1]),
             window=window,
-            horizon=horizon,
-            height=height,
-            width=width,
+            horizon=task_horizon,
+            height=volume.height,
+            width=volume.width,
             selected_channels=selected_channels,
             custom_model_params=hypers.get("custom_model_params", {}),
             param_schema=hypers.get("_uploaded_model_param_schema", {}),
@@ -1454,14 +1541,12 @@ class InferenceService:
         model.eval()
         topography_grid = self._prepare_uploaded_topography(
             model,
-            target_latitude,
-            target_longitude,
+            volume.latitude,
+            volume.longitude,
         )
 
-        split = int(0.8 * len(x_torch))
-        x_test = x_torch[split:]
-        y_test_true = y_torch[split:]
-        ls_test = ls_torch[split:] if ls_torch is not None else None
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
+        y_test_true = y_test
         if len(x_test) == 0:
             raise ValueError("No uploaded model test samples are available")
 
@@ -1486,8 +1571,8 @@ class InferenceService:
             preds = pred_tensor.cpu().numpy()
             trues = test_yb.numpy()
 
-        y_pred_raw = preds * (y_std + 1e-6) + y_mean
-        y_true_raw = trues * (y_std + 1e-6) + y_mean
+        y_pred_raw = preds * (volume.y_std + 1e-6) + volume.y_mean
+        y_true_raw = trues * (volume.y_std + 1e-6) + volume.y_mean
         y_true_flat = y_true_raw.flatten()
         y_pred_flat = y_pred_raw.flatten()
 
@@ -1504,8 +1589,61 @@ class InferenceService:
 
     def _prepare_data(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None):
         """复用训练脚本中的数据加载逻辑"""
+        volume = self._load_official_task_volume(used_mcd_vars, window, horizon, data_dirs)
+        X_scaled = volume.values
+        T = int(X_scaled.shape[0])
+
+        X_seq, y_seq, ls_seq = [], [], []
+        for i in range(T - window - horizon + 1):
+            X_seq.append(X_scaled[i: i + window])
+            y_seq.append(volume.y_scaled[i + window: i + window + horizon])
+            if volume.ls is not None:
+                ls_seq.append(volume.ls[i: i + window])
+
+        X_torch = torch.tensor(np.array(X_seq)).permute(0, 1, 4, 2, 3).float()
+        y_torch = torch.tensor(np.array(y_seq)).unsqueeze(2).float()
+        ls_torch = torch.tensor(np.array(ls_seq)).float() if ls_seq else None
+
+        return X_torch, y_torch, ls_torch, volume.y_mean, volume.y_std
+
+    def _load_official_task_volume(self, used_mcd_vars, window, horizon, data_dirs=None):
+        """取官方模型的标准化体积：先查进程内缓存，未命中再加载并写入。"""
+        from services.prediction_volume_cache import (
+            ScaledVolume,
+            get_scaled_volume,
+            put_scaled_volume,
+            volume_signature,
+        )
+
+        if data_dirs:
+            # 个人/临时数据源目录随时可能被清理，不进入进程内缓存。
+            return self._load_scaled_volume(used_mcd_vars, window, horizon, data_dirs)
+
+        signature = volume_signature(
+            openmars_dir=self.openmars_dir,
+            mcd_dir=self.mcd_dir,
+            selected_channels=[var_name for var_name, _ in used_mcd_vars],
+            training_dataset="official_mcd_vars",
+            cache_prefix="official",
+        )
+        cached = get_scaled_volume(signature)
+        if isinstance(cached, ScaledVolume):
+            return cached
+
+        volume = self._load_scaled_volume(used_mcd_vars, window, horizon, data_dirs)
+        put_scaled_volume(signature, volume)
+        return volume
+
+    def _load_scaled_volume(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None):
+        """加载 OpenMARS/MCD、插值并标准化，返回连续体积（与 window/horizon 无关的产物）。
+
+        与 ``_prepare_data`` 的数值结果一致：同一批输入文件、同一 ``split_idx`` 与
+        同一 ``StandardScaler`` 拟合区间，只是不再展开成逐样本滑窗张量。
+        """
         from scipy.interpolate import interp1d
         from sklearn.preprocessing import StandardScaler
+
+        from services.prediction_volume_cache import ScaledVolume
 
         # --- Loading OpenMars ---
         openmars_dir = Path((data_dirs or {}).get("ARESVISION_OPENMARS_DIR") or self.openmars_dir)
@@ -1514,7 +1652,7 @@ class InferenceService:
         def natural_sort_key(s): return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', str(s))]
         file_list = sorted(glob.glob(str(openmars_dir / "*.nc")), key=natural_sort_key)
         for f in file_list:
-            with _NETCDF_READ_LOCK:
+            with netcdf_read_lock():
                 ds = nc.Dataset(f)
                 try:
                     o3_list.append(ds.variables['o3col'][:])
@@ -1532,7 +1670,7 @@ class InferenceService:
             mcd_ls = []
             for f_nc in sorted(mcd_dir.glob("*.nc"), key=natural_sort_key):
                 if not f_nc.exists(): continue
-                with _NETCDF_READ_LOCK:
+                with netcdf_read_lock():
                     ds = nc.Dataset(f_nc, 'r')
                     try:
                         for var_name, sn in used_mcd_vars:
@@ -1567,26 +1705,28 @@ class InferenceService:
         feat_list = [y_raw] + [vars_dict[sn] for sn in short_names]
         X_raw = np.stack(feat_list, axis=-1)
         T = X_raw.shape[0]
-        
+        height, width = int(X_raw.shape[1]), int(X_raw.shape[2])
+
         split_idx = int(0.8 * (T - window - horizon + 1)) + window
         X_scaled = np.zeros_like(X_raw)
         for c in range(X_raw.shape[-1]):
             scaler = StandardScaler()
             scaler.fit(X_raw[:split_idx, ..., c].reshape(split_idx, -1))
             X_scaled[..., c] = scaler.transform(X_raw[..., c].reshape(T, -1)).reshape(T, 36, 72)
-        
+
         y_train_part = y_raw[:split_idx]
         y_mean, y_std = y_train_part.mean(), y_train_part.std()
         y_scaled = (y_raw - y_mean) / (y_std + 1e-6)
 
-        X_seq, y_seq, ls_seq = [], [], []
-        for i in range(T - window - horizon + 1):
-            X_seq.append(X_scaled[i: i + window])
-            y_seq.append(y_scaled[i + window: i + window + horizon])
-            ls_seq.append(om_ls_raw[i: i + window])
-        
-        X_torch = torch.tensor(np.array(X_seq)).permute(0, 1, 4, 2, 3).float()
-        y_torch = torch.tensor(np.array(y_seq)).unsqueeze(2).float()
-        ls_torch = torch.tensor(np.array(ls_seq)).float()
-        
-        return X_torch, y_torch, ls_torch, y_mean, y_std
+        return ScaledVolume(
+            values=X_scaled,
+            y_scaled=y_scaled,
+            ls=om_ls_raw,
+            y_mean=float(y_mean),
+            y_std=float(y_std),
+            height=height,
+            width=width,
+            latitude=None,
+            longitude=None,
+            split_idx=split_idx,
+        )

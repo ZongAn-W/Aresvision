@@ -77,51 +77,11 @@ class TrainingModelCompareResponse(BaseModel):
     items: list[TrainingModelCompareItem]
 
 
-class AblationItem(BaseModel):
-    variable_combo: str
-    variables: list[str]
-    rmse: float
-    mae: float
-    ssim: float
-    r2: float
-
-
-class AblationResponse(BaseModel):
-    items: list[AblationItem]
-
-
 class DiurnalResponse(BaseModel):
     hours: list[float]
     ozone_values: list[float]
     lat_band: str
     ls: float
-    source_meta: SourceMeta | None = None
-class PerformancePoint(BaseModel):
-    ls: float
-    my: int
-    r2: float
-    rmse: float
-    mae: float
-    ssim: float
-
-
-class PerformanceResponse(BaseModel):
-    items: list[PerformancePoint]
-    global_r2: float = 0.0
-    global_rmse: float = 0.0
-    global_mae: float = 0.0
-    global_ssim: float = 0.0
-    source_meta: SourceMeta | None = None
-
-
-class PerformanceCompareRequest(BaseModel):
-    # 每个项包含一个变量组合
-    configs: list[list[str]]
-
-
-class PerformanceCompareResponse(BaseModel):
-    # key 为模型后缀或变量标识，val 为对应的性能数据
-    results: dict[str, PerformanceResponse]
     source_meta: SourceMeta | None = None
 
 

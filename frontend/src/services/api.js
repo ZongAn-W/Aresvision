@@ -335,46 +335,6 @@ export async function fetchPredictMetrics(body, options = {}) {
   return res.json();
 }
 
-export async function prewarmPredictSource(marsYear = 27, options = {}) {
-  const url = appendDataSource(`${BASE}/predict/prewarm?my=${marsYear}`, options);
-  const res = await authedFetch(url, { method: 'POST' });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
-}
-
-export async function fetchPerformanceCurve(body, options = {}) {
-  const url = appendDataSource(`${BASE}/predict/performance`, options);
-  const res = await authedFetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: options.signal,
-  });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
-}
-
-export async function fetchPerformanceComparison(configs, options = {}) {
-  const marsYear = options?.marsYear ?? 27;
-  const url = appendDataSource(`${BASE}/predict/performance-compare?my=${marsYear}`, options);
-  const res = await authedFetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ configs }),
-    signal: options.signal,
-  });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
-}
-
-export async function fetchAblation(marsYear = 27, ls = 90, options = {}) {
-  const res = await authedFetch(
-    appendDataSource(`${BASE}/predict/ablation?my=${marsYear}&ls=${ls}`, options)
-  );
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
-}
-
 export async function fetchDiurnal(marsYear = 27, ls = 90, latBand = 'Equatorial (30S-30N)', options = {}) {
   const res = await authedFetch(appendDataSource(`${BASE}/predict/diurnal?my=${marsYear}&ls=${ls}&lat_band=${encodeURIComponent(latBand)}`, options));
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);

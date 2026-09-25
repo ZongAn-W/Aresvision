@@ -50,7 +50,7 @@ def test_predict_context_rejects_personal_source():
 
     async def run():
         with pytest.raises(Exception) as exc:
-            await predict_router._resolve_predict_context(request, 27, "personal", None)
+            await predict_router._resolve_diurnal_context(request, 27, "personal", None)
         assert getattr(exc.value, "status_code", None) == 400
         assert "Data Overview" in getattr(exc.value, "detail", "")
 

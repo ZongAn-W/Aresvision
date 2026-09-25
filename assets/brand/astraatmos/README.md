@@ -1,6 +1,6 @@
 # AstraAtmos 标识设计
 
-本目录保存「Atmospheric A / 大气之 A」设计方案及可复用资产。**该标志已正式接入产品**：全站导航、首页强调色、关于页、页脚与浏览器图标（SVG / PNG / ICO）均已使用本方案，深浅主题使用对应配色。接入范围与验收方式见[品牌接入方案](../../../docs/superpowers/plans/2026-09-24-atmospheric-a-brand-integration.md)。
+本目录保存「Atmospheric A / 大气之 A」设计方案及可复用资产。**该标志已正式接入产品**：全站导航、首页强调色、关于页、页脚与浏览器图标（SVG / PNG / ICO）均已使用本方案，深浅主题使用对应配色。接入范围与验收方式见[品牌接入方案](../../../docs/plans/2026-09-24-atmospheric-a-brand-integration.md)。
 
 产品代码中的品牌图形统一由 [`frontend/src/components/BrandMark.jsx`](../../../frontend/src/components/BrandMark.jsx) 绘制，配色变量在 [`brand.css`](../../../frontend/src/components/brand.css)。浏览器与文档使用 `frontend/public/` 下的静态副本，两者几何必须保持一致。
 
