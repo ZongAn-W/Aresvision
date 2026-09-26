@@ -1,3 +1,5 @@
+import { useMarsChartSetting } from '../workbench/MarsAnalysisSettings.jsx';
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -85,14 +87,16 @@ export default function RealtimeMonitor({ marsYear, lsValue, overviewSourceParam
       title: 'Hourly ozone unavailable',
       body: 'This source has no O3COL/o3col hourly field, so the chart no longer generates simulated ozone.',
     };
-  const [latBand, setLatBand] = useState(LAT_BANDS[2]);
+  const [latBand, setLatBand, managed] = useMarsChartSetting('realtime', 'band', LAT_BANDS[2]);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
   const [refreshing, setRefreshing] = useState(false);
   const hasDataRef = useRef(false);
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     const hasRenderableData = hasDataRef.current;
     if (hasRenderableData) setRefreshing(true);
     else setLoading(true);
@@ -108,6 +112,7 @@ export default function RealtimeMonitor({ marsYear, lsValue, overviewSourceParam
       })
       .catch((err) => {
         console.error(err);
+        if (active) setRequestError(err);
         if (active) {
           setLoading(false);
           setRefreshing(false);
@@ -116,7 +121,7 @@ export default function RealtimeMonitor({ marsYear, lsValue, overviewSourceParam
     return () => {
       active = false;
     };
-  }, [marsYear, lsValue, latBand, overviewSourceParams]);
+  }, [retryToken, marsYear, lsValue, latBand, overviewSourceParams]);
 
   const stats = useMemo(() => {
     if (!data?.ozone_values?.length) return null;
@@ -155,9 +160,11 @@ export default function RealtimeMonitor({ marsYear, lsValue, overviewSourceParam
       }
       : null,
     samples: sampleInsightSeries(data?.ozone_values || [], data?.hours || [], 12),
-  }), [data, latBand, loading, lsValue, marsYear, overviewSourceParams, shortLabels, stats]);
+  }), [data, latBand, loading, requestError, lsValue, marsYear, overviewSourceParams, shortLabels, stats]);
 
   useAiInsightRegistration('realtime', aiInsightProvider);
+
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
 
   if (loading && !data?.ozone_values?.length) {
     return (
@@ -181,6 +188,49 @@ export default function RealtimeMonitor({ marsYear, lsValue, overviewSourceParam
     const message = data?.message || unavailableCopy.body;
     return (
       <div style={{ width: '100%', height: '100%', display: 'grid', alignContent: 'start', gap: 14, padding: 20 }}>
+        {!managed ? (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {LAT_BANDS.map((item) => {
+              const active = item === latBand;
+              return (
+                <button
+                  key={item}
+                  onClick={() => setLatBand(item)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 999,
+                    border: `1px solid ${active ? C.mars : C.border}`,
+                    background: active ? 'rgba(199,91,57,0.12)' : 'rgba(255,255,255,0.03)',
+                    color: active ? C.mars : C.ice60,
+                    fontSize: 'calc(11px * var(--font-scale, 1))',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-body)',
+                  }}
+                >
+                  {shortLabels[item]}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 16, background: 'rgba(255,255,255,0.035)', padding: 18 }}>
+          <div style={{ color: C.mars, fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: 'calc(15px * var(--font-scale, 1))' }}>
+            {unavailableCopy.title}
+          </div>
+          <div style={{ color: C.ice60, marginTop: 8, lineHeight: 1.65, fontSize: 'calc(12px * var(--font-scale, 1))' }}>
+            {message || t('overview.charts.noData')}
+          </div>
+          <div style={{ color: C.ice30, marginTop: 10, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+            {copy.marsYear}{marsYear} · {copy.solarLongitude} {fmtNum(lsValue, 0)}° · {shortLabels[latBand]}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width: '100%', display: 'grid', gridTemplateRows: managed ? 'auto minmax(360px, 1fr)' : 'auto auto minmax(360px, 1fr)', gap: 16, minWidth: 0, paddingRight: 4 }}>
+      {!managed ? (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {LAT_BANDS.map((item) => {
             const active = item === latBand;
@@ -204,46 +254,7 @@ export default function RealtimeMonitor({ marsYear, lsValue, overviewSourceParam
             );
           })}
         </div>
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: 16, background: 'rgba(255,255,255,0.035)', padding: 18 }}>
-          <div style={{ color: C.mars, fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: 'calc(15px * var(--font-scale, 1))' }}>
-            {unavailableCopy.title}
-          </div>
-          <div style={{ color: C.ice60, marginTop: 8, lineHeight: 1.65, fontSize: 'calc(12px * var(--font-scale, 1))' }}>
-            {message || t('overview.charts.noData')}
-          </div>
-          <div style={{ color: C.ice30, marginTop: 10, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
-            {copy.marsYear}{marsYear} · {copy.solarLongitude} {fmtNum(lsValue, 0)}° · {shortLabels[latBand]}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ width: '100%', height: '100%', display: 'grid', gridTemplateRows: 'auto auto minmax(320px, 1fr)', gap: 16, overflowX: 'hidden', overflowY: 'auto', scrollbarGutter: 'stable', paddingRight: 4 }}>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        {LAT_BANDS.map((item) => {
-          const active = item === latBand;
-          return (
-            <button
-              key={item}
-              onClick={() => setLatBand(item)}
-              style={{
-                padding: '8px 12px',
-                borderRadius: 999,
-                border: `1px solid ${active ? C.mars : C.border}`,
-                background: active ? 'rgba(199,91,57,0.12)' : 'rgba(255,255,255,0.03)',
-                color: active ? C.mars : C.ice60,
-                fontSize: 'calc(11px * var(--font-scale, 1))',
-                cursor: 'pointer',
-                fontFamily: 'var(--font-body)',
-              }}
-            >
-              {shortLabels[item]}
-            </button>
-          );
-        })}
-      </div>
+      ) : null}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
         <div style={{ padding: '14px 16px', borderRadius: 12, background: 'rgba(199,91,57,0.08)', border: '1px solid rgba(199,91,57,0.18)' }}>

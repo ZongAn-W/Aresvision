@@ -1,3 +1,5 @@
+import { useMarsChartSetting } from '../workbench/MarsAnalysisSettings.jsx';
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -39,13 +41,16 @@ export default function WaveExplorer({ marsYear, overviewSourceParams = {} }) {
     colorbarTitle: 'Anomaly (m-atm cm)',
   };
 
+  const [variable, , managed] = useMarsChartSetting('wave', 'variable', 'o3col');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     setLoading(true);
-    fetchOverviewZonalAnomaly(marsYear, 'o3col', overviewSourceParams)
+    fetchOverviewZonalAnomaly(marsYear, variable, overviewSourceParams)
       .then((res) => {
         if (active) {
           setData(res);
@@ -54,11 +59,13 @@ export default function WaveExplorer({ marsYear, overviewSourceParams = {} }) {
       })
       .catch((err) => {
         console.error(err);
+        if (active) setRequestError(err);
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [marsYear, overviewSourceParams]);
+  }, [retryToken, marsYear, variable, overviewSourceParams]);
 
+  const anomalyUnit = { o3col: 'μm-atm', Temperature: 'K', Solar_Flux_DN: 'W/m²', U_Wind: 'm/s', V_Wind: 'm/s' }[variable];
   const diagnostics = useMemo(() => {
     if (!data?.x?.length || !data?.y?.length || !data?.z?.length) return null;
     const rowIndex = Math.floor(data.y.length / 2);
@@ -77,17 +84,17 @@ export default function WaveExplorer({ marsYear, overviewSourceParams = {} }) {
     card: 'wave',
     marsYear,
     source: buildOverviewSourceSnapshot(overviewSourceParams),
-    variable: 'o3col',
-    unit: 'μm-atm anomaly',
+    variable,
+    unit: `${anomalyUnit} anomaly`,
     valueMeaning: 'Zonal anomaly heatmap: positive and negative departures from the zonal mean by longitude and latitude.',
-    status: loading ? 'loading' : (data?.z?.length ? 'ready' : 'empty'),
+    status: requestError ? 'error' : loading ? 'loading' : (data?.z?.length ? 'ready' : 'empty'),
     dimensions: {
       lonCount: data?.x?.length || 0,
       latCount: data?.y?.length || 0,
     },
     valueRange: diagnostics?.valueRange || null,
     equatorialAnomalySamples: diagnostics?.equatorSamples || [],
-  }), [data, diagnostics, loading, marsYear, overviewSourceParams]);
+  }), [data, diagnostics, loading, requestError, marsYear, overviewSourceParams, variable, anomalyUnit]);
 
   useAiInsightRegistration('wave', aiInsightProvider);
 
@@ -95,12 +102,16 @@ export default function WaveExplorer({ marsYear, overviewSourceParams = {} }) {
   const maxAbs = hasHeatmap ? Math.max(Math.abs(data.min || 0), Math.abs(data.max || 0)) : 0;
   const hoverZ = hasHeatmap ? formatAdaptiveMatrix(data.z, { fixedDigits: 3 }) : [];
 
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
+
   return (
-    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div>
-        <h3 style={{ color: C.ice, margin: '0 0 4px 0', fontSize: 'calc(16px * var(--font-scale, 1))' }}>{copy.title}</h3>
-        <p style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))', margin: 0 }}>{copy.desc}</p>
-      </div>
+    <div className="mars-wave-grid">
+      {!managed ? (
+        <div>
+          <h3 style={{ color: C.ice, margin: '0 0 4px 0', fontSize: 'calc(16px * var(--font-scale, 1))' }}>{copy.title}</h3>
+          <p style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))', margin: 0 }}>{copy.desc}</p>
+        </div>
+      ) : null}
       <div style={{ height: '360px' }}>
         {loading ? (
           <div style={{ color: C.ice, padding: 20 }}>{copy.loading}</div>
@@ -118,9 +129,9 @@ export default function WaveExplorer({ marsYear, overviewSourceParams = {} }) {
                 colorscale: 'RdBu',
                 zmin: -maxAbs,
                 zmax: maxAbs,
-                hovertemplate: `${copy.lonAxis}: %{x:.1f}<br>${copy.latAxis}: %{y:.1f}<br>${copy.colorbarTitle}: %{customdata}<extra></extra>`,
+                hovertemplate: `${copy.lonAxis}: %{x:.1f}<br>${copy.latAxis}: %{y:.1f}<br>${isZh ? '距平' : 'Anomaly'} (${anomalyUnit}): %{customdata}<extra></extra>`,
                 colorbar: {
-                  title: copy.colorbarTitle,
+                  title: `${isZh ? '距平' : 'Anomaly'} (${anomalyUnit})`,
                   titleside: 'right',
                   titlefont: { color: plotText, size: 10  },
                   tickfont: { color: plotText, size: 10  },
@@ -153,13 +164,13 @@ export default function WaveExplorer({ marsYear, overviewSourceParams = {} }) {
           />
         )}
       </div>
-      <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+      <div className="mars-wave-diagnostics">
         <WaveBandDiagnosticsChart
           marsYear={marsYear}
           overviewSourceParams={overviewSourceParams}
           baseData={data}
           baseLoading={loading}
-          baseVariable="o3col"
+          baseVariable={variable}
         />
       </div>
     </div>

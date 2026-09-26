@@ -90,3 +90,31 @@ export const PLOTLY_SCALE = {
   jet:     'Jet',
   rdbu:    'RdBu',
 };
+
+/** 已知色阶名（不含残差专用 rdbu，它由 colorMode 直接指定） */
+const NAMED = new Set(['inferno', 'viridis', 'plasma', 'magma', 'cividis', 'jet']);
+
+/** 有符号的变量：风分量在火星与地球都用发散色阶（地球的 `earthColormap` 同样如此）。 */
+const DIVERGING_VARIABLES = new Set(['U_Wind', 'V_Wind', 'U10M', 'V10M']);
+
+/** 变量与设置解析出的色阶描述：`{ mode, name, min, max }`；数值缺失时范围落在 0–1 之外，调用方据此回退。 */
+export function makeColorSpec({ variable, centeredOnZero, colormap, range } = {}) {
+  const diverging = Boolean(centeredOnZero) || DIVERGING_VARIABLES.has(variable);
+  const mode = diverging ? 'rdbu' : (NAMED.has(colormap) ? colormap : 'inferno');
+  const finite = Number.isFinite(range?.min) && Number.isFinite(range?.max) && range.max > range.min;
+  return {
+    mode,
+    name: mode === 'rdbu' ? 'rdbu' : mode,
+    min: finite ? range.min : null,
+    max: finite ? range.max : null,
+  };
+}
+
+/** 按已知范围把数值转成色阶坐标 t∈[0,1]；范围缺失或退化时返回 null。 */
+export function colorFraction(spec, value) {
+  if (!Number.isFinite(value)) return null;
+  const min = spec?.min;
+  const max = spec?.max;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+  return Math.max(0, Math.min(1, (value - min) / (max - min)));
+}

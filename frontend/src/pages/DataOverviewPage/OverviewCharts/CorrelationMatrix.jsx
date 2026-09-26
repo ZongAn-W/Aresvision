@@ -1,3 +1,5 @@
+import { useMarsChartSetting } from '../workbench/MarsAnalysisSettings.jsx';
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -194,14 +196,16 @@ export default function CorrelationMatrix({ marsYear, overviewSourceParams = {} 
     Solar_Flux_DN: copy.labels.Solar,
   }), [copy.labels]);
 
-  const [selectedVariable, setSelectedVariable] = useState(VARIABLE_META_BASE[2].id);
+  const [selectedVariable, setSelectedVariable, managed] = useMarsChartSetting('correlation', 'variable', VARIABLE_META_BASE[2].id);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
   const [correlationData, setCorrelationData] = useState(null);
   const [ozoneHeatmap, setOzoneHeatmap] = useState(null);
   const [envHeatmaps, setEnvHeatmaps] = useState({});
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     setLoading(true);
     Promise.all([
       fetchOverviewCorrelation(marsYear, overviewSourceParams),
@@ -221,12 +225,13 @@ export default function CorrelationMatrix({ marsYear, overviewSourceParams = {} 
       })
       .catch((error) => {
         console.error(error);
+        if (active) setRequestError(error);
         if (active) setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, [marsYear, overviewSourceParams]);
+  }, [retryToken, marsYear, overviewSourceParams]);
 
   const derived = useMemo(() => {
     if (!ozoneHeatmap || !envHeatmaps[selectedVariable]) return null;
@@ -286,7 +291,7 @@ export default function CorrelationMatrix({ marsYear, overviewSourceParams = {} 
     driverUnit: selectedMeta?.unit || '',
     ozoneUnit: ozoneLabel(ozoneUnit),
     valueMeaning: 'Correlation matrix, scatter regression, normalized seasonal co-evolution, and lead-lag correlation between O3 and the selected driver.',
-    status: loading ? 'loading' : (derived ? 'ready' : 'empty'),
+    status: requestError ? 'error' : loading ? 'loading' : (derived ? 'ready' : 'empty'),
     strongestPair: strongest
       ? {
         a: corrLabels[strongest.a] || strongest.a,
@@ -319,9 +324,11 @@ export default function CorrelationMatrix({ marsYear, overviewSourceParams = {} 
       derived?.lagCurve?.map((item) => item.lag) || [],
       10,
     ),
-  }), [corrLabels, derived, loading, marsYear, overviewSourceParams, ozoneRangeMax, ozoneRangeMin, ozoneUnit, selectedMeta?.label, selectedMeta?.unit, selectedVariable, strongest, strongestLag]);
+  }), [corrLabels, derived, loading, requestError, marsYear, overviewSourceParams, ozoneRangeMax, ozoneRangeMin, ozoneUnit, selectedMeta?.label, selectedMeta?.unit, selectedVariable, strongest, strongestLag]);
 
   useAiInsightRegistration('correlation', aiInsightProvider);
+
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
 
   if (loading) {
     return (
@@ -340,20 +347,22 @@ export default function CorrelationMatrix({ marsYear, overviewSourceParams = {} 
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16, paddingRight: 4 }}>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        {variableMeta.map((meta) => {
-          const active = meta.id === selectedVariable;
-          return (
-            <button
-              key={meta.id}
-              onClick={() => setSelectedVariable(meta.id)}
-              style={{ padding: '8px 12px', borderRadius: 999, border: `1px solid ${active ? meta.color : C.border}`, background: active ? `${meta.color}20` : 'rgba(255,255,255,0.03)', color: active ? meta.color : C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))', cursor: 'pointer', fontFamily: 'var(--font-body)' }}
-            >
-              {meta.label}
-            </button>
-          );
-        })}
-      </div>
+      {!managed ? (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          {variableMeta.map((meta) => {
+            const active = meta.id === selectedVariable;
+            return (
+              <button
+                key={meta.id}
+                onClick={() => setSelectedVariable(meta.id)}
+                style={{ padding: '8px 12px', borderRadius: 999, border: `1px solid ${active ? meta.color : C.border}`, background: active ? `${meta.color}20` : 'rgba(255,255,255,0.03)', color: active ? meta.color : C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))', cursor: 'pointer', fontFamily: 'var(--font-body)' }}
+              >
+                {meta.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
         <div style={{ padding: '14px 16px', borderRadius: 12, background: 'rgba(74,158,255,0.08)', border: '1px solid rgba(74,158,255,0.18)' }}>
@@ -384,7 +393,7 @@ export default function CorrelationMatrix({ marsYear, overviewSourceParams = {} 
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
+      <div className="mars-chart-grid mars-correlation-grid">
         <div style={{ padding: 14, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, minHeight: 340, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }}>
           <div style={{ color: C.ice, fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 800, marginBottom: 8, fontFamily: 'var(--font-display)' }}>{copy.scatter}</div>
           <div style={{ minHeight: 0 }}>

@@ -1,3 +1,5 @@
+import { useMarsChartSetting } from '../workbench/MarsAnalysisSettings.jsx';
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -123,9 +125,10 @@ export default function SeasonalChart({ marsYear, overviewSourceParams = {} }) {
   const colormapName = settings?.colormap;
   const units = settings?.units || { ozone: 'um-atm', temperature: 'K', wind: 'm/s' };
 
-  const [variable, setVariable] = useState('o3col');
+  const [variable, setVariable, managed] = useMarsChartSetting('seasonal', 'variable', 'o3col');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
 
   const copy = isZh
     ? {
@@ -194,7 +197,7 @@ export default function SeasonalChart({ marsYear, overviewSourceParams = {} }) {
       variableLabel: currentVariableLabel,
       unit: currentUnitLabel,
       valueMeaning: 'Latitude-Ls heatmap values for the selected variable, converted to the current display unit.',
-      status: loading ? 'loading' : (data?.z?.length ? 'ready' : 'empty'),
+      status: requestError ? 'error' : loading ? 'loading' : (data?.z?.length ? 'ready' : 'empty'),
       dimensions: {
         lsCount: lsAxis.length,
         latCount: latAxis.length,
@@ -207,12 +210,13 @@ export default function SeasonalChart({ marsYear, overviewSourceParams = {} }) {
       latitudeBandSummary,
       equatorialSeriesSample: sampleInsightSeries(midLatitudeSeries, lsAxis, 12),
     };
-  }, [currentUnitLabel, currentVariableLabel, data, isZh, loading, marsYear, overviewSourceParams, units, variable]);
+  }, [currentUnitLabel, currentVariableLabel, data, isZh, loading, requestError, marsYear, overviewSourceParams, units, variable]);
 
   useAiInsightRegistration('seasonal', aiInsightProvider);
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     setLoading(true);
     const fetcher = variable === 'o3col'
       ? fetchOverviewSeasonalHeatmap(marsYear, overviewSourceParams)
@@ -224,6 +228,7 @@ export default function SeasonalChart({ marsYear, overviewSourceParams = {} }) {
       })
       .catch((err) => {
         console.error(err);
+        if (active) setRequestError(err);
         if (active) setData(null);
       })
       .finally(() => {
@@ -233,7 +238,7 @@ export default function SeasonalChart({ marsYear, overviewSourceParams = {} }) {
     return () => {
       active = false;
     };
-  }, [marsYear, variable, overviewSourceParams]);
+  }, [retryToken, marsYear, variable, overviewSourceParams]);
 
   useEffect(() => {
     if (data && !loading) {
@@ -249,6 +254,8 @@ export default function SeasonalChart({ marsYear, overviewSourceParams = {} }) {
     }
     return undefined;
   }, [data, loading]);
+
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
 
   if (loading) {
     return (
@@ -319,30 +326,34 @@ export default function SeasonalChart({ marsYear, overviewSourceParams = {} }) {
         }
       `}</style>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {variableOptions.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => setVariable(item.id)}
-            style={{
-              border: `1px solid ${variable === item.id ? C.blue : C.border}`,
-              background: variable === item.id ? 'rgba(74,158,255,0.16)' : 'rgba(255,255,255,0.03)',
-              color: variable === item.id ? C.blue : C.ice60,
-              borderRadius: 999,
-              padding: '6px 10px',
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              cursor: 'pointer',
-              fontFamily: 'var(--font-body)',
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
+      {!managed ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {variableOptions.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setVariable(item.id)}
+              style={{
+                border: `1px solid ${variable === item.id ? C.blue : C.border}`,
+                background: variable === item.id ? 'rgba(74,158,255,0.16)' : 'rgba(255,255,255,0.03)',
+                color: variable === item.id ? C.blue : C.ice60,
+                borderRadius: 999,
+                padding: '6px 10px',
+                fontSize: 'calc(11px * var(--font-scale, 1))',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-body)',
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-      <div style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
-        {copy.currentVar}: <span style={{ color: C.blue, fontWeight: 700 }}>{currentVariableLabel}</span>
-      </div>
+      {!managed ? (
+        <div style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+          {copy.currentVar}: <span style={{ color: C.blue, fontWeight: 700 }}>{currentVariableLabel}</span>
+        </div>
+      ) : null}
 
       <div style={{ minHeight: 360 }}>
         <Plot

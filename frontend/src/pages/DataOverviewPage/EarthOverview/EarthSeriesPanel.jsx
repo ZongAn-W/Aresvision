@@ -13,9 +13,20 @@ import { EARTH_VARIABLE_LABEL_KEYS, formatEarthNumber } from './earthOverviewMod
 const PLOTLY_CONFIG = { displayModeBar: false, responsive: true };
 
 /**
+ * dock 变体的曲线高度。
+ *
+ * 分析区里这一块要和「AI 解读」并排放在主图下面的一行里
+ * （见 workbench/observatoryLayout.js 的 `DOCK_BOTTOM_PAIR_HEIGHT`），
+ * 所以曲线不能再用 200px：那会把整行撑到第一屏之外，只剩半张卡片露在折叠线下。
+ */
+const DOCK_PLOT_HEIGHT = 132;
+
+/**
  * 点位曲线与区域均值曲线。
  *
  * 两条线都是原始物理值、同一单位；不做 Z-score、平滑或插值。
+ * `dock` 变体用于分析区：不再占满剩余高度，而是按内容高度排在主图下方
+ * （两条曲线横排），把纵向空间留给主图。
  */
 export default function EarthSeriesPanel({
   variable,
@@ -36,12 +47,12 @@ export default function EarthSeriesPanel({
   );
 
   const regionalLayout = useMemo(
-    () => buildSeriesLayout({ variable, units, displayedDate, isLight }),
+    () => buildSeriesLayout({ variable, units, displayedDate, isLight, height: DOCK_PLOT_HEIGHT }),
     [variable, units, displayedDate, isLight],
   );
 
   const pointLayout = useMemo(
-    () => buildSeriesLayout({ variable, units, displayedDate, isLight }),
+    () => buildSeriesLayout({ variable, units, displayedDate, isLight, height: DOCK_PLOT_HEIGHT }),
     [variable, units, displayedDate, isLight],
   );
 
@@ -56,8 +67,9 @@ export default function EarthSeriesPanel({
   const variableLabel = t(EARTH_VARIABLE_LABEL_KEYS[variable] || variable);
 
   return (
-    <div className="earth-series">
-      <div className="earth-series__summary">
+    <div className="earth-series earth-series--dock">
+      {/* 摘要压成一行：横排的两个数字本来一眼就能看完，做成卡片会白占一行高度。 */}
+      <div className="earth-series__summary earth-series__summary--inline">
         <h3>{variableLabel}</h3>
         <dl>
           <div>

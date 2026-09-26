@@ -1,23 +1,41 @@
 /**
- * Earth 三维分析工作台场景（共用工作台壳层 + Earth adapter）。
+ * Earth 三维分析观测台（共用观测台外壳 + Earth adapter）。
  *
- * 与 Mars 共用：三栏布局、模式选择、卡片外壳、三维场景控制、图例与 AI 解读入口。
- * Earth 专属：ISO 日期与年度选择、原始单位、v2 全球 5° 单元几何、极区统计，
- * 以及明确声明不可用的昼夜卡片（不请求 Mars 昼夜接口）。
+ * 观测档展示球体与观测轨；分析档依次选择分析、调整条件、阅读主图，
+ * AI 解读按需展开。逐日数据与点位操作统一留在观测档。Earth 专属语义保持不变：ISO 日期与年度选择、原始物理
+ * 单位、v2 全球 5° 单元几何、球面面积加权均值，以及明确声明不可用的昼夜卡片
+ * （不请求火星昼夜接口）。
+ *
+ * 设置内容按职责拆分：数据源（数据集身份）、图层（球体图层能力）、点位（坐标与
+ * 采样单元）、显示（三维/二维、数据场、经纬网、海岸线、自动旋转、视角重置）。
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../../../i18n/index.js';
 import { useSettings } from '../../../contexts/SettingsContext';
-import { makeGradient } from '../../../utils/colormaps';
-import C from '../../../constants/colors';
 import GlowCard from '../../../components/GlowCard';
+import C from '../../../constants/colors';
+import { getRgb } from '../../../utils/colormaps';
 import { useOverviewController } from '../workbench/useOverviewController.js';
 import { createEarthOverviewAdapter } from '../workbench/earthOverviewAdapter.js';
 import OverviewShell from '../workbench/OverviewShell.jsx';
-import OverviewAnalysisPanel from '../workbench/OverviewAnalysisPanel.jsx';
 import OverviewScene from '../workbench/OverviewScene.jsx';
-import AnalysisModePicker, { SectionLabel } from '../workbench/OverviewSidebarParts.jsx';
+import ObservatoryToolbar, { AnalysisEntryButton, ToolbarSelect } from '../workbench/ObservatoryToolbar.jsx';
+import EarthObservationRail from '../workbench/EarthObservationRail.jsx';
+import { earthRailDomain, earthRailSeries } from '../workbench/earthObservationRail.js';
+import ObservatoryTools, { ObservatorySourceButton } from '../workbench/ObservatoryTools.jsx';
+import AnalysisDock from '../workbench/AnalysisDock.jsx';
+import EarthAnalysisBoard from './EarthAnalysisBoard.jsx';
+import {
+  FieldRow,
+  InlineSwitch,
+  PanelButton,
+  PanelCard,
+  PanelSectionLabel,
+  PanelSelect,
+} from '../workbench/ObservatoryToolParts.jsx';
+import { earthAnalysisControls } from '../workbench/analysisGuidance.js';
+import { buildObservatoryGroups } from '../workbench/observatoryLayout.js';
 import { pointInsideGeometry } from '../workbench/OverviewAdapter.js';
 import {
   EARTH_VARIABLES,
@@ -25,6 +43,7 @@ import {
   earthColormap,
   formatEarthNumber,
 } from './earthOverviewModel.js';
+import { MODE_DEFS } from '../overviewChartLayout.js';
 import { normalizeLongitudeDegrees } from './earthMapGeometry.js';
 import {
   buildBandDiagnostics,
@@ -56,242 +75,25 @@ import {
 } from './EarthResearchViews.jsx';
 import EarthInsightPanel from './EarthInsightPanel.jsx';
 import EarthMap2D from './EarthMap2D.jsx';
-import EarthTimeline from './EarthTimeline.jsx';
-import EarthSeriesPanel from './EarthSeriesPanel.jsx';
 import './earthOverview.css';
 
-/** 左侧控件栏：与 Mars 相同的分区顺序（星球 → 分析模式 → 数据源 → 变量/时间 → 显示 → 点位）。 */
-function EarthWorkbenchSidebar({
-  controller, sceneSwitch, isZh, isLight, viewMode, onViewModeChange,
-  showField, onShowFieldChange, showGeo, onShowGeoChange,
-  showBaseMap, onShowBaseMapChange, autoRotate, onAutoRotateChange,
-  onResetCamera,
-}) {
-  const t = useT();
-  const [latInput, setLatInput] = useState('');
-  const [lonInput, setLonInput] = useState('');
-  const [inputError, setInputError] = useState('');
-
-  const geometry = controller.geometry;
-  const descriptorText = geometry
-    ? `${geometry.shape[0]} x ${geometry.shape[1]} · ${geometry.latBounds[0]}°~${geometry.latBounds[1]}° / ${geometry.lonBounds[0]}°~${geometry.lonBounds[1]}°`
-    : '--';
-
-  const submitCoordinates = (event) => {
-    event.preventDefault();
-    const lat = Number(latInput);
-    const lon = Number(lonInput);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      setInputError(t('earthOverview.errors.invalidCoordinates'));
-      return;
-    }
-    if (!pointInsideGeometry(geometry, lat, lon)) {
-      setInputError(t('earthOverview.errors.outsideCoverage'));
-      controller.markOutOfCoverage({ code: 'point_outside_coverage', lat, lon });
-      return;
-    }
-    setInputError('');
-    controller.selectPoint({ lat, lon });
-  };
-
-  const currentValue = (() => {
-    const series = controller.pointSeries;
-    const field = controller.field;
-    if (!series?.dates?.length || !field?.value) return '--';
-    const index = series.dates.indexOf(field.value);
-    if (index < 0) return '--';
-    const value = series.values[index];
-    return Number.isFinite(value) ? `${formatEarthNumber(value, 2)} ${series.unit || ''}` : '--';
-  })();
-
-  return (
-    <div className="overview-sidebar overview-sidebar--embedded" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 16, padding: '18px 14px', overflowY: 'auto', boxSizing: 'border-box' }}>
-      <div>
-        <h1 style={{ margin: 0, color: C.ice, fontFamily: 'var(--font-display)', fontSize: 'calc(17px * var(--font-scale, 1))', fontWeight: 800 }}>
-          {isZh ? '分析工作台' : 'Analysis workbench'}
-        </h1>
-        <p style={{ margin: '4px 0 0', color: C.ice50, fontFamily: 'var(--font-body)', fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6 }}>
-          {isZh
-            ? '与火星共用同一套分析工作台；日期、单位与网格保持地球语义。'
-            : 'Shares one analysis workbench with Mars while keeping Earth date, unit and grid semantics.'}
-        </p>
-      </div>
-
-      {sceneSwitch ? (
-        <section data-testid="planet-scene-switch-slot">
-          <SectionLabel>{isZh ? '数据总览星球' : 'Overview planet'}</SectionLabel>
-          {sceneSwitch}
-        </section>
-      ) : null}
-
-      <section>
-        <SectionLabel>{isZh ? '分析模式' : 'Analysis mode'}</SectionLabel>
-        <AnalysisModePicker
-          mode={controller.mode}
-          onSelect={controller.selectMode}
-          isZh={isZh}
-          isLight={isLight}
-          name="overview-mode-earth"
-        />
-      </section>
-
-      <section>
-        <SectionLabel>{isZh ? '数据范围' : 'Data scope'}</SectionLabel>
-        <div style={{ display: 'grid', gap: 12 }}>
-          <GlowCard style={{ padding: '14px 16px', display: 'grid', gap: 10 }}>
-            <FieldRow label={isZh ? '数据源' : 'Data source'} value={controller.sourceLabel} />
-            <FieldRow
-              label={isZh ? '发布指纹' : 'Release fingerprint'}
-              value={controller.sourceFingerprint ? `${controller.sourceFingerprint.slice(0, 12)}...` : '--'}
-            />
-            <FieldRow label={isZh ? '网格与覆盖' : 'Grid and coverage'} value={descriptorText} />
-            <FieldRow
-              label={isZh ? '时间模型' : 'Time model'}
-              value={`ISO ${controller.time?.start || '--'} ~ ${controller.time?.end || '--'} (${controller.timeAxis.length} ${isZh ? '天' : 'days'})`}
-            />
-            <FieldRow
-              label={isZh ? '聚合' : 'Aggregation'}
-              value={isZh ? '全球 5° 单元球面面积加权均值' : 'Global 5° cell spherical area-weighted mean'}
-            />
-          </GlowCard>
-
-          <GlowCard style={{ padding: '14px 16px', display: 'grid', gap: 12 }}>
-            <label className="earth-field">
-              <span>{isZh ? '球体变量' : 'Globe variable'}</span>
-              <select
-                value={controller.variable || ''}
-                onChange={(event) => controller.selectVariable(event.target.value)}
-                disabled={!controller.ready}
-              >
-                {EARTH_VARIABLES.map((id) => (
-                  <option key={id} value={id}>
-                    {`${t(EARTH_VARIABLE_LABEL_KEYS[id])} (${controller.variables.find((item) => item.id === id)?.unit || ''})`}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <FieldRow label={isZh ? '原始单位' : 'Physical unit'} value={controller.units || '--'} />
-
-            <label className="earth-field">
-              <span>{isZh ? '年度分析年份' : 'Analysis year'}</span>
-              <select
-                value={controller.year ?? ''}
-                onChange={(event) => controller.selectYear(Number(event.target.value))}
-                disabled={!controller.ready}
-              >
-                {controller.years.map((year) => (
-                  <option key={year} value={year}>{year}</option>
-                ))}
-              </select>
-            </label>
-
-            <form className="earth-coord" onSubmit={submitCoordinates}>
-              <label className="earth-field">
-                <span>{t('earthOverview.controls.latitude')}</span>
-                <input
-                  type="number" step="0.1" min="-90" max="90"
-                  value={latInput}
-                  disabled={!controller.ready}
-                  onChange={(event) => setLatInput(event.target.value)}
-                />
-              </label>
-              <label className="earth-field">
-                <span>{t('earthOverview.controls.longitude')}</span>
-                <input
-                  type="number" step="0.1" min="-180" max="180"
-                  value={lonInput}
-                  disabled={!controller.ready}
-                  onChange={(event) => setLonInput(event.target.value)}
-                />
-              </label>
-              <button type="submit" className="earth-btn" disabled={!controller.ready}>
-                {t('earthOverview.actions.viewPoint')}
-              </button>
-            </form>
-            {inputError ? <p className="earth-inline-error" role="alert">{inputError}</p> : null}
-          </GlowCard>
-        </div>
-      </section>
-
-      <section>
-        <SectionLabel>{isZh ? '显示控制' : 'Display controls'}</SectionLabel>
-        <GlowCard style={{ padding: '14px 16px', display: 'grid', gap: 10 }}>
-          <ToggleRow
-            label={isZh ? '三维球体' : '3D globe'}
-            value={viewMode === '3d'}
-            onChange={(next) => onViewModeChange(next ? '3d' : '2d')}
-          />
-          <ToggleRow label={isZh ? '数据场' : 'Data field'} value={showField} onChange={onShowFieldChange} />
-          <ToggleRow label={isZh ? '经纬网' : 'Graticule'} value={showGeo} onChange={onShowGeoChange} />
-          <ToggleRow label={isZh ? '海岸线底图' : 'Coastline base map'} value={showBaseMap} onChange={onShowBaseMapChange} />
-          <ToggleRow label={isZh ? '自动旋转' : 'Auto rotate'} value={autoRotate} onChange={onAutoRotateChange} />
-          <button type="button" className="earth-btn" onClick={onResetCamera}>
-            {isZh ? '重置视角' : 'Reset camera'}
-          </button>
-        </GlowCard>
-      </section>
-
-      <section>
-        <SectionLabel>{isZh ? '点位' : 'Point'}</SectionLabel>
-        <GlowCard style={{ padding: '14px 16px', display: 'grid', gap: 8 }}>
-          {controller.point ? (
-            <div style={{ display: 'grid', gap: 4 }}>
-              <FieldRow
-                label={isZh ? '请求坐标' : 'Requested'}
-                value={`${controller.point.requested?.lat ?? controller.point.lat}, ${controller.point.requested?.lon ?? controller.point.lon}`}
-              />
-              <FieldRow
-                label={isZh ? '实际单元中心' : 'Sampled cell centre'}
-                value={`${controller.point.lat}, ${controller.point.lon}`}
-              />
-              <FieldRow label={isZh ? '当前值' : 'Current value'} value={currentValue} />
-              <button type="button" className="earth-btn" onClick={() => controller.clearPoint()}>
-                {isZh ? '清除点位' : 'Clear point'}
-              </button>
-            </div>
-          ) : (
-            <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6 }}>
-              {isZh
-                ? '在球体或二维地图上点击一个单元以查看点位曲线。区域外点击只提示，不移动已有点位。'
-                : 'Click a cell on the globe or the 2D map to see the point series. Clicking outside the coverage only shows a notice and does not move the existing point.'}
-            </p>
-          )}
-        </GlowCard>
-      </section>
-    </div>
-  );
-}
-
-function FieldRow({ label, value }) {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 8, alignItems: 'baseline' }}>
-      <span style={{ color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))' }}>{label}</span>
-      <span
-        data-field-label={label}
-        style={{ color: C.ice80, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6, wordBreak: 'break-word' }}
-      >
-        {value || '--'}
-      </span>
-    </div>
-  );
-}
-
-function ToggleRow({ label, value, onChange }) {
-  return (
-    <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, cursor: 'pointer' }}>
-      <span style={{ color: C.ice80, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{label}</span>
-      <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
-    </label>
-  );
-}
+/**
+ * 紧凑预览只画「有真实序列、且缩到 120px 仍然可读」的图。
+ * 表格（季节极值）、多子图（环境因子、空间诊断）、热力图（季节结构）在角落里
+ * 会退化成不可读的窄条，因此预览位给出说明与展开入口，不硬压完整图表。
+ */
+const COMPACT_PREVIEW_KEYS = new Set(['globalTrend']);
 
 export default function EarthWorkbenchScene({
   selection,
   onSelectionChange,
   sceneSwitch,
-  panelWidths = { left: 300, right: 540 },
-  onPanelWidthsChange = () => {},
+  observatoryView = 'observe',
+  onObservatoryViewChange = null,
+  openPanel = null,
+  onOpenPanelChange = null,
+  selectedCard = '',
+  onSelectedCardChange = null,
 }) {
   const t = useT();
   const { settings } = useSettings();
@@ -299,12 +101,17 @@ export default function EarthWorkbenchScene({
   const isZh = settings?.language !== 'en';
 
   const adapter = useMemo(() => createEarthOverviewAdapter(), []);
+  const [analysisPresentation, setAnalysisPresentation] = useState('board');
+  const [boardDriver, setBoardDriver] = useState('T2M');
   const controller = useOverviewController({
     adapter,
     initialSelection: selection
       ? { value: selection.date, variable: selection.variable, point: selection.point }
       : null,
     onSelectionChange,
+    selectedCard,
+    onSelectedCardChange,
+    analysisBoard: observatoryView === 'analyze' && analysisPresentation === 'board',
   });
 
   const [viewMode, setViewMode] = useState('3d');
@@ -313,13 +120,21 @@ export default function EarthWorkbenchScene({
   const [showBaseMap, setShowBaseMap] = useState(true);
   const [autoRotate, setAutoRotate] = useState(true);
   const [bandId, setBandId] = useState('global');
-  const [normalized, setNormalized] = useState(false);
+  const [normalized, setNormalized] = useState(true);
+  const [latInput, setLatInput] = useState('');
+  const [lonInput, setLonInput] = useState('');
+  const [inputError, setInputError] = useState('');
 
   const variable = controller.variable;
   const scope = bandId;
   const colormap = controller.field
     ? earthColormap(controller.field.variable, settings?.colormap)
     : earthColormap(variable, settings?.colormap);
+
+  // 观测轨填充色：与球体、图例共用同一份色带；颜色按本轨数值范围铺满（见 railCurveFill.js）。
+  const railColorMode = variable === 'U10M' || variable === 'V10M'
+    ? 'rdbu'
+    : (settings?.colormap || 'inferno');
 
   const cardByKey = useMemo(() => {
     const map = new Map();
@@ -380,6 +195,23 @@ export default function EarthWorkbenchScene({
     controller.selectPoint({ lat: picked.preview.lat, lon: picked.preview.lon });
   }, [controller]);
 
+  const submitCoordinates = useCallback((event) => {
+    event.preventDefault();
+    const lat = Number(latInput);
+    const lon = Number(lonInput);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      setInputError(t('earthOverview.errors.invalidCoordinates'));
+      return;
+    }
+    if (!pointInsideGeometry(controller.geometry, lat, lon)) {
+      setInputError(t('earthOverview.errors.outsideCoverage'));
+      controller.markOutOfCoverage({ code: 'point_outside_coverage', lat, lon });
+      return;
+    }
+    setInputError('');
+    controller.selectPoint({ lat, lon });
+  }, [controller, latInput, lonInput, t]);
+
   // 卡片内的变量药丸与火星“季节变化”卡片一致：切换后联动整页变量、场与曲线。
   const variableOptions = useMemo(() => EARTH_VARIABLES.map((id) => ({
     id,
@@ -387,17 +219,21 @@ export default function EarthWorkbenchScene({
     en: t(EARTH_VARIABLE_LABEL_KEYS[id]),
   })), [t]);
 
-  const renderCard = useCallback((card) => {
+  const renderCard = useCallback((card, { compact = false, height: heightOverride = null } = {}) => {
     const data = card.state?.data;
+    const mini = compact === true;
+    // 观测档紧凑预览用固定像素；分析档主图用分析区算出的确定高度，
+    // 未给时退回 100%（由父容器决定）。
+    const height = mini ? 84 : (heightOverride ?? '100%');
     switch (card.key) {
       case 'seasonal':
         return (
           <SeasonalHeatmapView
             model={buildSeasonalHeatmap(data, variable, { isZh })}
             variable={variable}
-            variableOptions={variableOptions}
-            onVariableChange={controller.selectVariable}
             units={controller.units}
+            compact={mini}
+            height={height}
           />
         );
       case 'globalTrend':
@@ -405,7 +241,8 @@ export default function EarthWorkbenchScene({
           <RegionalTrendView
             model={buildRegionalTrend(data, { isZh, normalized })}
             normalized={normalized}
-            onToggleNormalized={setNormalized}
+            compact={mini}
+            height={height}
           />
         );
       case 'seasonalExtremes':
@@ -413,8 +250,7 @@ export default function EarthWorkbenchScene({
           <ExtremesView
             rows={buildExtremesTable(data, variable)}
             variableId={variable}
-            variableOptions={variableOptions}
-            onVariableChange={controller.selectVariable}
+            height={height}
           />
         );
       case 'environment':
@@ -422,32 +258,59 @@ export default function EarthWorkbenchScene({
           <EnvironmentView
             model={buildEnvironmentSeries(data, { bandId, isZh })}
             bandId={bandId}
-            onBandChange={setBandId}
-            bandIds={['global', ...((data?.bands || []).map((band) => band.id))]}
+            height={height}
           />
         );
       case 'polar':
-        return <PolarView polar={buildPolarSummary(data)} isZh={isZh} />;
+        return <PolarView polar={buildPolarSummary(data)} isZh={isZh} height={height} />;
       case 'solarsens':
-        return <RelationshipView model={buildRelationship(data, scope, 'solar_ozone')} />;
+        return <RelationshipView model={buildRelationship(data, scope, 'solar_ozone')} height={height} />;
       case 'correlation':
-        return <CorrelationView model={buildCorrelationMatrix(data, scope)} />;
+        return <CorrelationView model={buildCorrelationMatrix(data, scope)} height={height} />;
       case 'coupling':
-        return <RelationshipView model={buildRelationship(data, scope, 'temperature_ozone')} />;
+        return <RelationshipView model={buildRelationship(data, scope, 'temperature_ozone')} height={height} />;
       case 'wave':
         return (
           <SpatialAnomalyView
             anomaly={buildSpatialAnomaly(data)}
             rows={buildBandDiagnostics(data)}
             variableId={variable}
-            variableOptions={variableOptions}
-            onVariableChange={controller.selectVariable}
+            height={height}
           />
         );
       default:
         return null;
     }
-  }, [bandId, controller, isZh, normalized, scope, t, variable, variableOptions]);
+  }, [bandId, controller, isZh, normalized, scope, variable, variableOptions]);
+
+  // 紧凑预览只画真的有序列、且高度可压缩的图；其余图在预览位给出文字说明，
+  // 不把完整复杂图硬压进很矮的区域。预览忽略 heightOverride（那是主图用的）。
+  const renderPreviewCard = useCallback((card) => {
+    if (!COMPACT_PREVIEW_KEYS.has(card.key)) {
+      return (
+        <div style={{
+          display: 'grid',
+          alignContent: 'center',
+          justifyItems: 'center',
+          gap: 4,
+          height: '100%',
+          color: C.ice50,
+          fontSize: 'calc(11px * var(--font-scale, 1))',
+          textAlign: 'center',
+          padding: '0 12px',
+        }}
+        >
+          <span>{isZh
+            ? '该分析需要较大画布（表格或多子图），展开分析后查看。'
+            : 'This analysis needs a larger canvas (table or multiple subplots); open the dock to view it.'}</span>
+          <span style={{ color: C.ice40 }}>
+            {isZh ? '数据不会在这里被裁剪或重采样。' : 'Data is never cropped or resampled here.'}
+          </span>
+        </div>
+      );
+    }
+    return renderCard(card, { compact: true });
+  }, [isZh, renderCard]);
 
   const mapField = controller.field ? {
     field: controller.field.values,
@@ -463,91 +326,6 @@ export default function EarthWorkbenchScene({
     date: controller.field.value,
   } : null;
 
-  const timeline = (
-    <div
-      className="overview-timeline-anchor"
-      style={{
-        // 底部时间轴只占中央区域，避免盖住右侧分析栏里的按钮。
-        position: 'fixed',
-        left: 'var(--overview-scene-left)',
-        right: 'var(--overview-scene-right)',
-        bottom: 'var(--overview-timeline-bottom)',
-        zIndex: 1150,
-        padding: '0 8px 14px',
-        pointerEvents: 'none',
-      }}
-    >
-      <div style={{ pointerEvents: 'auto', display: 'grid', gap: 8 }}>
-        {controller.outOfCoverage ? (
-          <div className="earth-notice earth-notice--warning" role="status">
-            {t('earthOverview.map.noDataOutside')}
-            <button type="button" className="earth-btn" onClick={() => controller.dismissOutOfCoverage()}>
-              {t('earthOverview.actions.dismiss')}
-            </button>
-          </div>
-        ) : null}
-        <EarthTimeline
-          start={controller.time?.start || null}
-          end={controller.time?.end || null}
-          requestedDate={controller.date}
-          displayedDate={controller.displayedValue}
-          playing={controller.playing}
-          loading={controller.fieldStatus === 'loading'}
-          disabled={!controller.ready}
-          onDateChange={controller.selectValue}
-          onPlayChange={controller.setPlaying}
-          onRestart={controller.restart}
-        />
-      </div>
-    </div>
-  );
-
-  const legend = controller.field ? (
-    <div
-      className="overview-overlay-anchor overview-earth-legend"
-      style={{
-        position: 'fixed',
-        right: 'calc(var(--overview-scene-right) + var(--overview-overlay-gap))',
-        bottom: 'calc(var(--overview-timeline-bottom) + 132px)',
-        zIndex: 1150,
-        width: 232,
-        padding: '10px 12px',
-        borderRadius: 12,
-        border: `1px solid ${C.border}`,
-        background: isLight ? 'rgba(255,255,255,0.86)' : 'rgba(10,12,18,0.72)',
-        backdropFilter: 'blur(12px)',
-        color: C.ice70,
-        fontSize: 'calc(10px * var(--font-scale, 1))',
-        lineHeight: 1.6,
-        pointerEvents: 'none',
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', color: C.ice }}>
-        <span data-earth-legend="variable">{variableLabel(controller.field.variable, isZh)}</span>
-        <span data-earth-legend="units">{controller.field.unit}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-        <span>{formatEarthNumber(controller.field.colorRange.min, 1)}</span>
-        <span
-          aria-hidden="true"
-          style={{ flex: 1, height: 8, borderRadius: 999, background: makeGradient(colormap) }}
-        />
-        <span>{formatEarthNumber(controller.field.colorRange.max, 1)}</span>
-      </div>
-      <div style={{ marginTop: 6 }}>
-        {isZh ? '展示日期' : 'Displayed date'}: <strong>{controller.field.value}</strong>
-        {controller.requestedValue && controller.requestedValue !== controller.field.value
-          ? ` · ${t('earthOverview.timeline.loadingSelectedDate')}: ${controller.requestedValue}`
-          : ''}
-      </div>
-      <div style={{ marginTop: 4, color: C.ice45 }}>
-        {isZh
-          ? '未着色区域没有数据；颜色只表示数值，不表示高度。'
-          : 'Uncoloured areas have no data; colour encodes value, not altitude.'}
-      </div>
-    </div>
-  ) : null;
-
   const fallback2d = mapField ? (
     <EarthMap2D
       field={mapField}
@@ -558,7 +336,7 @@ export default function EarthWorkbenchScene({
     />
   ) : null;
 
-  const scene = viewMode === '3d' ? (
+  const threeD = viewMode === '3d' ? (
     <OverviewScene
       planet="earth"
       field={controller.field}
@@ -579,65 +357,455 @@ export default function EarthWorkbenchScene({
     />
   ) : null;
 
-  const map2d = viewMode === '2d' && mapField ? (
-    <div style={{ position: 'absolute', inset: '0 0 170px 0', padding: 16, overflow: 'auto' }}>
+  const twoD = viewMode === '2d' && mapField ? (
+    <div style={{ position: 'absolute', inset: 0, padding: 12, overflow: 'auto' }}>
       {fallback2d}
     </div>
   ) : null;
 
-  const analysis = (
-    // 单一滚动列：卡片、点位/覆盖曲线与 AI 解读在同一个滚动容器里顺序排列，
-    // 避免嵌套滚动与百分比高度让 Plotly 量到 NaN 尺寸。
+  const fieldCellCount = useMemo(() => {
+    let count = 0;
+    for (const row of controller.field?.values || []) {
+      for (const value of row) {
+        if (Number.isFinite(value)) count += 1;
+      }
+    }
+    return count;
+  }, [controller.field?.values]);
+
+  const dataFieldLegend = controller.field ? (
     <div
+      className="overview-overlay-anchor overview-earth-legend"
+      role="group"
+      aria-label={`${variableLabel(controller.field.variable, isZh)} (${controller.field.unit}) · ${controller.field.value}. ${isZh
+        ? '未着色区域没有数据；颜色只表示数值，不表示高度。'
+        : 'Uncoloured areas have no data; colour encodes value, not altitude.'}`}
       style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        minHeight: 0,
-        gap: 16,
-        padding: 24,
-        overflowY: 'auto',
-        overflowX: 'hidden',
+        position: 'absolute',
+        right: 'var(--overview-overlay-gap)',
+        bottom: 'var(--overview-overlay-gap)',
+        zIndex: 1150,
+        width: 'max-content',
+        minWidth: 158,
+        pointerEvents: 'none',
       }}
     >
-      <OverviewAnalysisPanel
-        mode={controller.mode}
-        cards={controller.cards}
-        expandedCard={controller.expandedCard}
-        onExpandedCardChange={controller.setExpandedCard}
-        renderCard={renderCard}
-        isZh={isZh}
-        isLight={isLight}
-        listScroll={false}
-        onRetryCard={() => controller.retryCards()}
-      />
-      <EarthSeriesPanel
-        variable={variable}
-        units={controller.units}
-        displayedDate={controller.displayedValue}
-        pointSeries={controller.pointSeries ? {
-          dates: controller.pointSeries.dates,
-          values: controller.pointSeries.values,
-          grid_point: controller.pointSeries.gridPoint,
-        } : null}
-        regionalSeries={controller.regionalSeries}
-        regionCoverage={controller.field?.coverage || controller.regionalSeries?.coverage || null}
-        onDateSelect={controller.selectValue}
-      />
-      <EarthInsightPanel
-        datasetId={controller.sourceId}
-        fingerprint={controller.sourceFingerprint}
-        year={controller.year}
-        date={controller.displayedValue || controller.date}
-        variable={variable}
-        units={controller.units}
-        scope={scope}
-        scopeLabel={bandLabel(scope, isZh)}
-        cards={insightCards}
-        ready={controller.ready && controller.fieldStatus === 'ready'}
-        isZh={isZh}
-      />
+      <GlowCard style={{ padding: '8px', background: 'var(--overview-panel-bg-strong)', border: '1px solid var(--overview-panel-border)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <div style={{ color: C.ice60, fontSize: 'calc(9px * var(--font-scale, 1))', fontWeight: 800, whiteSpace: 'nowrap' }}>
+            <span data-earth-legend="variable">{variableLabel(controller.field.variable, isZh)}</span>
+            {' ('}<span data-earth-legend="units">{controller.field.unit}</span>{')'}
+          </div>
+          <span
+            data-earth-legend="count"
+            title={isZh ? `${fieldCellCount} 个有效格点` : `${fieldCellCount} valid cells`}
+            aria-label={isZh ? `${fieldCellCount} 个有效格点` : `${fieldCellCount} valid cells`}
+            style={{
+              padding: '2px 5px',
+              borderRadius: 999,
+              border: `1px solid ${C.border}`,
+              color: C.mars,
+              fontSize: 'calc(8px * var(--font-scale, 1))',
+              fontWeight: 800,
+              fontFamily: 'var(--font-display)',
+              flexShrink: 0,
+              lineHeight: 1,
+            }}
+          >
+            {fieldCellCount}
+          </span>
+        </div>
+        <div
+          aria-hidden="true"
+          style={{
+            height: 7,
+            borderRadius: 999,
+            border: `1px solid ${C.border}`,
+            background: legendGradient(controller.field.variable, settings?.colormap),
+            marginBottom: 5,
+          }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 'calc(8px * var(--font-scale, 1))', color: C.ice, fontWeight: 700 }}>
+          <span>{formatEarthNumber(controller.field.colorRange.min, 3)}</span>
+          <span style={{ color: C.ice60 }}>{formatEarthNumber((controller.field.colorRange.min + controller.field.colorRange.max) / 2, 3)}</span>
+          <span>{formatEarthNumber(controller.field.colorRange.max, 3)}</span>
+        </div>
+      </GlowCard>
     </div>
+  ) : null;
+
+  // 观测档才渲染三维球体：分析档把整块高度让给主图（两条竖轨也只在观测档出现）。
+  // 注意场景元素身份保持稳定 —— 观测档内部切换变量/日期只改 props，不重建三维实例。
+  const useRail = observatoryView === 'observe';
+
+  // 每条轨用自己的极值当刻度：对侧取点只重画右侧，左轨形状保持稳定；
+  // 垂直日期轴仍严格共用，两条轨都按同一份真实日历定位。
+  const railDomain = useMemo(
+    () => earthRailDomain(earthRailSeries(controller.regionalSeries, controller.year)),
+    [controller.regionalSeries, controller.year],
+  );
+
+  const pointRailDomain = useMemo(
+    () => earthRailDomain(earthRailSeries(controller.pointSeries, controller.year)),
+    [controller.pointSeries, controller.year],
+  );
+
+  const scene = useRail ? (
+    <>
+      {threeD}
+      {twoD}
+    </>
+  ) : null;
+
+  const rail = useRail ? (
+    <EarthObservationRail
+      year={controller.year}
+      years={controller.years}
+      onYearChange={controller.selectYear}
+      timeValues={controller.timeAxis}
+      requestedDate={controller.date}
+      displayedDate={controller.displayedValue}
+      loading={controller.fieldStatus === 'loading'}
+      disabled={!controller.ready}
+      playing={controller.playing}
+      series={controller.regionalSeries}
+      seriesStatus={controller.regionalStatus}
+      seriesError={controller.regionalError}
+      units={controller.units || controller.field?.unit || ''}
+      variableLabel={variableLabel(variable, isZh)}
+      onDateChange={controller.selectValue}
+      onPlayChange={controller.setPlaying}
+      onRestart={controller.restart}
+      onStep={controller.stepValue}
+      domain={railDomain}
+      colorMode={railColorMode}
+      actions={(
+        <AnalysisEntryButton
+          label={t('observatory.view.expand')}
+          onClick={() => onObservatoryViewChange?.('analyze')}
+        />
+      )}
+    />
+  ) : null;
+
+  // 右侧竖栏：与左轨共用日期轴（上=年初、下=年末），数值刻度用本轨自己的极值，
+  // 因此选点只改右轨的形状，不会把左轨的全球均值压缩变形。
+  // 没有点位时显示占位说明，栏宽常驻，避免选中点位时页面横向跳动。
+  const railEnd = useRail ? (
+    <EarthObservationRail
+      pointSide
+      point={controller.pointCell || controller.point}
+      pointSeries={controller.pointSeries}
+      pointStatus={controller.pointStatus}
+      pointError={controller.pointError}
+      year={controller.year}
+      timeValues={controller.timeAxis}
+      requestedDate={controller.date}
+      displayedDate={controller.displayedValue}
+      units={controller.units || controller.field?.unit || ''}
+      variableLabel={variableLabel(variable, isZh)}
+      onDateChange={controller.selectValue}
+      onClearPoint={controller.clearPoint}
+      domain={pointRailDomain}
+      colorMode={railColorMode}
+      disabled={!controller.ready}
+    />
+  ) : null;
+
+  // 面向用户的分析分组名称：保留内部 temporal / drivers / dynamics ID 不变。
+  const groups = useMemo(() => buildObservatoryGroups(MODE_DEFS), []);
+
+
+  const geometry = controller.geometry;
+  const descriptorText = geometry
+    ? `${geometry.shape[0]} x ${geometry.shape[1]} · ${geometry.latBounds[0]}°~${geometry.latBounds[1]}° / ${geometry.lonBounds[0]}°~${geometry.lonBounds[1]}°`
+    : '--';
+
+  const currentValue = (() => {
+    const series = controller.pointSeries;
+    const field = controller.field;
+    if (!series?.dates?.length || !field?.value) return '--';
+    const index = series.dates.indexOf(field.value);
+    if (index < 0) return '--';
+    const value = series.values[index];
+    return Number.isFinite(value) ? `${formatEarthNumber(value, 2)} ${series.unit || ''}` : '--';
+  })();
+
+  const toolContent = {
+    source: (
+      <>
+        <PanelSectionLabel>{t('observatory.dataSource.title')}</PanelSectionLabel>
+        <PanelCard>
+          <FieldRow label={t('observatory.dataSource.current')} value={controller.sourceLabel} />
+          <FieldRow
+            label={t('observatory.dataSource.fingerprint')}
+            value={controller.sourceFingerprint ? `${controller.sourceFingerprint.slice(0, 12)}...` : '--'}
+          />
+          <FieldRow label={t('observatory.dataSource.grid')} value={descriptorText} />
+          <FieldRow
+            label={t('observatory.dataSource.timeModel')}
+            value={`ISO ${controller.time?.start || '--'} ~ ${controller.time?.end || '--'} (${controller.timeAxis.length} ${isZh ? '天' : 'days'})`}
+          />
+          <FieldRow
+            label={t('observatory.dataSource.aggregation')}
+            value={isZh ? '全球 5° 单元球面面积加权均值' : 'Global 5° cell spherical area-weighted mean'}
+          />
+        </PanelCard>
+
+      </>
+    ),
+    layers: (
+      <>
+        <PanelSectionLabel>{t('observatory.layerPanel.globeLayers')}</PanelSectionLabel>
+        <PanelCard>
+          <InlineSwitch
+            label={t('observatory.layerPanel.showField')}
+            checked={showField}
+            onChange={() => setShowField((value) => !value)}
+            isLight={isLight}
+          />
+          <InlineSwitch
+            label={t('observatory.layerPanel.graticule')}
+            checked={showGeo}
+            onChange={() => setShowGeo((value) => !value)}
+            isLight={isLight}
+          />
+          <InlineSwitch
+            label={t('observatory.layerPanel.coastline')}
+            checked={showBaseMap}
+            onChange={() => setShowBaseMap((value) => !value)}
+            isLight={isLight}
+          />
+        </PanelCard>
+      </>
+    ),
+
+    point: (
+      <>
+        <PanelSectionLabel>{t('observatory.tools.pointTitle')}</PanelSectionLabel>
+        <PanelCard>
+          <form className="earth-coord" onSubmit={submitCoordinates} style={{ display: 'grid', gap: 8 }}>
+            <label className="earth-field">
+              <span>{t('earthOverview.controls.latitude')}</span>
+              <input
+                type="number" step="0.1" min="-90" max="90"
+                value={latInput}
+                disabled={!controller.ready}
+                onChange={(event) => setLatInput(event.target.value)}
+              />
+            </label>
+            <label className="earth-field">
+              <span>{t('earthOverview.controls.longitude')}</span>
+              <input
+                type="number" step="0.1" min="-180" max="180"
+                value={lonInput}
+                disabled={!controller.ready}
+                onChange={(event) => setLonInput(event.target.value)}
+              />
+            </label>
+            <PanelButton type="submit" primary disabled={!controller.ready}>
+              {t('earthOverview.actions.viewPoint')}
+            </PanelButton>
+          </form>
+          {inputError ? <p className="earth-inline-error" role="alert">{inputError}</p> : null}
+        </PanelCard>
+
+        <PanelCard>
+          {controller.point ? (
+            <>
+              <FieldRow
+                label={t('observatory.point.requested')}
+                value={`${controller.point.requested?.lat ?? controller.point.lat}, ${controller.point.requested?.lon ?? controller.point.lon}`}
+              />
+              <FieldRow
+                label={t('observatory.point.cell')}
+                value={`${controller.point.lat}, ${controller.point.lon}`}
+              />
+              <FieldRow label={t('observatory.point.current')} value={currentValue} />
+              <PanelButton onClick={() => controller.clearPoint()}>
+                {t('observatory.point.clear')}
+              </PanelButton>
+            </>
+          ) : (
+            <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6 }}>
+              {t('observatory.point.empty')}
+            </p>
+          )}
+        </PanelCard>
+      </>
+    ),
+
+    display: (
+      <>
+        <PanelSectionLabel>{t('observatory.tools.displayTitle')}</PanelSectionLabel>
+        <PanelCard>
+          <PanelSelect
+            label={t('observatory.displayPanel.globeView')}
+            value={viewMode}
+            onChange={setViewMode}
+            isLight={isLight}
+            options={[
+              { value: '3d', label: t('observatory.displayPanel.view3d') },
+              { value: '2d', label: t('observatory.displayPanel.view2d') },
+            ]}
+          />
+          <InlineSwitch
+            label={t('observatory.displayPanel.autoRotate')}
+            checked={autoRotate}
+            onChange={() => setAutoRotate((value) => !value)}
+            isLight={isLight}
+          />
+          <PanelButton onClick={controller.resetCamera}>
+            {t('observatory.displayPanel.resetCamera')}
+          </PanelButton>
+        </PanelCard>
+      </>
+    ),
+  };
+
+  const analysisControls = earthAnalysisControls(selectedCard);
+  const boardCardKey = { temporal: 'seasonal', drivers: 'correlation', dynamics: 'wave' }[controller.mode];
+  const boardConditions = (
+    <>
+      <ToolbarSelect label={isZh ? '年份' : 'Year'} value={String(controller.year ?? '')}
+        onChange={next => controller.selectYear(Number(next))} disabled={!controller.ready} isLight={isLight}
+        options={controller.years.map(year => ({ value: String(year), label: String(year) }))} />
+      <ToolbarSelect label={isZh ? '分析变量' : 'Variable'}
+        value={controller.mode === 'drivers' ? boardDriver : variable}
+        onChange={controller.mode === 'drivers' ? setBoardDriver : controller.selectVariable}
+        disabled={!controller.ready} isLight={isLight}
+        options={variableOptions.filter(item => controller.mode !== 'drivers' || ['T2M', 'SWGDN'].includes(item.id))
+          .map(item => ({ value: item.id, label: isZh ? item.zh : item.en }))} />
+      {controller.mode === 'drivers' ? (
+        <ToolbarSelect label={isZh ? '分析范围' : 'Area'} value={scope} onChange={setBandId}
+          disabled={!controller.ready} isLight={isLight}
+          options={['global', 'south_polar', 'south_mid', 'tropics', 'north_mid', 'north_polar']
+            .map(id => ({ value: id, label: bandLabel(id, isZh) }))} />
+      ) : null}
+    </>
+  );
+  const analysisConditions = (
+    <>
+      <ToolbarSelect label={isZh ? '年份' : 'Year'} value={String(controller.year ?? '')}
+        onChange={(next) => controller.selectYear(Number(next))} disabled={!controller.ready} isLight={isLight}
+        options={controller.years.map((year) => ({ value: String(year), label: String(year) }))} />
+      {analysisControls.variable ? (
+        <ToolbarSelect label={isZh ? '分析变量' : 'Variable'} value={variable}
+          onChange={controller.selectVariable} disabled={!controller.ready} isLight={isLight}
+          options={variableOptions.map((item) => ({ value: item.id, label: isZh ? item.zh : item.en }))} />
+      ) : null}
+      {analysisControls.scope ? (
+        <ToolbarSelect label={isZh ? '分析范围' : 'Area'} value={scope}
+          onChange={setBandId} disabled={!controller.ready} isLight={isLight}
+          options={['global', 'south_polar', 'south_mid', 'tropics', 'north_mid', 'north_polar']
+            .map((id) => ({ value: id, label: bandLabel(id, isZh) }))} />
+      ) : null}
+      {analysisControls.normalized ? (
+        <ToolbarSelect label={isZh ? '比较方式' : 'Comparison'} value={normalized ? 'zscore' : 'raw'}
+          onChange={(next) => setNormalized(next === 'zscore')} isLight={isLight}
+          options={[
+            { value: 'zscore', label: isZh ? '标准化趋势（Z-score）' : 'Standardized trends (Z-score)' },
+            { value: 'raw', label: isZh ? '原始数值（各自单位）' : 'Original values (individual units)' },
+          ]} />
+      ) : null}
+    </>
+  );
+
+  const allToolDefinitions = useMemo(() => ([
+    {
+      key: 'layers',
+      label: t('observatory.tools.layers'),
+      title: t('observatory.tools.layersTitle'),
+      hint: t('observatory.tools.layersHint'),
+    },
+    {
+      key: 'point',
+      label: t('observatory.tools.point'),
+      title: t('observatory.tools.pointTitle'),
+      hint: t('observatory.tools.pointHint'),
+    },
+    {
+      key: 'display',
+      label: t('observatory.tools.display'),
+      title: t('observatory.tools.displayTitle'),
+      hint: t('observatory.tools.displayHint'),
+    },
+  ]), [t]);
+
+  // 图层、点位与视角都属于观测操作，年度分析只保留分析条件。
+  const toolDefinitions = useMemo(
+    () => (observatoryView === 'observe' ? allToolDefinitions : []),
+    [allToolDefinitions, observatoryView],
+  );
+
+  // 切换档位时关闭没有对应入口的工具面板。
+  useEffect(() => {
+    if (openPanel && openPanel !== 'source' && !toolDefinitions.some((tool) => tool.key === openPanel)) {
+      onOpenPanelChange?.(null);
+    }
+  }, [toolDefinitions, openPanel, onOpenPanelChange]);
+
+  // 隐藏逐日操作时暂停观测播放，年度图不会随某一天的日期更新。
+  useEffect(() => {
+    if (observatoryView === 'analyze') controller.setPlaying(false);
+  }, [observatoryView, controller.setPlaying]);
+
+  // 条件栏不再放「展示时间 / 单位」摘要：观测档的刻度轨已经给出日期与当天全球均值
+  // （含单位），舞台右下角图例也标了变量与单位，重复一次只会在球体上方多挂两个 chip。
+  const toolbar = (
+    <ObservatoryToolbar
+      planetSlot={sceneSwitch}
+      isZh={isZh}
+      toolsSlot={(
+        // 「图层 / 点位 / 显示」入口与对应面板由共用外壳提供，两星球共用同一份实现。
+        // toolContent 必须在上面先建好：JSX 在求值这里时就会读取它。
+        <ObservatoryTools
+          tools={toolDefinitions}
+          openPanel={openPanel}
+          onOpenPanelChange={onOpenPanelChange}
+          content={toolContent}
+          closeLabel={t('observatory.tools.close')}
+          sourceTitle={t('observatory.dataSource.title')}
+        />
+      )}
+      sourceSlot={(
+        <ObservatorySourceButton label={t('observatory.dataSource.title')}
+          openPanel={openPanel} onOpenPanelChange={onOpenPanelChange} />
+      )}
+      variableSlot={observatoryView === 'observe' ? (
+        <ToolbarSelect
+          label=""
+          title={t('observatory.dataSource.variable')}
+          value={controller.variable || ''}
+          onChange={(next) => controller.selectVariable(next)}
+          disabled={!controller.ready}
+          isLight={isLight}
+          options={EARTH_VARIABLES.map((id) => ({
+            value: id,
+            label: `${t(EARTH_VARIABLE_LABEL_KEYS[id])} (${controller.variables.find((item) => item.id === id)?.unit || ''})`,
+          }))}
+        />
+      ) : null}
+      view={observatoryView}
+      onViewChange={onObservatoryViewChange}
+    />
+  );
+
+  const insightSlot = (
+    <EarthInsightPanel
+      datasetId={controller.sourceId}
+      fingerprint={controller.sourceFingerprint}
+      year={controller.year}
+      date={controller.displayedValue || controller.date}
+      variable={variable}
+      units={controller.units}
+      scope={analysisControls.scope ? scope : 'global'}
+      scopeLabel={bandLabel(analysisControls.scope ? scope : 'global', isZh)}
+      cards={insightCards}
+      ready={controller.ready && controller.fieldStatus === 'ready'}
+      isZh={isZh}
+      chartId={selectedCard || null}
+    />
   );
 
   if (controller.sourceStatus === 'unsupported' || controller.sourceStatus === 'error') {
@@ -669,38 +837,53 @@ export default function EarthWorkbenchScene({
     <OverviewShell
       planet="earth"
       isLight={isLight}
-      scene={(
-        <>
-          {scene}
-          {map2d}
-        </>
-      )}
-      overlay={legend}
-      timeline={timeline}
-      sidebar={(
-        <EarthWorkbenchSidebar
-          controller={controller}
-          sceneSwitch={sceneSwitch}
+      view={observatoryView}
+      onViewChange={onObservatoryViewChange}
+      openPanel={openPanel}
+      onOpenPanelChange={onOpenPanelChange}
+      toolbar={toolbar}
+      rail={rail}
+      railEnd={railEnd}
+      scene={scene}
+      overlay={dataFieldLegend}
+      analysis={(
+        <AnalysisDock
+          view={observatoryView}
+          groups={groups}
+          mode={controller.mode}
+          onModeChange={controller.selectMode}
+          cards={controller.cards}
+          activeCard={selectedCard}
+          onCardChange={onSelectedCardChange}
+          onExpand={() => onObservatoryViewChange?.('analyze')}
+          onCollapse={() => onObservatoryViewChange?.('observe')}
+          renderCard={observatoryView === 'analyze' ? renderCard : renderPreviewCard}
           isZh={isZh}
           isLight={isLight}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          showField={showField}
-          onShowFieldChange={setShowField}
-          showGeo={showGeo}
-          onShowGeoChange={setShowGeo}
-          showBaseMap={showBaseMap}
-          onShowBaseMapChange={setShowBaseMap}
-          autoRotate={autoRotate}
-          onAutoRotateChange={setAutoRotate}
-          onResetCamera={controller.resetCamera}
+          conditionsSlot={analysisConditions}
+          presentation={analysisPresentation}
+          onPresentationChange={setAnalysisPresentation}
+          boardConditionsSlot={boardConditions}
+          boardSlot={<EarthAnalysisBoard state={cardByKey.get(boardCardKey)?.state} mode={controller.mode}
+            variable={variable} driver={boardDriver} scope={scope} isZh={isZh} onRetry={controller.retryCards} />}
+          contextNote={isZh
+            ? '按所选年份统计全年数据；调整条件后自动更新。'
+            : 'Charts summarize the selected year and update automatically.'}
+          onRetryCard={controller.retryCards}
+          aiSlot={observatoryView === 'analyze' ? insightSlot : null}
         />
       )}
-      analysis={analysis}
-      leftWidth={panelWidths.left}
-      rightWidth={panelWidths.right}
-      onLeftWidthChange={(left) => onPanelWidthsChange((current) => ({ ...current, left }))}
-      onRightWidthChange={(right) => onPanelWidthsChange((current) => ({ ...current, right }))}
+      notification={null}
     />
   );
+}
+
+/** 图例色带：与数据场使用同一个色带函数，避免图例与球体配色不一致。 */
+function legendGradient(variable, colormap) {
+  const palette = earthColormap(variable, colormap);
+  const stops = Array.from({ length: 10 }, (_, index) => {
+    const fraction = index / 9;
+    return `rgb(${getRgb(palette, fraction).join(',')}) ${fraction * 100}%`;
+  });
+  return `linear-gradient(90deg, ${stops.join(', ')})`;
 }

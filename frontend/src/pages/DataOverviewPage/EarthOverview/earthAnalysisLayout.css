@@ -1,0 +1,185 @@
+/**
+ * 分析档（底部分析区）的版式。
+ *
+ * 目标是把「分组 → 图表 → 变量 → 图」这条链排成一条清晰的纵向层级，
+ * 而不是把同一份信息在多条横带里重复。信息只出现一次：
+ * 图表名在顶部药丸行，变量用药丸表达，单位跟变量走，来源/年份/范围收进一行元信息。
+ */
+
+/* ── 卡片正文的图表头 ──────────────────────────────────────────── */
+.earth-chart-header {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.earth-chart-header__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.earth-chart-header__title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-80);
+  font-family: var(--font-display);
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.earth-chart-header__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.earth-chart-header__unit {
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace);
+  font-size: calc(10px * var(--font-scale, 1));
+  white-space: nowrap;
+}
+
+.earth-chart-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 60%, transparent);
+  font-family: var(--font-body);
+  font-size: calc(11px * var(--font-scale, 1));
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.earth-chart-control:hover:not(:disabled) {
+  border-color: var(--border-hover, var(--border));
+  color: var(--text);
+}
+
+.earth-chart-control[data-active='true'] {
+  border-color: var(--overview-accent, #9ad9ef);
+  background: var(--overview-accent-soft);
+  color: var(--overview-accent, #9ad9ef);
+}
+
+.earth-chart-control:disabled {
+  cursor: default;
+}
+
+/* ── 图表下方的说明块：收窄成一行注脚，不再占一整块 ──────────────── */
+.earth-chart-note {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--overview-hairline, var(--border));
+  background: var(--overview-elevated, rgba(255, 255, 255, 0.03));
+  color: color-mix(in srgb, var(--text) 60%, transparent);
+  font-family: var(--font-body);
+  font-size: calc(11px * var(--font-scale, 1));
+  line-height: 1.6;
+}
+
+.earth-chart-note strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* 图表上方的一行说明（聚合方式、统计口径等）：小字、低对比，不抢标题 */
+.earth-chart-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  color: color-mix(in srgb, var(--text) 48%, transparent);
+  font-size: calc(10px * var(--font-scale, 1));
+  line-height: 1.4;
+}
+
+.earth-chart-caption > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 关系散点与滞后相关并排对照，容器不足以容纳两张图时自动换行。 */
+.earth-relationship {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.earth-relationship__plots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
+.earth-relationship__panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.earth-relationship__plot {
+  width: 100%;
+  min-width: 0;
+  height: var(--relationship-plot-height, 320px);
+}
+
+/* 空间图与纬带表并排，热力图保留更宽的经度轴。 */
+.earth-spatial {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.earth-spatial__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  min-width: 0;
+}
+
+.earth-spatial__panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.earth-spatial__plot {
+  width: 100%;
+  min-width: 0;
+}
+
+.earth-spatial__table {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.earth-spatial__table tr {
+  height: 42px;
+}
+
+@container (min-width: 960px) {
+  .earth-spatial__content {
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  }
+}

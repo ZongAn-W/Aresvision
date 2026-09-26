@@ -11,7 +11,7 @@ export const MODE_DEFS = [
     id: 'temporal',
     icon: '1',
     color: C.mars,
-    title: { zh: '基础总览', en: 'Overview essentials' },
+    title: { zh: '变化规律', en: 'Change over time' },
     desc: {
       zh: '先看这一火星年的季节结构、全球变化、关键环境因子和极区特征。',
       en: 'Start with seasonal structure, annual global change, key environmental factors, and polar behavior.',
@@ -21,7 +21,7 @@ export const MODE_DEFS = [
     id: 'drivers',
     icon: '2',
     color: C.green,
-    title: { zh: '影响关系', en: 'Influence relationships' },
+    title: { zh: '变量关系', en: 'Variable relations' },
     desc: {
       zh: '进一步查看太阳辐射、变量相关和温度-O3耦合关系；这些图用于探索关系，不直接证明因果。',
       en: 'Explore solar flux, variable correlation, and temperature-O3 coupling. These charts show associations, not direct causality.',
@@ -31,7 +31,7 @@ export const MODE_DEFS = [
     id: 'dynamics',
     icon: '3',
     color: '#d9a441',
-    title: { zh: '高级空间诊断', en: 'Advanced spatial diagnostics' },
+    title: { zh: '空间诊断', en: 'Spatial diagnostics' },
     desc: {
       zh: '查看年平均空间距平、纬度带 RMS 和峰谷跨度，用于研究空间波动结构。',
       en: 'Inspect annual spatial anomalies, latitude-band RMS, and peak-to-peak span for wave-structure analysis.',

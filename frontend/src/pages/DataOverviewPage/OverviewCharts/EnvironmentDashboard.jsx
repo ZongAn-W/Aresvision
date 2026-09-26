@@ -1,3 +1,4 @@
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -105,7 +106,7 @@ function EnvCard({ meta, dataset, copy, plotText, plotGrid }) {
   };
 
   return (
-    <div style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, display: 'grid', gridTemplateRows: 'auto auto 1fr', gap: 12, minHeight: 280, minWidth: 0, overflow: 'hidden' }}>
+    <div style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, display: 'grid', gridTemplateRows: 'auto auto 200px', gap: 12, minWidth: 0 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(96px, auto)', alignItems: 'start', gap: 12 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ color: meta.color, fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{meta.label}</div>
@@ -187,6 +188,7 @@ export default function EnvironmentDashboard({ marsYear, overviewSourceParams = 
       Temperature: '温度',
       Solar_Flux_DN: '太阳辐射',
       U_Wind: '纬向风',
+      V_Wind: '经向风',
       polar_north: '北极区',
       mid_north: '北中纬',
       equatorial: '赤道区',
@@ -225,9 +227,11 @@ export default function EnvironmentDashboard({ marsYear, overviewSourceParams = 
   const [datasets, setDatasets] = useState({});
   const [ozoneHeatmap, setOzoneHeatmap] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     setLoading(true);
     Promise.all([
       fetchOverviewSeasonalHeatmap(marsYear, overviewSourceParams),
@@ -253,12 +257,13 @@ export default function EnvironmentDashboard({ marsYear, overviewSourceParams = 
       })
       .catch((err) => {
         console.error(err);
+        if (active) setRequestError(err);
         if (active) setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, [marsYear, overviewSourceParams]);
+  }, [retryToken, marsYear, overviewSourceParams]);
 
   const bandInfluence = useMemo(() => {
     if (!ozoneHeatmap || !Object.keys(datasets).length) return null;
@@ -301,7 +306,7 @@ export default function EnvironmentDashboard({ marsYear, overviewSourceParams = 
       marsYear,
       source: buildOverviewSourceSnapshot(overviewSourceParams),
       valueMeaning: 'Environment variables are global/latitude-band seasonal summaries; dominantDrivers are correlations with O3 by latitude band.',
-      status: loading ? 'loading' : (variableSummary.length ? 'ready' : 'empty'),
+      status: requestError ? 'error' : loading ? 'loading' : (variableSummary.length ? 'ready' : 'empty'),
       dominantDrivers: dominantDrivers.map((item) => ({
         band: item.band,
         variable: item.variable,
@@ -309,9 +314,11 @@ export default function EnvironmentDashboard({ marsYear, overviewSourceParams = 
       })),
       variableSummary,
     };
-  }, [datasets, dominantDrivers, loading, marsYear, overviewSourceParams, variableMeta]);
+  }, [datasets, dominantDrivers, loading, requestError, marsYear, overviewSourceParams, variableMeta]);
 
   useAiInsightRegistration('environment', aiInsightProvider);
+
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
 
   if (loading) {
     return (
@@ -330,13 +337,13 @@ export default function EnvironmentDashboard({ marsYear, overviewSourceParams = 
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 18, paddingRight: 4 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 18 }}>
+      <div className="mars-chart-grid">
         {variableMeta.map((meta) => (
           <EnvCard key={meta.id} meta={meta} dataset={datasets[meta.id]} copy={copy} plotText={plotText} plotGrid={plotGrid} />
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 18 }}>
+      <div className="mars-chart-grid">
         <div style={{ padding: 16, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, minHeight: 320, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }}>
           <div style={{ color: C.ice, fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display)' }}>{copy.influence}</div>
           <div style={{ minHeight: 0 }}>

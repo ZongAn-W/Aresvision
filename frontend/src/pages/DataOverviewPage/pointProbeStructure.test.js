@@ -4,17 +4,19 @@ import { readFileSync } from 'node:fs';
 
 const pageSource = readFileSync(new URL('../DataOverviewPage.jsx', import.meta.url), 'utf8');
 const modalSource = readFileSync(new URL('./PointProbeModal.jsx', import.meta.url), 'utf8');
+const contentSource = readFileSync(new URL('./PointProbeContent.jsx', import.meta.url), 'utf8');
 
-test('Data Overview opens a dedicated point probe modal instead of setting right-panel selectedCoordinate', () => {
-  assert.match(pageSource, /PointProbeModal/);
+test('Data Overview owns the point probe request and keeps it out of selectedCoordinate', () => {
+  // 观测台把点位结果嵌进分析区，独立弹窗与嵌入式共用同一份内容组件。
+  assert.match(pageSource, /PointProbeContent/);
   assert.match(pageSource, /fetchOverviewPointProbe/);
   assert.doesNotMatch(pageSource, /onGlobeClick=\{\(coord\) => setSelectedCoordinate\(coord\)\}/);
+  assert.match(modalSource, /PointProbeContent/);
 });
 
-test('point probe modal renders point, global mean, and latitude mean series', () => {
-  assert.match(modalSource, /point/);
-  assert.match(modalSource, /globalMean/);
-  assert.match(modalSource, /latitudeMean/);
-  assert.match(modalSource, /react-plotly\.js/);
+test('point probe content renders point, global mean, and latitude mean series', () => {
+  assert.match(contentSource, /point/);
+  assert.match(contentSource, /globalMean/);
+  assert.match(contentSource, /latitudeMean/);
+  assert.match(contentSource, /react-plotly\.js/);
 });
-

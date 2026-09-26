@@ -144,6 +144,17 @@ test('extremes table reports the real sampled latitudes and nullable metrics', (
   assert.equal(buildExtremesTable({}, 'TO3'), null);
 });
 
+test('standardized comparison uses dimensionless values and never falls back to physical values', () => {
+  const model = buildRegionalTrend(suite(), { normalized: true });
+  const ozone = model.series.find((entry) => entry.id === 'TO3');
+  assert.equal(ozone.units, '');
+  assert.deepEqual(ozone.values, [-1, 0, 1]);
+  const missing = model.series.find((entry) => entry.id === 'SWGDN');
+  assert.deepEqual(missing.values, [null, null, null]);
+  assert.equal(missing.reason, 'standardization_unavailable');
+  assert.deepEqual(buildRegionalTrend(suite()).series.find((entry) => entry.id === 'SWGDN').values, [100, 110, 120]);
+});
+
 test('environment series can switch between the globe and a latitude band', () => {
   const global = buildEnvironmentSeries(suite(), { bandId: 'global', isZh: true });
   assert.equal(global.series.length, 3);

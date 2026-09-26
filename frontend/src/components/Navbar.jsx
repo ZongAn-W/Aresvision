@@ -326,6 +326,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
   return (
     <nav
       className={`nav-glass${current === 'home' ? ' home-nav' : ''}`}
+      data-page={current}
       style={{
         position: 'fixed', top: 0, left: 0, right: 0,
         zIndex: 2000,

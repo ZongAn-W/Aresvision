@@ -1,3 +1,5 @@
+import { useMarsAnalysisManaged } from '../workbench/MarsAnalysisSettings.jsx';
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -18,6 +20,7 @@ const SMOOTH_WINDOW = 21;
 
 export default function CouplingAnalysis({ marsYear, overviewSourceParams = {} }) {
   const { settings } = useSettings();
+  const managed = useMarsAnalysisManaged();
 
   const isLight = settings?.theme === 'light';
   const plotText = isLight ? 'rgba(23,33,47,0.88)' : 'rgba(236,244,255,0.94)';
@@ -53,9 +56,11 @@ export default function CouplingAnalysis({ marsYear, overviewSourceParams = {} }
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     setLoading(true);
     fetchOverviewCouplingData(marsYear, 'o3col', 'Temperature', overviewSourceParams)
       .then((res) => {
@@ -66,10 +71,11 @@ export default function CouplingAnalysis({ marsYear, overviewSourceParams = {} }
       })
       .catch((err) => {
         console.error(err);
+        if (active) setRequestError(err);
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [marsYear, overviewSourceParams]);
+  }, [retryToken, marsYear, overviewSourceParams]);
 
   const diagnostics = useMemo(() => {
     if (!data?.var1?.length || !data?.var2?.length) return null;
@@ -100,7 +106,7 @@ export default function CouplingAnalysis({ marsYear, overviewSourceParams = {} }
     marsYear,
     source: buildOverviewSourceSnapshot(overviewSourceParams),
     valueMeaning: 'Global mean O3 and Temperature seasonal coupling; correlation is calculated from raw series while displayed trend lines are smoothed.',
-    status: loading ? 'loading' : (data?.ls?.length ? 'ready' : 'empty'),
+    status: requestError ? 'error' : loading ? 'loading' : (data?.ls?.length ? 'ready' : 'empty'),
     lsCount: data?.ls?.length || 0,
     correlation: diagnostics?.corr ?? null,
     ozone: diagnostics
@@ -122,9 +128,11 @@ export default function CouplingAnalysis({ marsYear, overviewSourceParams = {} }
       min: roundValue(data?.ls?.[0]),
       max: roundValue(data?.ls?.[data?.ls?.length - 1]),
     },
-  }), [data, diagnostics, loading, marsYear, overviewSourceParams]);
+  }), [data, diagnostics, loading, requestError, marsYear, overviewSourceParams]);
 
   useAiInsightRegistration('coupling', aiInsightProvider);
+
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
 
   if (loading) {
     return <div style={{ color: C.ice, padding: 20 }}>{copy.loading}</div>;
@@ -136,10 +144,12 @@ export default function CouplingAnalysis({ marsYear, overviewSourceParams = {} }
 
   return (
     <div style={{ width: '100%', display: 'grid', gridTemplateRows: 'auto auto', gap: 12 }}>
-      <div style={{ marginBottom: 12 }}>
-        <h3 style={{ color: C.ice, margin: '0 0 4px 0', fontSize: 'calc(16px * var(--font-scale, 1))' }}>{copy.title}</h3>
-        <p style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))', margin: 0 }}>{copy.desc}</p>
-      </div>
+      {!managed ? (
+        <div style={{ marginBottom: 12 }}>
+          <h3 style={{ color: C.ice, margin: '0 0 4px 0', fontSize: 'calc(16px * var(--font-scale, 1))' }}>{copy.title}</h3>
+          <p style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))', margin: 0 }}>{copy.desc}</p>
+        </div>
+      ) : null}
       <div style={{ minHeight: chartHeight, height: chartHeight }}>
         <Plot
           data={[

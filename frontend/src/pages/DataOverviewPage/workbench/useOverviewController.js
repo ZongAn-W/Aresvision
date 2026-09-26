@@ -63,8 +63,19 @@ function emptySelection() {
  * @param {object} options.adapter 星球适配器（见 OverviewAdapter.js 契约）。
  * @param {object} [options.initialSelection] 页面层保存的选择，用于切回时恢复。
  * @param {(selection: object) => void} [options.onSelectionChange] 选择变化回写。
+ * @param {string} [options.selectedCard] 当前主图身份（受控）。观测台由页面层持有，
+ *   controller 只读取它决定展开哪张卡片，不再维护第二个竞争的 activeChartId。
+ * @param {(cardKey: string) => void} [options.onSelectedCardChange] 主图变化回写。
+ *   分析分组仍由 `selection.mode`（`selectMode`）持有，页面层读 `controller.mode`。
  */
-export function useOverviewController({ adapter, initialSelection = null, onSelectionChange = null }) {
+export function useOverviewController({
+  adapter,
+  initialSelection = null,
+  onSelectionChange = null,
+  selectedCard = '',
+  onSelectedCardChange = null,
+  analysisBoard = false,
+}) {
   const validation = useMemo(() => validateOverviewAdapter(adapter), [adapter]);
   if (!validation.ok) {
     // Fail loudly in development instead of rendering a half-configured scene.
@@ -99,8 +110,17 @@ export function useOverviewController({ adapter, initialSelection = null, onSele
   const [cameraEpoch, setCameraEpoch] = useState(0);
 
   const [cardStates, setCardStates] = useState({});
-  const [expandedCard, setExpandedCard] = useState('');
   const [cardReloadToken, setCardReloadToken] = useState(0);
+
+  // 当前主图身份受控：观测台由页面层持有 `expandedCard`，controller 只读它。
+  // 未受控时退回默认 `globalTrend`，不会再自动挂载目录里的第一张卡片。
+  const expandedCard = analysisBoard
+    ? ({ temporal: 'seasonal', drivers: 'correlation', dynamics: 'wave' }[selection.mode] || 'seasonal')
+    : selectedCard ?? '';
+  const setExpandedCard = useCallback((next) => {
+    const value = typeof next === 'function' ? next(expandedCard) : next;
+    onSelectedCardChange?.(value ?? '');
+  }, [expandedCard, onSelectedCardChange]);
 
   const epochRef = useRef(0);
   const selectionRef = useRef(selection);
@@ -150,7 +170,6 @@ export function useOverviewController({ adapter, initialSelection = null, onSele
     setPlaying(false);
     setOutOfCoverage(null);
     setCardStates({});
-    setExpandedCard('');
     setSelection({ ...emptySelection(), ...(initialSelection || {}) });
     // 相机与几何参数必须一起重置，否则新星球会沿用旧星球的视角。
     setCameraEpoch((value) => value + 1);
@@ -463,9 +482,11 @@ export function useOverviewController({ adapter, initialSelection = null, onSele
 
   const selectMode = useCallback((mode) => {
     if (!MODE_IDS.includes(mode)) return;
+    // 切组时清空当前主图：新组由页面层的 pickActiveCard 选出合法图表，
+    // 避免旧组图表在切换瞬间被当成“已选中的主图”而误发请求。
     setSelection((previous) => ({ ...previous, mode }));
     setExpandedCard('');
-  }, []);
+  }, [setExpandedCard]);
 
   const selectYear = useCallback((year) => {
     setSelection((previous) => {
@@ -632,12 +653,8 @@ export function useOverviewController({ adapter, initialSelection = null, onSele
     selection.variable, year,
   ]);
 
-  // 展开第一张卡片；切换模式后旧展开项失效。
-  useEffect(() => {
-    setExpandedCard((previous) => (
-      modeCards.some((card) => card.key === previous) ? previous : (modeCards[0]?.key || '')
-    ));
-  }, [modeCards]);
+  // 主图身份由页面层持有（观测台的 AnalysisDock 通过 pickActiveCard 选择）；
+  // controller 不再自动展开目录首项，否则会提前加载一张用户看不到的图表。
 
   const cards = useMemo(
     () => modeCards.map((card) => ({

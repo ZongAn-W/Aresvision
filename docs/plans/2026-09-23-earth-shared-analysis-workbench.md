@@ -2,6 +2,8 @@
 
 > **2026-09-24 实施状态（优先于下文历史假设）**：本方案首期范围**已实现**，实现说明与协议见 [共用分析工作台](../earth-analysis-workbench.md)。
 >
+> **2026-09-25 布局已被替代：** 本文中“三栏布局 / 左右固定面板 / ≤1120px 顺序布局 / 拖拽改宽”的描述由 [行星观测台改版计划书](2026-09-25-planetary-observatory-redesign.md)（已实施）取代。本方案的**数据、单位、能力、请求隔离与年度分析契约仍然有效**，改动只在承载布局与控件位置上；阅读布局与控件位置时以[共用分析工作台](../earth-analysis-workbench.md)为准。
+>
 > 已完成：共用工作台壳层与控制器（`OverviewShell` / `useOverviewController` / `OverviewAdapter` / `OverviewCard` / `OverviewScene`）、`marsOverviewAdapter` 与 `earthOverviewAdapter`、统一卡片状态（`idle/loading/ready/unsupported/error`）、`SphericalFieldCanvas` 的显式 `planet/field/geometry/selection/lighting` 接口与 Earth 全球单元图层、Earth 三维工作台（日期播放、五变量原始单位、经纬度点选、点位曲线、覆盖均值）、三种分析模式、Earth 年度分析接口 `/api/analysis/earth/overview/*`、极区统计（`|latitude| >= 60°`）、昼夜能力说明与图表 AI 解读。
 >
 > 与下文的差异（以实际实现为准）：

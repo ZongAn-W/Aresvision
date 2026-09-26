@@ -50,7 +50,11 @@ export default function GlowCard({ children, className = '', style = {}, breathe
           }}
         />
       )}
-      <div style={{ position: 'relative', zIndex: 1, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/*
+        内层是列的 flex 容器；`gap: inherit` 让调用方写在 style 上的 gap 真正作用到
+        卡片内部的元素上（否则 gap 只作用在内层容器这一个子元素上，等于没生效）。
+      */}
+      <div style={{ position: 'relative', zIndex: 1, height: '100%', display: 'flex', flexDirection: 'column', gap: 'inherit' }}>
         {children}
       </div>
     </div>

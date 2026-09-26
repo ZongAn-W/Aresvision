@@ -35,10 +35,11 @@ test('chart titles use beginner-safe names', () => {
   assert.equal(CARD_TITLES.waveDiag, undefined);
 });
 
-test('analysis modes describe the new overview reading levels', () => {
+test('analysis modes describe the observatory reading levels', () => {
+  // 内部 ID 稳定（迁移风险最低），面向用户的名称与观测台分组标题保持一致。
   assert.deepEqual(MODE_DEFS.map((mode) => [mode.id, mode.title.zh, mode.title.en]), [
-    ['temporal', '基础总览', 'Overview essentials'],
-    ['drivers', '影响关系', 'Influence relationships'],
-    ['dynamics', '高级空间诊断', 'Advanced spatial diagnostics'],
+    ['temporal', '变化规律', 'Change over time'],
+    ['drivers', '变量关系', 'Variable relations'],
+    ['dynamics', '空间诊断', 'Spatial diagnostics'],
   ]);
 });

@@ -1,3 +1,5 @@
+import { useMarsChartSetting } from '../workbench/MarsAnalysisSettings.jsx';
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -70,9 +72,10 @@ export default function WaveBandDiagnosticsChart({
   const plotText = isLight ? 'rgba(23,33,47,0.88)' : 'rgba(236,244,255,0.94)';
   const plotGrid = isLight ? 'rgba(23,33,47,0.12)' : 'rgba(160,196,240,0.15)';
 
-  const [variable, setVariable] = useState('o3col');
+  const [variable, setVariable, managed] = useMarsChartSetting('wave', 'variable', 'o3col');
   const [rawData, setRawData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
 
   const copy = isZh
     ? {
@@ -114,6 +117,7 @@ export default function WaveBandDiagnosticsChart({
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     const source = resolveWaveDiagnosticsSource({
       variable,
       baseVariable,
@@ -136,6 +140,7 @@ export default function WaveBandDiagnosticsChart({
       })
       .catch((err) => {
         console.error(err);
+        if (active) setRequestError(err);
         if (active) setRawData(null);
       })
       .finally(() => {
@@ -145,7 +150,7 @@ export default function WaveBandDiagnosticsChart({
     return () => {
       active = false;
     };
-  }, [baseData, baseLoading, baseVariable, marsYear, variable, overviewSourceParams]);
+  }, [retryToken, baseData, baseLoading, baseVariable, marsYear, variable, overviewSourceParams]);
 
   const diagnostics = useMemo(() => {
     if (!rawData?.z?.length || !rawData?.x?.length || !rawData?.y?.length) return null;
@@ -203,46 +208,52 @@ export default function WaveBandDiagnosticsChart({
       variable,
       variableLabel: currentVariableLabel,
       valueMeaning: 'Latitude-band spatial anomaly diagnostics; RMS measures anomaly strength and span measures peak-to-peak spread.',
-      status: loading ? 'loading' : (bands.length ? 'ready' : 'empty'),
+      status: requestError ? 'error' : loading ? 'loading' : (bands.length ? 'ready' : 'empty'),
       strongestRms: strongestRms ? { band: strongestRms.band, value: formatInsightValue(strongestRms.value) } : null,
       strongestSpan: strongestSpan ? { band: strongestSpan.band, value: formatInsightValue(strongestSpan.value) } : null,
       rmsSample: sampleInsightSeries(rms, bands, 8),
       spanSample: sampleInsightSeries(span, bands, 8),
     };
-  }, [currentVariableLabel, diagnostics, loading, marsYear, overviewSourceParams, variable]);
+  }, [currentVariableLabel, diagnostics, loading, requestError, marsYear, overviewSourceParams, variable]);
 
   useAiInsightRegistration('waveDiag', aiInsightProvider);
+
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
 
   if (loading) return <div style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))' }}>{copy.loading}</div>;
   if (!diagnostics?.bands?.length) return <div style={{ color: C.mars, fontSize: 'calc(12px * var(--font-scale, 1))' }}>{copy.noData}</div>;
 
   return (
     <div style={{ width: '100%', display: 'grid', gap: 10 }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {variableOptions.map((option) => (
-          <button
-            key={option.id}
-            onClick={() => setVariable(option.id)}
-            style={{
-              border: `1px solid ${variable === option.id ? C.blue : C.border}`,
-              background: variable === option.id ? 'rgba(74,158,255,0.16)' : 'rgba(255,255,255,0.03)',
-              color: variable === option.id ? C.blue : C.ice60,
-              borderRadius: 999,
-              padding: '6px 10px',
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              cursor: 'pointer',
-              fontFamily: 'var(--font-body)',
-            }}
-            title={`${copy.selectLabel}: ${option.label}`}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
+      {!managed ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {variableOptions.map((option) => (
+            <button
+              key={option.id}
+              onClick={() => setVariable(option.id)}
+              style={{
+                border: `1px solid ${variable === option.id ? C.blue : C.border}`,
+                background: variable === option.id ? 'rgba(74,158,255,0.16)' : 'rgba(255,255,255,0.03)',
+                color: variable === option.id ? C.blue : C.ice60,
+                borderRadius: 999,
+                padding: '6px 10px',
+                fontSize: 'calc(11px * var(--font-scale, 1))',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-body)',
+              }}
+              title={`${copy.selectLabel}: ${option.label}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-      <div style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
-        {copy.variableLabel}: <span style={{ color: C.blue, fontWeight: 700 }}>{currentVariableLabel}</span>
-      </div>
+      {!managed ? (
+        <div style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+          {copy.variableLabel}: <span style={{ color: C.blue, fontWeight: 700 }}>{currentVariableLabel}</span>
+        </div>
+      ) : null}
 
       <div style={{ width: '100%', height: 320 }}>
         <Plot
