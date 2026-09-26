@@ -1,10 +1,33 @@
+/**
+ * 数据总览的可见性契约。
+ *
+ * 观测台改版后页面不再有左右固定栏：常量只描述「导航高度」「画布最小宽度」
+ * 与设置面板宽度；两档尺寸预算统一由 observatoryLayout.js 计算。
+ * `OVERVIEW_GLOBE` 继续独立描述两个星球共用的科学场景参数（缩放、粒子、
+ * 光照模式），不随布局改动。
+ */
+
+import { OBSERVATORY_LAYOUT } from './observatoryLayout.js';
+
 export const OVERVIEW_LAYOUT = Object.freeze({
   navbarHeight: 70,
-  leftWidth: 300,
-  rightWidth: 540,
-  minSceneWidth: 320,
-  compactBreakpoint: 1120,
-  timelineBottom: 18,
+  /** 临时设置面板宽度（贴画布左边，覆盖场景）。 */
+  panelWidth: OBSERVATORY_LAYOUT.panelWidth,
+  minSceneWidth: OBSERVATORY_LAYOUT.minSceneWidth,
+  /** 观测台完整两档布局的最小宽度与最小工作区高度。 */
+  desktopBreakpoint: OBSERVATORY_LAYOUT.desktopBreakpoint,
+  minDesktopContentHeight: OBSERVATORY_LAYOUT.minDesktopContentHeight,
+  gutter: OBSERVATORY_LAYOUT.gutter,
+  timelineHeight: OBSERVATORY_LAYOUT.timelineHeight,
+  toolbarHeight: OBSERVATORY_LAYOUT.toolbarHeight,
+  compactDockHeight: OBSERVATORY_LAYOUT.compactDockHeight,
+  analyzeSceneMin: OBSERVATORY_LAYOUT.analyzeSceneMin,
+  analyzeSceneMax: OBSERVATORY_LAYOUT.analyzeSceneMax,
+  /** 文档流布局下的球体高度建议值。 */
+  flowSceneHeight: 360,
+  flowAnalyzeSceneHeight: 280,
+  /** 窄屏阈值：以下使用多行控件与模态抽屉。 */
+  narrowBreakpoint: OBSERVATORY_LAYOUT.narrowBreakpoint,
   overlayGap: 14,
 });
 
@@ -31,10 +54,16 @@ export const OVERVIEW_GLOBE = Object.freeze({
   lightingMode: 'fixed',
 });
 
-export function desktopSceneWidth(viewportWidth, left = OVERVIEW_LAYOUT.leftWidth, right = OVERVIEW_LAYOUT.rightWidth) {
-  return viewportWidth - left - right;
+/**
+ * 画布可用宽度。观测台没有左右栏，默认偏移为 0，保留参数只为兼容既有调用，
+ * 禁止再按 viewport 减栏宽推算画布尺寸。
+ */
+export function desktopSceneWidth(viewportWidth, inset = 2 * OVERVIEW_LAYOUT.gutter) {
+  return viewportWidth - inset;
 }
 
-export function shouldUseCompactOverview(viewportWidth) {
-  return viewportWidth <= OVERVIEW_LAYOUT.compactBreakpoint;
+/** 是否需要文档流布局：窗口过窄，或扣掉导航/条件栏后的工作区过矮。 */
+export function shouldUseCompactOverview(viewportWidth, contentHeight = Number.POSITIVE_INFINITY) {
+  return viewportWidth < OVERVIEW_LAYOUT.desktopBreakpoint
+    || contentHeight < OVERVIEW_LAYOUT.minDesktopContentHeight;
 }

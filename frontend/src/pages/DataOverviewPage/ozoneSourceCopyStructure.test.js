@@ -2,22 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const sidebarSource = readFileSync(new URL('./SidebarMenu.jsx', import.meta.url), 'utf8');
+// 数据源控件已从旧左栏拆到 MarsSourceControls，复制文案的约束随之迁移。
+const sourceControlsSource = readFileSync(new URL('./MarsSourceControls.jsx', import.meta.url), 'utf8');
+const toolPartsSource = readFileSync(new URL('./workbench/ObservatoryToolParts.jsx', import.meta.url), 'utf8');
 
-function sourceBetween(startMarker, endMarker) {
-  const start = sidebarSource.indexOf(startMarker);
-  const end = sidebarSource.indexOf(endMarker, start);
+function sourceBetween(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
   assert.notEqual(start, -1, `${startMarker} should exist`);
   assert.notEqual(end, -1, `${endMarker} should exist after ${startMarker}`);
-  return sidebarSource.slice(start, end);
+  return source.slice(start, end);
 }
 
 test('ozone source controls do not show the redundant MCD analysis explanation', () => {
-  assert.equal(sidebarSource.includes('右侧分析始终使用 MCD'), false);
-  assert.equal(sidebarSource.includes('Right-side analysis stays on MCD'), false);
+  assert.equal(sourceControlsSource.includes('右侧分析始终使用 MCD'), false);
+  assert.equal(sourceControlsSource.includes('Right-side analysis stays on MCD'), false);
 });
 
-test('sidebar control panel keeps dataset source copy concise', () => {
+test('source control panel keeps dataset source copy concise', () => {
   [
     '先选择分析视角',
     'Choose an analysis lens first',
@@ -32,27 +34,28 @@ test('sidebar control panel keeps dataset source copy concise', () => {
     '官方源跟随',
     'Official source follows',
   ].forEach((text) => {
-    assert.equal(sidebarSource.includes(text), false, `${text} should not be rendered in the sidebar`);
+    assert.equal(sourceControlsSource.includes(text), false, `${text} should not be rendered in the source panel`);
   });
 });
 
 test('disabled personal ozone source buttons expose hover explanations', () => {
-  assert.match(sidebarSource, /disabledTitle/);
-  assert.match(sidebarSource, /const optionTitle = optionDisabled \? option\.disabledTitle : option\.title/);
-  assert.match(sidebarSource, /title=\{optionTitle\}/);
-  assert.match(sidebarSource, /<span[\s\S]*title=\{optionTitle\}/);
-  assert.match(sidebarSource, /<button[\s\S]*disabled=\{optionDisabled\}[\s\S]*title=\{optionTitle\}/);
-  assert.match(sidebarSource, /disabledTitle: personalDisabledTitle/);
-  assert.match(sidebarSource, /No personal/);
-  assert.match(sidebarSource, /sourceName/);
+  // 分段控件的禁用原因说明由共用原子控件统一提供。
+  assert.match(toolPartsSource, /const optionTitle = optionDisabled \? option\.disabledTitle : option\.title/);
+  assert.match(toolPartsSource, /title=\{optionTitle\}/);
+  assert.match(toolPartsSource, /<button[\s\S]*disabled=\{optionDisabled\}[\s\S]*title=\{optionTitle\}/);
+  assert.match(sourceControlsSource, /disabledTitle: personalDisabledTitle/);
+  assert.match(sourceControlsSource, /No personal/);
+  assert.match(sourceControlsSource, /sourceName/);
 });
 
 test('MCD personal source explains sign-in before reporting missing data', () => {
-  const mcdPickerSource = sourceBetween('function SourceScopePicker', 'function formatLsStatus');
-  const dataScopeSource = sourceBetween('<SectionLabel>{isZh ? \'数据范围\'', '{rawUploadsLoading || isSwitchingSource');
-
+  const mcdPickerSource = sourceBetween(sourceControlsSource, 'export function SourceScopePicker', 'export function OzoneSourceModePicker');
   assert.match(mcdPickerSource, /isSignedIn = false/);
   assert.match(mcdPickerSource, /const personalDisabledTitle = !isSignedIn/);
   assert.match(mcdPickerSource, /登录后可使用个人数据源。/);
-  assert.match(dataScopeSource, /isSignedIn=\{Boolean\(user\)\}/);
+  assert.match(mcdPickerSource, /isSignedIn=\{Boolean\(user\)\}|isSignedIn = false/);
+
+  // 面板调用点必须把登录状态传下去，否则禁用原因会退化成“暂无数据”。
+  const panelsSource = readFileSync(new URL('./ObservatoryMars.jsx', import.meta.url), 'utf8');
+  assert.match(panelsSource, /isSignedIn=\{Boolean\(user\)\}/);
 });

@@ -1,3 +1,5 @@
+import { useMarsChartSetting } from '../workbench/MarsAnalysisSettings.jsx';
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -113,9 +115,10 @@ export default function SeasonalExtremesChart({ marsYear, overviewSourceParams =
   const plotGrid = isLight ? 'rgba(23,33,47,0.12)' : 'rgba(160,196,240,0.15)';
   const units = settings?.units || { ozone: 'um-atm', temperature: 'K', wind: 'm/s' };
 
-  const [variable, setVariable] = useState('o3col');
+  const [variable, setVariable, managed] = useMarsChartSetting('seasonalExtremes', 'variable', 'o3col');
   const [heatmapData, setHeatmapData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
 
   const copy = isZh
     ? {
@@ -156,6 +159,7 @@ export default function SeasonalExtremesChart({ marsYear, overviewSourceParams =
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     setLoading(true);
 
     const fetcher = variable === 'o3col'
@@ -168,6 +172,7 @@ export default function SeasonalExtremesChart({ marsYear, overviewSourceParams =
       })
       .catch((err) => {
         console.error(err);
+        if (active) setRequestError(err);
         if (active) setHeatmapData(null);
       })
       .finally(() => {
@@ -177,7 +182,7 @@ export default function SeasonalExtremesChart({ marsYear, overviewSourceParams =
     return () => {
       active = false;
     };
-  }, [marsYear, variable, overviewSourceParams]);
+  }, [retryToken, marsYear, variable, overviewSourceParams]);
 
   const data = useMemo(
     () => buildExtremesFromHeatmap(heatmapData, latBands, variable, units),
@@ -206,7 +211,7 @@ export default function SeasonalExtremesChart({ marsYear, overviewSourceParams =
       variableLabel: currentVariableLabel,
       unit: currentUnitLabel,
       valueMeaning: 'Annual latitude-band amplitude equals max minus min across Ls; peakLs is the Ls where the band reaches its maximum.',
-      status: loading ? 'loading' : (data?.bands?.length ? 'ready' : 'empty'),
+      status: requestError ? 'error' : loading ? 'loading' : (data?.bands?.length ? 'ready' : 'empty'),
       strongestBand: strongestBand
         ? {
           band: strongestBand.band,
@@ -217,39 +222,45 @@ export default function SeasonalExtremesChart({ marsYear, overviewSourceParams =
       amplitudeSample: sampleInsightSeries(amplitudes, data?.bands || [], 10),
       peakLsSample: sampleInsightSeries(peaks, data?.bands || [], 10),
     };
-  }, [currentUnitLabel, currentVariableLabel, data, loading, marsYear, overviewSourceParams, variable]);
+  }, [currentUnitLabel, currentVariableLabel, data, loading, requestError, marsYear, overviewSourceParams, variable]);
 
   useAiInsightRegistration('seasonalExtremes', aiInsightProvider);
+
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
 
   if (loading) return <div style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))' }}>{copy.loading}</div>;
   if (!data?.bands?.length) return <div style={{ color: C.mars, fontSize: 'calc(12px * var(--font-scale, 1))' }}>{copy.noData}</div>;
 
   return (
     <div style={{ width: '100%', display: 'grid', gap: 10 }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {variableOptions.map((option) => (
-          <button
-            key={option.id}
-            onClick={() => setVariable(option.id)}
-            style={{
-              border: `1px solid ${variable === option.id ? C.blue : C.border}`,
-              background: variable === option.id ? 'rgba(74,158,255,0.16)' : 'rgba(255,255,255,0.03)',
-              color: variable === option.id ? C.blue : C.ice60,
-              borderRadius: 999,
-              padding: '6px 10px',
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              cursor: 'pointer',
-              fontFamily: 'var(--font-body)',
-            }}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
+      {!managed ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {variableOptions.map((option) => (
+            <button
+              key={option.id}
+              onClick={() => setVariable(option.id)}
+              style={{
+                border: `1px solid ${variable === option.id ? C.blue : C.border}`,
+                background: variable === option.id ? 'rgba(74,158,255,0.16)' : 'rgba(255,255,255,0.03)',
+                color: variable === option.id ? C.blue : C.ice60,
+                borderRadius: 999,
+                padding: '6px 10px',
+                fontSize: 'calc(11px * var(--font-scale, 1))',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-body)',
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-      <div style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
-        {copy.currentVar}: <span style={{ color: C.blue, fontWeight: 700 }}>{currentVariableLabel}</span>
-      </div>
+      {!managed ? (
+        <div style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+          {copy.currentVar}: <span style={{ color: C.blue, fontWeight: 700 }}>{currentVariableLabel}</span>
+        </div>
+      ) : null}
 
       <div style={{ width: '100%', height: 340 }}>
         <Plot

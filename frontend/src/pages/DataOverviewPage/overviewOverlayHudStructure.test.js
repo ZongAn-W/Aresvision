@@ -5,12 +5,15 @@ import { readFileSync } from 'node:fs';
 const overviewPageSource = readFileSync(new URL('../DataOverviewPage.jsx', import.meta.url), 'utf8');
 const globeLegendSource = readFileSync(new URL('./GlobeLegend.jsx', import.meta.url), 'utf8');
 
-test('gesture camera preview is a compact edge HUD instead of a large scene overlay', () => {
+test('gesture camera preview is a compact edge HUD inside the canvas', () => {
   assert.match(overviewPageSource, /className="gesture-capture-hud"/);
   assert.match(overviewPageSource, /const GESTURE_WINDOW_WIDTH = 138/);
   assert.match(overviewPageSource, /const GESTURE_WINDOW_HEIGHT = 96/);
-  assert.match(overviewPageSource, /top:\s*'82px'/);
+  // 观测台画布已经是全幅场景：HUD 相对画布左上角定位，不再使用窗口偏移。
+  assert.match(overviewPageSource, /top:\s*'12px'/);
+  assert.match(overviewPageSource, /left:\s*'12px'/);
   assert.doesNotMatch(overviewPageSource, /bottom:\s*'116px'/);
+  assert.doesNotMatch(overviewPageSource, /--overview-scene-left/);
 });
 
 test('globe legend uses compact edge styling and avoids the tall source-row legend', () => {

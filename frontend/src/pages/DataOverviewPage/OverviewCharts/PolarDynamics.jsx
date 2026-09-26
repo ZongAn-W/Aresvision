@@ -1,3 +1,5 @@
+import { useMarsAnalysisManaged } from '../workbench/MarsAnalysisSettings.jsx';
+import ChartRequestError, { useChartRequestError } from './ChartRequestError.jsx';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
@@ -18,6 +20,7 @@ const SMOOTH_WINDOW = 21;
 
 export default function PolarDynamics({ marsYear, overviewSourceParams = {} }) {
   const { settings } = useSettings();
+  const managed = useMarsAnalysisManaged();
 
   const isLight = settings?.theme === 'light';
   const plotText = isLight ? 'rgba(23,33,47,0.88)' : 'rgba(236,244,255,0.94)';
@@ -53,9 +56,11 @@ export default function PolarDynamics({ marsYear, overviewSourceParams = {} }) {
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { requestError, setRequestError, retryToken, retry } = useChartRequestError();
 
   useEffect(() => {
     let active = true;
+    setRequestError(null);
     setLoading(true);
     fetchOverviewPolarDynamics(marsYear, overviewSourceParams)
       .then((res) => {
@@ -66,10 +71,11 @@ export default function PolarDynamics({ marsYear, overviewSourceParams = {} }) {
       })
       .catch((err) => {
         console.error(err);
+        if (active) setRequestError(err);
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [marsYear, overviewSourceParams]);
+  }, [retryToken, marsYear, overviewSourceParams]);
 
   const diagnostics = useMemo(() => {
     if (!data?.ls?.length) return null;
@@ -127,7 +133,7 @@ export default function PolarDynamics({ marsYear, overviewSourceParams = {} }) {
     marsYear,
     source: buildOverviewSourceSnapshot(overviewSourceParams),
     valueMeaning: 'North and south polar O3 and temperature seasonal series; ozone is in μm-atm and temperature is in K.',
-    status: loading ? 'loading' : (data?.ls?.length ? 'ready' : 'empty'),
+    status: requestError ? 'error' : loading ? 'loading' : (data?.ls?.length ? 'ready' : 'empty'),
     lsCount: data?.ls?.length || 0,
     north: diagnostics
       ? {
@@ -149,9 +155,11 @@ export default function PolarDynamics({ marsYear, overviewSourceParams = {} }) {
         ozoneSamples: diagnostics.southOzoneSamples,
       }
       : null,
-  }), [data, diagnostics, loading, marsYear, overviewSourceParams]);
+  }), [data, diagnostics, loading, requestError, marsYear, overviewSourceParams]);
 
   useAiInsightRegistration('polar', aiInsightProvider);
+
+  if (requestError) return <ChartRequestError isZh={isZh} onRetry={retry} />;
 
   if (loading) {
     return <div style={{ color: C.ice, padding: 20 }}>{copy.loading}</div>;
@@ -163,12 +171,14 @@ export default function PolarDynamics({ marsYear, overviewSourceParams = {} }) {
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div>
-        <h3 style={{ color: C.ice, margin: '0 0 4px 0', fontSize: 'calc(16px * var(--font-scale, 1))' }}>{copy.title}</h3>
-        <p style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))', margin: 0 }}>{copy.desc}</p>
-      </div>
+      {!managed ? (
+        <div>
+          <h3 style={{ color: C.ice, margin: '0 0 4px 0', fontSize: 'calc(16px * var(--font-scale, 1))' }}>{copy.title}</h3>
+          <p style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))', margin: 0 }}>{copy.desc}</p>
+        </div>
+      ) : null}
 
-      <div style={{ height: '600px', display: 'grid', gridTemplateColumns: '1fr', gridTemplateRows: '1fr 1fr', gap: 10 }}>
+      <div className="mars-chart-grid mars-polar-grid">
         
         {/* Ozone vs Ls (North and South) */}
         <Plot

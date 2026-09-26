@@ -71,14 +71,16 @@ export function buildRegionalTrend(suite, { isZh = true, normalized = false } = 
     .map((variableId) => ({
       id: variableId,
       label: variableLabel(variableId, isZh),
-      units: suite.variables?.find?.((item) => item.id === variableId)?.units
+      units: normalized ? '' : (suite.variables?.find?.((item) => item.id === variableId)?.units
         || EARTH_VARIABLE_UNITS[variableId]
-        || '',
+        || ''),
       color: EARTH_VARIABLE_COLORS[variableId],
       values: normalized
-        ? (suite.zscore?.[variableId]?.values || suite.regional_series[variableId])
+        ? (suite.zscore?.[variableId]?.values || suite.dates.map(() => null))
         : suite.regional_series[variableId],
-      reason: suite.zscore?.[variableId]?.reason ?? null,
+      reason: normalized && !suite.zscore?.[variableId]?.values
+        ? 'standardization_unavailable'
+        : (suite.zscore?.[variableId]?.reason ?? null),
     }));
   if (!series.length) return null;
   return {

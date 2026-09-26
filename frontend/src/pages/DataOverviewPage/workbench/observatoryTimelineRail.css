@@ -1,0 +1,511 @@
+/**
+ * 观测刻度轨样式。
+ *
+ * 风格取「克制的科学仪器」：冰蓝主操作、细分隔线、等宽数字。
+ * **整列不做实心底板**：只留细线与文字浮在场景上，避免在画布左侧切出一条色块。
+ * 读数区与控件保留半透明玻璃底，保证叠在亮部时文字仍然可读。
+ * 颜色只读 `--overview-*` 与品牌变量，不覆盖任何科学色带。
+ */
+
+.observatory-rail {
+  --overview-rail-line: rgba(154, 217, 239, 0.28);
+  --overview-rail-line-soft: rgba(154, 217, 239, 0.14);
+  --overview-rail-surface: rgba(8, 12, 20, 0.34);
+  --overview-rail-ink: var(--text);
+  --overview-rail-ink-dim: color-mix(in srgb, var(--text) 62%, transparent);
+  --overview-rail-accent: var(--overview-accent, #9ad9ef);
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 12px 14px;
+  overflow: hidden;
+}
+
+.overview-shell.is-light .observatory-rail {
+  --overview-rail-line: rgba(35, 99, 135, 0.34);
+  --overview-rail-line-soft: rgba(35, 99, 135, 0.16);
+  --overview-rail-surface: rgba(255, 255, 255, 0.55);
+  --overview-rail-accent: var(--overview-accent, #236387);
+}
+
+/* ── 年份与年内进度 ─────────────────────────────────────────────── */
+.observatory-rail__header {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 6px;
+}
+
+.observatory-rail__year {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.observatory-rail__year-label {
+  color: var(--overview-rail-ink-dim);
+  font-size: calc(10px * var(--font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.observatory-rail__year select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--overview-rail-line-soft);
+  background: var(--overview-rail-surface);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: var(--overview-rail-ink);
+  font-family: var(--font-body);
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.observatory-rail__year-static {
+  color: var(--overview-rail-ink);
+  font-family: var(--font-body);
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.observatory-rail__progress {
+  display: block;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--overview-rail-line-soft);
+  overflow: hidden;
+}
+
+.observatory-rail__progress-fill {
+  display: block;
+  height: 100%;
+  transform-origin: left center;
+  background: var(--overview-rail-accent);
+  transition: transform 180ms linear;
+}
+
+/* ── 读数区：保留半透明玻璃底，叠在亮部时文字仍可读 ─────────────── */
+.observatory-rail__readout {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--overview-rail-line-soft);
+  background: var(--overview-rail-surface);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.observatory-rail__date {
+  color: var(--overview-rail-ink);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace);
+  font-size: calc(14px * var(--font-scale, 1));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.observatory-rail__dayline {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--overview-rail-ink-dim);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace);
+  font-size: calc(10px * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.observatory-rail__dayline-sep { opacity: 0.45; }
+
+.observatory-rail__global {
+  display: grid;
+  gap: 1px;
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 1px solid var(--overview-rail-line-soft);
+  min-width: 0;
+}
+
+.observatory-rail__global-label {
+  color: var(--overview-rail-ink-dim);
+  font-size: calc(9px * var(--font-scale, 1));
+  font-weight: 700;
+  /* 变量名可能比一栏宽（例如「臭氧柱总量」「10 米纬向风」），必须截断而不是顶出栏外 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.observatory-rail__global-value {
+  color: var(--overview-rail-accent);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace);
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.observatory-rail__status {
+  color: var(--overview-warn, #f19a78);
+  font-size: calc(9px * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+/* ── 轨道本体 ───────────────────────────────────────────────────── */
+.observatory-rail__track-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  /* flex 子项默认 min-height:auto，会被内容顶高；轨道必须严格贴合可用高度。 */
+  min-height: 120px;
+  height: 0;
+}
+
+.observatory-rail__track {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 66px;
+  /* 竖向拖拽属于轨道，不该被浏览器当成页面滚动 */
+  touch-action: none;
+}
+
+/*
+ * MUI Slider 铺满整个轨道宽度：垂直模式下它的百分比位移是相对自身宽度算的，
+ * 若只在刻度基准线上留 4px，滑块会被压成一条细缝且几乎点不中。
+ * 视觉上的「轨道感」由 SVG 的基准线与刻线负责，Slider 自身保持透明。
+ */
+.observatory-rail__track .MuiSlider-root {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+}
+
+.observatory-rail__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.observatory-rail__axis {
+  stroke: var(--overview-rail-line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.observatory-rail__tick {
+  stroke: var(--overview-rail-line-soft);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.observatory-rail__tick[data-major='true'] {
+  stroke: var(--overview-rail-line);
+}
+
+/*
+ * 偏离带只留线、不填面：轨道这一列不加底板，填充色会在大球体旁边糊出一片色块。
+ * 轮廓线足以表达「这一天在全年的高低位置」，也不会压过球体本身。
+ */
+.observatory-rail__band {
+  fill: none;
+  stroke: color-mix(in srgb, var(--overview-rail-accent) 78%, transparent);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.overview-shell.is-light .observatory-rail__band {
+  stroke: color-mix(in srgb, var(--overview-rail-accent) 66%, transparent);
+}
+
+/* 扫描线：只做仪器感的缓慢往复，减少动态效果时整条不渲染 */
+.observatory-rail__scan {
+  stroke: color-mix(in srgb, var(--overview-rail-accent) 55%, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  animation: observatory-rail-scan 7.5s ease-in-out infinite alternate;
+}
+
+@keyframes observatory-rail-scan {
+  from { transform: translateY(2px); opacity: 0.25; }
+  50% { opacity: 0.6; }
+  to { transform: translateY(456px); opacity: 0.25; }
+}
+
+/* ── 月份标签（贴在轨道右侧，只显示季度首月）─────────────────────── */
+.observatory-rail__month {
+  position: absolute;
+  left: 70px;
+  transform: translateY(-50%);
+  color: var(--overview-rail-ink-dim);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace);
+  font-size: calc(9px * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0.72;
+}
+
+.observatory-rail__month[data-major='true'] {
+  color: var(--overview-rail-ink);
+  font-weight: 700;
+  opacity: 0.92;
+}
+
+.observatory-rail__month--button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: color 150ms ease;
+}
+
+.observatory-rail__month--button:hover:not(:disabled) {
+  color: var(--overview-rail-accent);
+}
+
+.observatory-rail__month--button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ── 播放控制：2×2，播放键在右上角占据视觉重心 ───────────────────── */
+.observatory-rail__controls {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 32px;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--overview-rail-line-soft);
+}
+
+.observatory-rail__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--overview-rail-line-soft);
+  background: var(--overview-rail-surface);
+  color: var(--overview-rail-ink-dim);
+  font-family: var(--font-body);
+  font-size: calc(10px * var(--font-scale, 1));
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+.observatory-rail__btn:hover:not(:disabled) {
+  border-color: var(--overview-rail-line);
+  color: var(--overview-rail-ink);
+}
+
+.observatory-rail__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.observatory-rail__btn--play {
+  border-color: var(--overview-rail-accent);
+  color: var(--overview-rail-accent);
+  background: var(--overview-accent-soft);
+}
+
+.observatory-rail__actions {
+  flex: 0 0 auto;
+  display: grid;
+}
+
+.observatory-rail__actions > button {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ── 减少动态效果 ───────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .observatory-rail__scan { animation: none; opacity: 0; }
+  .observatory-rail__progress-fill { transition: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   右侧「点位年变化」轨：与左轨镜像。
+   刻度基准线靠右、曲线向左生长，月份标签移到左侧，避免与左轨的标签列撞在一起。
+   ══════════════════════════════════════════════════════════════════ */
+.observatory-rail--point {
+  /* 右轨不做左轨那条分隔线，整列同样透明 */
+  border-right: 0;
+  text-align: right;
+}
+
+.observatory-rail--point .observatory-rail__header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.observatory-rail__rail-title {
+  color: var(--overview-rail-ink-dim);
+  font-size: calc(10px * var(--font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.observatory-rail__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--overview-rail-line-soft);
+  background: var(--overview-rail-surface);
+  color: var(--overview-rail-ink-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.observatory-rail__close:hover {
+  border-color: var(--overview-rail-line);
+  color: var(--overview-rail-ink);
+}
+
+.observatory-rail--point .observatory-rail__readout {
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.observatory-rail--point .observatory-rail__dayline,
+.observatory-rail--point .observatory-rail__global {
+  justify-items: end;
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.observatory-rail__range {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 3px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--overview-rail-line-soft);
+  color: var(--overview-rail-ink-dim);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace);
+  font-size: calc(9px * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.observatory-rail__range-sep { opacity: 0.5; }
+
+.observatory-rail__range-note {
+  color: var(--overview-rail-ink-dim);
+  opacity: 0.75;
+}
+
+/* 轨道靠右对齐：`left: auto` 覆盖左轨的 `left: 0` */
+.observatory-rail--point .observatory-rail__track {
+  left: auto;
+  right: 0;
+}
+
+/* 月份标签放在轴左侧，跳过空标签的月份不占位 */
+.observatory-rail--point .observatory-rail__month {
+  left: auto;
+  right: 70px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: right;
+}
+
+/* 点位曲线：与左轨的全球均值同色系但更亮，方便并排区分 */
+.observatory-rail__point-curve {
+  fill: none;
+  stroke: color-mix(in srgb, var(--overview-rail-accent) 96%, transparent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 当前展示日期：整条横标，两轨共用同一日期语义 */
+.observatory-rail__point-marker {
+  stroke: var(--overview-warn, #f19a78);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.85;
+}
+
+.observatory-rail__footnote {
+  flex: 0 0 auto;
+  color: var(--overview-rail-ink-dim);
+  font-size: calc(9px * var(--font-scale, 1));
+  line-height: 1.4;
+  opacity: 0.75;
+  /* 一栏放不下整句，截断而不是顶出栏外 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 右栏占位（尚未选择点位）───────────────────────────────────── */
+.observatory-rail--empty .observatory-rail__empty-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 0 2px;
+}
+
+.observatory-rail__empty-cross {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px dashed var(--overview-rail-line);
+  color: var(--overview-rail-ink-dim);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.observatory-rail__empty-text {
+  margin: 0;
+  color: var(--overview-rail-ink-dim);
+  font-size: calc(10px * var(--font-scale, 1));
+  line-height: 1.6;
+  opacity: 0.85;
+}
+

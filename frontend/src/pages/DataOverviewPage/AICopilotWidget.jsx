@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import C from '../../constants/colors';
+import GlowCard from '../../components/GlowCard';
 import { useSettings } from '../../contexts/SettingsContext';
 import { useDataOverview } from '../../contexts/DataOverviewContext';
 import { copilotChat } from '../../services/api';
@@ -101,7 +102,15 @@ function compactAnswer(text, maxChars = 220) {
   return `${merged}${merged.length < input.length ? '...' : ''}`;
 }
 
-export default function AICopilotWidget() {
+/**
+ * Ares Copilot。
+ *
+ * 两种形态共用同一套状态与请求逻辑：
+ * - 默认（浮动）：右下角的圆形入口 + 气泡，用于球体场景上的随手提问；
+ * - `embedded`：分析区里的一块面板（与地球的 AI 解读同位同形），
+ *   不再做 fixed 定位 —— 分析档没有球体，浮层锚点会失去参照物。
+ */
+export default function AICopilotWidget({ embedded = false, cardKey = null }) {
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
   const isZh = settings?.language !== 'en';
@@ -163,6 +172,9 @@ Requirements:
   const bubbleShadow = isLight
     ? '0 12px 28px rgba(15,23,42,0.16), inset 0 0 10px rgba(74, 158, 255, 0.08)'
     : '0 8px 32px rgba(74, 158, 255, 0.2), inset 0 0 10px rgba(74, 158, 255, 0.1)';
+  // 目标图表身份：分析区把当前主图的 card key 传进来（分析区自己持有这个状态），
+  // 旧上下文里的 `expandedCard` 已经没有组件再写入，只作为浮动形态的兜底。
+  const targetCard = cardKey || expandedCard;
 
   const [showBubble, setShowBubble] = useState(false);
   const [hasTriggered, setHasTriggered] = useState(false);
@@ -172,6 +184,8 @@ Requirements:
   const [hasResult, setHasResult] = useState(false);
 
   useEffect(() => {
+    // 内嵌形态没有气泡，不做「到某个 Ls 自动弹窗」这件事。
+    if (embedded) return;
     if (globalTimeLs >= 240 && globalTimeLs <= 270 && !hasTriggered) {
       setShowBubble(true);
       setPulse(true);
@@ -180,17 +194,17 @@ Requirements:
   }, [globalTimeLs, hasTriggered]);
 
   const selectedCardTitle = useMemo(() => {
-    const card = SHARED_CARD_TITLES[expandedCard] || CARD_TITLES[expandedCard];
-    if (!card) return expandedCard || copy.unnamed;
+    const card = SHARED_CARD_TITLES[targetCard] || CARD_TITLES[targetCard];
+    if (!card) return targetCard || copy.unnamed;
     return isZh ? card.zh : card.en;
-  }, [copy.unnamed, expandedCard, isZh]);
+  }, [copy.unnamed, isZh, targetCard]);
 
   const handleAIChat = async () => {
     setIsAnalyzing(true);
     setAiResponse('');
     setHasResult(false);
     try {
-      const snapshot = buildExpandedCardSnapshot(getAiInsight, expandedCard);
+      const snapshot = buildExpandedCardSnapshot(getAiInsight, targetCard);
       const snapshotText = flattenSnapshot(snapshot);
       const dynamicMetrics = snapshotText || copy.noSnapshot;
 
@@ -199,14 +213,14 @@ Requirements:
         ls_range: [globalTimeLs, globalTimeLs],
         selected_variables: Array.from(new Set([globeVariable, ...(selectedVariables || [])])),
         active_mode: activeAnalysisMode,
-        expanded_card: expandedCard,
+        expanded_card: targetCard,
         expanded_card_title: selectedCardTitle,
         coordinate: selectedCoordinate,
         card_snapshot: snapshot || null,
         dynamic_metrics: dynamicMetrics,
       };
 
-      const question = copy.question(selectedCardTitle, expandedCard);
+      const question = copy.question(selectedCardTitle, targetCard);
       const res = await copilotChat(question, context);
       const rawAnswer = typeof res?.answer === 'string' ? res.answer : String(res?.answer ?? '');
       let normalizedAnswer = normalizeAiText(rawAnswer);
@@ -241,6 +255,83 @@ Requirements:
       setHasResult(false);
     }, 500);
   };
+
+  // 分析区里的内嵌形态：与地球「AI 解读当前图表」同样的克制版式，
+  // 标题 + 一个按钮 + 一句说明 + 结果，结果区自己滚动，不撑高分析区。
+  if (embedded) {
+    return (
+      <GlowCard style={{ padding: '14px 16px', display: 'grid', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 'calc(14px * var(--font-scale, 1))' }}>🧠</span>
+          <span style={{ color: C.ice, fontFamily: 'var(--font-display)', fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 700 }}>
+            {copy.title}
+          </span>
+          {hasResult && !isAnalyzing ? (
+            <span style={{ color: C.ice50, fontSize: 'calc(10px * var(--font-scale, 1))' }}>{copy.done}</span>
+          ) : null}
+          <div style={{ flex: 1, minWidth: 8 }} />
+          <button
+            type="button"
+            onClick={handleAIChat}
+            disabled={isAnalyzing}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 999,
+              border: `1px solid ${C.blue}`,
+              background: isAnalyzing ? 'transparent' : 'rgba(74,158,255,0.12)',
+              color: isAnalyzing ? C.ice50 : C.blue,
+              fontFamily: 'var(--font-body)',
+              fontSize: 'calc(11px * var(--font-scale, 1))',
+              fontWeight: 700,
+              cursor: isAnalyzing ? 'wait' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {isAnalyzing
+              ? (isZh ? '解读中…' : 'Interpreting…')
+              : copy.askBtn}
+          </button>
+        </div>
+
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', paddingRight: 6 }}>
+          {!hasResult && !isAnalyzing ? (
+            <p style={{ margin: 0, color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.7 }}>
+              {copy.target}
+              <span style={{ color: C.blue }}>{selectedCardTitle}</span>
+              <br />
+              {copy.intro}
+            </p>
+          ) : null}
+
+          {isAnalyzing ? (
+            <p style={{ margin: 0, color: C.blue, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.7 }}>
+              {copy.analyzing}
+            </p>
+          ) : null}
+
+          {hasResult ? (
+            <p style={{
+              margin: 0,
+              color: aiResponse.startsWith(copy.reqFailed) ? C.mars : C.ice80,
+              fontSize: 'calc(12px * var(--font-scale, 1))',
+              lineHeight: 1.8,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+            >
+              {aiResponse}
+            </p>
+          ) : null}
+        </div>
+
+        <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.6 }}>
+          {isZh
+            ? '只发送当前图表的统计快照与控件状态，不发送原始场数据；仅在你点击时调用。'
+            : 'Only the current chart’s statistical snapshot and control state are sent — never the raw field — and only when you click.'}
+        </p>
+      </GlowCard>
+    );
+  }
 
   return (
     <div

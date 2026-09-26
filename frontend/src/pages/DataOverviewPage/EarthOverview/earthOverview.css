@@ -151,6 +151,79 @@
   background: var(--bg-card, rgba(12, 18, 28, 0.62));
 }
 
+/*
+ * 观测台时间轨道：容器本身已经有边框与底色，这里只排一行。
+ * 单行放不下时（窄屏 / 文字放大）允许换行，保证 390px 下没有横向滚动。
+ */
+.earth-timeline--embedded {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.earth-timeline--embedded > .earth-timeline__row {
+  width: auto;
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.earth-timeline--embedded .earth-timeline__field {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.earth-timeline--embedded .earth-timeline__row--actions {
+  margin-left: auto;
+  flex-wrap: nowrap;
+}
+
+/* 「展开分析」入口在时间轨道右端，与播放键同一行；轨道变高时它保持单行。 */
+.earth-timeline--embedded .earth-timeline__row--actions > button,
+.earth-timeline--embedded .earth-timeline__row--actions > span {
+  flex: 0 0 auto;
+}
+
+.earth-timeline--embedded .earth-timeline__status,
+.earth-timeline--embedded .earth-timeline__displayed {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.earth-timeline--embedded .earth-btn {
+  min-height: 32px;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
+.earth-timeline__track {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 240px;
+  min-width: 160px;
+}
+
+.earth-timeline__track input[type='range'] {
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+
+@media (max-width: 1023px) {
+  .earth-timeline--embedded {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}
+
 .earth-timeline__row {
   display: flex;
   flex-wrap: wrap;
@@ -354,6 +427,67 @@
   border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
   border-radius: 14px;
   background: var(--bg-card, rgba(12, 18, 28, 0.62));
+}
+
+/*
+ * 分析区里的序列面板：只占内容高度，不参与「剩余高度」分配。
+ * 分析档现在把整块高度给主图，如果这里继续 flex:1，两条曲线会和主图抢空间，
+ * 主图被压到 200px 左右。
+ */
+.earth-series--dock {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  align-items: start;
+}
+
+.earth-series--dock .earth-series__summary {
+  grid-column: 1 / -1;
+}
+
+.earth-series--dock .earth-series__summary dl {
+  gap: 14px;
+}
+
+/*
+ * 分析区里的摘要行：变量名 + 三个数值横排成一行。
+ * 竖着排的卡片式摘要会白占 60px，把这一块挤出主图下方的预留高度。
+ */
+.earth-series__summary--inline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+
+.earth-series__summary--inline h3 {
+  margin: 0;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.earth-series__summary--inline dl {
+  gap: 14px;
+  margin: 0;
+}
+
+.earth-series__summary--inline dl > div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.earth-series__summary--inline dt {
+  font-size: calc(10px * var(--font-scale, 1));
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.earth-series__summary--inline dd {
+  margin: 0;
+  font-size: calc(12px * var(--font-scale, 1));
 }
 
 .earth-series__panel h4 {

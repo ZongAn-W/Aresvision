@@ -16,6 +16,7 @@ import {
   variableLabel,
 } from './earthResearchModel.js';
 import { EARTH_VARIABLE_UNITS } from './earthOverviewModel.js';
+import './earthAnalysisLayout.css';
 
 const PLOT_HEIGHT = 320;
 
@@ -63,36 +64,67 @@ export function VariableTabs({ value, onChange, options, isZh = true }) {
   );
 }
 
-/** “当前变量: X (单位)” 提示行，与火星卡片一致。 */
-export function CurrentVariableLine({ label, units, isZh }) {
+/**
+ * 卡片正文统一头部：标题在左、控件在右、变量药丸在下一行。
+ *
+ * 观测台的分析档已经在上方给出「分组 → 图表」选择，所以卡片内部**不再重复**
+ * 上级已有的信息：标题只留一次，变量只用药丸表达 —— 不再额外写一行
+ * 「当前变量: X (DU)」，那是同一个值在卡片里的第二次出现。
+ */
+export function ChartHeader({
+  title, controls = null, variableOptions = [], variable, onVariableChange, isZh = true,
+}) {
+  const hasTabs = Array.isArray(variableOptions) && variableOptions.length >= 2 && onVariableChange;
   return (
-    <div style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
-      {isZh ? '当前变量' : 'Current variable'}:{' '}
-      <span style={{ color: C.blue, fontWeight: 700 }}>
-        {label}{units ? ` (${units})` : ''}
-      </span>
+    <div className="earth-chart-header">
+      <div className="earth-chart-header__row">
+        <h3 className="earth-chart-header__title">{title}</h3>
+        {controls ? <div className="earth-chart-header__controls">{controls}</div> : null}
+      </div>
+      {hasTabs ? (
+        <VariableTabs value={variable} onChange={onVariableChange} options={variableOptions} isZh={isZh} />
+      ) : null}
     </div>
   );
 }
 
-/** 卡片正文统一头部：标题 + 变量药丸 + 当前变量行。 */
+/** 图表右上角的一个小控件（例如 Z-score 切换）；与药丸同款但更克制。 */
+export function ChartControl({ children, active = false, onClick = null, title = null }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={onClick ? active : undefined}
+      title={title || undefined}
+      disabled={!onClick}
+      className="earth-chart-control"
+      data-active={active ? 'true' : 'false'}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** 图表下方的单位说明：只在没有变量药丸可用时展示，避免与药丸重复。 */
+function UnitBadge({ label, units }) {
+  if (!label && !units) return null;
+  return (
+    <span className="earth-chart-header__unit">
+      {label}{units ? ` · ${units}` : ''}
+    </span>
+  );
+}
+
 function CardChartHeader({ title, variableOptions, variable, onVariableChange, label, units, isZh }) {
   return (
-    <>
-      <div
-        style={{
-          color: C.ice80,
-          fontFamily: 'var(--font-display)',
-          fontSize: 'calc(13px * var(--font-scale, 1))',
-          fontWeight: 700,
-          letterSpacing: '-0.01em',
-        }}
-      >
-        {title}
-      </div>
-      <VariableTabs value={variable} onChange={onVariableChange} options={variableOptions} isZh={isZh} />
-      <CurrentVariableLine label={label} units={units} isZh={isZh} />
-    </>
+    <ChartHeader
+      title={title}
+      isZh={isZh}
+      variable={variable}
+      variableOptions={variableOptions}
+      onVariableChange={onVariableChange}
+      controls={<UnitBadge label={label} units={units} />}
+    />
   );
 }
 
@@ -121,21 +153,7 @@ function baseLayout({ text, grid }) {
 }
 
 export function NoteBlock({ children }) {
-  return (
-    <div
-      style={{
-        padding: '12px 14px',
-        borderRadius: 12,
-        border: `1px solid ${C.border}`,
-        background: 'rgba(255,255,255,0.03)',
-        color: C.ice60,
-        fontSize: 'calc(12px * var(--font-scale, 1))',
-        lineHeight: 1.7,
-      }}
-    >
-      {children}
-    </div>
-  );
+  return <div className="earth-chart-note">{children}</div>;
 }
 
 export function ViewPlaceholder({ isZh, text = null }) {
@@ -149,6 +167,7 @@ export function ViewPlaceholder({ isZh, text = null }) {
 // ── 季节结构：纬度 × 日期热力图 ─────────────────────────────────────────
 export function SeasonalHeatmapView({
   model, variable, variableOptions = [], onVariableChange = null, units = '',
+  compact = false, height = null,
 }) {
   const { isZh, text, grid } = usePlotTheme();
   if (!model) return <ViewPlaceholder isZh={isZh} />;
@@ -156,18 +175,39 @@ export function SeasonalHeatmapView({
   const chartUnits = units || model.units || '';
   const flat = z.flat().filter(Number.isFinite);
   const layout = baseLayout({ text, grid });
+  // 与年内变化图同样：'100%' 表示由父容器（分析区）给高度，数字表示固定像素。
+  const fillParent = height === '100%';
+  const hostHeight = fillParent ? '100%' : (height ?? PLOT_HEIGHT);
   return (
-    <div className="overview-card-plot" style={{ display: 'grid', gap: 10 }}>
-      <CardChartHeader
-        title={isZh ? '季节结构热力图（纵轴：纬度 - 横轴：日期）' : 'Seasonal structure (Y: latitude - X: date)'}
-        variableOptions={variableOptions}
-        variable={variable}
-        onVariableChange={onVariableChange}
-        label={variableLabel(variable, isZh)}
-        units={chartUnits}
-        isZh={isZh}
-      />
-      <div style={{ minHeight: PLOT_HEIGHT }}>
+    <div
+      className="overview-card-plot"
+      style={{
+        display: 'grid',
+        gap: compact ? 4 : 10,
+        flex: fillParent ? '1 1 auto' : undefined,
+        minHeight: 0,
+        minWidth: 0,
+      }}
+    >
+      {!compact ? (
+        <CardChartHeader
+          title={isZh ? '季节结构热力图（纵轴：纬度 - 横轴：日期）' : 'Seasonal structure (Y: latitude - X: date)'}
+          variableOptions={variableOptions}
+          variable={variable}
+          onVariableChange={onVariableChange}
+          label={variableLabel(variable, isZh)}
+          units={chartUnits}
+          isZh={isZh}
+        />
+      ) : null}
+      <div
+        style={{
+          height: hostHeight,
+          minHeight: fillParent ? 200 : hostHeight,
+          flex: fillParent ? '1 1 auto' : undefined,
+          minWidth: 0,
+        }}
+      >
         <Plot
           data={[{
             type: 'heatmap',
@@ -205,76 +245,103 @@ export function SeasonalHeatmapView({
           style={{ width: '100%', height: '100%' }}
         />
       </div>
-      <NoteBlock>
-        {isZh
-          ? '每行是该纬度上 72 个等面积经度单元的日均值（equal_longitude_mean），横轴为真实 UTC 日期；该图不表示昼夜变化。'
-          : 'Each row is the daily mean over the 72 equal-area longitude cells at that latitude (equal_longitude_mean) on real UTC dates. It does not represent a diurnal cycle.'}
-      </NoteBlock>
+      {!compact ? (
+        <NoteBlock>
+          {isZh
+            ? '每行是该纬度上 72 个等面积经度单元的日均值（equal_longitude_mean），横轴为真实 UTC 日期；该图不表示昼夜变化。'
+            : 'Each row is the daily mean over the 72 equal-area longitude cells at that latitude (equal_longitude_mean) on real UTC dates. It does not represent a diurnal cycle.'}
+        </NoteBlock>
+      ) : null}
     </div>
   );
 }
 
 // ── 年内变化：五变量全球面积加权均值 ────────────────────────────────────
-export function RegionalTrendView({ model, normalized = false, onToggleNormalized = null }) {
+export function RegionalTrendView({ model, normalized = false, onToggleNormalized = null, height = PLOT_HEIGHT, compact = false }) {
   const { isZh, text, grid } = usePlotTheme();
+  // '100%' 表示「由父容器决定高度」（分析档主图占满分析区）；数字表示固定像素（观测档预览）。
+  const plotHostHeight = height === '100%'
+    ? '100%'
+    : (Number.isFinite(Number(height)) ? Number(height) : (compact ? 84 : PLOT_HEIGHT));
   if (!model) return <ViewPlaceholder isZh={isZh} />;
   const layout = baseLayout({ text, grid });
   const traces = model.series.map((entry) => ({
     type: 'scatter',
     mode: 'lines',
-    name: `${entry.label} (${entry.units || '--'})`,
+    name: `${entry.label}${entry.units ? ` (${entry.units})` : ''}`,
     x: model.x,
     y: entry.values,
     line: { width: 2, color: entry.color },
-    hovertemplate: `${entry.label} %{y:.3f} ${entry.units || ''}<extra></extra>`,
+    hovertemplate: `${entry.label} %{y:.3f} ${normalized ? 'Z-score' : entry.units || ''}<extra></extra>`,
   }));
   return (
-    <div style={{ display: 'grid', gap: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-        <span style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+    <div style={{ display: 'grid', gap: compact ? 4 : 10, flex: plotHostHeight === '100%' ? '1 1 auto' : undefined, minHeight: 0, minWidth: 0 }}>
+      <div className="earth-chart-caption">
+        <span>
           {isZh ? '聚合：全球 5° 单元球面面积加权均值' : 'Aggregation: global 5° cell spherical area-weighted mean'}
         </span>
-        {onToggleNormalized ? (
-          <button
-            type="button"
+        {onToggleNormalized && !compact ? (
+          <ChartControl
+            active={normalized}
             onClick={() => onToggleNormalized(!normalized)}
-            style={{
-              padding: '4px 10px', borderRadius: 999, border: `1px solid ${C.border}`,
-              background: 'transparent', color: C.ice, cursor: 'pointer',
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-            }}
+            title={normalized
+              ? (isZh ? '当前显示 Z-score 对照' : 'Currently showing Z-score comparison')
+              : (isZh ? '当前显示原始单位' : 'Currently showing physical units')}
           >
             {normalized
-              ? (isZh ? '显示原始单位' : 'Show physical units')
-              : (isZh ? '显示 Z-score 对照' : 'Show Z-score comparison')}
-          </button>
+              ? (isZh ? 'Z-score 对照' : 'Z-score')
+              : (isZh ? '原始单位' : 'Units')}
+          </ChartControl>
         ) : null}
       </div>
-      <div style={{ width: '100%', height: PLOT_HEIGHT }}>
+      {/* 高度必须是确定的像素值：观测台的预览位是 Grid 项，百分比高度在自动行高
+          的轨道上解析为 0，Plotly 会量不到尺寸。分析档主图由父容器给高度，
+          这里传 '100%' —— 父链上每一层都有确定高度，所以能撑满分析区。 */}
+      <div
+        style={{
+          width: '100%',
+          height: plotHostHeight === '100%' ? '100%' : plotHostHeight,
+          minHeight: plotHostHeight === '100%' ? 200 : plotHostHeight,
+          flex: plotHostHeight === '100%' ? '1 1 auto' : undefined,
+          minWidth: 0,
+        }}
+      >
         <Plot
           data={traces}
           layout={{
             ...layout,
-            xaxis: { ...layout.xaxis, type: 'date', title: { text: model.xTitle, font: { size: 11, color: text } } },
-            yaxis: { ...layout.yaxis, title: { text: model.yTitle, font: { size: 11, color: text } } },
+            margin: compact ? { l: 44, r: 10, t: 6, b: 28 } : layout.margin,
+            showlegend: !compact,
+            xaxis: { ...layout.xaxis, type: 'date', title: { text: compact ? '' : model.xTitle, font: { size: 11, color: text } } },
+            yaxis: { ...layout.yaxis, title: { text: compact ? '' : model.yTitle, font: { size: 11, color: text } } },
           }}
           config={WORKBENCH_PLOT_CONFIG}
           useResizeHandler
           style={{ width: '100%', height: '100%' }}
         />
       </div>
-      <NoteBlock>
-        {isZh
-          ? '每变量使用各自的原始单位；Z-score 仅用于比较同步变化，不代表绝对数值大小，也不用于训练归一化。'
-          : 'Each variable keeps its own physical unit. Z-scores only compare synchronised variation; they are not magnitudes and are not used for training normalisation.'}
-      </NoteBlock>
+      {!compact ? (
+        <NoteBlock>
+          {isZh
+            ? (normalized
+              ? '标准化后可比较各变量的升降趋势；0 表示各自年均值，不同曲线的数值不代表原始物理量。'
+              : '各变量保留自己的单位，不能直接比较数值大小。比较升降趋势时，请选择「标准化趋势」。')
+            : (normalized
+              ? 'Standardized values compare trends. Zero is each variable’s annual mean; values are dimensionless.'
+              : 'Each variable keeps its own unit. Magnitudes are not comparable; choose standardized trends to compare changes.')}
+        </NoteBlock>
+      ) : null}
     </div>
   );
 }
 
 // ── 季节极值：按纬带给出峰/谷日期 ──────────────────────────────────────
-export function ExtremesView({ rows, variableId, variableOptions = [], onVariableChange = null }) {
+export function ExtremesView({ rows, variableId, variableOptions = [], onVariableChange = null, height = PLOT_HEIGHT }) {
   const { isZh } = usePlotTheme();
+  // 分析档主图由父容器给高度（'100%'），观测档预览用固定像素。
+  const fillParent = height === '100%';
+  const hostHeight = fillParent ? '100%' : height;
+
   const units = rows?.[0]?.units || EARTH_VARIABLE_UNITS[variableId] || '';
   if (!rows?.length) {
     return (
@@ -287,7 +354,6 @@ export function ExtremesView({ rows, variableId, variableOptions = [], onVariabl
   return (
     <div style={{ display: 'grid', gap: 10 }}>
       <VariableTabs value={variableId} onChange={onVariableChange} options={variableOptions} isZh={isZh} />
-      <CurrentVariableLine label={variableLabel(variableId, isZh)} units={units} isZh={isZh} />
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', whiteSpace: 'nowrap', fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice80 }}>
           <thead>
@@ -332,8 +398,12 @@ export function ExtremesView({ rows, variableId, variableOptions = [], onVariabl
 }
 
 // ── 环境因子：纬带内变量对比 ────────────────────────────────────────────
-export function EnvironmentView({ model, bandId, onBandChange = null, bandIds = [] }) {
+export function EnvironmentView({ model, bandId, onBandChange = null, bandIds = [], height = PLOT_HEIGHT }) {
   const { isZh, text, grid } = usePlotTheme();
+  // 分析档主图由父容器给高度（'100%'），观测档预览用固定像素。
+  const fillParent = height === '100%';
+  const hostHeight = fillParent ? '100%' : height;
+
   if (!model) return <ViewPlaceholder isZh={isZh} />;
   const layout = baseLayout({ text, grid });
   return (
@@ -358,7 +428,7 @@ export function EnvironmentView({ model, bandId, onBandChange = null, bandIds = 
           ))}
         </div>
       ) : null}
-      <div style={{ width: '100%', height: PLOT_HEIGHT }}>
+      <div style={{ width: '100%', height: hostHeight, minHeight: fillParent ? 200 : hostHeight }}>
         <Plot
           data={model.series.map((entry) => ({
             type: 'scatter',
@@ -389,14 +459,18 @@ export function EnvironmentView({ model, bandId, onBandChange = null, bandIds = 
 }
 
 // ── 变量相关性 5×5 ─────────────────────────────────────────────────────
-export function CorrelationView({ model }) {
+export function CorrelationView({ model, height = PLOT_HEIGHT }) {
   const { isZh, text } = usePlotTheme();
+  // 分析档主图由父容器给高度（'100%'），观测档预览用固定像素。
+  const fillParent = height === '100%';
+  const hostHeight = fillParent ? '100%' : height;
+
   const { labels, r } = model || {};
   if (!model) return <ViewPlaceholder isZh={isZh} />;
   const flat = (r || []).flat().filter(Number.isFinite);
   return (
     <div style={{ display: 'grid', gap: 10 }}>
-      <div style={{ width: '100%', height: PLOT_HEIGHT }}>
+      <div style={{ width: '100%', height: hostHeight, minHeight: fillParent ? 200 : hostHeight }}>
         <Plot
           data={[{
             type: 'heatmap',
@@ -434,8 +508,10 @@ export function CorrelationView({ model }) {
 }
 
 // ── 辐射/温度 与 O3 的关系（散点 + 回归 + 滞后） ────────────────────────
-export function RelationshipView({ model, colorByDate = true }) {
+export function RelationshipView({ model, colorByDate = true, height = PLOT_HEIGHT }) {
   const { isZh, text, grid } = usePlotTheme();
+  const plotHeight = typeof height === 'number' ? Math.max(300, height) : PLOT_HEIGHT;
+
   if (!model) return <ViewPlaceholder isZh={isZh} />;
   const layout = baseLayout({ text, grid });
   const peak = peakLagDays(model.lag);
@@ -484,25 +560,57 @@ export function RelationshipView({ model, colorByDate = true }) {
   }
 
   return (
-    <div style={{ display: 'grid', gap: 10 }}>
-      <div style={{ width: '100%', height: PLOT_HEIGHT }}>
-        <Plot
-          data={traces}
-          layout={{
-            ...layout,
-            xaxis: {
-              ...layout.xaxis,
-              title: { text: `${model.driverVariable} (${model.driverUnits})`, font: { size: 11, color: text } },
-            },
-            yaxis: {
-              ...layout.yaxis,
-              title: { text: `TO3 (${model.referenceUnits})`, font: { size: 11, color: text } },
-            },
-          }}
-          config={WORKBENCH_PLOT_CONFIG}
-          useResizeHandler
-          style={{ width: '100%', height: '100%' }}
-        />
+    <div className="earth-relationship" style={{ '--relationship-plot-height': `${plotHeight}px` }}>
+      <div className="earth-relationship__plots">
+        <section className="earth-relationship__panel" aria-label={isZh ? '同期关系' : 'Same-day relationship'}>
+          <h3 className="earth-chart-header__title">{isZh ? '同期关系' : 'Same-day relationship'}</h3>
+          <div className="earth-relationship__plot">
+            <Plot
+              data={traces}
+              layout={{
+                ...layout,
+                xaxis: {
+                  ...layout.xaxis,
+                  title: { text: `${model.driverVariable} (${model.driverUnits})`, font: { size: 11, color: text } },
+                },
+                yaxis: {
+                  ...layout.yaxis,
+                  title: { text: `TO3 (${model.referenceUnits})`, font: { size: 11, color: text } },
+                },
+              }}
+              config={WORKBENCH_PLOT_CONFIG}
+              useResizeHandler
+              style={{ width: '100%', height: '100%' }}
+            />
+          </div>
+        </section>
+        {model.lag?.length ? (
+          <section className="earth-relationship__panel" aria-label={isZh ? '滞后相关' : 'Lagged correlation'}>
+            <h3 className="earth-chart-header__title">{isZh ? '滞后相关' : 'Lagged correlation'}</h3>
+            <div className="earth-relationship__plot">
+            <Plot
+              data={[{
+                type: 'bar',
+                x: model.lag.map((row) => row.lag_days),
+                y: model.lag.map((row) => row.r),
+                marker: { color: model.lag.map((row) => (row.r >= 0 ? C.blue : C.mars)) },
+                hovertemplate: `lag %{x} d<br>r=%{y:.3f}<extra></extra>`,
+              }]}
+              layout={{
+                ...layout,
+                margin: { l: 52, r: 18, t: 32, b: 52 },
+                bargap: 0.15,
+                xaxis: { ...layout.xaxis, title: { text: isZh ? '滞后（天，正=驱动领先）' : 'Lag (days, positive = driver leads)', font: { size: 10, color: text } } },
+                yaxis: { ...layout.yaxis, range: [-1, 1], title: { text: 'r', font: { size: 10, color: text } } },
+                showlegend: false,
+              }}
+              config={WORKBENCH_PLOT_CONFIG}
+              useResizeHandler
+              style={{ width: '100%', height: '100%' }}
+            />
+            </div>
+          </section>
+        ) : null}
       </div>
       <div
         style={{
@@ -523,30 +631,6 @@ export function RelationshipView({ model, colorByDate = true }) {
           value={peak === null ? '--' : `${peak} ${isZh ? '天' : 'd'}`}
         />
       </div>
-      {model.lag?.length ? (
-        <div style={{ width: '100%', height: 200 }}>
-          <Plot
-            data={[{
-              type: 'bar',
-              x: model.lag.map((row) => row.lag_days),
-              y: model.lag.map((row) => row.r),
-              marker: { color: model.lag.map((row) => (row.r >= 0 ? C.blue : C.mars)) },
-              hovertemplate: `lag %{x} d<br>r=%{y:.3f}<extra></extra>`,
-            }]}
-            layout={{
-              ...layout,
-              margin: { l: 52, r: 18, t: 6, b: 40 },
-              bargap: 0.15,
-              xaxis: { ...layout.xaxis, title: { text: isZh ? '滞后（天，正=驱动领先）' : 'Lag (days, positive = driver leads)', font: { size: 10, color: text } } },
-              yaxis: { ...layout.yaxis, range: [-1, 1], title: { text: 'r', font: { size: 10, color: text } } },
-              showlegend: false,
-            }}
-            config={WORKBENCH_PLOT_CONFIG}
-            useResizeHandler
-          style={{ width: '100%', height: '100%' }}
-          />
-        </div>
-      ) : null}
       <NoteBlock>
         {isZh
           ? '正滞后表示驱动变量领先臭氧若干天；滞后相关使用重叠样本，不环绕、不跨年补点。共同季节性与时间自相关会同时抬高各滞后阶的相关，因此不得据此声称物理响应时间。'
@@ -567,9 +651,11 @@ function Metric({ label, value }) {
 
 // ── 空间距平与纬带 RMS ─────────────────────────────────────────────────
 export function SpatialAnomalyView({
-  anomaly, rows, variableId, variableOptions = [], onVariableChange = null,
+  anomaly, rows, variableId, variableOptions = [], onVariableChange = null, height = PLOT_HEIGHT,
 }) {
   const { isZh, text } = usePlotTheme();
+  const plotHeight = typeof height === 'number' ? Math.max(320, height) : PLOT_HEIGHT;
+
   if (!anomaly || !rows) {
     return (
       <div style={{ display: 'grid', gap: 10 }}>
@@ -584,70 +670,77 @@ export function SpatialAnomalyView({
     1e-9,
   );
   return (
-    <div className="overview-card-plot" style={{ display: 'grid', gap: 10 }}>
+    <div className="overview-card-plot earth-spatial">
       <VariableTabs value={variableId} onChange={onVariableChange} options={variableOptions} isZh={isZh} />
-      <CurrentVariableLine label={variableLabel(variableId, isZh)} units={anomaly.units} isZh={isZh} />
-      <div style={{ minHeight: PLOT_HEIGHT }}>
-        <Plot
-          data={[{
-            type: 'heatmap',
-            x: anomaly.x,
-            y: anomaly.y,
-            z: anomaly.z,
-            zmin: -bound,
-            zmax: bound,
-            colorscale: 'RdBu',
-            reversescale: true,
-            colorbar: {
-              title: {
-                text: `${variableLabel(variableId, isZh)}${anomaly.units ? ` (${anomaly.units})` : ''}`,
+      <div className="earth-spatial__content">
+        <section className="earth-spatial__panel" aria-label={isZh ? '空间距平' : 'Spatial anomaly'}>
+          <h3 className="earth-chart-header__title">{isZh ? '空间距平' : 'Spatial anomaly'}</h3>
+          <div className="earth-spatial__plot" style={{ height: plotHeight }}>
+            <Plot
+              data={[{
+                type: 'heatmap',
+                x: anomaly.x,
+                y: anomaly.y,
+                z: anomaly.z,
+                zmin: -bound,
+                zmax: bound,
+                colorscale: 'RdBu',
+                reversescale: true,
+                colorbar: {
+                  title: {
+                    text: `${variableLabel(variableId, isZh)}${anomaly.units ? ` (${anomaly.units})` : ''}`,
+                    font: { color: text, size: 10 },
+                    side: 'top',
+                  },
+                  orientation: 'h',
+                  y: -0.22,
+                  yanchor: 'top',
+                  len: 0.8,
+                  thickness: 10,
+                  tickfont: { color: text, size: 9 },
+                },
+                hovertemplate: `${isZh ? '纬度' : 'Lat'}=%{y} ${isZh ? '经度' : 'Lon'}=%{x}<br>%{z:.2f} ${anomaly.units}<extra></extra>`,
+              }]}
+              layout={{
+                autosize: true,
+                paper_bgcolor: 'transparent',
+                plot_bgcolor: 'transparent',
+                margin: { l: 62, r: 18, t: 10, b: 78 },
                 font: { color: text, size: 10 },
-                side: 'top',
-              },
-              orientation: 'h',
-              y: -0.22,
-              yanchor: 'top',
-              len: 0.8,
-              thickness: 10,
-              tickfont: { color: text, size: 9 },
-            },
-            hovertemplate: `${isZh ? '纬度' : 'Lat'}=%{y} ${isZh ? '经度' : 'Lon'}=%{x}<br>%{z:.2f} ${anomaly.units}<extra></extra>`,
-          }]}
-          layout={{
-            autosize: true,
-            paper_bgcolor: 'transparent',
-            plot_bgcolor: 'transparent',
-            margin: { l: 62, r: 18, t: 10, b: 78 },
-            font: { color: text, size: 10 },
-            xaxis: { title: { text: isZh ? '经度' : 'Longitude', font: { size: 11, color: text } }, tickfont: { color: text, size: 10 } },
-            yaxis: { title: { text: isZh ? '纬度' : 'Latitude', font: { size: 11, color: text } }, tickfont: { color: text, size: 10 } },
-          }}
-          config={WORKBENCH_PLOT_CONFIG}
-          useResizeHandler
-          style={{ width: '100%', height: '100%' }}
-        />
-      </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', whiteSpace: 'nowrap', fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice80 }}>
-          <thead>
-            <tr style={{ color: C.ice50, textAlign: 'left' }}>
-              <th style={{ padding: '6px 8px' }}>{isZh ? '纬带' : 'Band'}</th>
-              <th style={{ padding: '6px 8px' }}>RMS ({rows[0]?.units || anomaly.units})</th>
-              <th style={{ padding: '6px 8px' }}>{isZh ? '峰谷跨度' : 'Peak-to-peak'}</th>
-              <th style={{ padding: '6px 8px' }}>{isZh ? '网格点' : 'Cells'}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.bandId} style={{ borderTop: `1px solid ${C.border}` }}>
-                <td style={{ padding: '6px 8px' }}>{bandLabel(row.bandId, isZh)}</td>
-                <td style={{ padding: '6px 8px' }}>{formatValue(row.rms)}</td>
-                <td style={{ padding: '6px 8px' }}>{formatValue(row.peakToPeak)}</td>
-                <td style={{ padding: '6px 8px' }}>{row.gridPointCount ?? 0}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                xaxis: { title: { text: isZh ? '经度' : 'Longitude', font: { size: 11, color: text } }, tickfont: { color: text, size: 10 } },
+                yaxis: { title: { text: isZh ? '纬度' : 'Latitude', font: { size: 11, color: text } }, tickfont: { color: text, size: 10 } },
+              }}
+              config={WORKBENCH_PLOT_CONFIG}
+              useResizeHandler
+              style={{ width: '100%', height: '100%' }}
+            />
+          </div>
+        </section>
+        <section className="earth-spatial__panel" aria-label={isZh ? '纬带诊断' : 'Latitude-band diagnostics'}>
+          <h3 className="earth-chart-header__title">{isZh ? '纬带诊断' : 'Latitude-band diagnostics'}</h3>
+          <div className="earth-spatial__table">
+            <table style={{ width: '100%', borderCollapse: 'collapse', whiteSpace: 'nowrap', fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice80 }}>
+              <thead>
+                <tr style={{ color: C.ice50, textAlign: 'left' }}>
+                  <th style={{ padding: '6px 8px' }}>{isZh ? '纬带' : 'Band'}</th>
+                  <th style={{ padding: '6px 8px' }}>RMS ({rows[0]?.units || anomaly.units})</th>
+                  <th style={{ padding: '6px 8px' }}>{isZh ? '峰谷跨度' : 'Peak-to-peak'}</th>
+                  <th style={{ padding: '6px 8px' }}>{isZh ? '网格点' : 'Cells'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.bandId} style={{ borderTop: `1px solid ${C.border}` }}>
+                    <td style={{ padding: '6px 8px' }}>{bandLabel(row.bandId, isZh)}</td>
+                    <td style={{ padding: '6px 8px' }}>{formatValue(row.rms)}</td>
+                    <td style={{ padding: '6px 8px' }}>{formatValue(row.peakToPeak)}</td>
+                    <td style={{ padding: '6px 8px' }}>{row.gridPointCount ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
       <NoteBlock>
         {isZh
@@ -659,8 +752,12 @@ export function SpatialAnomalyView({
 }
 
 // ── 极区统计（日平均，|latitude| >= 60°） ──────────────────────────────
-export function PolarView({ polar, isZh: forcedZh = null }) {
+export function PolarView({ polar, isZh: forcedZh = null, height = PLOT_HEIGHT }) {
   const theme = usePlotTheme();
+  // 分析档主图由父容器给高度（'100%'），观测档预览用固定像素。
+  const fillParent = height === '100%';
+  const hostHeight = fillParent ? '100%' : height;
+
   const isZh = forcedZh === null ? theme.isZh : forcedZh;
   const { text, grid } = theme;
   if (!polar) return <ViewPlaceholder isZh={isZh} />;

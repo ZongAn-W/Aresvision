@@ -14,7 +14,14 @@ import {
 } from './timelineCoverage.js';
 import { formatTimelineLs } from './timelineFormatting.js';
 
-export default function TimelineController({ embedded = true }) {
+/**
+ * Mars Ls 播放控件。
+ *
+ * 观测台下它是时间轨道那一行的内容：横向铺满、左侧播放与 Ls 元信息、右侧重置，
+ * 末尾的 `actions` 槽位放「展开分析」入口（观测档没有常驻分析区）。
+ * 不再按窗口宽度减左右栏宽来居中。
+ */
+export default function TimelineController({ embedded = true, actions = null }) {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
@@ -28,8 +35,6 @@ export default function TimelineController({ embedded = true }) {
     overviewOzoneCapabilities,
     marsYear,
   } = useDataOverview();
-
-  const playerWidth = 'clamp(380px, calc(100vw - var(--overview-scene-left) - var(--overview-scene-right) - 180px), 680px)';
 
   const seasonName =
     globalTimeLs < 90 ? t('common.season.spring') :
@@ -74,16 +79,20 @@ export default function TimelineController({ embedded = true }) {
       className="overview-timeline-anchor"
       data-embedded={embedded ? 'true' : 'false'}
       style={{
-        position: 'fixed',
-        bottom: 'var(--overview-timeline-bottom)',
-        left: 'calc(var(--overview-scene-left) + (100vw - var(--overview-scene-left) - var(--overview-scene-right)) / 2)',
-        transform: 'translateX(-50%)',
-        width: playerWidth,
+        // 观测台：时间轨道是自己的一行，横向铺满，不再按窗口居中于左右栏之间。
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        boxSizing: 'border-box',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 var(--overview-gutter)',
         zIndex: 1500,
         transition: 'none',
       }}
     >
-      <GlowCard style={{ padding: '7px 10px 6px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0 }}>
+      <GlowCard style={{ padding: '7px 10px 6px', flex: '1 1 auto', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <button
             onClick={onTogglePlay}
@@ -320,6 +329,8 @@ export default function TimelineController({ embedded = true }) {
           </button>
         </div>
       </GlowCard>
+        {actions}
+      </div>
     </div>
   );
 }

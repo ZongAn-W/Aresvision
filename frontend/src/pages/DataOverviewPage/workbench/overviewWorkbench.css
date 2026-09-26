@@ -1,43 +1,134 @@
 /**
- * 共用分析工作台外壳样式。
+ * 行星观测台外壳样式。
  *
- * 桌面为全屏三维场景 + 左右固定面板 + 底部时间轴；窄屏（≤1120px）改为
- * 顺序布局，避免固定面板挤掉球体，并保证 390px 无横向溢出。
+ * 桌面：顶部观测条件栏 + 全幅行星画布 + 独立时间轨道 + 底部分析区，
+ * 四行 Grid，没有常驻左右栏。
+ * 文档流（窄屏或工作区过矮）：同一批 DOM 顺序排列，画布保持可用高度，
+ * 设置面板改用模态抽屉。
+ *
+ * 颜色只使用品牌变量与局部 --overview-* 变量；科学色带、正负差值配色与
+ * 来源色由图表自己维护，不在这里覆盖。
  */
 
 .overview-shell {
   position: relative;
+  box-sizing: border-box;
   width: 100%;
-  min-height: 100vh;
+  /*
+   * 桌面是「一屏四行」工作区：高度固定为视口高度（由组件按测量结果内联写入），
+   * 行高只来自下面四个槽位。若这里用 min-height，内容变高会把行高预算撑大，
+   * 形成越排越高的正反馈。
+   */
+  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
-  --overview-left-width: 300px;
-  --overview-right-width: 540px;
-  --overview-navbar-height: 70px;
-  --overview-panel-bg: rgba(10, 12, 18, 0.62);
-  --overview-panel-bg-strong: rgba(10, 12, 18, 0.82);
+  --overview-toolbar-height: 64px;
+  --overview-timeline-height: 64px;
+  --overview-scene-height: 420px;
+  --overview-dock-height: 192px;
+  --overview-panel-width: 320px;
+  --overview-gutter: 16px;
+  --overview-overlay-gap: 14px;
+  --overview-timeline-bottom: 14px;
+  --overview-panel-bg: rgba(10, 12, 18, 0.72);
+  --overview-panel-bg-strong: rgba(10, 12, 18, 0.88);
   --overview-panel-border: rgba(255, 255, 255, 0.08);
   --overview-panel-blur: 20px;
-  --overview-card-radius: 16px;
-  --overview-control-radius: 12px;
-  --overview-accent: #ff6b35;
-  --overview-scene-left: 300px;
-  --overview-scene-right: 540px;
-  --overview-timeline-bottom: 18px;
-  --overview-overlay-gap: 14px;
-  --overview-scene-offset: 0px;
+  --overview-card-radius: 12px;
+  --overview-control-radius: 8px;
+  --overview-accent: var(--brand-primary, #9ad9ef);
+  --overview-accent-soft: rgba(154, 217, 239, 0.16);
+  --overview-warn: #f19a78;
+  --overview-hairline: rgba(255, 255, 255, 0.08);
+  --overview-elevated: rgba(255, 255, 255, 0.04);
   isolation: isolate;
   background:
-    radial-gradient(ellipse at 50% 48%, rgba(20, 48, 79, 0.22), transparent 44%),
-    radial-gradient(ellipse at 70% 30%, rgba(56, 189, 248, 0.08), transparent 30%),
+    radial-gradient(ellipse at 50% 42%, rgba(20, 48, 79, 0.20), transparent 46%),
+    radial-gradient(ellipse at 72% 26%, rgba(56, 189, 248, 0.06), transparent 32%),
     linear-gradient(180deg, #030711 0%, #060a12 58%, #02040a 100%);
+  display: grid;
+  grid-template-rows:
+    var(--overview-toolbar-height)
+    var(--overview-scene-height)
+    var(--overview-timeline-height)
+    var(--overview-dock-height);
+  grid-template-areas:
+    'toolbar'
+    'scene'
+    'timeline'
+    'analysis';
+}
+
+/*
+ * 带观测刻度轨时：时间轴立在画布左侧，与画布并排，底部不再有独立轨道行。
+ * 行高：toolbar / scene / timeline / analysis，其中 timeline、analysis 两行
+ * 由组件按档位写入的变量控制（观测档都是 0），因此两个档位共用同一份行定义。
+ * rail 纵向贯穿 scene + timeline + analysis 三行，所以它就是一整条左栏。
+ */
+.overview-shell--with-rail {
+  --overview-rail-width: 124px;
+  --overview-rail-row-height: var(--overview-scene-height);
+  grid-template-columns: var(--overview-rail-width) minmax(0, 1fr);
+  grid-template-rows:
+    var(--overview-toolbar-height)
+    var(--overview-rail-row-height)
+    var(--overview-timeline-height)
+    var(--overview-dock-height);
+  grid-template-areas:
+    'toolbar  toolbar'
+    'rail     scene'
+    'rail     timeline'
+    'rail     analysis';
+}
+
+.overview-shell--with-rail .overview-shell__rail {
+  grid-area: rail;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * 右侧「点位年变化」轨：与左轨镜像，同样纵向贯穿 scene + timeline + analysis 三行。
+ * 三列布局只在右轨存在时启用；没有右轨时场景仍是「左轨 + 场景」两列。
+ */
+.overview-shell--with-rail-end {
+  grid-template-columns: var(--overview-rail-width) minmax(0, 1fr) var(--overview-rail-width);
+  grid-template-areas:
+    'toolbar  toolbar  toolbar'
+    'rail     scene    rail-end'
+    'rail     timeline rail-end'
+    'rail     analysis rail-end';
+}
+
+.overview-shell--with-rail-end .overview-shell__rail-end {
+  grid-area: rail-end;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * 时间轨道与分析区横跨整幅（含左栏宽度），时间轨道那两行因此不再受 rail 占位影响；
+ * 竖轨只与场景共用第 2 行，不需要为了对齐而写死一个补偿值。
+ */
+.overview-shell--with-rail .overview-shell__timeline,
+.overview-shell--with-rail .overview-shell__analysis {
+  grid-column: 1 / -1;
 }
 
 .overview-shell.is-light {
-  --overview-panel-bg: rgba(255, 255, 255, 0.86);
-  --overview-panel-bg-strong: rgba(255, 255, 255, 0.94);
+  --overview-panel-bg: rgba(255, 255, 255, 0.88);
+  --overview-panel-bg-strong: rgba(255, 255, 255, 0.95);
   --overview-panel-border: rgba(15, 23, 42, 0.10);
+  --overview-hairline: rgba(15, 23, 42, 0.10);
+  --overview-elevated: rgba(15, 23, 42, 0.035);
+  --overview-accent: var(--brand-primary, #236387);
+  --overview-accent-soft: rgba(35, 99, 135, 0.10);
   background:
-    radial-gradient(ellipse at 50% 48%, rgba(148, 190, 226, 0.2), transparent 44%),
+    radial-gradient(ellipse at 50% 42%, rgba(148, 190, 226, 0.20), transparent 46%),
     linear-gradient(180deg, #e8f0f8 0%, #dce7f3 58%, #c9d8e8 100%);
 }
 
@@ -46,10 +137,117 @@
   height: 100vh;
 }
 
+/* ── 顶部观测条件栏 ─────────────────────────────────────────────── */
+.overview-shell__toolbar {
+  grid-area: toolbar;
+  position: relative;
+  z-index: 1200;
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  border-bottom: 1px solid var(--overview-hairline);
+  background: var(--overview-panel-bg-strong);
+  backdrop-filter: blur(var(--overview-panel-blur));
+  -webkit-backdrop-filter: blur(var(--overview-panel-blur));
+}
+
+.overview-shell__toolbar-inner {
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 var(--overview-gutter);
+  /* 桌面固定一行：条件栏不允许换行撑高，否则会把画布挤小。 */
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+/* ── 画布 ───────────────────────────────────────────────────────── */
 .overview-shell__scene {
+  grid-area: scene;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * 没有场景时（例如分析档只放主图、不显示球体）场景行整行不渲染，
+ * 让出的高度由组件写进 --overview-dock-height，交给分析区。
+ */
+.overview-shell[data-observatory-scene='hidden'] {
+  --overview-scene-height: 0px;
+}
+
+.overview-shell__overlays {
   position: absolute;
   inset: 0;
+  z-index: 15;
+  pointer-events: none;
+}
+
+/* ── 时间轨道 ───────────────────────────────────────────────────── */
+.overview-shell__timeline {
+  grid-area: timeline;
+  position: relative;
+  z-index: 1210;
+  box-sizing: border-box;
   min-width: 0;
+  border-top: 1px solid var(--overview-hairline);
+  border-bottom: 1px solid var(--overview-hairline);
+  background: var(--overview-panel-bg-strong);
+  backdrop-filter: blur(var(--overview-panel-blur));
+  -webkit-backdrop-filter: blur(var(--overview-panel-blur));
+}
+
+/* ── 底部分析区 ─────────────────────────────────────────────────── */
+.overview-shell__analysis {
+  grid-area: analysis;
+  position: relative;
+  z-index: 1200;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--overview-panel-bg);
+  backdrop-filter: blur(var(--overview-panel-blur));
+  -webkit-backdrop-filter: var(--overview-panel-blur);
+}
+
+/*
+ * 观测档只展示与观测有关的内容：星球、数据源、变量、时间与画布。
+ * 观测档的分析区整行收起：高度压成 0 还不够 —— 这个网格单元仍会渲染并画自己的
+ * 面板底色与边框，在页面底部留下一条没有任何内容的着色横条。
+ */
+.overview-shell[data-observatory-view='observe'] .overview-shell__analysis {
+  display: none;
+}
+
+/*
+ * 同理，观测档把时间轴搬到了左侧刻度轨，底部这一行就没有内容了；
+ * 空行仍会画自己的面板底色与上边框，形成一条没有内容的横条，所以整行收起。
+ * 分析档保留这一行（那是分析档的水平时间轨道）。
+ */
+.overview-shell--with-rail[data-observatory-view='observe'] .overview-shell__timeline {
+  display: none;
+}
+
+/* 设置面板是浮层：包一层绝对定位容器，不让它们进入 Grid 的自动放置。 */
+.overview-shell__tools {
+  position: absolute;
+  inset: var(--overview-toolbar-height) 0 0;
+  z-index: 1400;
+  pointer-events: none;
+}
+
+.overview-shell__tools > * {
+  pointer-events: auto;
+}
+
+.overview-shell__tools > [role='dialog'] {
+  pointer-events: auto;
 }
 
 .overview-panel-surface {
@@ -59,167 +257,567 @@
   -webkit-backdrop-filter: blur(var(--overview-panel-blur));
 }
 
-.overview-shell__sidebar,
-.overview-shell__analysis {
-  box-sizing: border-box;
-  min-width: 0;
-}
-
-.overview-shell__sidebar {
-  position: fixed;
-  left: 0;
-  top: var(--overview-navbar-height);
-  width: var(--overview-left-width);
-  height: calc(100vh - var(--overview-navbar-height));
-  z-index: 1000;
-  border-right: 1px solid var(--overview-panel-border);
-}
-
-.overview-shell__analysis {
-  position: fixed;
-  right: 0;
-  top: var(--overview-navbar-height);
-  width: var(--overview-right-width);
-  height: calc(100vh - var(--overview-navbar-height));
-  z-index: 1000;
-  border-left: 1px solid var(--overview-panel-border);
-}
-
-.overview-resizer {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 8px;
-  z-index: 20;
-  cursor: col-resize;
-}
-
-.overview-resizer--left { right: -4px; }
-.overview-resizer--right { left: -4px; }
-
+/* ── 覆盖层锚点 ─────────────────────────────────────────────────── */
 .overview-overlay-anchor,
 .overview-timeline-anchor {
-  --overview-anchor-left: var(--overview-scene-left);
-  --overview-anchor-right: var(--overview-scene-right);
+  --overview-anchor-left: 0px;
+  --overview-anchor-right: 0px;
 }
 
 .overview-copilot-anchor {
-  max-width: calc(100vw - var(--overview-scene-left) - var(--overview-scene-right) - 28px);
+  max-width: calc(100vw - 2 * var(--overview-gutter));
 }
 
-.overview-shell--compact {
+/* ── 文档流布局：窄屏或工作区过矮 ───────────────────────────────── */
+.overview-shell--flow {
   display: flex;
   flex-direction: column;
-  gap: 12px;
   height: auto;
-  padding: 12px;
+  min-height: 100vh;
   overflow-x: hidden;
   overflow-y: auto;
 }
 
-.overview-shell--compact .overview-shell__sidebar,
-.overview-shell--compact .overview-shell__analysis {
-  position: relative;
-  inset: auto;
-  width: 100%;
+.overview-shell--flow .overview-shell__tools {
+  position: static;
+  pointer-events: auto;
+}
+
+.overview-shell--flow .observatory-panel {
+  position: fixed;
+  top: 72px;
+  left: 12px;
+  bottom: 12px;
+  width: min(var(--overview-panel-width), calc(100vw - 24px));
+}
+
+.overview-shell--flow .overview-shell__toolbar {
   height: auto;
-  border: 0;
-  z-index: auto;
+  flex: 0 0 auto;
 }
 
-.overview-shell--compact .overview-shell__scene {
-  position: relative;
-  inset: auto;
-  order: 0;
-  height: 42vh;
+.overview-shell--flow .overview-shell__toolbar-inner {
+  height: auto;
+  flex-wrap: wrap;
+  padding: 8px var(--overview-gutter);
+  row-gap: 8px;
+}
+
+.overview-shell--flow .overview-shell__scene {
+  flex: 0 0 auto;
+  height: var(--overview-scene-height);
   min-height: 280px;
+  margin: 0 var(--overview-gutter);
   border-radius: var(--overview-card-radius);
+  border: 1px solid var(--overview-hairline);
   overflow: hidden;
+  margin-top: 8px;
 }
 
-.overview-shell--compact .overview-shell__sidebar { order: 1; }
-.overview-shell--compact .overview-shell__timeline { order: 2; }
-.overview-shell--compact .overview-shell__analysis { order: 3; }
-.overview-shell--compact .overview-shell__overlays { position: absolute; inset: 0; z-index: 15; pointer-events: none; }
-
-.overview-shell__scene--compact {
-  position: relative;
-  inset: auto;
-  height: 46vh;
-  min-height: 280px;
-  border-radius: 16px;
-  overflow: hidden;
+.overview-shell--flow .overview-shell__timeline,
+.overview-shell--flow .overview-shell__analysis {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 0;
 }
 
-.overview-shell__compact-panels {
+.overview-shell--flow .overview-shell__timeline {
+  margin: 8px 0 0;
+  border-radius: var(--overview-card-radius);
+  border: 1px solid var(--overview-hairline);
+}
+
+.overview-shell--flow .overview-shell__analysis {
+  margin: 8px 0 0 0;
+  border-top: 1px solid var(--overview-hairline);
+  border-radius: 0;
+  padding-bottom: 16px;
+}
+
+.overview-shell--flow .overview-shell__overlays {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+}
+
+.overview-shell--flow .overview-timeline-anchor {
+  position: relative !important;
+  inset: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  transform: none !important;
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.overview-shell--flow .overview-copilot-anchor {
+  position: absolute !important;
+  left: auto !important;
+  right: var(--overview-overlay-gap) !important;
+  bottom: var(--overview-overlay-gap) !important;
+  width: auto !important;
+  max-width: calc(100% - 2 * var(--overview-overlay-gap));
+}
+
+.overview-shell--flow .overview-globe-legend-compact,
+.overview-shell--flow .overview-earth-legend {
+  position: absolute !important;
+  left: auto !important;
+  right: var(--overview-overlay-gap) !important;
+  bottom: var(--overview-overlay-gap) !important;
+  width: max-content !important;
+  max-width: calc(100% - 2 * var(--overview-overlay-gap));
+}
+
+.overview-shell--flow .overview-mars-hud,
+.overview-shell--flow .overview-hud {
+  pointer-events: none;
+}
+
+.overview-shell--flow :is(table, pre, code) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+@media (max-width: 600px) {
+  .overview-shell {
+    --overview-gutter: 8px;
+  }
+
+  .overview-shell--flow .overview-shell__scene {
+    min-height: 280px;
+  }
+}
+
+/* ── 分析区版式 ─────────────────────────────────────────────────── */
+.analysis-dock {
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  padding: 16px var(--overview-gutter) 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.analysis-selection-row, .analysis-conditions-row, .analysis-conditions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   min-width: 0;
 }
 
-.overview-shell__compact-panel {
+.analysis-selection-row { padding-bottom: 12px; }
+.analysis-conditions-row { padding: 12px 0 4px; border-top: 1px solid var(--overview-hairline); }
+.analysis-step { display: inline-flex; align-items: center; gap: 8px; color: var(--text); font-size: calc(13px * var(--font-scale, 1)); font-weight: 700; flex-shrink: 0; }
+.analysis-step__number { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; color: var(--overview-accent); background: var(--overview-accent-soft); font-size: 12px; }
+.analysis-groups { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 10px; background: var(--overview-elevated); border: 1px solid var(--overview-hairline); }
+.analysis-groups button, .analysis-back, .analysis-action {
+  min-height: 40px; padding: 8px 14px; border: 1px solid transparent; border-radius: 7px;
+  color: var(--text-70, var(--text)); background: transparent; cursor: pointer;
+  font: 600 calc(13px * var(--font-scale, 1)) var(--font-body); line-height: 1.4;
+}
+.analysis-groups button[aria-pressed='true'], .analysis-action {
+  color: var(--overview-accent); border-color: var(--overview-accent); background: var(--overview-accent-soft);
+}
+.analysis-back { margin-left: auto; border-color: var(--overview-hairline); }
+.analysis-dock button:hover, .analysis-support summary:hover { background: var(--overview-accent-soft); }
+.analysis-dock :is(button, select, summary):focus-visible,
+.observatory-toolbar :is(button, select):focus-visible {
+  outline: 2px solid var(--overview-accent); outline-offset: 3px;
+}
+.analysis-conditions label > span { font-size: calc(12px * var(--font-scale, 1)) !important; color: var(--text-70, var(--text)) !important; }
+.analysis-conditions label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.analysis-conditions select { min-height: 40px; max-width: 260px !important; }
+.analysis-conditions .mars-analysis-ls {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1 1 100%;
+  width: 100%;
   min-width: 0;
-  max-width: 100%;
+  gap: 8px;
+}
+.mars-analysis-ls__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mars-analysis-ls__value { color: var(--overview-accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mars-analysis-ls input { width: 100%; min-height: 32px; margin: 0; accent-color: var(--overview-accent); cursor: pointer; }
+.mars-analysis-ls input:focus-visible { outline: 2px solid var(--overview-accent); outline-offset: 3px; }
+.mars-analysis-ls input:disabled { cursor: not-allowed; opacity: 0.5; }
+.mars-analysis-chart { width: 100%; min-width: 0; container-type: inline-size; }
+.mars-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 18px; }
+.mars-chart-grid > *, .mars-wave-grid > * { min-width: 0; }
+.mars-correlation-grid > :not(:last-child) { height: 360px; }
+.mars-polar-grid > .js-plotly-plot { height: 360px !important; min-width: 0; }
+.mars-wave-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.mars-wave-diagnostics { min-width: 0; }
+@container (min-width: 960px) {
+  .mars-wave-grid { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); align-items: start; }
+}
+.analysis-context, .analysis-context-note { color: var(--text-60, var(--text)); font-size: calc(12px * var(--font-scale, 1)); line-height: 1.6; }
+.analysis-context-note { margin: 0; }
+.analysis-chart-heading { margin: 6px 0 14px; }
+.analysis-chart-heading h2 { margin: 0 0 6px; color: var(--text); font: 700 calc(19px * var(--font-scale, 1)) var(--font-display); }
+.analysis-chart-heading p { margin: 0; color: var(--text-60, var(--text)); font-size: calc(13px * var(--font-scale, 1)); line-height: 1.6; }
+[data-dock-main] { flex: 0 0 auto; min-width: 0; }
+.analysis-state { display: grid; gap: 16px; justify-items: start; align-content: center; min-height: 220px; padding: 24px; color: var(--text-70, var(--text)); font-size: calc(14px * var(--font-scale, 1)); line-height: 1.7; }
+.analysis-support { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 16px; flex: 0 0 auto; }
+.analysis-support details { border: 1px solid var(--overview-hairline); border-radius: 10px; background: var(--overview-elevated); }
+.analysis-support summary { padding: 13px 16px; cursor: pointer; color: var(--text-70, var(--text)); font: 600 calc(13px * var(--font-scale, 1)) var(--font-body); }
+.analysis-support { padding-bottom: 30px; }
+.analysis-support__content { padding: 12px 16px 16px; min-width: 0; border-top: 1px solid var(--overview-hairline); }
+.analysis-preview { display: flex; justify-content: space-between; gap: 12px; padding: 12px; }
+.overview-shell--flow .analysis-dock { height: auto; overflow: visible; }
+.overview-shell--flow .dock-body { overflow: visible; flex: 0 0 auto; }
+
+/* 数据总览的窄屏导航让出第二行，避免固定导航遮住分析条件。 */
+@media (max-width: 1100px) {
+  .nav-glass[data-page='overview'] {
+    height: calc(78px + 40px * var(--font-scale, 1)) !important;
+    align-items: flex-start !important;
+    padding: 18px 16px 0 !important;
+  }
+  .nav-glass[data-page='overview'] .home-nav__links {
+    position: absolute; left: 16px; right: 16px; bottom: 7px; overflow-x: auto;
+  }
+  .nav-glass[data-page='overview'] .home-nav__links button {
+    flex-shrink: 0; min-height: 40px; padding: 8px 10px !important;
+  }
+  .nav-glass[data-page='overview'] .home-nav__links span { white-space: nowrap; }
+}
+
+@media (max-width: 720px) {
+  .analysis-dock { padding: 12px; }
+  .analysis-step { width: 100%; }
+  .analysis-groups { width: 100%; }
+  .analysis-groups button { flex: 1; min-height: 44px; padding: 8px; }
+  .analysis-selection-row .dock-selector { width: 100%; }
+  .analysis-selection-row .dock-selector select { width: 100%; min-width: 0; max-width: none; }
+  .analysis-back { margin-left: 0; }
+  .analysis-conditions { width: 100%; gap: 10px; }
+  .analysis-conditions label { flex: 1 1 200px; justify-content: space-between; }
+  .analysis-conditions select { min-width: 0; max-width: 75% !important; min-height: 44px; }
+  .analysis-support__content { padding: 12px 8px; }
+}
+
+.dock-head {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--overview-hairline);
+}
+
+.dock-head__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.dock-head__status {
+  color: var(--overview-warn, #f19a78);
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* 分析上下文：变量与单位不在这里（图表头的变量药丸已经表达），只留范围/年份/来源 */
+.dock-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+  font-size: calc(11px * var(--font-scale, 1));
+  line-height: 1.4;
+}
+
+.dock-meta__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.dock-meta__label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dock-meta__value {
+  color: color-mix(in srgb, var(--text) 80%, transparent);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 图表数量多时用一个下拉，避免药丸行占掉整条横带 */
+.dock-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dock-selector__label, .dock-selector > span {
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.dock-selector select {
+  min-width: 200px;
+  max-width: 320px;
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: var(--overview-control-radius);
+  border: 1px solid var(--border-strong, var(--border));
+  background: var(--overview-elevated);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 主图与下方面板共用的滚动列；头部固定不滚 */
+.dock-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  overflow-y: auto;
   overflow-x: hidden;
 }
 
-@media (max-width: 1120px) {
-  .overview-shell--compact .overview-timeline-anchor {
-    position: relative !important;
-    inset: auto !important;
-    left: auto !important;
-    right: auto !important;
-    bottom: auto !important;
-    transform: none !important;
-    width: 100% !important;
-    max-width: none !important;
+/* 宽屏分析：条件独立成左栏，主图获得完整纵向空间。 */
+@media (min-width: 1024px) {
+  .analysis-dock {
+    display: grid;
+    grid-template-columns: 264px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 24px;
+    padding-top: 20px;
   }
 
-  .overview-shell--compact .overview-copilot-anchor {
-    position: absolute !important;
-    left: auto !important;
-    right: var(--overview-overlay-gap) !important;
-    bottom: var(--overview-overlay-gap) !important;
-    width: auto !important;
+  .analysis-controls {
+    min-height: 0;
+    min-width: 0;
+    align-content: start;
+    gap: 20px;
+    padding: 0 20px 24px 0;
+    border-bottom: 0;
+    border-right: 1px solid var(--overview-hairline);
+    overflow-y: auto;
   }
 
-  .overview-shell--compact .overview-globe-legend-compact,
-  .overview-shell--compact .overview-earth-legend {
-    position: absolute !important;
-    left: auto !important;
-    right: var(--overview-overlay-gap) !important;
-    bottom: var(--overview-overlay-gap) !important;
-    width: max-content !important;
-    max-width: calc(100% - 2 * var(--overview-overlay-gap));
+  .analysis-controls .analysis-selection-row,
+  .analysis-controls .analysis-conditions-row,
+  .analysis-controls .analysis-conditions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding-bottom: 0;
+    width: 100%;
   }
 
-  .overview-shell--compact .overview-copilot-anchor {
-    right: var(--overview-overlay-gap) !important;
-    bottom: var(--overview-overlay-gap) !important;
-    max-width: calc(100% - 2 * var(--overview-overlay-gap));
-  }
+  .analysis-controls .analysis-conditions-row { padding-top: 20px; }
+  .analysis-controls .analysis-groups { flex-direction: column; }
+  .analysis-controls .analysis-groups button { text-align: left; min-height: 44px; }
 
-  .overview-shell--compact .overview-shell__compact-panel :is(table, pre, code) {
-    max-width: 100%;
-    overflow-x: auto;
-  }
-}
-
-@media (max-width: 600px) {
-  .overview-shell--compact {
-    padding: 8px;
+  .analysis-controls .dock-selector,
+  .analysis-controls .analysis-conditions label {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch !important;
     gap: 8px;
+    width: 100%;
+    min-width: 0;
   }
 
-  .overview-shell__scene--compact {
-    height: 42vh;
-    min-height: 250px;
-    border-radius: var(--overview-card-radius);
+  .analysis-controls :is(.dock-selector, .analysis-conditions) select {
+    width: 100%;
+    min-width: 0;
+    max-width: 100% !important;
+    min-height: 42px;
   }
+
+  .analysis-controls .analysis-back { margin: 0; width: 100%; }
+  .analysis-dock .dock-body { padding-top: 0; }
+  .overview-shell--flow .analysis-dock { grid-template-rows: auto; }
 }
 
-/* 卡片图表的 Plotly 模式栏：与火星卡片一致，挪到右下角并统一配色。 */
+/*
+ * 主图下方一行：点位/序列面板 + AI 面板。
+ *
+ * 用 `flex: 1 0 auto` 而不是固定高度：主图高度是按这一行的预留值算出来的，
+ * 实际行高吸掉分析区剩下的零头（不允许收缩，内容超高时由分析区自己滚动，
+ * 不把卡片压扁）。
+ */
+.dock-bottom {
+  flex: 1 0 auto;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dock-bottom[data-cells='2'] {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 460px);
+}
+
+.dock-bottom[data-cells='1'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dock-bottom__cell {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 卡片撑满整行：两块并排时高度一致，行底不留空白带。
+   选择器要比卡片自己的 `.earth-series--dock { flex: 0 0 auto }` 更具体，
+   否则序列面板按内容宽度（569px）排成单列，两块曲线上下堆叠、整行变高。 */
+.dock-bottom .dock-bottom__cell > * {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+/*
+ * 分析主图的 Plotly 模式栏：默认是一列按钮竖着压在图的右缘。
+ * 这里只把它收成一行、压低对比度，位置仍用 Plotly 自己的图内右上角
+ * （挪到卡片底部会落进说明行，和「原始单位」药丸撞在一起）。
+ */
+[data-dock-main] .modebar {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  width: auto !important;
+  height: auto !important;
+  padding: 2px 4px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: transparent;
+}
+
+[data-dock-main] .modebar-group {
+  display: flex !important;
+  flex-direction: row !important;
+  margin: 0 !important;
+}
+
+[data-dock-main] .modebar-btn svg {
+  fill: rgba(148, 163, 184, 0.72) !important;
+}
+
+[data-dock-main] .modebar-btn:hover svg,
+[data-dock-main] .modebar-btn.active svg {
+  fill: var(--overview-accent) !important;
+}
+
+/* ── 设置抽屉 ───────────────────────────────────────────────────── */
+.observatory-panel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  bottom: 8px;
+  z-index: 1400;
+  box-sizing: border-box;
+  width: var(--overview-panel-width);
+  max-width: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--overview-card-radius);
+  border: 1px solid var(--overview-panel-border);
+  background: var(--overview-panel-bg-strong);
+  backdrop-filter: blur(var(--overview-panel-blur));
+  -webkit-backdrop-filter: blur(var(--overview-panel-blur));
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  animation: observatory-panel-in 180ms ease-out;
+}
+
+@keyframes observatory-panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.observatory-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--overview-hairline);
+  flex: 0 0 auto;
+}
+
+.observatory-panel__title {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.observatory-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px 16px;
+  align-content: start;
+}
+
+.observatory-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 2400;
+  display: flex;
+  align-items: flex-end;
+}
+
+.observatory-drawer__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 7, 17, 0.62);
+  border: 0;
+  padding: 0;
+}
+
+.observatory-drawer__sheet {
+  position: relative;
+  width: 100%;
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px 16px 0 0;
+  border: 1px solid var(--overview-panel-border);
+  border-bottom: 0;
+  background: var(--overview-panel-bg-strong);
+  backdrop-filter: blur(var(--overview-panel-blur));
+  -webkit-backdrop-filter: blur(var(--overview-panel-blur));
+  overflow: hidden;
+}
+
+/* ── 卡片图表的 Plotly 模式栏：挪到右下角并统一配色 ───────────────── */
 .overview-card-plot .modebar {
   top: auto !important;
   bottom: 0 !important;
@@ -243,5 +841,16 @@
 
 .overview-card-plot .modebar-btn:hover svg,
 .overview-card-plot .modebar-btn.active svg {
-  fill: #ff6b35 !important;
+  fill: var(--overview-accent) !important;
+}
+
+/* ── 减少动态效果 ───────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .observatory-panel {
+    animation: none;
+  }
+
+  .overview-shell * {
+    scroll-behavior: auto !important;
+  }
 }

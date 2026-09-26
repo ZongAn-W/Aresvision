@@ -4,9 +4,12 @@
  * 只在用户显式点击时调用一次 `/analysis/earth/overview/insight`，
  * 发送统计摘要（星球、数据集、年份、变量、区域、少量标量），
  * 绝不发送整幅原始场；回答中必须标明数据源、星球、时间范围与单位。
+ *
+ * 请求结果绑定上下文身份（星球 / 数据集 / 发布指纹 / 图形 ID / 年份 / 日期 /
+ * 变量 / 区域）：身份变化时取消在途请求并清空旧回答，旧回答不会显示在新图下。
  */
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import GlowCard from '../../../components/GlowCard';
 import C from '../../../constants/colors';
 import { postEarthOverviewInsight } from '../../../services/datasets.js';
@@ -26,9 +29,28 @@ export default function EarthInsightPanel({
   cards = [],
   ready = true,
   isZh = true,
+  chartId = null,
 }) {
   const [state, setState] = useState({ status: 'idle', answer: null, meta: null, error: null });
   const abortRef = useRef(null);
+
+  // 上下文身份：任何一项变化都让旧回答失效。
+  const contextKey = [
+    'earth', datasetId ?? '-', fingerprint ?? '-', chartId ?? '-',
+    year ?? '-', date ?? '-', variable ?? '-', units ?? '-', scope ?? '-',
+  ].join('|');
+  const contextKeyRef = useRef(contextKey);
+  contextKeyRef.current = contextKey;
+
+  useEffect(() => {
+    // 身份变化：取消在途请求并清空旧回答；这里不发起任何新请求。
+    abortRef.current?.abort();
+    setState((previous) => (
+      previous.status === 'idle' && !previous.answer && !previous.error
+        ? previous
+        : { status: 'idle', answer: null, meta: null, error: null }
+    ));
+  }, [contextKey]);
 
   const run = useCallback(async () => {
     if (!ready) {
@@ -40,6 +62,7 @@ export default function EarthInsightPanel({
       });
       return;
     }
+    const requestKey = contextKey;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -59,10 +82,11 @@ export default function EarthInsightPanel({
 
     try {
       const response = await postEarthOverviewInsight(payload, { signal: controller.signal });
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || contextKeyRef.current !== requestKey) return;
       setState({ status: 'ready', answer: response?.answer || '', meta: response, error: null });
     } catch (error) {
       if (error?.name === 'AbortError') return;
+      if (contextKeyRef.current !== requestKey) return;
       setState({
         status: 'error',
         answer: null,
@@ -70,7 +94,7 @@ export default function EarthInsightPanel({
         error: error?.message || (isZh ? '解读请求失败。' : 'Insight request failed.'),
       });
     }
-  }, [cards, datasetId, date, fingerprint, isZh, ready, scope, scopeLabel, units, variable, year]);
+  }, [cards, contextKey, datasetId, date, fingerprint, isZh, ready, scope, scopeLabel, units, variable, year]);
 
   return (
     <GlowCard style={{ padding: '16px 18px', display: 'grid', gap: 10 }}>

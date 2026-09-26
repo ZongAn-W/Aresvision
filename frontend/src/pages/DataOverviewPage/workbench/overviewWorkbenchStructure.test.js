@@ -9,7 +9,10 @@ const sceneSource = readFileSync(new URL('./OverviewScene.jsx', import.meta.url)
 const pageSource = readFileSync(new URL('../../DataOverviewPage.jsx', import.meta.url), 'utf8');
 const earthSceneSource = readFileSync(new URL('../EarthOverview/EarthWorkbenchScene.jsx', import.meta.url), 'utf8');
 const earthAdapterSource = readFileSync(new URL('./earthOverviewAdapter.js', import.meta.url), 'utf8');
-const panelSource = readFileSync(new URL('./OverviewAnalysisPanel.jsx', import.meta.url), 'utf8');
+const dockSource = readFileSync(new URL('./AnalysisDock.jsx', import.meta.url), 'utf8');
+const toolbarSource = readFileSync(new URL('./ObservatoryToolbar.jsx', import.meta.url), 'utf8');
+const layoutSource = readFileSync(new URL('./observatoryLayout.js', import.meta.url), 'utf8');
+const marsToolsSource = readFileSync(new URL('../ObservatoryMars.jsx', import.meta.url), 'utf8');
 
 test('planet switch cancels requests, clears the old scene and resets camera and geometry', () => {
   // 1 + 2: cancel every in-flight request and clear field / series / playback / point.
@@ -31,17 +34,44 @@ test('planet switch cancels requests, clears the old scene and resets camera and
   assert.match(controllerSource, /coordinator\.settle\(request\)/);
 });
 
-test('the shared shell provides three columns, drag handles and a compact fallback', () => {
-  assert.match(shellSource, /overview-shell__sidebar/);
-  assert.match(shellSource, /overview-shell__analysis/);
+test('the shared shell provides toolbar, scene, timeline and analysis slots with no fixed rails', () => {
+  assert.match(shellSource, /overview-shell__toolbar/);
   assert.match(shellSource, /overview-shell__scene/);
-  assert.match(shellSource, /role="separator"/);
-  assert.match(shellSource, /overview-resizer--left/);
-  assert.match(shellSource, /overview-resizer--right/);
+  assert.match(shellSource, /overview-shell__timeline/);
+  assert.match(shellSource, /overview-shell__analysis/);
+  // 观测台没有左右固定栏与拖拽改宽。
+  assert.doesNotMatch(shellSource, /overview-shell__sidebar/);
+  assert.doesNotMatch(shellSource, /overview-resizer/);
+  assert.doesNotMatch(shellSource, /role="separator"/);
   assert.match(shellSource, /MIN_SCENE_WIDTH/);
   assert.match(shellSource, /shouldUseCompactOverview/);
+  assert.match(shellSource, /getObservatoryLayout/);
   assert.doesNotMatch(shellSource, /panelMode === 'external'/);
   assert.match(shellSource, /overviewVisualContract/);
+  // 场景容器尺寸来自真实测量：ResizeObserver + 自身高度，且卸载时清理。
+  assert.match(shellSource, /ResizeObserver/);
+  assert.match(shellSource, /observer\.disconnect\(\)/);
+  assert.match(shellSource, /sceneRef/);
+  // 兼容字段 offsetX 固定为 0，禁止再按窗口减栏宽。
+  assert.match(shellSource, /offsetX: 0/);
+});
+
+test('the observatory shell wires observe/analyze through one shared state', () => {
+  // 两档由外部状态驱动；Shell 不自己维护第二套布局状态。
+  assert.match(shellSource, /view = 'observe'/);
+  assert.match(shellSource, /onViewChange/);
+  assert.doesNotMatch(shellSource, /useState\('observe'\)/);
+  // 场景容器不随 view 改变 key，模式切换不重建三维实例。
+  assert.doesNotMatch(shellSource, /key=\{[^}]*view/);
+  assert.match(toolbarSource, /aria-pressed=\{active\}/);
+  assert.match(dockSource, /aria-pressed=\{active\}/);
+  // 分析区两档共用一个主图身份。
+  assert.match(dockSource, /pickActiveCard/);
+  assert.match(dockSource, /onCardChange/);
+  assert.match(dockSource, /onExpand/);
+  assert.match(dockSource, /onCollapse/);
+  assert.match(layoutSource, /export function pickActiveCard/);
+  assert.match(layoutSource, /export function getObservatoryLayout/);
 });
 
 test('the shared card renders every unified state explicitly', () => {
@@ -79,20 +109,40 @@ test('Earth workbench declares fixed lighting and no Mars Ls handling', () => {
   assert.doesNotMatch(earthSceneSource, /solarLongitudeLs/);
   assert.doesNotMatch(earthSceneSource, /marsYear/);
   assert.match(earthSceneSource, /OverviewShell/);
-  assert.match(earthSceneSource, /OverviewAnalysisPanel/);
+  assert.match(earthSceneSource, /AnalysisDock/);
   assert.match(earthSceneSource, /EarthInsightPanel/);
   assert.match(earthSceneSource, /const \[autoRotate, setAutoRotate\] = useState\(true\)/);
+  // Earth 的设置内容按职责拆到图层 / 点位 / 显示三个面板。
+  assert.match(earthSceneSource, /layers:/);
+  assert.match(earthSceneSource, /point:/);
+  assert.match(earthSceneSource, /display:/);
+  assert.match(earthSceneSource, /EarthObservationRail/);
+  assert.match(earthSceneSource, /EarthMap2D/);
 });
 
-test('the page routes both planets through the shared workbench shell', () => {
+test('the page routes both planets through the shared observatory shell', () => {
   assert.match(pageSource, /EarthWorkbenchScene/);
   assert.match(pageSource, /OverviewShell/);
   assert.doesNotMatch(pageSource, /panelMode="external"/);
-  assert.match(pageSource, /<SidebarMenu embedded sceneSwitch=\{sceneSwitch\} \/>/);
-  assert.match(pageSource, /<DetailPanel embedded/);
-  assert.match(pageSource, /<TimelineController embedded \/>/);
-  // The gesture HUD stays in the page so its structure contract is unchanged.
+  assert.doesNotMatch(pageSource, /<SidebarMenu/);
+  assert.doesNotMatch(pageSource, /<DetailPanel/);
+  // 火星条件栏与设置面板走 ObservatoryMars，观测时间轴与曲线位于两侧。
+  assert.match(pageSource, /MarsObservatoryToolbar/);
+  assert.match(pageSource, /useMarsObservatoryPanels/);
+  assert.match(pageSource, /<MarsObservationRail/);
+  // 观测档没有常驻分析区：展开入口保留在左轨。
+  assert.match(pageSource, /AnalysisEntryButton/);
+  assert.match(pageSource, /rail=\{observatoryView === 'observe'/);
+  assert.match(pageSource, /railEnd=\{observatoryView === 'observe'/);
+  assert.match(pageSource, /PointProbeContent/);
+  assert.match(pageSource, /AnalysisDock/);
+  // 手势 HUD 留在页面里，结构契约不变。
   assert.match(pageSource, /className="gesture-capture-hud"/);
+  // 手势坐标按画布真实矩形映射，不再按窗口减栏宽。
+  assert.match(pageSource, /getBoundingClientRect/);
+  assert.doesNotMatch(pageSource, /leftPanelWidth \+ 28/);
+  // 点位结果嵌进分析区，弹窗保留给独立场景。
+  assert.match(marsToolsSource, /panels/);
 });
 
 test('Earth is the default overview planet and appears before Mars in the switch', () => {
@@ -101,41 +151,52 @@ test('Earth is the default overview planet and appears before Mars in the switch
   assert.match(pageSource, /const \[planet, setPlanet\] = useState\('earth'\)/);
 });
 
-test('the analysis panel drives cards from the adapter catalog', () => {
-  assert.match(panelSource, /cards\.map/);
-  assert.match(panelSource, /card\.state/);
-  // 模式选择属于左栏：右栏默认不再重复渲染选择器。
-  assert.match(panelSource, /showModePicker = false/);
-  assert.match(panelSource, /modeDefinition/);
+test('the analysis dock drives the main chart from the adapter catalog', () => {
+  assert.match(dockSource, /cards\.map/);
+  assert.match(dockSource, /card\.state/);
+  assert.match(dockSource, /renderCard/);
+  // 非活动图表不渲染：避免隐藏图表继续发请求或占着 Plotly 尺寸。
+  assert.match(dockSource, /showFullChart/);
+  assert.match(dockSource, /CARD_STATUS\.READY/);
 });
 
-test('both planets render the same mode picker and section labels', () => {
-  const sidebarSource = readFileSync(new URL('../SidebarMenu.jsx', import.meta.url), 'utf8');
-  assert.match(sidebarSource, /import AnalysisModePicker, \{ SectionLabel \} from '\.\/workbench\/OverviewSidebarParts\.jsx'/);
-  assert.match(sidebarSource, /<AnalysisModePicker/);
-  // 旧的就地副本必须已经移除，否则外观相同的两份实现会再次漂移。
-  assert.doesNotMatch(sidebarSource, /function RadioModeCard/);
-  assert.doesNotMatch(sidebarSource, /function SectionLabel/);
+test('both planets expose the same mode picker and the same panel primitives', () => {
+  const partsSource = readFileSync(new URL('./OverviewSidebarParts.jsx', import.meta.url), 'utf8');
+  assert.match(partsSource, /export default function AnalysisModePicker/);
+  assert.match(partsSource, /MODE_DEFS\.map/);
 
-  assert.match(earthSceneSource, /import AnalysisModePicker, \{ SectionLabel \} from '\.\.\/workbench\/OverviewSidebarParts\.jsx'/);
-  assert.match(earthSceneSource, /<AnalysisModePicker/);
-  assert.match(earthSceneSource, /<SectionLabel>/);
-  // Earth 左栏分区顺序与 Mars 一致：星球 → 分析模式 → 数据范围 → 显示 → 点位。
-  const order = ['数据总览星球', '分析模式', '数据范围', '显示控制', '点位']
-    .map((label) => earthSceneSource.indexOf(`'${label}`));
-  assert.ok(order.every((index) => index > 0), `missing section label: ${order.join(',')}`);
-  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  // 两个星球都渲染同一份模式选择器与同一份设置面板控件。
+  // 分析分类只有 AnalysisDock 一处入口，不再重复藏在图层设置里。
+  assert.doesNotMatch(earthSceneSource, /<AnalysisModePicker/);
+  assert.match(earthSceneSource, /<AnalysisDock/);
+  assert.match(earthSceneSource, /ObservatoryToolParts/);
+  assert.match(marsToolsSource, /MarsSourceControls/);
+  assert.match(marsToolsSource, /ObservatoryToolParts/);
+  assert.match(marsToolsSource, /panels = \{/);
+  // 四个面板键：数据源 + 图层 + 显示 + 点位。
+  for (const key of ['source:', 'layers:', 'display:', 'point:']) {
+    assert.ok(marsToolsSource.includes(key), `missing Mars panel: ${key}`);
+  }
+  // 数据源与图层两个面板共用同一份个人上传读取逻辑，不重复请求 getMyUploads。
+  assert.equal(
+    (marsToolsSource.match(/getMyUploads\(\)/g) || []).length,
+    1,
+    'getMyUploads must be called from a single shared hook',
+  );
 });
 
 test('card bodies reuse the shared plot config, variable tabs and colour bars', () => {
   const viewsSource = readFileSync(new URL('../EarthOverview/EarthResearchViews.jsx', import.meta.url), 'utf8');
   assert.match(viewsSource, /export const WORKBENCH_PLOT_CONFIG/);
   assert.match(viewsSource, /export function VariableTabs/);
-  assert.match(viewsSource, /export function CurrentVariableLine/);
+  // 变量只在药丸行里出现一次：卡片内不再重复写一行「当前变量: X (单位)」。
+  assert.doesNotMatch(viewsSource, /CurrentVariableLine/);
+  assert.doesNotMatch(viewsSource, /'当前变量'/);
+  assert.doesNotMatch(viewsSource, /'Current variable'/);
   assert.match(viewsSource, /WORKBENCH_PLOT_CONFIG/);
-  // 变量驱动的卡片必须暴露药丸行，而不是只跟随左栏。
-  assert.match(earthSceneSource, /variableOptions=\{variableOptions\}/);
-  assert.match(earthSceneSource, /onVariableChange=\{controller\.selectVariable\}/);
+  // 当前图适用的变量与范围在同一个条件区域中调整。
+  assert.match(earthSceneSource, /conditionsSlot=\{analysisConditions\}/);
+  assert.match(earthSceneSource, /onChange=\{controller\.selectVariable\}/);
   // 横向色标：与火星热力图一致。
   assert.match(viewsSource, /orientation: 'h'/);
   const cssSource = readFileSync(new URL('./overviewWorkbench.css', import.meta.url), 'utf8');

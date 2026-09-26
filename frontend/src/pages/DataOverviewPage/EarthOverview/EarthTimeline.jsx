@@ -12,6 +12,9 @@ import {
  *
  * 滑块索引 0..count-1 始终显示真实日期；上一天、下一天、日期输入和滑块走同一个
  * 选择函数，暂停与校验逻辑不分叉。
+ *
+ * `embedded` 时按所在容器（观测台时间轨道）布局：一整行铺开，不再使用固定宽度，
+ * 日期与步进在窄屏自动换行。
  */
 export default function EarthTimeline({
   start,
@@ -24,6 +27,8 @@ export default function EarthTimeline({
   onDateChange,
   onPlayChange,
   onRestart,
+  embedded = false,
+  actions = null,
 }) {
   const t = useT();
 
@@ -49,13 +54,17 @@ export default function EarthTimeline({
   };
 
   return (
-    <section className="earth-timeline" aria-label={t('earthOverview.timeline.label')}>
+    <section
+      className={`earth-timeline${embedded ? ' earth-timeline--embedded' : ''}`}
+      aria-label={t('earthOverview.timeline.label')}
+    >
       <div className="earth-timeline__row">
         <button
           type="button"
           className="earth-btn"
           onClick={() => onDateChange(dateAtIndex(start, (currentIndex ?? 0) - 1))}
           disabled={disabled || atStart}
+          aria-label={t('earthOverview.timeline.previousDay')}
         >
           {t('earthOverview.timeline.previousDay')}
         </button>
@@ -78,60 +87,58 @@ export default function EarthTimeline({
           className="earth-btn"
           onClick={() => onDateChange(dateAtIndex(start, (currentIndex ?? 0) + 1))}
           disabled={disabled || atEnd}
+          aria-label={t('earthOverview.timeline.nextDay')}
         >
           {t('earthOverview.timeline.nextDay')}
         </button>
-      </div>
 
-      <div className="earth-timeline__row">
-        <input
-          type="range"
-          min={0}
-          max={Math.max(0, total)}
-          step={1}
-          value={currentIndex ?? 0}
-          disabled={disabled}
-          aria-label={t('earthOverview.timeline.dataDate')}
-          onChange={(event) => handleIndex(event.target.value)}
-        />
-        <span className="earth-timeline__index">
-          {currentIndex !== null ? `${currentIndex + 1} / ${total + 1}` : '--'}
-        </span>
-      </div>
+        <div className="earth-timeline__track">
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, total)}
+            step={1}
+            value={currentIndex ?? 0}
+            disabled={disabled}
+            aria-label={t('earthOverview.timeline.dataDate')}
+            onChange={(event) => handleIndex(event.target.value)}
+          />
+          <span className="earth-timeline__index">
+            {currentIndex !== null ? `${currentIndex + 1} / ${total + 1}` : '--'}
+          </span>
+        </div>
 
-      <div className="earth-timeline__row earth-timeline__row--actions">
-        <button
-          type="button"
-          className="earth-btn earth-btn--primary"
-          onClick={() => onPlayChange(!playing)}
-          disabled={disabled}
-          aria-pressed={playing}
-        >
-          {playing ? t('earthOverview.timeline.pause') : t('earthOverview.timeline.play')}
-        </button>
-        <button
-          type="button"
-          className="earth-btn"
-          onClick={onRestart}
-          disabled={disabled || playing}
-        >
-          {t('earthOverview.timeline.replayFromFirst')}
-        </button>
-        {loading ? (
-          <span className="earth-timeline__status" role="status">
-            {t('earthOverview.timeline.loadingSelectedDate')}
-          </span>
-        ) : null}
-        {!loading && pendingDifferentDate ? (
-          <span className="earth-timeline__status" role="status">
-            {t('earthOverview.timeline.loadingSelectedDate')}
-          </span>
-        ) : null}
-        {displayedIndex !== null && displayedDate ? (
-          <span className="earth-timeline__displayed">
-            {t('earthOverview.timeline.showing')}: <strong>{displayedDate}</strong>
-          </span>
-        ) : null}
+        <div className="earth-timeline__row earth-timeline__row--actions">
+          <button
+            type="button"
+            className="earth-btn earth-btn--primary"
+            onClick={() => onPlayChange(!playing)}
+            disabled={disabled}
+            aria-pressed={playing}
+          >
+            {playing ? t('earthOverview.timeline.pause') : t('earthOverview.timeline.play')}
+          </button>
+          <button
+            type="button"
+            className="earth-btn"
+            onClick={onRestart}
+            disabled={disabled || playing}
+          >
+            {t('earthOverview.timeline.replayFromFirst')}
+          </button>
+          {loading || pendingDifferentDate ? (
+            <span className="earth-timeline__status" role="status">
+              {t('earthOverview.timeline.loadingSelectedDate')}
+            </span>
+          ) : null}
+          {displayedIndex !== null && displayedDate ? (
+            <span className="earth-timeline__displayed">
+              {t('earthOverview.timeline.showing')}: <strong>{displayedDate}</strong>
+            </span>
+          ) : null}
+          {/* 观测档没有常驻分析区，「展开分析」入口放在时间轨道这一行。 */}
+          {actions}
+        </div>
       </div>
     </section>
   );

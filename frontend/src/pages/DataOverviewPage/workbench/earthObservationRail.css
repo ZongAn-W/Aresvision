@@ -1,0 +1,15 @@
+.earth-observation-rail .mars-observation-rail__time {
+  font-size: calc(14px * var(--font-scale, 1));
+  white-space: nowrap;
+}
+.earth-observation-rail .observatory-rail__year { min-width: 58px; flex-shrink: 0; }
+.earth-observation-rail .observatory-rail__year select { padding: 4px 2px; }
+.earth-observation-rail .mars-observation-rail__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.earth-observation-rail {
+  grid-template-rows: 40px 120px minmax(120px, 1fr) 118px;
+}
+.earth-observation-rail .mars-observation-rail__heading { line-height: 1.25; }

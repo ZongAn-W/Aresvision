@@ -45,7 +45,7 @@ function StatusItem({ label, value, valueColor = C.ice }) {
   );
 }
 
-export default function TopStatusBar() {
+export default function TopStatusBar({ embedded = false }) {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
@@ -75,7 +75,30 @@ export default function TopStatusBar() {
 
   return (
     <div
-      style={{
+      className="overview-status-strip"
+      data-embedded={embedded ? 'true' : 'false'}
+      style={embedded ? {
+        // 观测台画布内：相对画布顶部定位，不再覆盖全站导航。
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        minHeight: 40,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        padding: '6px 10px',
+        borderRadius: 10,
+        background: isLight
+          ? 'linear-gradient(180deg, rgba(255,255,255,0.90) 0%, rgba(255,255,255,0.62) 100%)'
+          : 'linear-gradient(180deg, rgba(10,14,20,0.86) 0%, rgba(10,14,20,0.52) 100%)',
+        border: `1px solid ${C.border}`,
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
+        zIndex: 1200,
+        pointerEvents: 'none',
+      } : {
         position: 'fixed',
         top: 0,
         left: 0,

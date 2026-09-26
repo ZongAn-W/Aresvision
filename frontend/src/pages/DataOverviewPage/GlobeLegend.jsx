@@ -41,10 +41,8 @@ export default function GlobeLegend({ ozoneData, sceneModel, embedded = true }) 
   if (!ozoneData || typeof ozoneData.maxVal === 'undefined') return null;
 
   const panelWidth = gestureEnabled ? 150 : 158;
-  const panelBottom = 88;
 
-  const pointsCount = ozoneData.points?.length || 0;
-  const maxVal = convertByVariable(ozoneData.maxVal || 0, variable, settings.units).toFixed(3);
+  const pointsCount = ozoneData.points?.length || 0;  const maxVal = convertByVariable(ozoneData.maxVal || 0, variable, settings.units).toFixed(3);
   const midVal = convertByVariable(((ozoneData.maxVal || 0) + (ozoneData.minVal || 0)) / 2, variable, settings.units).toFixed(3);
   const minVal = convertByVariable(ozoneData.minVal || 0, variable, settings.units).toFixed(3);
   const horizontalGradient = (() => {
@@ -82,9 +80,10 @@ export default function GlobeLegend({ ozoneData, sceneModel, embedded = true }) 
       className="overview-globe-legend-compact overview-overlay-anchor"
       data-embedded={embedded ? 'true' : 'false'}
       style={{
-        position: 'fixed',
-        bottom: `calc(var(--overview-timeline-bottom) + ${panelBottom - 20}px)`,
-        left: 'calc(var(--overview-scene-left) + var(--overview-overlay-gap))',
+        // 观测台画布已是全幅场景：图例相对画布左下角定位，不再按窗口减栏宽。
+        position: 'absolute',
+        bottom: `calc(var(--overview-overlay-gap) + 28px)`,
+        left: 'var(--overview-overlay-gap)',
         width: `${panelWidth}px`,
         zIndex: 1000,
         pointerEvents: 'none',
