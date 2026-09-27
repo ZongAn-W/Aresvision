@@ -19,6 +19,12 @@ const UserTrainingProvider = ({ children, enabled, user }) => {
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [progressData, setProgressData] = useState(null);
   const [logs, setLogs] = useState([]);
+  // 用户主动进入「新建实验」后，不再让任务轮询自动选中运行中的任务
+  // （否则 5 秒轮询或目录重渲染都会把用户从配置画布拽回监控阶段）。
+  const suppressAutoSelectRef = useRef(false);
+  const setSuppressAutoSelect = useCallback((value) => {
+    suppressAutoSelectRef.current = Boolean(value);
+  }, []);
 
   const wsRef = useRef(null);
   const pollingRef = useRef(null);
@@ -61,7 +67,9 @@ const UserTrainingProvider = ({ children, enabled, user }) => {
       if (!mountedRef.current || !tasksGate.current.isCurrent(request)) return;
       setTasks(data);
       setActiveTaskId((currentTaskId) => (
-        reconcileActiveTrainingTaskId(data, currentTaskId)
+        reconcileActiveTrainingTaskId(data, currentTaskId, {
+          suppressAutoSelect: suppressAutoSelectRef.current,
+        })
       ));
     } catch (err) {
       console.error('Failed to load tasks', err);
@@ -213,6 +221,7 @@ const UserTrainingProvider = ({ children, enabled, user }) => {
     setTasks,
     activeTaskId,
     setActiveTaskId,
+    setSuppressAutoSelect,
     progressData,
     setProgressData,
     logs,

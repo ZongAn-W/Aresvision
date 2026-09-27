@@ -34,3 +34,14 @@ test('geo labels avoid equator collisions and cull labels on the far hemisphere'
   assert.match(source, /updateGeoLabelVisibility\(geoOverlayRef\.current, sphereMeshRef\.current, cameraRef\.current\)/);
   assert.doesNotMatch(source, /Mirror latitude labels on the opposite hemisphere/);
 });
+
+test('SphericalFieldCanvas exposes analytical globe overlay switches', () => {
+  assert.match(source, /showContours = false/);
+  assert.match(source, /showWindVectors = false/);
+  assert.match(source, /showTerminator = false/);
+  assert.match(source, /latCenters: layerFieldData\.latCenters \|\| geometry\?\.latCenters/);
+  assert.match(source, /lonCenters: layerFieldData\.lonCenters \|\| geometry\?\.lonCenters/);
+  assert.match(source, /field-contour-overlay/);
+  assert.match(source, /wind-vector-overlay/);
+  assert.match(source, /solar-terminator-overlay/);
+});

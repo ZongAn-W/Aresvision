@@ -58,6 +58,7 @@ import {
   PREDICT_MODEL_MODE_COMPARE,
   PREDICT_MODEL_MODE_TRAINED,
   normalizePredictModelMode,
+  readPredictModeFromHash,
 } from './PredictPage/predictModelModes';
 import CompareTrainingModelsPanel from './PredictPage/CompareTrainingModels/CompareTrainingModelsPanel';
 import { getCompareSelectionState } from './PredictPage/CompareTrainingModels/compareTrainingModelsData';
@@ -106,7 +107,11 @@ export default function PredictPage() {
   const [lsStart, setLsStart] = useState(90);
   const [marsYear, setMarsYear] = useState(27);
   const dataSourceMode = 'default';
-  const [modelMode, setModelMode] = useState(() => normalizePredictModelMode());
+  // 训练页可以通过 hash query 显式请求模式（如 mode=trained_compare）。
+  const [hashRequestedMode, setHashRequestedMode] = useState(() => readPredictModeFromHash(window.location.hash));
+  const [modelMode, setModelMode] = useState(
+    () => readPredictModeFromHash(window.location.hash) || normalizePredictModelMode()
+  );
   const [trainingTasks, setTrainingTasks] = useState([]);
   const [trainingTasksScope, setTrainingTasksScope] = useState(null);
   const [trainingTasksLoading, setTrainingTasksLoading] = useState(false);
@@ -418,9 +423,12 @@ export default function PredictPage() {
       pendingTrainingTaskHandoffRef.current = null;
     }
 
+    // hash 显式请求的模式（训练页「去模型比较」/ 单模型 handoff）优先于缓存里的模式：
+    // 否则上次浏览留下的 trained 模式会把比较模式顶掉，URL 与实际界面不一致。
+    const urlRequestedMode = readPredictModeFromHash(window.location.hash);
     const effectiveRestoredModelMode = handoff
       ? PREDICT_MODEL_MODE_TRAINED
-      : restoredModelMode;
+      : (urlRequestedMode || restoredModelMode);
     const restoredContext = {
       modelMode: effectiveRestoredModelMode,
       trainingTaskId: effectiveRestoredModelMode === PREDICT_MODEL_MODE_TRAINED
@@ -530,6 +538,23 @@ export default function PredictPage() {
   useLayoutEffect(() => {
     cacheReadyScopeRef.current = cacheReadyScope === predictScope ? predictScope : null;
   }, [cacheReadyScope, predictScope]);
+
+  // 监听 hash：训练页每次跳转都带着希望进入的模式。
+  useEffect(() => {
+    const syncRequestedMode = () => setHashRequestedMode(readPredictModeFromHash(window.location.hash));
+    window.addEventListener('hashchange', syncRequestedMode);
+    syncRequestedMode();
+    return () => window.removeEventListener('hashchange', syncRequestedMode);
+  }, []);
+
+  /**
+   * hash 显式请求的模式优先于预测缓存里的模式：进入 #/predict?mode=trained_compare
+   * 与单模型 handoff 都从训练页发起，必须由 URL 决定，而不是上次浏览留下的缓存。
+   */
+  useEffect(() => {
+    if (!hashRequestedMode) return;
+    setModelMode(hashRequestedMode);
+  }, [hashRequestedMode]);
 
   useEffect(() => {
     if (modelMode !== PREDICT_MODEL_MODE_TRAINED || trainingTasksLoading || !trainingTasksLoaded) return;
@@ -1033,6 +1058,12 @@ export default function PredictPage() {
   return (
     <div className="page-enter" style={{ padding: '100px 40px 60px', maxWidth: 1400, margin: '0 auto' }}>
       <SectionTitle title={t('predict.title')} subtitle={t('predict.subtitle')} />
+
+      {hashRequestedMode === PREDICT_MODEL_MODE_COMPARE && modelMode === PREDICT_MODEL_MODE_COMPARE ? (
+        <div className="predict-mode-hint" role="status">
+          {t('experimentCenter.compareModeHint')}
+        </div>
+      ) : null}
 
       <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 24 }}>
         <PredictSidebar

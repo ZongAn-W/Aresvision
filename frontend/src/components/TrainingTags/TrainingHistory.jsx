@@ -5,7 +5,8 @@ import { filterTaggedTasks } from './trainingTagFilters';
 import { TagChips, TagFilter, TagPicker } from './TagControls';
 import { EditTaskTagsDialog, TagManager } from './TagDialogs';
 
-export default function TrainingHistory({ tasks, tagState, isZh, renderTask }) {
+export default function TrainingHistory({ tasks, tagState, isZh, renderTask, renderMode = 'list', statusMatcher = null, headerExtra = null }) {
+  const isDirectory = renderMode === 'directory';
   const [filter, setFilter] = useState({ tagIds: [], untagged: false });
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState([]);
@@ -13,7 +14,10 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask }) {
   const [editing, setEditing] = useState(null);
   const [managing, setManaging] = useState(false);
   const [error, setError] = useState('');
-  const filtered = useMemo(() => filterTaggedTasks(tasks, { ...filter, search }), [tasks, filter, search]);
+  const filtered = useMemo(
+    () => filterTaggedTasks(tasks, { ...filter, search, statusMatcher }),
+    [tasks, filter, search, statusMatcher]
+  );
   const available = new Set(filtered.map(task => task.id));
   const visibleSelection = selected.filter(id => available.has(id));
 
@@ -24,7 +28,7 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask }) {
     setBatchTagIds(prev => prev.filter(id => known.has(id)));
   }, [tagState.tags, tagState.loading, tagState.error]);
 
-  useEffect(() => { setSelected([]); }, [filter, search]);
+  useEffect(() => { setSelected([]); }, [filter, search, statusMatcher]);
 
   async function batch(operation) {
     setError('');
@@ -34,6 +38,44 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask }) {
       setBatchTagIds([]);
     } catch (err) { setError(err.message); }
   }
+
+  if (isDirectory) return <div className="training-tag-directory">
+    {headerExtra ? <div className="experiment-directory-tools">{headerExtra(selected, filtered)}</div> : null}
+    <div className="training-tag-toolbar">
+      <input className="training-tag-input" style={{ flex: '1 1 150px' }} type="search" aria-label={isZh ? '搜索实验名称' : 'Search experiments'} placeholder={isZh ? '搜索实验名称' : 'Search experiments'} value={search} onChange={event => { setSelected([]); setSearch(event.target.value); }} />
+      <button className="training-tag-button" disabled={tagState.scope === null || tagState.busy} onClick={() => setManaging(true)}>{isZh ? '管理标签' : 'Manage tags'}</button>
+    </div>
+    <TagFilter tags={tagState.tags} {...filter} isZh={isZh} disabled={tagState.loading || tagState.busy} onChange={next => { setSelected([]); setFilter(next); }} />
+    {tagState.loading && <div role="status" className="training-tag-hint">{isZh ? '正在加载标签…' : 'Loading tags…'}</div>}
+    {tagState.error && <div role="alert" className="training-tag-toolbar" style={{ color: C.mars }}>
+      {tagState.error}<button className="training-tag-button" onClick={() => tagState.refresh().catch(() => {})}>{isZh ? '重试' : 'Retry'}</button>
+    </div>}
+    {selected.length > 0 && <div className="experiment-directory-selection">
+      <span className="training-tag-hint" role="status">{isZh ? `已选 ${visibleSelection.length}` : `${visibleSelection.length} selected`}</span>
+      <button className="training-tag-button" onClick={() => setSelected(filtered.map(task => task.id))}>{isZh ? '全选当前结果' : 'Select visible'}</button>
+      <button className="training-tag-button" onClick={() => setSelected([])}>{isZh ? '清空选择' : 'Clear'}</button>
+      <TagPicker tags={tagState.tags} value={batchTagIds} onChange={setBatchTagIds} isZh={isZh} label={isZh ? '批量调整标签' : 'Edit tags in bulk'} disabled={tagState.busy || tagState.loading} />
+      <button className="training-tag-button" disabled={tagState.busy || !batchTagIds.length} onClick={() => batch('add')}>{isZh ? '添加所选标签' : 'Add tags'}</button>
+      <button className="training-tag-button" disabled={tagState.busy || !batchTagIds.length} onClick={() => batch('remove')}>{isZh ? '移除所选标签' : 'Remove tags'}</button>
+    </div>}
+    {error && <div role="alert" style={{ color: C.mars }}>{error}</div>}
+    <div className="experiment-directory-list">
+      {filtered.map(task => renderTask(task, <div className="training-tag-toolbar experiment-directory-row-tools" onClick={event => event.stopPropagation()}>
+        <label className="training-tag-option">
+          <input type="checkbox" checked={visibleSelection.includes(task.id)} disabled={tagState.busy} aria-label={isZh ? `选择实验 ${task.custom_model_name || task.id}` : `Select experiment ${task.custom_model_name || task.id}`} onChange={event => setSelected(prev => event.target.checked ? [...new Set([...prev, task.id])] : prev.filter(id => id !== task.id))} />
+          {isZh ? '选择' : 'Select'}
+        </label>
+        <TagChips tags={task.tags} />
+        {!task.tags?.length && <span className="training-tag-hint">{isZh ? '未分组' : 'Untagged'}</span>}
+        <button className="training-tag-button" style={{ marginLeft: 'auto' }} disabled={tagState.busy || tagState.loading || Boolean(tagState.error)} onClick={() => setEditing(task)}>{isZh ? '编辑标签' : 'Edit tags'}</button>
+      </div>))}
+    </div>
+    {!filtered.length && <div style={{ padding: 24, textAlign: 'center', color: C.ice60, lineHeight: 1.7 }}>
+      {tasks.length ? (isZh ? '没有匹配的实验，请调整筛选条件。' : 'No matching experiments. Adjust your filters.') : (isZh ? '暂无实验。新建实验后，实验会出现在这里。' : 'No experiments yet. Create one and it will appear here.')}
+    </div>}
+    {managing && <TagManager state={tagState} isZh={isZh} onClose={() => setManaging(false)} />}
+    {editing && <EditTaskTagsDialog title={isZh ? `编辑标签 · ${editing.custom_model_name || editing.id}` : `Edit tags · ${editing.custom_model_name || editing.id}`} initialIds={(editing.tags || []).map(tag => tag.id)} state={tagState} isZh={isZh} onClose={() => setEditing(null)} onSave={ids => tagState.mutate(() => replaceTrainingTaskTags(editing.id, ids))} />}
+  </div>;
 
   return <div>
     <div className="training-tag-toolbar">

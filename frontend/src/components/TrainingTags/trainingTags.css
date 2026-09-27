@@ -16,3 +16,26 @@
 .training-tag-dialog-body { display: grid; gap: 12px; padding: 20px; color: var(--text); }
 .training-tag-manager-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .training-tag-manager-row input { flex: 1 1 160px; }
+
+/* 实验目录（紧凑行）复用同一套标签控件，只调整密度与换行。 */
+.training-tag-directory { display: grid; gap: 8px; min-width: 0; }
+.training-tag-directory .training-tag-toolbar { gap: 6px; }
+.training-tag-directory .training-tag-input { min-height: 36px; padding: 7px 10px; font-size: calc(12px * var(--font-scale, 1)); }
+.training-tag-directory .training-tag-button { min-height: 34px; padding: 6px 10px; font-size: calc(11px * var(--font-scale, 1)); }
+.training-tag-directory .training-tag-filter { margin: 4px 0; }
+.training-tag-directory .training-tag-options { max-height: 108px; }
+.training-tag-directory .training-tag-option { min-height: 30px; }
+.training-tag-directory .training-tag-picker { margin: 2px 0; padding: 8px 10px; }
+.training-tag-directory .training-tag-chips { flex-wrap: wrap; }
+.experiment-directory-row-tools { gap: 6px; }
+.experiment-directory-row-tools .training-tag-button { min-height: 30px; padding: 5px 9px; }
+
+@media (max-width: 900px) {
+  .training-tag-directory .training-tag-options { max-height: 132px; }
+}
+
+@media (max-width: 640px) {
+  .training-tag-directory .training-tag-button,
+  .experiment-directory-row-tools .training-tag-button { min-height: 44px; }
+  .training-tag-directory .training-tag-option { min-height: 44px; }
+}

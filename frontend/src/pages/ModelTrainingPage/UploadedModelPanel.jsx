@@ -1,5 +1,6 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import C from '../../constants/colors';
+import './experimentCenter.css';
 
 function getStatusColor(status) {
   if (status === 'valid') return C.green;
@@ -37,6 +38,16 @@ function ValidationMessages({ report, labels, fieldHintStyle }) {
   );
 }
 
+/**
+ * 上传模型区域（紧凑版）。
+ *
+ * 默认只显示当前模型的胶囊式摘要（.py 标记、截断文件名、版本 · 校验状态 · 自定义参数数量）
+ * 与两个主要动作（上传 / 替换、编辑自定义参数）。整套模型管理（列表、重新校验、删除）
+ * 收在可展开的「管理上传模型」里，不抢占主上传操作的视觉层级。
+ *
+ * 上传、替换、选择、重新校验、删除、模板与说明下载、格式说明、区内 inline error
+ * 全部保留；校验失败、版本不匹配等错误通过 `inlineError` 直接显示在区域顶部。
+ */
 export default function UploadedModelPanel({
   models = [],
   selectedId,
@@ -49,237 +60,197 @@ export default function UploadedModelPanel({
   selectionDisabled = false,
   guideDownloadUrl,
   templateDownloadUrl,
+  inlineError = '',
+  statusLabel = '',
+  statusTone = 'ok',
+  onEditParams,
   labels,
   sectionTitleStyle,
+  fieldLabelStyle,
   fieldHintStyle,
 }) {
   const fileRef = useRef(null);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [formatOpen, setFormatOpen] = useState(false);
   const selected = models.find((item) => item.id === selectedId) || null;
-  const downloadLinkStyle = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '9px 12px',
-    borderRadius: 10,
-    border: `1px solid ${C.border}`,
-    background: 'transparent',
-    color: C.ice70,
-    textDecoration: 'none',
-    fontWeight: 700,
-    fontSize: 'calc(12px * var(--font-scale, 1))',
-    fontFamily: 'var(--font-body)',
-  };
+  const validCount = models.filter((item) => item.validation_status === 'valid').length;
+  const paramCount = Object.keys(selected?.param_schema || {}).length;
+  const formatItems = Array.isArray(labels.formatItems) ? labels.formatItems : [];
+  const selectedName = selected?.original_filename || selected?.display_name || labels.noFilename;
+
+  const pickFile = () => fileRef.current?.click();
 
   return (
-    <div style={{ display: 'grid', gap: 12 }}>
-      <div
-        style={{
-          display: 'flex',
-          gap: 12,
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
+    <div className="experiment-uploaded-model" data-uploaded-model-panel="true" data-model-state={selected ? (selected.validation_status === 'valid' ? 'valid' : 'invalid') : 'empty'}>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".py"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) onUpload(file);
+          event.target.value = '';
         }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <div style={{ ...sectionTitleStyle, marginBottom: 4 }}>{labels.title}</div>
-          <div style={{ ...fieldHintStyle, marginTop: 0 }}>{labels.hint}</div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {guideDownloadUrl ? (
-            <a href={guideDownloadUrl} download style={downloadLinkStyle}>
-              {labels.downloadGuide}
-            </a>
-          ) : null}
-          {templateDownloadUrl ? (
-            <a href={templateDownloadUrl} download style={downloadLinkStyle}>
-              {labels.downloadTemplate}
-            </a>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading || busy}
-            style={{
-              padding: '9px 12px',
-              borderRadius: 10,
-              border: `1px solid ${C.border}`,
-              background: C.bgMuted,
-              color: C.ice,
-              cursor: uploading || busy ? 'not-allowed' : 'pointer',
-              opacity: uploading || busy ? 0.6 : 1,
-              fontWeight: 700,
-              fontSize: 'calc(12px * var(--font-scale, 1))',
-              fontFamily: 'var(--font-body)',
-            }}
-          >
-            {uploading ? labels.uploading : labels.upload}
-          </button>
-        </div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".py"
-          hidden
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) onUpload(file);
-            event.target.value = '';
-          }}
-        />
-      </div>
+      />
 
-      {models.length === 0 ? (
-        <div
-          style={{
-            ...fieldHintStyle,
-            marginTop: 0,
-            padding: '11px 12px',
-            border: `1px dashed ${C.border}`,
-            borderRadius: 12,
-            background: C.bgMuted,
-          }}
-        >
-          {labels.empty}
+      {/* 错误、校验失败与版本不匹配都在上传模型区域内解释。 */}
+      {inlineError ? (
+        <div className="experiment-uploaded-model-error" role="alert" data-uploaded-model-error="true">
+          {inlineError}
+        </div>
+      ) : null}
+
+      {selected ? (
+        <div className="experiment-uploaded-card" data-uploaded-model-card="true">
+          <span className="experiment-uploaded-icon" aria-hidden="true">{labels.typeBadge}</span>
+          <div className="experiment-uploaded-body">
+            <div className="experiment-uploaded-name" title={selectedName}>{selectedName}</div>
+            <div className="experiment-uploaded-meta">
+              {`v${selected.version ?? '--'} · ${labels.summaryParamCount ? labels.summaryParamCount(paramCount) : `${paramCount}`} · ${labels.summaryValidCount ? labels.summaryValidCount(validCount) : validCount}`}
+            </div>
+          </div>
+          <span className="experiment-uploaded-status" data-tone={statusTone} data-uploaded-model-status="true">
+            {statusLabel || getStatusLabel(selected.validation_status, labels)}
+          </span>
         </div>
       ) : (
-        <div style={{ display: 'grid', gap: 8 }}>
-          {models.map((model) => {
-            const active = selectedId === model.id;
-            const statusColor = getStatusColor(model.validation_status);
-            return (
-              <button
-                key={model.id}
-                type="button"
-                onClick={() => onSelect(model.id)}
-                disabled={selectionDisabled}
-                style={{
-                  textAlign: 'left',
-                  padding: '10px 12px',
-                  borderRadius: 12,
-                  border: `1px solid ${active ? 'rgba(74,158,255,0.28)' : C.border}`,
-                  background: active ? 'rgba(74,158,255,0.10)' : C.bgMuted,
-                  color: C.ice,
-                  cursor: selectionDisabled ? 'not-allowed' : 'pointer',
-                  opacity: selectionDisabled ? 0.6 : 1,
-                  fontFamily: 'var(--font-body)',
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: 10,
-                    alignItems: 'center',
-                  }}
-                >
-                  <strong
-                    style={{
-                      minWidth: 0,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      fontSize: 'calc(12px * var(--font-scale, 1))',
-                    }}
-                  >
-                    {model.display_name || model.original_filename || labels.unnamed}
-                  </strong>
-                  <span
-                    style={{
-                      flex: '0 0 auto',
-                      color: statusColor,
-                      fontSize: 'calc(11px * var(--font-scale, 1))',
-                      fontWeight: 800,
-                    }}
-                  >
-                    {getStatusLabel(model.validation_status, labels)}
-                  </span>
-                </div>
-                <div
-                  style={{
-                    ...fieldHintStyle,
-                    marginTop: 4,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  v{model.version ?? '--'} / {model.original_filename || labels.noFilename}
-                </div>
-              </button>
-            );
-          })}
+        <div className="experiment-uploaded-empty" data-uploaded-model-empty="true">
+          <strong>{labels.missing}</strong>
+          <span>{labels.hint}</span>
         </div>
       )}
 
-      {selected ? (
-        <div
-          style={{
-            padding: '11px 12px',
-            borderRadius: 12,
-            background: C.bgMuted,
-            border: `1px solid ${C.border}`,
-          }}
+      <div className="experiment-uploaded-actions">
+        <button
+          type="button"
+          className="experiment-uploaded-upload"
+          data-uploaded-model-upload="true"
+          onClick={pickFile}
+          disabled={uploading || busy}
         >
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 8,
-            }}
-          >
-            <div
-              style={{
-                color: getStatusColor(selected.validation_status),
-                fontSize: 'calc(12px * var(--font-scale, 1))',
-                fontWeight: 800,
-              }}
-            >
-              {getStatusLabel(selected.validation_status, labels)}
+          {uploading ? labels.uploading : (selected ? labels.uploadAgain : labels.upload)}
+        </button>
+        {selected && onEditParams ? (
+          <button type="button" className="experiment-uploaded-link" data-uploaded-model-params="true" onClick={onEditParams}>
+            {labels.editParams}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="experiment-uploaded-link is-quiet"
+          aria-expanded={manageOpen}
+          aria-controls="experiment-uploaded-manage"
+          onClick={() => setManageOpen((value) => !value)}
+        >
+          {labels.manage}
+        </button>
+        {guideDownloadUrl ? (
+          <a href={guideDownloadUrl} download className="experiment-uploaded-link is-quiet">
+            {labels.downloadGuide}
+          </a>
+        ) : null}
+        {templateDownloadUrl ? (
+          <a href={templateDownloadUrl} download className="experiment-uploaded-link is-quiet">
+            {labels.downloadTemplate}
+          </a>
+        ) : null}
+      </div>
+
+      {manageOpen ? (
+        <div className="experiment-uploaded-manage" id="experiment-uploaded-manage" data-uploaded-model-manage="true">
+          {models.length === 0 ? (
+            <div className="experiment-uploaded-empty" role="status">
+              <strong>{labels.missing}</strong>
+              <span>{labels.hint}</span>
             </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          ) : (
+            <div className="experiment-uploaded-list" role="list">
+              {models.map((model) => {
+                const active = selectedId === model.id;
+                return (
+                  <button
+                    key={model.id}
+                    type="button"
+                    role="listitem"
+                    className="experiment-uploaded-item"
+                    aria-pressed={active}
+                    data-uploaded-model-item={model.id}
+                    onClick={() => onSelect(model.id)}
+                    disabled={selectionDisabled}
+                  >
+                    <span className="experiment-uploaded-item-name" title={model.original_filename || ''}>
+                      {model.display_name || model.original_filename || labels.unnamed}
+                    </span>
+                    <span className="experiment-uploaded-item-status" style={{ color: getStatusColor(model.validation_status) }}>
+                      {getStatusLabel(model.validation_status, labels)}
+                    </span>
+                    <span className="experiment-uploaded-item-meta">
+                      {`v${model.version ?? '--'} / ${model.original_filename || labels.noFilename}`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {selected ? (
+            <div className="experiment-uploaded-detail">
+              <div className="experiment-uploaded-detail-actions">
+                <button
+                  type="button"
+                  className="experiment-expert-action"
+                  onClick={() => onRevalidate(selected.id)}
+                  disabled={busy}
+                >
+                  {labels.revalidate}
+                </button>
+                <button
+                  type="button"
+                  className="experiment-expert-action"
+                  onClick={pickFile}
+                  disabled={uploading || busy}
+                >
+                  {labels.replace}
+                </button>
+                <button
+                  type="button"
+                  className="experiment-expert-action is-danger"
+                  onClick={() => onDelete(selected.id)}
+                  disabled={busy}
+                >
+                  {labels.delete}
+                </button>
+              </div>
+              <ValidationMessages report={selected.validation_report} labels={labels} fieldHintStyle={fieldHintStyle} />
+            </div>
+          ) : null}
+
+          {formatItems.length > 0 ? (
+            <div className="experiment-uploaded-format">
               <button
                 type="button"
-                onClick={() => onRevalidate(selected.id)}
-                disabled={busy}
-                style={{
-                  padding: '7px 10px',
-                  borderRadius: 9,
-                  border: `1px solid ${C.border}`,
-                  background: 'transparent',
-                  color: C.ice70,
-                  cursor: busy ? 'not-allowed' : 'pointer',
-                  opacity: busy ? 0.6 : 1,
-                  fontSize: 'calc(11px * var(--font-scale, 1))',
-                  fontWeight: 700,
-                }}
+                className="experiment-uploaded-link is-quiet"
+                aria-expanded={formatOpen}
+                onClick={() => setFormatOpen((value) => !value)}
               >
-                {labels.revalidate}
+                {labels.formatTitle}
               </button>
-              <button
-                type="button"
-                onClick={() => onDelete(selected.id)}
-                disabled={busy}
-                style={{
-                  padding: '7px 10px',
-                  borderRadius: 9,
-                  border: '1px solid rgba(217,92,92,0.18)',
-                  background: 'rgba(217,92,92,0.08)',
-                  color: '#d95c5c',
-                  cursor: busy ? 'not-allowed' : 'pointer',
-                  opacity: busy ? 0.6 : 1,
-                  fontSize: 'calc(11px * var(--font-scale, 1))',
-                  fontWeight: 700,
-                }}
-              >
-                {labels.delete}
-              </button>
+              {formatOpen ? (
+                <ul>
+                  {formatItems.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
-          </div>
-          <ValidationMessages report={selected.validation_report} labels={labels} fieldHintStyle={fieldHintStyle} />
+          ) : null}
+
+          {fieldLabelStyle ? (
+            <div className="experiment-uploaded-foot">
+              <span style={{ ...fieldLabelStyle, marginBottom: 0 }}>{`${labels.validationLabel}: ${statusLabel || (selected ? getStatusLabel(selected.validation_status, labels) : '--')}`}</span>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

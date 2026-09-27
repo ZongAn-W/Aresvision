@@ -32,6 +32,8 @@ export function pointsToFieldData(layer, options = {}) {
 
   return {
     field,
+    latCenters: Array.from({ length: latCount }, (_, index) => LAT_MAX - index * LAT_STEP),
+    lonCenters: Array.from({ length: lonCount }, (_, index) => LON_MIN + index * LON_STEP),
     minVal: layer.minVal,
     maxVal: layer.maxVal,
   };

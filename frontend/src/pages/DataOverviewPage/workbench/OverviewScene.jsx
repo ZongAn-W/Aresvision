@@ -48,6 +48,16 @@ export default function OverviewScene({
   showField = true,
   showGeoAnnotations = true,
   showBaseMap = true,
+  showSurfaceTexture = true,
+  baseMapStrength = 1,
+  showContours = false,
+  showWindVectors = false,
+  showTerminator = false,
+  windFields = null,
+  solarLongitudeLs = 0,
+  referenceDate = null,
+  referenceHour = 12,
+  sunDirection = null,
   autoRotate = false,
   sceneKey = '',
   poseKey = null,
@@ -113,6 +123,16 @@ export default function OverviewScene({
           offsetX={offsetX}
           showGeoAnnotations={showGeoAnnotations}
           showBaseMap={showBaseMap}
+          showSurfaceTexture={showSurfaceTexture}
+          baseMapStrength={baseMapStrength}
+          showContours={showContours}
+          showWindVectors={showWindVectors}
+          showTerminator={showTerminator}
+          windFields={windFields}
+          solarLongitudeLs={solarLongitudeLs}
+          referenceDate={referenceDate}
+          referenceHour={referenceHour}
+          sunDirection={sunDirection}
           autoRotate={autoRotate}
           zoom={OVERVIEW_GLOBE.zoom}
           forceFullscreen
