@@ -48,12 +48,18 @@ class UploadedModelReference:
     source_text: str | None = None
 
     def checkpoint_reference(self) -> dict[str, Any]:
-        """Return the plain-data form stored inside an Earth checkpoint."""
+        """Return the plain-data form stored inside an Earth checkpoint.
+
+        ``source_path`` is kept so a prediction can still detect that the file the
+        user uploaded has changed or disappeared; the embedded ``source_text`` is
+        what actually gets executed.
+        """
         return {
             "package_id": self.package_id,
             "display_name": self.display_name,
             "version": int(self.version),
             "content_hash": self.content_hash,
+            "source_path": self.source_path,
             "param_schema": dict(self.param_schema),
             "custom_model_params": dict(self.custom_model_params),
             "source_text": self.source_text,
@@ -167,9 +173,15 @@ def verify_reference_source(reference: Any) -> dict[str, Any]:
 def resolve_source_text(reference: Any) -> tuple[str, dict[str, Any]]:
     """Return the source to execute plus a verification report.
 
-    A hash mismatch is a hard error: continuing would train or predict with code
-    the validation never approved. A missing file is acceptable **only** when the
-    checkpoint embedded the verified source.
+    The checkpoint's embedded copy is the authoritative record of the code that was
+    trained, so this prefers it whenever it exists, and prefers the on-disk file
+    only when the digest still matches. A changed file is therefore *reported*, not
+    silently used: a drifted or tampered file can never alter a prediction. When
+    neither the file nor an embedded copy is usable the model cannot be rebuilt, and
+    that is a hard error.
+
+    ``strict_file=True`` (used when a new task must prove it is training the code it
+    validated) instead rejects a changed file outright.
     """
     if not isinstance(reference, dict):
         raise UploadedModelSourceError(
@@ -178,12 +190,8 @@ def resolve_source_text(reference: Any) -> tuple[str, dict[str, Any]]:
         )
     report = verify_reference_source(reference)
     embedded = reference.get("source_text")
-    if report["status"] == "tampered":
-        raise UploadedModelSourceError(
-            "The uploaded model file was modified after this task was created; "
-            f"{report['detail']}. Retrain or re-upload the model.",
-            code="uploaded_model_tampered",
-        )
+    has_embedded = isinstance(embedded, str) and embedded.strip()
+
     if report["status"] == "available":
         text, digest = read_source_file(reference["source_path"])
         if reference.get("content_hash") and digest != reference["content_hash"]:
@@ -192,15 +200,59 @@ def resolve_source_text(reference: Any) -> tuple[str, dict[str, Any]]:
                 code="uploaded_model_tampered",
             )
         return text, report
-    if isinstance(embedded, str) and embedded.strip():
+
+    if has_embedded:
         report = dict(report)
         report["used_embedded_source"] = True
+        if report["status"] == "tampered":
+            report["force_failure"] = True
         return embedded, report
+
+    if report["status"] == "tampered":
+        raise UploadedModelSourceError(
+            "The uploaded model file was modified after this task was created and the "
+            f"artifact has no embedded copy: {report['detail']}",
+            code="uploaded_model_tampered",
+        )
     raise UploadedModelSourceError(
         "The uploaded model file is unavailable and this checkpoint has no embedded "
         "copy, so the model cannot be rebuilt",
         code="uploaded_model_missing",
     )
+
+
+def resolve_source_text_strict(reference: Any) -> tuple[str, dict[str, Any]]:
+    """Resolve source for a **new** run, requiring the verified file to be intact.
+
+    Used when starting a task: the server must be able to prove the code it is
+    pinning is the code it validated, so a missing or changed file is a hard error
+    rather than a fallback to an embedded copy.
+    """
+    if not isinstance(reference, dict):
+        raise UploadedModelSourceError(
+            "No uploaded model reference was provided",
+            code="uploaded_model_reference_missing",
+        )
+    report = verify_reference_source(reference)
+    if report["status"] == "tampered":
+        raise UploadedModelSourceError(
+            "The uploaded model file was modified after it was validated; re-upload or "
+            f"revalidate the model ({report['detail']})",
+            code="uploaded_model_tampered",
+        )
+    if report["status"] != "available":
+        raise UploadedModelSourceError(
+            f"The uploaded model file is unavailable ({report['detail']})",
+            code="uploaded_model_missing",
+        )
+    text, digest = read_source_file(reference["source_path"])
+    expected = str(reference.get("content_hash") or "")
+    if expected and digest != expected:
+        raise UploadedModelSourceError(
+            "The uploaded model file changed while it was being read",
+            code="uploaded_model_tampered",
+        )
+    return text, report
 
 
 __all__ = [
@@ -210,5 +262,6 @@ __all__ = [
     "hash_source_bytes",
     "read_source_file",
     "resolve_source_text",
+    "resolve_source_text_strict",
     "verify_reference_source",
 ]

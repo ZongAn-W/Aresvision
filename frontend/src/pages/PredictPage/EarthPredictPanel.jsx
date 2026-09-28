@@ -4,10 +4,12 @@ import {
   EARTH_FIELD_KINDS,
   EARTH_TARGET_UNIT,
   buildEarthFieldPayload,
+  describeEarthModelIdentity,
   earthFieldLabel,
   isOriginSelectable,
   readEarthLeadMetric,
   readEarthMetric,
+  readEarthResponseModelIdentity,
   resolveEarthColorRanges,
 } from './earthPredictModel';
 import './earthPredictPanel.css';
@@ -70,6 +72,16 @@ export default function EarthPredictPanel({
   });
 
   const metrics = result?.metrics;
+  // 模型身份优先取本次预测结果（服务端固定返回），回退到上下文，保证切换任务后
+  // 展示的仍是这次预测真正使用的模型。
+  const contextModelIdentity = useMemo(
+    () => readEarthResponseModelIdentity(result) || readEarthResponseModelIdentity(context),
+    [context, result],
+  );
+  const contextWarnings = useMemo(() => {
+    const warnings = result?.warnings?.length ? result.warnings : context?.warnings;
+    return Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+  }, [context, result]);
 
   return (
     <div className="earth-predict-panel" data-earth-predict-panel="true">
@@ -149,6 +161,13 @@ export default function EarthPredictPanel({
       {context ? (
         <dl className="earth-predict-facts" data-earth-context-facts="true">
           <div><dt>{copy.factDataset}</dt><dd>{`${context.dataset_id} · ${context.dataset_version}`}</dd></div>
+          {/* 模型身份：训练用的是官方 DLinear 还是用户上传模型，必须一眼可见。 */}
+          <div>
+            <dt>{copy.factModel}</dt>
+            <dd data-earth-context-model="true" data-model-source={contextModelIdentity.modelSource}>
+              {describeEarthModelIdentity(contextModelIdentity, copy)}
+            </dd>
+          </div>
           <div><dt>{copy.factGrid}</dt><dd>{`${context.grid.shape[0]} × ${context.grid.shape[1]}`}</dd></div>
           <div><dt>{copy.factWindow}</dt><dd>{`${context.window} → ${context.horizon} ${copy.dayUnit}`}</dd></div>
           <div><dt>{copy.factChannels}</dt><dd>{context.input_channel_order.join(', ')}</dd></div>
@@ -157,6 +176,12 @@ export default function EarthPredictPanel({
         </dl>
       ) : null}
 
+      {/* 原始模型文件缺失或被改动时，服务端会说明它改用了 checkpoint 内的副本。 */}
+      {contextWarnings.length ? (
+        <div className="earth-predict-status" data-tone="warning" role="status" data-earth-model-warnings="true">
+          {contextWarnings.map((warning) => <p key={warning}>{warning}</p>)}
+        </div>
+      ) : null}
       {result ? (
         <>
           <div className="earth-predict-days" role="tablist" aria-label={copy.dayTabsLabel} data-earth-day-tabs="true">

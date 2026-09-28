@@ -57,9 +57,13 @@ from services.earth_training_contract import (  # noqa: E402
     normalize_earth_training_hyperparameters,
     split_window_counts,
 )
-from training_backbones.earth_daily_model import (  # noqa: E402
-    create_earth_forecaster,
-    earth_forward,
+from services.earth_model_source import (  # noqa: E402
+    MODEL_SOURCE_OFFICIAL,
+    MODEL_SOURCE_UPLOADED,
+    EarthModelBuildError,
+    ModelSourcePlan,
+    build_earth_model_for_plan,
+    earth_forward_for_model,
 )
 
 SPEC_ENV_VAR = "ARESVISION_EARTH_TRAINING_SPEC"
@@ -180,6 +184,7 @@ def _evaluate_split(
     device: torch.device,
     *,
     loss_function: nn.Module,
+    model_source: str = MODEL_SOURCE_OFFICIAL,
 ) -> tuple[dict, float]:
     """Return DU metrics plus the mean normalized MSE for a whole partition."""
     model.eval()
@@ -190,7 +195,7 @@ def _evaluate_split(
         for inputs, targets in loader:
             inputs = inputs.to(device)
             targets = targets.to(device)
-            output = earth_forward(model, inputs)
+            output = earth_forward_for_model(model, inputs, model_source=model_source)
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during evaluation")
             loss = loss_function(output, targets)
@@ -236,6 +241,28 @@ def run_training(
     patience = hyperparameters["early_stopping_patience"]
     hidden_layers = hyperparameters["linear_hidden_layers"]
 
+    # The server pinned the model source and, for an uploaded model, its exact
+    # verified reference. Nothing here re-reads the user's current upload, so a new
+    # version published after this task was created cannot change the trained code.
+    raw_source = str(spec.get("hyperparameters", {}).get("model_source") or "official").strip().lower()
+    model_source = MODEL_SOURCE_UPLOADED if raw_source == "uploaded" else MODEL_SOURCE_OFFICIAL
+    uploaded_reference = spec.get("uploaded_model")
+    if model_source == MODEL_SOURCE_UPLOADED and not isinstance(uploaded_reference, dict):
+        raise EarthTrainingError(
+            "This Earth task was pinned to an uploaded model but the training spec has "
+            "no model reference"
+        )
+    if model_source == MODEL_SOURCE_UPLOADED:
+        # The pinned reference carries the parameters that were validated at task
+        # creation. Request-level values only fill gaps, so a later request can never
+        # retroactively change what a pinned reference already fixed.
+        uploaded_reference = dict(uploaded_reference)
+        request_params = spec.get("hyperparameters", {}).get("custom_model_params")
+        if isinstance(request_params, dict):
+            merged = dict(request_params)
+            merged.update(uploaded_reference.get("custom_model_params") or {})
+            uploaded_reference["custom_model_params"] = merged
+
     seed_everything(seed)
     resolved_device = resolve_device(device)
     prepared = _build_loaders(spec, registry, batch_size, seed)
@@ -243,16 +270,41 @@ def run_training(
     dataset_by_name = prepared["splits"]
     train_dataset = dataset_by_name["train"]
 
-    model = create_earth_forecaster(order, hidden_layers).to(resolved_device)
+    plan = ModelSourcePlan(
+        model_source=model_source,
+        input_channel_order=order,
+        linear_hidden_layers=hidden_layers,
+        uploaded_model=uploaded_reference if model_source == MODEL_SOURCE_UPLOADED else None,
+    )
+    try:
+        model, model_build_config, model_warnings = build_earth_model_for_plan(plan)
+    except EarthModelBuildError as exc:
+        raise EarthTrainingError(str(exc)) from exc
+    model = model.to(resolved_device)
+    for warning in model_warnings:
+        print(f"Earth model warning: {warning}", flush=True)
     loss_function = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    model_label = (
+        f"uploaded:{uploaded_reference.get('display_name')}"
+        f"@v{uploaded_reference.get('version')}"
+        if model_source == MODEL_SOURCE_UPLOADED
+        else "official:dlinear"
+    )
     print(f"Training Device: {resolved_device}", flush=True)
     print(
-        f"EarthModel=dlinear, Dataset={binding['dataset_id']}@{binding['dataset_version']}, "
+        f"EarthModel={model_label}, Dataset={binding['dataset_id']}@{binding['dataset_version']}, "
         f"Channels={','.join(order)}, Window={EARTH_WINDOW}, Horizon={EARTH_HORIZON}",
         flush=True,
     )
+    if model_source == MODEL_SOURCE_UPLOADED:
+        print(
+            f"Earth uploaded model source sha256="
+            f"{str(uploaded_reference.get('content_hash'))[:12]}… "
+            f"(pinned at task creation)",
+            flush=True,
+        )
     print(
         "Earth split windows: "
         + ", ".join(f"{name}={count}" for name, count in prepared["counts"].items()),
@@ -279,7 +331,7 @@ def run_training(
             inputs = inputs.to(resolved_device)
             targets = targets.to(resolved_device)
             optimizer.zero_grad(set_to_none=True)
-            output = earth_forward(model, inputs)
+            output = earth_forward_for_model(model, inputs, model_source=model_source)
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during training")
             loss = loss_function(output, targets)
@@ -306,6 +358,7 @@ def run_training(
             dataset_by_name["validation"],
             resolved_device,
             loss_function=loss_function,
+            model_source=model_source,
         )
         epochs_completed = epoch
         print(
@@ -349,6 +402,7 @@ def run_training(
         dataset_by_name["validation"],
         resolved_device,
         loss_function=loss_function,
+        model_source=model_source,
     )
     test_metrics, test_loss = _evaluate_split(
         model,
@@ -356,6 +410,7 @@ def run_training(
         dataset_by_name["test"],
         resolved_device,
         loss_function=loss_function,
+        model_source=model_source,
     )
     print("Earth metrics unit: DU", flush=True)
     print(
@@ -400,6 +455,20 @@ def run_training(
         "device": str(resolved_device),
         "duration_seconds": round(time.time() - start_time, 3),
     }
+    uploaded_block = None
+    if model_source == MODEL_SOURCE_UPLOADED:
+        uploaded_block = {
+            "package_id": uploaded_reference.get("package_id"),
+            "display_name": uploaded_reference.get("display_name"),
+            "version": uploaded_reference.get("version"),
+            "content_hash": uploaded_reference.get("content_hash"),
+            "source_path": uploaded_reference.get("source_path"),
+            "source_text": uploaded_reference.get("source_text"),
+            "param_schema": uploaded_reference.get("param_schema") or {},
+            "custom_model_params": uploaded_reference.get("custom_model_params") or {},
+            "build_config": model_build_config,
+            "input_channel_order": order,
+        }
     payload = build_checkpoint_payload(
         model=model,
         input_channel_order=order,
@@ -410,6 +479,8 @@ def run_training(
         metrics=metrics,
         split_window_counts=prepared["counts"],
         task_id=task_id,
+        model_source=model_source,
+        uploaded_model=uploaded_block,
     )
     saved_path = save_earth_artifact_atomic(payload, output_path, strict_reload=True)
     # Final proof on the published file: reload it strictly and reproduce the
@@ -417,13 +488,15 @@ def run_training(
     checkpoint = load_earth_training_artifact(
         saved_path, expected_binding=binding, expected_task_id=task_id
     )
-    reloaded = build_earth_model_from_checkpoint(checkpoint)
+    reloaded, reload_warnings = build_earth_model_from_checkpoint(checkpoint)
+    for warning in reload_warnings:
+        print(f"Earth reload warning: {warning}", flush=True)
     reloaded.to(resolved_device)
     sample_inputs, _ = next(iter(prepared["test_loader"]))
     sample_inputs = sample_inputs.to(resolved_device)
     with torch.no_grad():
-        before = earth_forward(model, sample_inputs)
-        after = earth_forward(reloaded, sample_inputs)
+        before = earth_forward_for_model(model, sample_inputs, model_source=model_source)
+        after = earth_forward_for_model(reloaded, sample_inputs, model_source=model_source)
     if not torch.equal(before, after):
         raise EarthTrainingError("The published checkpoint does not reproduce the trained model")
     print(f"Model saved: {saved_path}", flush=True)
@@ -434,6 +507,9 @@ def run_training(
         "epochs_completed": epochs_completed,
         "split_window_counts": prepared["counts"],
         "metrics": checkpoint.metrics,
+        "model_source": model_source,
+        "model_identity": checkpoint.model_identity(),
+        "warnings": list(model_warnings) + list(reload_warnings),
     }
 
 

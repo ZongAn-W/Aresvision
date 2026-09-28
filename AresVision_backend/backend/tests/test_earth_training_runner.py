@@ -201,7 +201,7 @@ def test_early_stopping_restores_the_best_epoch(earth_global_release, tmp_path, 
 
     original_evaluate = runner._evaluate_split
 
-    def fake_evaluate(model, loader, dataset, device, *, loss_function):
+    def fake_evaluate(model, loader, dataset, device, *, loss_function, model_source="official"):
         metrics = {
             "overall": {"rmse": 1.0, "mae": 0.5},
             "by_lead": [
@@ -271,7 +271,7 @@ def test_artifact_is_never_published_when_the_run_fails(earth_global_release, tm
     def explode(model, inputs, **kwargs):
         raise RuntimeError("injected failure")
 
-    monkeypatch.setattr(runner, "earth_forward", explode)
+    monkeypatch.setattr(runner, "earth_forward_for_model", explode)
     registry, binding, spec = _spec(earth_global_release, epochs=1, batch_size=64)
     output = tmp_path / "task_901_fail.pth"
     with pytest.raises(Exception):

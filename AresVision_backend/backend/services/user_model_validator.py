@@ -30,11 +30,15 @@ from training_backbones.uploaded_model_dataset_spec import (
     earth_incompatibility_reasons,
     normalize_dataset_declarations,
 )
+from training_backbones.uploaded_model_source_check import (
+    ALLOWED_IMPORT_ROOTS,
+    DISALLOWED_ATTRIBUTE_CALLS,
+    DISALLOWED_DIRECT_CALLS,
+    call_name as _call_name,
+    validate_uploaded_model_ast,
+)
 
 
-ALLOWED_IMPORT_ROOTS = {"torch", "numpy"}
-DISALLOWED_DIRECT_CALLS = {"open", "eval", "exec", "compile", "__import__"}
-DISALLOWED_ATTRIBUTE_CALLS = {"system", "popen", "Popen", "run"}
 EXPECTED_OUTPUT_SHAPE = [2, 3, 1, 8, 16]
 
 #: Earth dry-run contract: the published global grid, the fixed 7 -> 3 window and
@@ -229,35 +233,13 @@ class UserModelValidator:
 
     @staticmethod
     def _validate_ast(tree: ast.AST) -> list[str]:
-        errors: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    root = alias.name.split(".", 1)[0]
-                    if root not in ALLOWED_IMPORT_ROOTS:
-                        errors.append(f"Disallowed import: {root}")
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:
-                    errors.append("Disallowed import: relative import")
-                    continue
-                root = (node.module or "").split(".", 1)[0]
-                if root not in ALLOWED_IMPORT_ROOTS:
-                    errors.append(f"Disallowed import: {root or '<unknown>'}")
-            elif isinstance(node, ast.Call):
-                call_name = UserModelValidator._call_name(node.func)
-                if isinstance(node.func, ast.Name) and call_name in DISALLOWED_DIRECT_CALLS:
-                    errors.append(f"Disallowed call: {call_name}")
-                elif isinstance(node.func, ast.Attribute) and call_name in DISALLOWED_ATTRIBUTE_CALLS:
-                    errors.append(f"Disallowed call: {call_name}")
-        return errors
+        # Shared with the execution path so upload validation and actual runs can
+        # never disagree about what an uploaded model may do.
+        return validate_uploaded_model_ast(tree)
 
     @staticmethod
     def _call_name(func: ast.expr) -> str | None:
-        if isinstance(func, ast.Name):
-            return func.id
-        if isinstance(func, ast.Attribute):
-            return func.attr
-        return None
+        return _call_name(func)
 
     @staticmethod
     def _import_module(path: Path, module_name: str):
@@ -616,6 +598,63 @@ class UserModelValidator:
             normalized[name] = normalized_schema
 
         return normalized, errors
+
+    @staticmethod
+    def normalize_custom_params(
+        param_schema: Any,
+        custom_params: Any,
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Validate user-supplied parameter values against a normalized schema.
+
+        Returns ``(resolved_values, errors)``. Missing values fall back to the
+        schema default, unknown keys are reported, and a value outside its declared
+        range or of the wrong type is an error rather than a silent clamp.
+        """
+        if not isinstance(param_schema, dict):
+            return {}, []
+        supplied = custom_params if isinstance(custom_params, dict) else {}
+        errors: list[str] = []
+        unknown = sorted(set(supplied) - set(param_schema))
+        if unknown:
+            errors.append(f"Unknown custom model parameter: {unknown[0]}")
+
+        resolved: dict[str, Any] = {}
+        for name, schema in param_schema.items():
+            if not isinstance(schema, dict):
+                continue
+            if name not in supplied:
+                resolved[name] = schema.get("default")
+                continue
+            value = supplied[name]
+            field_type = schema.get("type")
+            if field_type == "int":
+                if not UserModelValidator._is_int(value):
+                    errors.append(f"Parameter {name} must be an int")
+                    continue
+            elif field_type == "float":
+                if not UserModelValidator._is_number(value):
+                    errors.append(f"Parameter {name} must be a number")
+                    continue
+                value = float(value)
+            elif field_type == "bool":
+                if not isinstance(value, bool):
+                    errors.append(f"Parameter {name} must be a bool")
+                    continue
+            elif field_type == "select":
+                options = schema.get("options") or []
+                if value not in options:
+                    errors.append(f"Parameter {name} must be one of {options}")
+                    continue
+            if field_type in {"int", "float"}:
+                minimum, maximum = schema.get("min"), schema.get("max")
+                if UserModelValidator._is_number(minimum) and value < minimum:
+                    errors.append(f"Parameter {name} must be at least {minimum}")
+                    continue
+                if UserModelValidator._is_number(maximum) and value > maximum:
+                    errors.append(f"Parameter {name} must be at most {maximum}")
+                    continue
+            resolved[name] = value
+        return resolved, errors
 
     @staticmethod
     def _normalize_numeric_param(

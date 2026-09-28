@@ -1,0 +1,315 @@
+"""Build the Earth forecaster for either model source.
+
+Earth supports two model sources: the platform's official DLinear and a user
+uploaded single-file model. Both are driven through the same narrow interface -
+``[B, 7, C, 36, 72] -> [B, 3, 1, 36, 72]`` - so the training loop, checkpoint and
+prediction path do not branch on the model type beyond this module.
+
+The uploaded branch:
+
+* executes the **verified** source only (hash-checked, AST-checked the same way as
+  at upload) and never a bare pickle;
+* refuses Mars-only auxiliary inputs, because the Earth feed provides no Ls and no
+  MOLA topography;
+* records the exact build configuration so a reload rebuilds the same module.
+"""
+
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import sys
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Sequence
+
+import torch
+
+from services.uploaded_model_source import (
+    UploadedModelSourceError,
+    resolve_source_text,
+)
+from training_backbones.earth_daily_model import (
+    earth_model_config,
+    create_earth_forecaster,
+    require_earth_channel_order,
+    state_dict_to_cpu,
+)
+from training_backbones.uploaded_model_contract import (
+    attach_uploaded_model_contract,
+    normalize_auxiliary_inputs,
+    run_uploaded_model,
+    uploaded_model_requires_ls,
+    uploaded_model_requires_topography,
+)
+from training_backbones.uploaded_model_source_check import assert_source_is_safe
+
+MODEL_SOURCE_OFFICIAL = "official"
+MODEL_SOURCE_UPLOADED = "uploaded"
+EARTH_MODEL_SOURCES = (MODEL_SOURCE_OFFICIAL, MODEL_SOURCE_UPLOADED)
+
+
+class EarthModelBuildError(ValueError):
+    """The Earth model could not be built for the requested source."""
+
+    def __init__(self, message: str, *, code: str = "invalid_earth_training_artifact"):
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class ModelSourcePlan:
+    """What the platform decided to train, in a form both runner and checkpoint keep."""
+
+    model_source: str
+    input_channel_order: list[str]
+    linear_hidden_layers: int
+    uploaded_model: dict[str, Any] | None = None
+    warnings: tuple[str, ...] = ()
+
+
+def _load_uploaded_module(source_text: str, filename: str):
+    """Import uploaded source text as a throwaway module.
+
+    The text is the hash-verified copy, and the shared safety gate is re-applied
+    here so a file that slipped past the hash check still cannot import anything
+    outside torch/numpy or call an unsafe builtin.
+    """
+    try:
+        tree = assert_source_is_safe(source_text, filename)
+    except ValueError as exc:
+        raise EarthModelBuildError(str(exc), code="uploaded_model_source_invalid") from exc
+    del tree
+
+    module_name = f"_aresvision_earth_uploaded_{uuid.uuid4().hex}"
+    loader = importlib.machinery.SourceFileLoader(module_name, filename)
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    if spec is None or spec.loader is None:
+        raise EarthModelBuildError(
+            "The uploaded model source could not be loaded",
+            code="uploaded_model_source_invalid",
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        # exec of hash-verified, AST-checked user source: the documented upload
+        # protocol executes build_model(config), not a serialized object.
+        exec(compile(source_text, filename, "exec"), module.__dict__)
+    finally:
+        sys.modules.pop(module_name, None)
+    return module
+
+
+def uploaded_model_config(
+    *,
+    input_channel_order: Sequence[str],
+    window: int,
+    horizon: int,
+    height: int,
+    width: int,
+    param_schema: Any,
+    custom_model_params: Any,
+    declared_parameters: Any = None,
+) -> dict[str, Any]:
+    """The build config handed to ``build_model`` for the Earth feed.
+
+    ``in_channels`` is the real number of channels the platform will feed, and
+    ``selected_channels`` starts with the mandatory ``TO3`` target so a model never
+    has to guess which channel is the prediction target.
+
+    Parameter defaults come from the model's own ``MODEL_SPEC.parameters`` merged
+    with the schema stored at upload time. The model's declaration is the fallback
+    when a stored schema is incomplete, so a model that reads
+    ``config["hidden_dim"]`` still builds instead of failing with a KeyError.
+    """
+    order = require_earth_channel_order(input_channel_order)
+    schema: dict[str, Any] = {}
+    if isinstance(declared_parameters, dict):
+        schema.update({key: value for key, value in declared_parameters.items() if isinstance(value, dict)})
+    if isinstance(param_schema, dict):
+        # The stored schema is authoritative where both exist.
+        schema.update({key: value for key, value in param_schema.items() if isinstance(value, dict)})
+    params = custom_model_params if isinstance(custom_model_params, dict) else {}
+
+    config: dict[str, Any] = {
+        "in_channels": len(order),
+        "window": int(window),
+        "horizon": int(horizon),
+        "height": int(height),
+        "width": int(width),
+        "selected_channels": list(order),
+        "target_channel": order[0],
+    }
+    for name, field in schema.items():
+        config[name] = params.get(name, field.get("default"))
+    # A value the user supplied for a parameter the schema does not describe is
+    # still passed through rather than silently dropped.
+    for name, value in params.items():
+        config.setdefault(name, value)
+    return config
+
+
+def build_uploaded_earth_model(
+    *,
+    reference: dict[str, Any],
+    input_channel_order: Sequence[str],
+    window: int,
+    horizon: int,
+    height: int,
+    width: int,
+) -> tuple[torch.nn.Module, dict[str, Any], tuple[str, ...]]:
+    """Build the uploaded model for the Earth feed.
+
+    Returns ``(model, build_config, warnings)``. Raises for a tampered source, a
+    missing source without an embedded copy, or a Mars-only auxiliary input.
+    """
+    order = require_earth_channel_order(input_channel_order)
+    source_text, source_report = resolve_source_text(reference)
+    filename = str(reference.get("display_name") or "uploaded_model") + ".py"
+
+    module = _load_uploaded_module(source_text, filename)
+    model_spec = getattr(module, "MODEL_SPEC", None)
+    build_model = getattr(module, "build_model", None)
+    if not isinstance(model_spec, dict):
+        raise EarthModelBuildError(
+            "The uploaded model no longer exports MODEL_SPEC as a dict",
+            code="uploaded_model_source_invalid",
+        )
+    if not callable(build_model):
+        raise EarthModelBuildError(
+            "The uploaded model no longer exports build_model(config)",
+            code="uploaded_model_source_invalid",
+        )
+
+    try:
+        auxiliary_inputs = normalize_auxiliary_inputs(model_spec)
+    except ValueError as exc:
+        raise EarthModelBuildError(str(exc), code="uploaded_model_source_invalid") from exc
+
+    config = uploaded_model_config(
+        input_channel_order=order,
+        window=window,
+        horizon=horizon,
+        height=height,
+        width=width,
+        param_schema=reference.get("param_schema"),
+        custom_model_params=reference.get("custom_model_params"),
+        declared_parameters=model_spec.get("parameters"),
+    )
+    try:
+        model = build_model(config)
+    except Exception as exc:  # noqa: BLE001 - report as a build failure
+        raise EarthModelBuildError(
+            f"The uploaded model could not be built for Earth data: {exc}"
+        ) from exc
+    if not isinstance(model, torch.nn.Module):
+        raise EarthModelBuildError("build_model(config) must return torch.nn.Module")
+
+    attach_uploaded_model_contract(model, model_spec)
+    if uploaded_model_requires_ls(model):
+        raise EarthModelBuildError(
+            "The uploaded model requires Ls, which is a Mars-only input and is not "
+            "available for Earth data"
+        )
+    if uploaded_model_requires_topography(model):
+        raise EarthModelBuildError(
+            "The uploaded model requires MOLA topography, which is a Mars-only input "
+            "and is not available for Earth data"
+        )
+
+    warnings: list[str] = []
+    if source_report.get("used_embedded_source"):
+        if source_report.get("status") == "tampered":
+            warnings.append(
+                "the uploaded model file no longer matches the trained version "
+                f"({source_report.get('detail')}); the model was rebuilt from the "
+                "verified copy stored inside the checkpoint"
+            )
+        else:
+            warnings.append(
+                "the original uploaded model file is unavailable; the model was "
+                "rebuilt from the verified copy stored inside the checkpoint"
+            )
+    return model, config, tuple(warnings)
+
+
+def build_earth_model_for_plan(plan: ModelSourcePlan) -> tuple[torch.nn.Module, dict[str, Any], tuple[str, ...]]:
+    """Build the Earth model described by a plan (official or uploaded)."""
+    if plan.model_source == MODEL_SOURCE_OFFICIAL:
+        model = create_earth_forecaster(
+            plan.input_channel_order, plan.linear_hidden_layers
+        )
+        config = earth_model_config(
+            plan.input_channel_order, plan.linear_hidden_layers
+        )
+        return model, config, ()
+    if plan.model_source == MODEL_SOURCE_UPLOADED:
+        if not isinstance(plan.uploaded_model, dict):
+            raise EarthModelBuildError(
+                "The uploaded model plan has no model reference",
+                code="uploaded_model_reference_missing",
+            )
+        return build_uploaded_earth_model(
+            reference=plan.uploaded_model,
+            input_channel_order=plan.input_channel_order,
+            window=7,
+            horizon=3,
+            height=36,
+            width=72,
+        )
+    raise EarthModelBuildError(f"Unsupported Earth model source: {plan.model_source}")
+
+
+def earth_forward_for_model(
+    model: torch.nn.Module,
+    inputs: torch.Tensor,
+    *,
+    model_source: str,
+    horizon: int = 3,
+    height: int = 36,
+    width: int = 72,
+) -> torch.Tensor:
+    """Run either model type and normalize the output contract.
+
+    Uploaded models are called through the shared contract runner, which enforces
+    that no auxiliary input is passed; the official DLinear keeps its zero time
+    placeholder (see :func:`training_backbones.earth_daily_model.earth_forward`).
+    """
+    if model_source == MODEL_SOURCE_OFFICIAL:
+        from training_backbones.earth_daily_model import earth_forward
+
+        return earth_forward(model, inputs, horizon=horizon, height=height, width=width)
+    if model_source != MODEL_SOURCE_UPLOADED:
+        raise EarthModelBuildError(f"Unsupported Earth model source: {model_source}")
+    if inputs.dim() != 5:
+        raise EarthModelBuildError("Earth model input must be [B, window, C, H, W]")
+    batch, _, _, input_height, input_width = inputs.shape
+    if int(input_height) != int(height) or int(input_width) != int(width):
+        raise EarthModelBuildError(
+            f"Earth model expects a {int(height)}x{int(width)} grid, got "
+            f"{int(input_height)}x{int(input_width)}"
+        )
+    output = run_uploaded_model(model, inputs, context="Earth uploaded model")
+    expected = (batch, int(horizon), 1, int(height), int(width))
+    if tuple(output.shape) != expected:
+        raise EarthModelBuildError(
+            f"Unexpected Earth output shape: {tuple(output.shape)}"
+        )
+    if not torch.isfinite(output).all():
+        raise EarthModelBuildError("Non-finite Earth model output")
+    return output
+
+
+__all__ = [
+    "EARTH_MODEL_SOURCES",
+    "EarthModelBuildError",
+    "MODEL_SOURCE_OFFICIAL",
+    "MODEL_SOURCE_UPLOADED",
+    "ModelSourcePlan",
+    "build_earth_model_for_plan",
+    "build_uploaded_earth_model",
+    "earth_forward_for_model",
+    "state_dict_to_cpu",
+    "uploaded_model_config",
+]

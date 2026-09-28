@@ -5,15 +5,17 @@ import { filterTaggedTasks } from './trainingTagFilters';
 import { TagChips, TagFilter, TagPicker } from './TagControls';
 import { EditTaskTagsDialog, TagManager } from './TagDialogs';
 
-export default function TrainingHistory({ tasks, tagState, isZh, renderTask, renderMode = 'list', statusMatcher = null, headerExtra = null, emptyState = null }) {
+export default function TrainingHistory({ tasks, tagState, isZh, renderTask, renderMode = 'list', statusMatcher = null, headerExtra = null, emptyState = null, groupTasks = null }) {
   const isDirectory = renderMode === 'directory';
   const [filter, setFilter] = useState({ tagIds: [], untagged: false });
   const [search, setSearch] = useState('');
+  const [tagFilterOpen, setTagFilterOpen] = useState(false);
   const [selected, setSelected] = useState([]);
   const [batchTagIds, setBatchTagIds] = useState([]);
   const [editing, setEditing] = useState(null);
   const [managing, setManaging] = useState(false);
   const [error, setError] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState([]);
   const filtered = useMemo(
     () => filterTaggedTasks(tasks, { ...filter, search, statusMatcher }),
     [tasks, filter, search, statusMatcher]
@@ -40,12 +42,19 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask, ren
   }
 
   if (isDirectory) return <div className={`training-tag-directory${emptyState ? ` is-${emptyState.reason}` : ''}`}>
-    {headerExtra ? <div className="experiment-directory-tools">{headerExtra(selected, filtered)}</div> : null}
-    <div className="training-tag-toolbar">
-      <input className="training-tag-input" style={{ flex: '1 1 150px' }} type="search" aria-label={isZh ? '搜索实验名称' : 'Search experiments'} placeholder={isZh ? '搜索实验名称' : 'Search experiments'} value={search} onChange={event => { setSelected([]); setSearch(event.target.value); }} />
-      <button className="training-tag-button" disabled={tagState.scope === null || tagState.busy} onClick={() => setManaging(true)}>{isZh ? '管理标签' : 'Manage tags'}</button>
+    <div className="experiment-directory-search">
+      <input className="training-tag-input" type="search" aria-label={isZh ? '搜索实验名称' : 'Search experiments'} placeholder={isZh ? '搜索实验名称' : 'Search experiments'} value={search} onChange={event => { setSelected([]); setSearch(event.target.value); }} />
     </div>
-    <TagFilter tags={tagState.tags} {...filter} isZh={isZh} disabled={tagState.loading || tagState.busy} onChange={next => { setSelected([]); setFilter(next); }} />
+    <div className="experiment-directory-tools">
+      {headerExtra ? headerExtra(selected, filtered) : null}
+      <details className="experiment-directory-tag-filter" open={tagFilterOpen} onToggle={event => setTagFilterOpen(event.currentTarget.open)}>
+        <summary>{isZh ? '标签筛选' : 'Tag filter'}{filter.untagged || filter.tagIds.length > 0 ? <span>{isZh ? '已启用' : 'Active'}</span> : null}</summary>
+        <div className="experiment-directory-tag-filter-body">
+          <TagFilter tags={tagState.tags} {...filter} isZh={isZh} disabled={tagState.loading || tagState.busy} onChange={next => { setSelected([]); setFilter(next); }} />
+          <button className="training-tag-button" disabled={tagState.scope === null || tagState.busy} onClick={() => setManaging(true)}>{isZh ? '管理标签' : 'Manage tags'}</button>
+        </div>
+      </details>
+    </div>
     {tagState.loading && <div role="status" className="training-tag-hint">{isZh ? '正在加载标签…' : 'Loading tags…'}</div>}
     {tagState.error && <div role="alert" className="training-tag-toolbar" style={{ color: C.mars }}>
       {tagState.error}<button className="training-tag-button" onClick={() => tagState.refresh().catch(() => {})}>{isZh ? '重试' : 'Retry'}</button>
@@ -60,7 +69,12 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask, ren
     </div>}
     {error && <div role="alert" style={{ color: C.mars }}>{error}</div>}
     <div className="experiment-directory-list">
-      {filtered.map(task => renderTask(task, <div className="training-tag-toolbar experiment-directory-row-tools" onClick={event => event.stopPropagation()}>
+      {(groupTasks ? groupTasks(filtered) : [{ id: 'all', label: '', tasks: filtered }]).map(group => (
+        <section className="experiment-directory-group" key={group.id}>
+          {group.label ? <button type="button" className="experiment-directory-group-toggle" aria-expanded={!collapsedGroups.includes(group.id)} onClick={() => setCollapsedGroups(previous => previous.includes(group.id) ? previous.filter(id => id !== group.id) : [...previous, group.id])}>
+            <span>{group.label}</span><span>{group.tasks.length}</span><span aria-hidden="true">{collapsedGroups.includes(group.id) ? '+' : '−'}</span>
+          </button> : null}
+          {!collapsedGroups.includes(group.id) ? <div className="experiment-directory-group-items">{group.tasks.map(task => renderTask(task, <div className="training-tag-toolbar experiment-directory-row-tools" onClick={event => event.stopPropagation()}>
         <label className="training-tag-option">
           <input type="checkbox" checked={visibleSelection.includes(task.id)} disabled={tagState.busy} aria-label={isZh ? `选择实验 ${task.custom_model_name || task.id}` : `Select experiment ${task.custom_model_name || task.id}`} onChange={event => setSelected(prev => event.target.checked ? [...new Set([...prev, task.id])] : prev.filter(id => id !== task.id))} />
           {isZh ? '选择' : 'Select'}
@@ -68,7 +82,9 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask, ren
         <TagChips tags={task.tags} />
         {!task.tags?.length && <span className="training-tag-hint">{isZh ? '未分组' : 'Untagged'}</span>}
         <button className="training-tag-button" style={{ marginLeft: 'auto' }} disabled={tagState.busy || tagState.loading || Boolean(tagState.error)} onClick={() => setEditing(task)}>{isZh ? '编辑标签' : 'Edit tags'}</button>
-      </div>))}
+      </div>))}</div> : null}
+        </section>
+      ))}
     </div>
     {!filtered.length && (() => {
       const copy = emptyState || {};

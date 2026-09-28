@@ -41,10 +41,37 @@ function getModelIdentity(task) {
   return getExperimentArchitectureLabel(hyperparameters.model_architecture);
 }
 
+function getDirectoryCompleteness(task) {
+  const hyperparameters = parseTaskHyperparameters(task?.hyperparameters);
+  return [
+    Boolean(task?.custom_model_name?.trim()),
+    Boolean(getModelIdentity(task)),
+    Boolean(task?.dataset_id || hyperparameters.training_dataset),
+  ].filter(Boolean).length;
+}
+
+function groupDirectoryTasks(items, isZh, showRecent) {
+  const groups = [
+    { id: 'recent', label: isZh ? '最近实验' : 'Recent experiments', tasks: [] },
+    { id: 'running', label: isZh ? '运行中' : 'Running', tasks: [] },
+    { id: 'completed', label: isZh ? '已完成' : 'Completed', tasks: [] },
+    { id: 'failed', label: isZh ? '失败或需修复' : 'Failed or needs attention', tasks: [] },
+  ];
+  const recentIds = new Set(showRecent ? [...items]
+    .sort((a, b) => Date.parse(b.end_time || b.start_time || 0) - Date.parse(a.end_time || a.start_time || 0))
+    .slice(0, 3).map((task) => task.id) : []);
+  items.forEach((task) => {
+    const status = String(task.status || '').toLowerCase();
+    const group = recentIds.has(task.id) ? groups[0]
+      : status === 'running' || status === 'pending' ? groups[1]
+        : status === 'completed' ? groups[2] : groups[3];
+    group.tasks.push(task);
+  });
+  return groups.filter((group) => group.tasks.length);
+}
+
 /**
- * 目录行只负责「找到实验」：名称、任务号、状态、模型身份、数据集、通道、
- * 时间与一项核心指标。完整参数、日志、预测、比较、重命名、测试和删除
- * 全部在右侧工作区完成，这里不再渲染历史卡片式的内容。
+ * 目录行优先展示识别实验所需的信息；通道、指标与标签操作放在次级详情。
  */
 function ExperimentDirectoryRow({
   task,
@@ -59,6 +86,7 @@ function ExperimentDirectoryRow({
   onSelect,
   onStop,
   copy,
+  isZh,
 }) {
   const statusMeta = getTrainingStatusMeta(task.status, t);
   const hyperparameters = useMemo(() => parseTaskHyperparameters(task.hyperparameters), [task.hyperparameters]);
@@ -70,6 +98,7 @@ function ExperimentDirectoryRow({
     : baselineLabel;
   const datasetLabel = task.dataset_id || hyperparameters.training_dataset || '--';
   const progress = Math.min(100, Math.max(0, Number(task.progress) || 0));
+  const completeness = getDirectoryCompleteness(task);
 
   return (
     <div
@@ -88,35 +117,27 @@ function ExperimentDirectoryRow({
         }
       }}
     >
-      {tagControls}
-
       <div className="experiment-directory-row-top">
         <span className="experiment-directory-name" title={task.custom_model_name || t('modelTraining.unnamedModel')}>
           {task.custom_model_name || t('modelTraining.unnamedModel')}
         </span>
-        <span className="experiment-directory-id">{`#${task.id}`}</span>
       </div>
-
-      <div className="experiment-directory-meta">
-        <span className="experiment-directory-badge" style={{ background: statusMeta.tint, border: `1px solid ${statusMeta.border}`, color: statusMeta.color }}>
-          <span className="experiment-directory-status-dot" style={{ background: statusMeta.color }} />
+      <div className="experiment-directory-status-line">
+        <span className="experiment-directory-badge" data-tone={task.status || 'unknown'}>
+          <span className="experiment-directory-status-dot" />
           {statusMeta.label}
         </span>
-        {isActiveRun ? (
-          <span className="experiment-directory-metric">{`${copy.progressLabel} ${progress.toFixed(0)}%`}</span>
-        ) : null}
+        <time>{formatDirectoryDate(task.end_time || task.start_time, locale)}</time>
       </div>
 
-      <div className="experiment-directory-meta">
-        <span>{`${getModelIdentity(task) || '--'} · ${datasetLabel}`}</span>
+      <div className="experiment-directory-facts">
+        <div><span>{isZh ? '模型' : 'Model'}</span><strong title={getModelIdentity(task)}>{getModelIdentity(task) || '--'}</strong></div>
+        <div><span>{isZh ? '数据' : 'Data'}</span><strong title={datasetLabel}>{datasetLabel}</strong></div>
       </div>
 
-      <div className="experiment-directory-meta">
-        <span>{channelLabel}</span>
-        <span>{formatDirectoryDate(task.start_time, locale)}</span>
-        {metric ? (
-          <span className="experiment-directory-metric">{`${metric.key.toUpperCase()} ${metric.value}`}</span>
-        ) : null}
+      <div className="experiment-directory-footer">
+        <span className="experiment-directory-id">{`#${task.id}`}</span>
+        <span className="experiment-directory-completeness" title={isZh ? '记录字段完整度，不代表训练校验' : 'Recorded fields, not training readiness'}>{`${isZh ? '字段' : 'Fields'} ${completeness}/3`}</span>
       </div>
 
       {isActiveRun ? (
@@ -137,6 +158,18 @@ function ExperimentDirectoryRow({
           </div>
         </>
       ) : null}
+
+      <details className="experiment-directory-row-details" onClick={(event) => event.stopPropagation()}>
+        <summary>{isZh ? '标签与详情' : 'Tags and details'}<span aria-hidden="true">⌄</span></summary>
+        <div className="experiment-directory-row-extra">
+          {tagControls}
+          <div className="experiment-directory-extra-facts">
+            <span title={channelLabel}>{`${isZh ? '通道' : 'Channels'} · ${channelLabel}`}</span>
+            {metric ? <span>{`${metric.key.toUpperCase()} ${metric.value}`}</span> : null}
+            {isActiveRun ? <span>{`${copy.progressLabel} ${progress.toFixed(0)}%`}</span> : null}
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
@@ -166,8 +199,14 @@ export default function ExperimentDirectory({
 }) {
   const t = useT();
   const [statusFilter, setStatusFilter] = useState('all');
+  const [sortOrder, setSortOrder] = useState('newest');
   const counts = useMemo(() => countExperimentStatuses(tasks), [tasks]);
   const statusMatcher = useMemo(() => createTrainingStatusMatcher(statusFilter), [statusFilter]);
+  const sortedTasks = useMemo(() => [...tasks].sort((a, b) => {
+    if (sortOrder === 'name') return String(a.custom_model_name || '').localeCompare(String(b.custom_model_name || ''), locale);
+    const difference = Date.parse(b.end_time || b.start_time || 0) - Date.parse(a.end_time || a.start_time || 0);
+    return (sortOrder === 'oldest' ? -difference : difference) || Number(b.id) - Number(a.id);
+  }), [tasks, sortOrder, locale]);
 
   const filterLabels = {
     all: t('experimentCenter.filterAll'),
@@ -210,11 +249,22 @@ export default function ExperimentDirectory({
 
       <TrainingHistory
         key={tagState.scope ?? 'guest'}
-        tasks={tasks}
+        tasks={sortedTasks}
         tagState={tagState}
         isZh={isZh}
         renderMode="directory"
         statusMatcher={statusMatcher}
+        groupTasks={(items) => groupDirectoryTasks(items, isZh, statusFilter === 'all' && sortOrder === 'newest')}
+        headerExtra={() => (
+          <label className="experiment-directory-sort">
+            <span className="sr-only">{isZh ? '排序' : 'Sort'}</span>
+            <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
+              <option value="newest">{isZh ? '最近更新' : 'Newest'}</option>
+              <option value="oldest">{isZh ? '最早更新' : 'Oldest'}</option>
+              <option value="name">{isZh ? '名称' : 'Name'}</option>
+            </select>
+          </label>
+        )}
         emptyState={{
           reason: isEmptyDirectory ? (tasksError ? 'error' : (isPending ? 'loading' : 'no-experiments')) : 'no-match',
           zh: {
@@ -251,6 +301,7 @@ export default function ExperimentDirectory({
             onSelect={onSelectTask}
             onStop={onStop}
             copy={copy}
+            isZh={isZh}
           />
         )}
       />

@@ -44,7 +44,15 @@ from services.earth_training_contract import (
     EARTH_METRICS_SCHEMA,
     EARTH_TARGET_CHANNEL,
     EARTH_TARGET_UNIT,
+    EARTH_UPLOADED_ARCHITECTURE,
     EARTH_WINDOW,
+)
+from services.earth_model_source import (
+    MODEL_SOURCE_OFFICIAL,
+    MODEL_SOURCE_UPLOADED,
+    EarthModelBuildError,
+    build_uploaded_earth_model,
+    earth_forward_for_model,
 )
 from training_backbones.earth_daily_model import (
     earth_model_config,
@@ -230,11 +238,89 @@ class EarthCheckpoint:
     path: str
     payload: dict
     model_config: dict
+    model_ref: dict
     dataset_binding: dict
     training_contract: dict
     normalization: dict
     run: dict
     metrics: dict
+
+    @property
+    def model_source(self) -> str:
+        return str(self.model_ref.get("model_source") or MODEL_SOURCE_OFFICIAL)
+
+    @property
+    def uploaded_model(self) -> Optional[dict]:
+        reference = self.model_ref.get("uploaded_model")
+        return reference if isinstance(reference, dict) else None
+
+    def model_identity(self) -> dict:
+        """Public identity of the trained model, safe to return over HTTP."""
+        identity = {
+            "model_source": self.model_source,
+            "model_architecture": self.model_ref.get("architecture"),
+        }
+        uploaded = self.uploaded_model
+        if uploaded is not None:
+            identity.update({
+                "uploaded_model_id": uploaded.get("package_id"),
+                "uploaded_model_name": uploaded.get("display_name"),
+                "uploaded_model_version": uploaded.get("version"),
+                "uploaded_model_content_hash": uploaded.get("content_hash"),
+                "uploaded_model_source_embedded": bool(uploaded.get("source_text")),
+            })
+        return identity
+
+
+def build_model_reference(
+    *,
+    model_source: str,
+    model_config: Mapping[str, Any],
+    uploaded_model: Optional[Mapping[str, Any]] = None,
+) -> dict:
+    """Build the ``model_ref`` block stored inside a checkpoint.
+
+    For an uploaded model the reference carries the pinned identity **and the
+    verified source text**, so prediction can rebuild the model after the original
+    file is gone, and can prove the file it did find is the one that was trained.
+    """
+    if model_source == MODEL_SOURCE_OFFICIAL:
+        reference: dict[str, Any] = {
+            "model_source": MODEL_SOURCE_OFFICIAL,
+            "architecture": model_config.get("architecture"),
+            "implementation_id": model_config.get("implementation_id"),
+        }
+        return reference
+    if model_source != MODEL_SOURCE_UPLOADED:
+        raise EarthArtifactError(f"Unsupported Earth model source: {model_source}")
+    if not isinstance(uploaded_model, Mapping):
+        raise EarthArtifactError("An uploaded Earth model requires a stored model reference")
+    source_text = uploaded_model.get("source_text")
+    reference = {
+        "model_source": MODEL_SOURCE_UPLOADED,
+        "architecture": EARTH_UPLOADED_ARCHITECTURE,
+        "implementation_id": uploaded_model.get("package_id"),
+        "uploaded_model": {
+            "package_id": uploaded_model.get("package_id"),
+            "display_name": uploaded_model.get("display_name"),
+            "version": int(uploaded_model.get("version") or 0),
+            "content_hash": uploaded_model.get("content_hash"),
+            "source_path": uploaded_model.get("source_path"),
+            # Plain text, never a pickled object: loading re-executes this source
+            # only after its digest matches the recorded one.
+            "source_text": source_text if isinstance(source_text, str) else None,
+            "source_available": bool(isinstance(source_text, str) and source_text.strip()),
+            "param_schema": _plain(dict(uploaded_model.get("param_schema") or {})),
+            "custom_model_params": _plain(dict(uploaded_model.get("custom_model_params") or {})),
+            "build_config": _plain(dict(uploaded_model.get("build_config") or {})),
+            "input_channel_order": list(uploaded_model.get("input_channel_order") or []),
+        },
+    }
+    for key in ("package_id", "content_hash"):
+        value = reference["uploaded_model"][key]
+        if not isinstance(value, str) or not value:
+            raise EarthArtifactError(f"An uploaded Earth model requires a {key}")
+    return reference
 
 
 def build_checkpoint_payload(
@@ -248,6 +334,8 @@ def build_checkpoint_payload(
     metrics: Mapping[str, Any],
     split_window_counts: Mapping[str, int],
     task_id: Optional[int] = None,
+    model_source: str = MODEL_SOURCE_OFFICIAL,
+    uploaded_model: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Assemble the complete checkpoint payload as plain, serialisable data."""
     order = require_earth_channel_order(input_channel_order)
@@ -270,10 +358,16 @@ def build_checkpoint_payload(
     model_config = earth_model_config(
         order, linear_hidden_layers, implementation_id=EARTH_IMPLEMENTATION_ID
     )
+    model_ref = build_model_reference(
+        model_source=model_source,
+        model_config=model_config,
+        uploaded_model=uploaded_model,
+    )
     payload = {
         "artifact_schema": EARTH_ARTIFACT_SCHEMA,
         "model_state_dict": state_dict_to_cpu(model),
         "model_config": model_config,
+        "model_ref": model_ref,
         "dataset_binding": binding,
         "training_contract": contract,
         "normalization": _plain(dict(normalization)),
@@ -364,8 +458,41 @@ def validate_checkpoint_payload(
     model_config = payload.get("model_config")
     if not isinstance(model_config, Mapping):
         raise EarthArtifactError("Checkpoint has no model config")
-    if model_config.get("architecture") != "dlinear":
-        raise EarthArtifactError("Checkpoint model is not the official DLinear")
+    model_ref = payload.get("model_ref")
+    if not isinstance(model_ref, Mapping):
+        # Older official-only checkpoints have no model_ref; treat them as official
+        # DLinear so already completed tasks stay loadable and predictable.
+        model_ref = {
+            "model_source": MODEL_SOURCE_OFFICIAL,
+            "architecture": model_config.get("architecture"),
+        }
+    model_source = str(model_ref.get("model_source") or MODEL_SOURCE_OFFICIAL)
+    if model_source not in (MODEL_SOURCE_OFFICIAL, MODEL_SOURCE_UPLOADED):
+        raise EarthArtifactError(f"Unsupported checkpoint model source: {model_source}")
+    if model_source == MODEL_SOURCE_OFFICIAL:
+        if model_config.get("architecture") != "dlinear":
+            raise EarthArtifactError("Checkpoint model is not the official DLinear")
+    else:
+        uploaded = model_ref.get("uploaded_model")
+        if not isinstance(uploaded, Mapping):
+            raise EarthArtifactError("An uploaded Earth checkpoint has no model reference")
+        for key in ("package_id", "content_hash"):
+            value = uploaded.get(key)
+            if not isinstance(value, str) or not value:
+                raise EarthArtifactError(
+                    f"The uploaded model reference requires a non-empty {key}"
+                )
+        if int(model_config.get("input_channels", -1)) < 1:
+            raise EarthArtifactError("model_config input channel count is invalid")
+        if not isinstance(uploaded.get("source_text"), str) or not uploaded["source_text"].strip():
+            raise EarthArtifactError(
+                "An uploaded Earth checkpoint must embed the verified model source so it "
+                "can be rebuilt without the original file"
+            )
+        if list(uploaded.get("input_channel_order") or []) != list(model_config.get("input_channel_order") or []):
+            raise EarthArtifactError(
+                "The uploaded model reference channel order disagrees with the model config"
+            )
     order = require_earth_channel_order(model_config.get("input_channel_order") or [])
     if int(model_config.get("input_channels", -1)) != len(order):
         raise EarthArtifactError("model_config input channel count is inconsistent")
@@ -383,6 +510,12 @@ def validate_checkpoint_payload(
     hidden_layers = int((model_config.get("architecture_params") or {}).get("linear_hidden_layers", 2))
     if hidden_layers < 1 or hidden_layers > 4:
         raise EarthArtifactError("model_config linear_hidden_layers is out of range")
+    # An uploaded model's architecture is whatever its source defines; only the
+    # mandatory input/output contract above is enforced for it.
+    if model_source == MODEL_SOURCE_OFFICIAL and model_ref.get("architecture") != model_config.get("architecture"):
+        raise EarthArtifactError("model_ref architecture disagrees with model_config")
+    if model_source == MODEL_SOURCE_UPLOADED and model_ref.get("architecture") != EARTH_UPLOADED_ARCHITECTURE:
+        raise EarthArtifactError("An uploaded checkpoint must be marked as the uploaded architecture")
     if expected_channel_order is not None and list(expected_channel_order) != order:
         raise EarthArtifactError("Checkpoint input channel order does not match the request")
 
@@ -456,6 +589,7 @@ def validate_checkpoint_payload(
     validated = dict(payload)
     validated["model_state_dict"] = dict(state_dict)
     validated["model_config"] = dict(model_config)
+    validated["model_ref"] = dict(model_ref)
     validated["training_contract"] = dict(contract)
     validated["dataset_binding"] = dict(binding)
     validated["run"] = dict(run)
@@ -542,6 +676,7 @@ def load_earth_training_artifact(
         path=str(artifact_path),
         payload=validated,
         model_config=validated["model_config"],
+        model_ref=validated["model_ref"],
         dataset_binding=validated["dataset_binding"],
         training_contract=validated["training_contract"],
         normalization=validated["normalization"],
@@ -550,15 +685,41 @@ def load_earth_training_artifact(
     )
 
 
-def build_earth_model_from_checkpoint(checkpoint: EarthCheckpoint) -> torch.nn.Module:
-    """Rebuild the model and load its weights with ``strict=True``."""
-    model = forecaster_from_config(checkpoint.model_config)
+def build_earth_model_from_checkpoint(
+    checkpoint: EarthCheckpoint,
+) -> tuple[torch.nn.Module, tuple[str, ...]]:
+    """Rebuild the model from the checkpoint and load its weights ``strict=True``.
+
+    Returns ``(model, warnings)``. The official DLinear is rebuilt from its stored
+    configuration. An uploaded model is rebuilt by executing the source text the
+    checkpoint embedded - after checking the original file is still the verified
+    one when it exists - so a missing or tampered file is a reported condition
+    rather than a silent rebuild with different code.
+    """
+    warnings: tuple[str, ...] = ()
+    if checkpoint.model_source == MODEL_SOURCE_UPLOADED:
+        reference = checkpoint.uploaded_model or {}
+        try:
+            model, _config, warnings = build_uploaded_earth_model(
+                reference=reference,
+                input_channel_order=checkpoint.model_config.get("input_channel_order") or [],
+                window=int(checkpoint.model_config.get("window", EARTH_WINDOW)),
+                horizon=int(checkpoint.model_config.get("horizon", EARTH_HORIZON)),
+                height=int(checkpoint.model_config.get("height", 36)),
+                width=int(checkpoint.model_config.get("width", 72)),
+            )
+        except EarthModelBuildError as exc:
+            raise EarthArtifactError(str(exc), code=exc.code) from exc
+    else:
+        model = forecaster_from_config(checkpoint.model_config)
     try:
         model.load_state_dict(checkpoint.payload["model_state_dict"], strict=True)
     except Exception as exc:
-        raise EarthArtifactError(f"The Earth checkpoint weights do not fit the model: {exc}") from exc
+        raise EarthArtifactError(
+            f"The Earth checkpoint weights do not fit the model: {exc}"
+        ) from exc
     model.eval()
-    return model
+    return model, warnings
 
 
 # ── atomic save ────────────────────────────────────────────────────────────
@@ -599,12 +760,15 @@ def save_earth_artifact_atomic(
 
 
 def _verify_round_trip(path: Path, expected: Mapping[str, Any]) -> None:
-    """Reload the written file and compare the standardized output bit for bit."""
+    """Reload the written file and compare the standardized output bit for bit.
+
+    The reloaded model is compared against an independently constructed model of
+    the same source and weights, so a checkpoint that does not reproduce its own
+    output is caught before it replaces the published file.
+    """
     checkpoint = load_earth_training_artifact(path)
-    model = build_earth_model_from_checkpoint(checkpoint)
-    reference = forecaster_from_config(expected["model_config"])
-    reference.load_state_dict(expected["model_state_dict"], strict=True)
-    reference.eval()
+    model, _warnings = build_earth_model_from_checkpoint(checkpoint)
+    reference = _reference_model_from_payload(expected)
     window = int(expected["model_config"]["window"])
     channels = int(expected["model_config"]["input_channels"])
     height = int(expected["model_config"]["height"])
@@ -612,10 +776,39 @@ def _verify_round_trip(path: Path, expected: Mapping[str, Any]) -> None:
     generator = torch.Generator().manual_seed(20200101)
     probe = torch.randn((2, window, channels, height, width), generator=generator)
     with torch.no_grad():
-        first = model(probe, probe.new_zeros((2, window)))
-        second = reference(probe, probe.new_zeros((2, window)))
+        first = _forward_payload_model(model, expected, probe)
+        second = _forward_payload_model(reference, expected, probe)
     if not torch.equal(first, second):
         raise EarthArtifactError("The written checkpoint does not reproduce its own output")
+
+
+def _reference_model_from_payload(payload: Mapping[str, Any]) -> torch.nn.Module:
+    """Rebuild the model the payload describes, without reading the artifact back."""
+    model_ref = payload.get("model_ref") or {}
+    if str(model_ref.get("model_source") or MODEL_SOURCE_OFFICIAL) == MODEL_SOURCE_UPLOADED:
+        reference = model_ref.get("uploaded_model") or {}
+        model, _config, _warnings = build_uploaded_earth_model(
+            reference=reference,
+            input_channel_order=payload["model_config"].get("input_channel_order") or [],
+            window=int(payload["model_config"].get("window", EARTH_WINDOW)),
+            horizon=int(payload["model_config"].get("horizon", EARTH_HORIZON)),
+            height=int(payload["model_config"].get("height", 36)),
+            width=int(payload["model_config"].get("width", 72)),
+        )
+    else:
+        model = forecaster_from_config(payload["model_config"])
+    model.load_state_dict(payload["model_state_dict"], strict=True)
+    model.eval()
+    return model
+
+
+def _forward_payload_model(
+    model: torch.nn.Module, payload: Mapping[str, Any], probe: torch.Tensor
+) -> torch.Tensor:
+    """Run one model from a payload descriptor through the shared Earth interface."""
+    model_ref = payload.get("model_ref") or {}
+    model_source = str(model_ref.get("model_source") or MODEL_SOURCE_OFFICIAL)
+    return earth_forward_for_model(model, probe, model_source=model_source)
 
 
 def normalization_from_release(release, input_channel_order: Sequence[str]) -> dict:
@@ -719,6 +912,7 @@ __all__ = [
     "build_checkpoint_payload",
     "build_earth_model_from_checkpoint",
     "build_metrics_block",
+    "build_model_reference",
     "compute_earth_metrics",
     "forecast_dates",
     "load_earth_training_artifact",

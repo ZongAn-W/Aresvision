@@ -108,21 +108,34 @@ def test_unsupported_configurations_are_rejected_with_409():
         normalize_earth_training_hyperparameters({"transfer_learning": True})
     assert transfer.value.status_code == 409
 
+    # An unknown source is refused; 'uploaded' is now a supported source and is
+    # covered by the uploaded-model contract tests.
     with pytest.raises(DatasetRequestError) as source:
-        normalize_earth_training_hyperparameters({"model_source": "uploaded"})
+        normalize_earth_training_hyperparameters({"model_source": "carrier-pigeon"})
     assert source.value.status_code == 409
 
 
 def test_require_configuration_rejects_unsupported_before_parameters():
-    # An uploaded-model request must fail on capability, not on a parameter error.
+    # A genuine capability failure wins over parameter validation: an unknown model
+    # source is refused with the capability code even though window=3 is also wrong.
     with pytest.raises(DatasetRequestError) as error:
+        require_earth_training_configuration(
+            model_source="carrier-pigeon",
+            uploaded_model_id=None,
+            hyperparameters={"window": 3},
+        )
+    assert error.value.status_code == 409
+    assert error.value.code == "dataset_training_configuration_not_supported"
+
+    # An uploaded-model request with a bad window fails on the parameter instead,
+    # which is the documented precedence for supported sources.
+    with pytest.raises(DatasetRequestError) as parameter_error:
         require_earth_training_configuration(
             model_source="uploaded",
             uploaded_model_id="model-1",
             hyperparameters={"window": 3},
         )
-    assert error.value.status_code == 409
-    assert error.value.code == "dataset_training_configuration_not_supported"
+    assert parameter_error.value.status_code == 422
 
     accepted = require_earth_training_configuration(
         model_source="official",
@@ -166,8 +179,8 @@ def test_units_and_planet_identity():
 def test_profile_publishes_the_fixed_contract():
     profile = earth_training_profile()
     assert profile["profile_id"] == "earth_daily_dlinear_v1"
-    assert profile["model_architectures"] == ["dlinear"]
-    assert profile["model_sources"] == ["official"]
+    assert profile["model_architectures"] == ["dlinear", "uploaded"]
+    assert profile["model_sources"] == ["official", "uploaded"]
     assert profile["target"] == EARTH_TARGET_CHANNEL
     assert profile["target_unit"] == EARTH_TARGET_UNIT
     assert (profile["window"], profile["horizon"]) == (EARTH_WINDOW, EARTH_HORIZON)

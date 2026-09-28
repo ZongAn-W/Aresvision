@@ -773,6 +773,24 @@ export function getUserModelDownloadUrl(kind) {
   return `${BASE}/user-models/downloads/${encodeURIComponent(kind)}`;
 }
 
+/**
+ * 上传模型的 Earth 兼容性结论。
+ *
+ * “Mars 可用”不等于“Earth 可用”，所以训练页在选择 Earth + 上传模型时必须问服务端，
+ * 不能在前端推断。结论来自上传校验时的 Earth dry-run。
+ */
+export async function fetchUploadedModelEarthCompatibility(modelId, { signal } = {}) {
+  const res = await authedFetch(
+    `${BASE}/user-models/${encodeURIComponent(modelId)}/earth-compatibility`,
+    { signal },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.json();
+}
+
 export async function revalidateUserModel(modelId) {
   const res = await authedFetch(`${BASE}/user-models/${modelId}/validate`, {
     method: 'POST',

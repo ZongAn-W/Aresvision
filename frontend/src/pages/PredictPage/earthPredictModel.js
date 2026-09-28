@@ -200,10 +200,92 @@ export function isEarthTask(task) {
 /**
  * Earth 预测可用的任务：已完成、权重可用，且身份是 Earth。
  *
- * 与火星选择器分开实现，避免 Earth 任务漏进火星下拉（或反向污染）。
+ * 与火星选择器分开实现，避免 Earth 任务漏进火星下拉（或反向污染）。选项标签带上
+ * 模型来源，让「官方 DLinear」与「上传模型」在历史里可区分。
  */
 export function getEarthTrainingModelOptions(tasks = []) {
   return (Array.isArray(tasks) ? tasks : [])
     .filter((task) => task?.status === 'completed' && task?.model_available === true && isEarthTask(task))
-    .map((task) => ({ id: Number(task.id), label: task.custom_model_name || `Task #${task.id}`, task }));
+    .map((task) => {
+      const base = task.custom_model_name || `Task #${task.id}`;
+      const identity = readEarthTaskModelIdentity(task);
+      return {
+        id: Number(task.id),
+        label: identity.uploadedModelName ? `${base} · ${identity.uploadedModelName}` : base,
+        task,
+        modelSource: identity.modelSource,
+      };
+    });
+}
+
+/**
+ * 从训练任务读取模型来源与上传模型身份。
+ *
+ * 训练记录由服务端固定写入（`_uploaded_model_*`），这里只读展示；缺失时按官方
+ * DLinear 处理，保持旧任务（无上传字段）仍可被识别与预测。
+ */
+export function readEarthTaskModelIdentity(task) {
+  const hyperparameters = task?.hyperparameters || {};
+  const modelSource = String(
+    hyperparameters.model_source || task?.model_source || 'official',
+  ).toLowerCase() === 'uploaded'
+    ? 'uploaded'
+    : 'official';
+  const uploadedModelId = hyperparameters._uploaded_model_id || task?.uploaded_model_id || null;
+  return {
+    modelSource,
+    uploaded: modelSource === 'uploaded',
+    uploadedModelId: uploadedModelId ? String(uploadedModelId) : null,
+    uploadedModelName: hyperparameters._uploaded_model_name || null,
+    uploadedModelVersion: hyperparameters._uploaded_model_version ?? task?.uploaded_model_version ?? null,
+    uploadedModelContentHash: hyperparameters._uploaded_model_content_hash || null,
+    customModelParams: hyperparameters.custom_model_params || {},
+  };
+}
+
+/** 预测结果里的模型身份（服务端在 /predict 与 /context 都会返回）。 */
+export function readEarthResponseModelIdentity(response) {
+  const identity = response?.model && typeof response.model === 'object' ? response.model : null;
+  if (!identity) {
+    const architecture = response?.model_architecture || null;
+    return {
+      known: Boolean(architecture),
+      modelSource: architecture === 'uploaded' ? 'uploaded' : 'official',
+      uploaded: architecture === 'uploaded',
+      uploadedModelId: null,
+      uploadedModelName: null,
+      uploadedModelVersion: null,
+      uploadedModelContentHash: null,
+    };
+  }
+  const modelSource = String(identity.model_source || 'official').toLowerCase() === 'uploaded'
+    ? 'uploaded'
+    : 'official';
+  return {
+    known: true,
+    modelSource,
+    uploaded: modelSource === 'uploaded',
+    uploadedModelId: identity.uploaded_model_id || null,
+    uploadedModelName: identity.uploaded_model_name || null,
+    uploadedModelVersion: identity.uploaded_model_version ?? null,
+    uploadedModelContentHash: identity.uploaded_model_content_hash || null,
+    sourceEmbedded: identity.uploaded_model_source_embedded === true,
+  };
+}
+
+/** 一句话描述预测所用模型；上传模型带名称、版本与指纹前缀。 */
+export function describeEarthModelIdentity(identity, labels = {}) {
+  if (!identity) return '';
+  if (!identity.uploaded) {
+    return labels.official || 'DLinear (official)';
+  }
+  const parts = [identity.uploadedModelName || labels.uploadedFallback || 'Uploaded model'];
+  if (identity.uploadedModelVersion !== null && identity.uploadedModelVersion !== undefined) {
+    parts.push(`v${identity.uploadedModelVersion}`);
+  }
+  const description = parts.join(' ');
+  const hash = identity.uploadedModelContentHash
+    ? String(identity.uploadedModelContentHash).slice(0, 12)
+    : '';
+  return hash ? `${description} · ${hash}` : description;
 }

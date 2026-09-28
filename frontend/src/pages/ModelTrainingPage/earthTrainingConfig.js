@@ -18,8 +18,13 @@ import {
 
 export const EARTH_DATASET_ID = TRAINING_DATASET_EARTH_MERRA2_V2;
 export const EARTH_MODEL_ARCHITECTURE = 'dlinear';
-/** Earth 首期只允许官方模型来源；切换数据集时用它显式设置来源。 */
-export const EARTH_MODEL_SOURCE = 'official';
+/** 上传模型的架构标记；真正的代码由服务端固定的模型引用决定。 */
+export const EARTH_UPLOADED_ARCHITECTURE = 'uploaded';
+/** Earth 支持两种模型来源：官方 DLinear 与用户上传模型。 */
+export const EARTH_MODEL_SOURCE_OFFICIAL = 'official';
+export const EARTH_MODEL_SOURCE_UPLOADED = 'uploaded';
+export const EARTH_MODEL_SOURCES = [EARTH_MODEL_SOURCE_OFFICIAL, EARTH_MODEL_SOURCE_UPLOADED];
+export const EARTH_MODEL_SOURCE = EARTH_MODEL_SOURCE_OFFICIAL;
 export const EARTH_WINDOW = 7;
 export const EARTH_HORIZON = 3;
 export const EARTH_TARGET_CHANNEL = 'TO3';
@@ -70,7 +75,9 @@ export function getEarthChannelOptions() {
  * 构造 Earth 训练超参数。
  *
  * 只发送服务端白名单字段：不发送 dataset_version / dataset_fingerprint /
- * dataset_snapshot（由服务端生成），也不发送迁移或上传模型字段。
+ * dataset_snapshot（由服务端生成），也不发送迁移字段。选择上传模型时只发送
+ * `model_source` 与自定义参数值；模型 ID/版本/内容哈希与快照由服务端根据
+ * 上传记录生成并固定。
  */
 export function buildEarthTrainingHyperparameters({
   selectedChannels = EARTH_OPTIONAL_CHANNELS,
@@ -80,11 +87,14 @@ export function buildEarthTrainingHyperparameters({
   seed,
   earlyStoppingPatience,
   linearHiddenLayers,
+  modelSource = EARTH_MODEL_SOURCE_OFFICIAL,
+  customModelParams = null,
 } = {}) {
+  const uploaded = modelSource === EARTH_MODEL_SOURCE_UPLOADED;
   const hyperparameters = {
     training_dataset: EARTH_DATASET_ID,
-    model_architecture: EARTH_MODEL_ARCHITECTURE,
-    model_source: 'official',
+    model_architecture: uploaded ? EARTH_UPLOADED_ARCHITECTURE : EARTH_MODEL_ARCHITECTURE,
+    model_source: uploaded ? EARTH_MODEL_SOURCE_UPLOADED : EARTH_MODEL_SOURCE_OFFICIAL,
     window: EARTH_WINDOW,
     horizon: EARTH_HORIZON,
     use_sphere: false,
@@ -96,14 +106,53 @@ export function buildEarthTrainingHyperparameters({
     learning_rate: sanitizePositiveNumber(learningRate, 0.001, 0.000001, 1),
     seed: sanitizeNonNegativeInteger(seed, EARTH_PARAM_BOUNDS.seed.fallback, EARTH_PARAM_BOUNDS.seed.max),
     early_stopping_patience: sanitizeNonNegativeInteger(earlyStoppingPatience, 0, EARTH_PARAM_BOUNDS.early_stopping_patience.max),
-    linear_hidden_layers: sanitizePositiveInteger(
+  };
+  if (uploaded) {
+    // 官方模型没有 linear_hidden_layers 这个开关；上传模型由源码自己决定结构。
+    hyperparameters.custom_model_params = customModelParams && typeof customModelParams === 'object'
+      ? { ...customModelParams }
+      : {};
+  } else {
+    hyperparameters.linear_hidden_layers = sanitizePositiveInteger(
       linearHiddenLayers,
       EARTH_PARAM_BOUNDS.linear_hidden_layers.fallback,
       EARTH_PARAM_BOUNDS.linear_hidden_layers.min,
       EARTH_PARAM_BOUNDS.linear_hidden_layers.max,
-    ),
-  };
+    );
+  }
   return hyperparameters;
+}
+
+/**
+ * 读取某个上传模型的 Earth 兼容性结论。
+ *
+ * 结论来自服务端（上传校验时的 Earth dry-run），前端只负责展示：Mars 可用不等于
+ * Earth 可用，缺少结论一律按不可用处理并说明原因。
+ */
+export function readEarthUploadedModelCompatibility(compatibility) {
+  if (!compatibility || typeof compatibility !== 'object') {
+    return { known: false, compatible: false, reason: 'earth_compatibility_unknown' };
+  }
+  const reasons = Array.isArray(compatibility.reasons) ? compatibility.reasons.filter(Boolean) : [];
+  return {
+    known: true,
+    compatible: compatibility.compatible === true,
+    reason: reasons[0] || null,
+    reasons,
+    warnings: Array.isArray(compatibility.warnings) ? compatibility.warnings : [],
+    outputShape: Array.isArray(compatibility.output_shape) ? compatibility.output_shape : null,
+    declaresEarthFeed: compatibility.declares_earth_feed === true,
+  };
+}
+
+/** 当前选中的上传模型是否可用于 Earth 训练；返回阻塞原因。 */
+export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId, compatibility } = {}) {
+  if (modelSource !== EARTH_MODEL_SOURCE_UPLOADED) return null;
+  if (!uploadedModelId) return 'uploaded_model_required';
+  const verdict = readEarthUploadedModelCompatibility(compatibility);
+  if (!verdict.known) return 'earth_compatibility_unknown';
+  if (!verdict.compatible) return verdict.reason || 'uploaded_model_not_earth_compatible';
+  return null;
 }
 
 /**
@@ -179,23 +228,30 @@ export function getEarthTrainingReadiness({
 }
 
 /**
- * Mars 表单快照：切到 Earth 时保存、切回时恢复。
+ * 场景草稿快照：切走时保存、切回时恢复。
  *
- * 只保存会被 Earth 覆盖的字段，避免把整页状态复制出第二份真相。
+ * Earth 与火星各自保留完整草稿（含上传模型选择与自定义参数），因此两个场景的
+ * 配置不会互相覆盖。
  */
-export function captureMarsTrainingSnapshot(values) {
+export function captureTrainingDraft(values) {
   return {
     trainingDataset: values.trainingDataset,
     modelSource: values.modelSource,
-    selectedUploadedModelId: values.selectedUploadedModelId,
+    selectedUploadedModelId: values.selectedUploadedModelId || '',
     modelArchitecture: values.modelArchitecture,
-    useSphere: values.useSphere,
+    useSphere: Boolean(values.useSphere),
     windowValue: values.windowValue,
     horizon: values.horizon,
-    transferEnabled: values.transferEnabled,
+    transferEnabled: Boolean(values.transferEnabled),
     selectedChannels: Array.isArray(values.selectedChannels) ? [...values.selectedChannels] : [],
+    customModelParams: values.customModelParams && typeof values.customModelParams === 'object'
+      ? { ...values.customModelParams }
+      : {},
   };
 }
+
+/** 兼容旧命名：火星草稿就是通用草稿。 */
+export const captureMarsTrainingSnapshot = captureTrainingDraft;
 
 /**
  * Earth 生效时的表单覆盖值。
@@ -206,7 +262,7 @@ export function captureMarsTrainingSnapshot(values) {
 export function applyEarthTrainingDefaults({ storedMarsSnapshot = null } = {}) {
   return {
     trainingDataset: EARTH_DATASET_ID,
-    modelSource: 'official',
+    modelSource: EARTH_MODEL_SOURCE_OFFICIAL,
     selectedUploadedModelId: '',
     modelArchitecture: EARTH_MODEL_ARCHITECTURE,
     useSphere: false,
@@ -214,11 +270,36 @@ export function applyEarthTrainingDefaults({ storedMarsSnapshot = null } = {}) {
     horizon: EARTH_HORIZON,
     transferEnabled: false,
     selectedChannels: [...EARTH_OPTIONAL_CHANNELS],
+    customModelParams: {},
     storedMarsSnapshot,
   };
 }
 
-/** 从 Earth 切回 Mars 时恢复的字段；没有快照则回到页面默认值。 */
+/** 从火星切到 Earth 时恢复的 Earth 草稿；没有草稿则回到 Earth 默认值。 */
+export function resolveEarthTrainingRestore(snapshot) {
+  if (!snapshot) return null;
+  const modelSource = EARTH_MODEL_SOURCES.includes(snapshot.modelSource)
+    ? snapshot.modelSource
+    : EARTH_MODEL_SOURCE_OFFICIAL;
+  return {
+    trainingDataset: EARTH_DATASET_ID,
+    modelSource,
+    selectedUploadedModelId: snapshot.selectedUploadedModelId || '',
+    modelArchitecture: modelSource === EARTH_MODEL_SOURCE_UPLOADED
+      ? EARTH_UPLOADED_ARCHITECTURE
+      : EARTH_MODEL_ARCHITECTURE,
+    useSphere: false,
+    windowValue: EARTH_WINDOW,
+    horizon: EARTH_HORIZON,
+    transferEnabled: false,
+    selectedChannels: normalizeEarthSelectedChannels(snapshot.selectedChannels),
+    customModelParams: snapshot.customModelParams && typeof snapshot.customModelParams === 'object'
+      ? { ...snapshot.customModelParams }
+      : {},
+  };
+}
+
+/** 从 Earth 切回火星时恢复的字段；没有快照则回到页面默认值。 */
 export function resolveMarsTrainingRestore(snapshot) {
   if (!snapshot) return null;
   return {
@@ -231,5 +312,8 @@ export function resolveMarsTrainingRestore(snapshot) {
     horizon: snapshot.horizon,
     transferEnabled: Boolean(snapshot.transferEnabled),
     selectedChannels: Array.isArray(snapshot.selectedChannels) ? [...snapshot.selectedChannels] : [],
+    customModelParams: snapshot.customModelParams && typeof snapshot.customModelParams === 'object'
+      ? { ...snapshot.customModelParams }
+      : {},
   };
 }

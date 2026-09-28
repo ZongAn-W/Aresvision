@@ -74,12 +74,26 @@ def _normalize_validation_report(value: str | None) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         parsed = {}
 
-    return {
+    report: dict[str, Any] = {
         "ok": parsed.get("ok") if isinstance(parsed.get("ok"), bool) else False,
         "errors": _normalize_string_list(parsed.get("errors")),
         "warnings": _normalize_string_list(parsed.get("warnings")),
         "output_shape": _normalize_output_shape(parsed.get("output_shape")),
     }
+    # The Earth capability result is part of the upload contract now, so it must
+    # survive serialization; the training page reads it before offering the model
+    # for an Earth experiment. It is only published when the model opted in.
+    datasets = parsed.get("datasets")
+    if isinstance(datasets, dict) and datasets:
+        report["datasets"] = datasets
+    earth = parsed.get("earth")
+    if isinstance(earth, dict):
+        report["earth"] = {
+            "compatible": earth.get("compatible") if isinstance(earth.get("compatible"), bool) else False,
+            "errors": _normalize_string_list(earth.get("errors")),
+            "output_shape": _normalize_output_shape(earth.get("output_shape")),
+        }
+    return report
 
 
 def _serialize_package(package: UserModelPackage) -> UserModelPackageResponse:
@@ -155,6 +169,25 @@ async def get_user_model(
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     return _serialize_package(package)
+
+
+@router.get("/{model_id}/earth-compatibility")
+async def get_user_model_earth_compatibility(
+    model_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """Whether this uploaded model may be trained on Earth MERRA-2 data.
+
+    A model validated for Mars is not automatically usable on Earth, so the
+    training page asks this before offering the model for an Earth experiment.
+    """
+    try:
+        return await _service(request).get_earth_compatibility(model_id, current_user.id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @router.post("/{model_id}/validate", response_model=UserModelPackageResponse)

@@ -171,7 +171,7 @@ def test_cpu_round_trip_reproduces_the_standardized_output(earth_global_release,
         expected_task_id=11,
         expected_hyperparameters={"selected_channels": list(order[1:])},
     )
-    model = build_earth_model_from_checkpoint(checkpoint)
+    model, _warnings = build_earth_model_from_checkpoint(checkpoint)
     inputs = torch.randn(2, 7, len(order), 36, 72)
     original = prepared["model"]
     original.eval()
@@ -197,7 +197,7 @@ def test_du_output_is_identical_after_reload(earth_global_release, tmp_path):
     target = tmp_path / "task_11_earth.pth"
     save_earth_artifact_atomic(prepared["payload"], target)
     checkpoint = load_earth_training_artifact(target, expected_binding=prepared["binding"], expected_task_id=11)
-    model = build_earth_model_from_checkpoint(checkpoint)
+    model, _warnings = build_earth_model_from_checkpoint(checkpoint)
     inputs = torch.randn(3, 7, 2, 36, 72)
     mean = checkpoint.normalization["mean"][0]
     scale = checkpoint.normalization["scale"][0]
@@ -234,9 +234,9 @@ def test_reference_output_is_reproducible_from_the_checkpoint_alone(earth_global
     target = tmp_path / "task_11_earth.pth"
     save_earth_artifact_atomic(prepared["payload"], target)
     checkpoint = load_earth_training_artifact(target)
-    rebuilt = build_earth_model_from_checkpoint(checkpoint)
+    rebuilt, _warnings = build_earth_model_from_checkpoint(checkpoint)
     rebuilt.eval()
-    rebuilt_again = build_earth_model_from_checkpoint(checkpoint)
+    rebuilt_again, _warnings = build_earth_model_from_checkpoint(checkpoint)
     rebuilt_again.eval()
     inputs = torch.randn(1, 7, 2, 36, 72)
     with torch.no_grad():

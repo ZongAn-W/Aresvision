@@ -24,9 +24,9 @@ export function getTrainingStatusMeta(status, t) {
   if (status === 'running') {
     return {
       label: t('modelTraining.statusRunning'),
-      color: C.mars,
-      tint: 'rgba(199, 91, 57, 0.12)',
-      border: 'rgba(199, 91, 57, 0.20)',
+      color: '#79bbdf',
+      tint: 'rgba(121, 187, 223, 0.12)',
+      border: 'rgba(121, 187, 223, 0.26)',
     };
   }
   if (status === 'pending') {

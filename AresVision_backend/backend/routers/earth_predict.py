@@ -109,6 +109,8 @@ async def get_earth_predict_context(
         "training_split_end": context.training_split_end,
         "metrics": context.metrics,
         "run": context.run,
+        "model": context.model,
+        "warnings": context.warnings,
     }
 
 

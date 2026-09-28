@@ -47,6 +47,16 @@ from services.earth_training_contract import (
     EARTH_TARGET_UNIT,
     EARTH_WINDOW,
 )
+from services.earth_model_source import (
+    MODEL_SOURCE_OFFICIAL,
+    MODEL_SOURCE_UPLOADED,
+    EarthModelBuildError,
+    earth_forward_for_model,
+)
+from services.uploaded_model_source import (
+    UploadedModelSourceError,
+    verify_reference_source,
+)
 
 ORIGIN_OUT_OF_RANGE = "earth_prediction_origin_out_of_range"
 ORIGIN_INVALID = "invalid_earth_prediction_origin"
@@ -78,6 +88,10 @@ class EarthPredictionContext:
     metrics: dict
     run: dict
     training_split_end: Optional[str] = field(default=None)
+    #: Identity of the trained model (official DLinear or a pinned uploaded model).
+    model: dict = field(default_factory=dict)
+    #: Warnings raised while rebuilding the model, e.g. the uploaded file is gone.
+    warnings: list[str] = field(default_factory=list)
 
 
 def _task_binding(task: Any) -> dict:
@@ -167,7 +181,7 @@ def _sync_release(registry: DatasetRegistry, binding: Mapping[str, Any]):
 
 
 def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredictionContext:
-    """Return the selectable origins, grid, units and trained metrics."""
+    """Return the selectable origins, grid, units, model identity and metrics."""
     _require_completed_earth_task(task)
     checkpoint = _load_checkpoint(task)
     release = _sync_release(registry, checkpoint.dataset_binding)
@@ -182,6 +196,10 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
     snapshot = checkpoint.dataset_binding.get("dataset_snapshot") or {}
     published_splits = snapshot.get("splits") or {}
     training_end = (published_splits.get("train") or {}).get("end")
+    # Report the uploaded model's file state without failing the context call: the
+    # page must be able to explain that the original file is gone even though the
+    # checkpoint can still rebuild the model from its embedded copy.
+    warnings = _model_source_warnings(checkpoint)
     return EarthPredictionContext(
         task_id=int(getattr(task, "id", 0) or 0),
         dataset_id=checkpoint.dataset_binding["dataset_id"],
@@ -214,7 +232,30 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
             ),
         },
         training_split_end=str(training_end) if training_end else None,
+        model=checkpoint.model_identity(),
+        warnings=warnings,
     )
+
+
+def _model_source_warnings(checkpoint: Any) -> list[str]:
+    """Describe the uploaded model file state for the prediction page."""
+    if checkpoint.model_source != MODEL_SOURCE_UPLOADED:
+        return []
+    reference = checkpoint.uploaded_model or {}
+    report = verify_reference_source(reference)
+    if report["status"] == "available":
+        return []
+    if report["status"] == "missing":
+        return [
+            "the original uploaded model file is unavailable; prediction uses the "
+            "verified copy stored inside the checkpoint"
+        ]
+    if report["status"] == "tampered":
+        return [
+            f"the uploaded model file no longer matches the trained version ({report['detail']}); "
+            "prediction will use the verified copy stored inside the checkpoint"
+        ]
+    return [f"the uploaded model file state is unknown: {report['detail']}"]
 
 
 def _origin_index(release, origin: Any, window: int, horizon: int) -> int:
@@ -280,11 +321,21 @@ def run_earth_prediction(
     resolved_device = torch.device(device) if device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
-    model = build_earth_model_from_checkpoint(checkpoint).to(resolved_device)
+    try:
+        model, model_warnings = build_earth_model_from_checkpoint(checkpoint)
+    except (EarthArtifactError, EarthModelBuildError, UploadedModelSourceError) as exc:
+        raise DatasetRequestError(
+            getattr(exc, "code", "invalid_earth_training_artifact"),
+            str(exc),
+            status_code=409,
+        ) from exc
+    model = model.to(resolved_device)
     with torch.no_grad():
-        output = model(
+        output = earth_forward_for_model(
+            model,
             torch.from_numpy(inputs).to(resolved_device),
-            torch.zeros((1, window), device=resolved_device),
+            model_source=checkpoint.model_source,
+            horizon=horizon,
         )
     if not torch.isfinite(output).all():
         raise DatasetRequestError(
@@ -320,6 +371,7 @@ def run_earth_prediction(
 
     snapshot = checkpoint.dataset_binding.get("dataset_snapshot") or {}
     published_grid = snapshot.get("grid") or {}
+    identity = checkpoint.model_identity()
     return {
         "planet": "earth",
         "task_id": int(getattr(task, "id", 0) or 0),
@@ -328,7 +380,10 @@ def run_earth_prediction(
         "dataset_fingerprint": checkpoint.dataset_binding["dataset_fingerprint"],
         "target": TARGET_CHANNEL,
         "target_unit": EARTH_TARGET_UNIT,
-        "model_architecture": checkpoint.model_config.get("architecture"),
+        "model_architecture": identity.get("model_architecture"),
+        "model_source": identity.get("model_source"),
+        "model": identity,
+        "warnings": list(model_warnings),
         "input_channel_order": order,
         "input_units": list(contract.get("input_units") or []),
         "forecast_origin": origin_date,

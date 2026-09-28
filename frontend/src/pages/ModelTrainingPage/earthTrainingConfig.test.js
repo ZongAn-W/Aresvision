@@ -5,18 +5,23 @@ import {
   EARTH_CHANNEL_ORDER,
   EARTH_DATASET_ID,
   EARTH_HORIZON,
+  EARTH_MODEL_ARCHITECTURE,
+  EARTH_MODEL_SOURCE_OFFICIAL,
   EARTH_OPTIONAL_CHANNELS,
   EARTH_WINDOW,
   applyEarthTrainingDefaults,
   buildEarthTrainingHyperparameters,
-  captureMarsTrainingSnapshot,
+  captureTrainingDraft,
   describeEarthInputUnits,
   describeEarthSplitSamples,
+  getEarthTrainingReadiness,
+  getEarthUploadedSelectionBlocker,
   isEarthTrainingDataset,
   normalizeEarthSelectedChannels,
   readEarthDatasetAvailability,
+  readEarthUploadedModelCompatibility,
+  resolveEarthTrainingRestore,
   resolveMarsTrainingRestore,
-  getEarthTrainingReadiness,
 } from './earthTrainingConfig.js';
 import { sanitizeTrainingDataset } from './trainingParamSanitizers.js';
 
@@ -157,7 +162,7 @@ test('readiness blocks unavailable data, missing name and out-of-range values', 
     .forEach((code) => assert.ok(blocked.blockers.includes(code), `${code} should block`));
 });
 
-test('switching to Earth stores the Mars form and switching back restores it', () => {
+test('switching to Earth keeps each scene draft and restores it on the way back', () => {
   const marsValues = {
     trainingDataset: 'mcd_overview',
     modelSource: 'uploaded',
@@ -168,25 +173,144 @@ test('switching to Earth stores the Mars form and switching back restores it', (
     horizon: 4,
     transferEnabled: true,
     selectedChannels: ['U', 'T'],
+    customModelParams: { hidden_dim: 32 },
   };
-  const snapshot = captureMarsTrainingSnapshot(marsValues);
-  const earth = applyEarthTrainingDefaults({ storedMarsSnapshot: snapshot });
+  const marsDraft = captureTrainingDraft(marsValues);
+  const earth = applyEarthTrainingDefaults({ storedMarsSnapshot: marsDraft });
 
-  // Earth 生效值必须覆盖火星字段（快照只保存、不应用）。
+  // Earth 生效值必须覆盖火星字段（草稿只保存、不应用）。
   assert.equal(earth.trainingDataset, EARTH_DATASET_ID);
-  assert.equal(earth.modelSource, 'official');
-  assert.equal(earth.modelArchitecture, 'dlinear');
+  assert.equal(earth.modelSource, EARTH_MODEL_SOURCE_OFFICIAL);
+  assert.equal(earth.modelArchitecture, EARTH_MODEL_ARCHITECTURE);
   assert.equal(earth.useSphere, false);
   assert.equal(earth.windowValue, EARTH_WINDOW);
   assert.equal(earth.horizon, EARTH_HORIZON);
   assert.equal(earth.transferEnabled, false);
   assert.equal(earth.selectedUploadedModelId, '');
   assert.deepEqual(earth.selectedChannels, EARTH_OPTIONAL_CHANNELS);
-  assert.deepEqual(earth.storedMarsSnapshot, snapshot);
+  assert.deepEqual(earth.customModelParams, {});
+  assert.deepEqual(earth.storedMarsSnapshot, marsDraft);
 
-  // 切回火星恢复原值，避免 Earth 通道流入火星请求。
-  assert.deepEqual(resolveMarsTrainingRestore(snapshot), marsValues);
+  // 切回火星恢复原值，包括上传模型与自定义参数，避免 Earth 通道流入火星请求。
+  const restored = resolveMarsTrainingRestore(marsDraft);
+  assert.equal(restored.trainingDataset, 'mcd_overview');
+  assert.equal(restored.modelSource, 'uploaded');
+  assert.equal(restored.selectedUploadedModelId, 'model-1');
+  assert.deepEqual(restored.customModelParams, { hidden_dim: 32 });
+  assert.deepEqual(restored.selectedChannels, ['U', 'T']);
   assert.equal(resolveMarsTrainingRestore(null), null);
+});
+
+test('Earth keeps its own draft when returning from Mars', () => {
+  const earthDraft = captureTrainingDraft({
+    trainingDataset: EARTH_DATASET_ID,
+    modelSource: 'uploaded',
+    selectedUploadedModelId: 'earth-model-9',
+    modelArchitecture: 'uploaded',
+    selectedChannels: ['T2M'],
+    customModelParams: { hidden_dim: 24 },
+  });
+  const restored = resolveEarthTrainingRestore(earthDraft);
+  // Earth 的固定契约始终生效，即使草稿声明了别的值。
+  assert.equal(restored.trainingDataset, EARTH_DATASET_ID);
+  assert.equal(restored.windowValue, EARTH_WINDOW);
+  assert.equal(restored.horizon, EARTH_HORIZON);
+  assert.equal(restored.useSphere, false);
+  assert.equal(restored.transferEnabled, false);
+  // 草稿里的上传模型与参数被保留，不退回官方默认。
+  assert.equal(restored.modelSource, 'uploaded');
+  assert.equal(restored.modelArchitecture, 'uploaded');
+  assert.equal(restored.selectedUploadedModelId, 'earth-model-9');
+  assert.deepEqual(restored.customModelParams, { hidden_dim: 24 });
+  assert.deepEqual(restored.selectedChannels, ['T2M']);
+});
+
+test('an unknown model source in a draft falls back to official, never to uploaded', () => {
+  assert.equal(resolveEarthTrainingRestore(null), null);
+  const restored = resolveEarthTrainingRestore({
+    modelSource: 'carrier-pigeon',
+    selectedUploadedModelId: 'should-not-stay-uploaded',
+  });
+  assert.equal(restored.modelSource, 'official');
+  assert.equal(restored.modelArchitecture, EARTH_MODEL_ARCHITECTURE);
+
+  const defaults = applyEarthTrainingDefaults({});
+  assert.equal(defaults.modelSource, EARTH_MODEL_SOURCE_OFFICIAL);
+  assert.equal(defaults.modelArchitecture, EARTH_MODEL_ARCHITECTURE);
+});
+
+test('Earth uploaded payload pins the source and sends only custom parameter values', () => {
+  const uploaded = buildEarthTrainingHyperparameters({
+    modelSource: 'uploaded',
+    customModelParams: { hidden_dim: 16, dropout: 0 },
+    selectedChannels: ['T2M'],
+  });
+  assert.equal(uploaded.model_source, 'uploaded');
+  assert.equal(uploaded.model_architecture, 'uploaded');
+  assert.deepEqual(uploaded.custom_model_params, { hidden_dim: 16, dropout: 0 });
+  // 上传模型的结构由源码决定：不发送官方 DLinear 的线性层数开关。
+  assert.equal(Object.hasOwn(uploaded, 'linear_hidden_layers'), false);
+  // 身份字段永远由服务端生成。
+  ['dataset_version', 'dataset_fingerprint', 'dataset_snapshot', '_uploaded_model_path', '_uploaded_model_id']
+    .forEach((key) => assert.equal(Object.hasOwn(uploaded, key), false, `${key} must not be sent`));
+
+  const official = buildEarthTrainingHyperparameters({ modelSource: 'official', linearHiddenLayers: 3 });
+  assert.equal(official.model_source, 'official');
+  assert.equal(official.model_architecture, 'dlinear');
+  assert.equal(official.linear_hidden_layers, 3);
+  assert.equal(Object.hasOwn(official, 'custom_model_params'), false);
+});
+
+test('uploaded Earth compatibility is read from the server verdict, not inferred', () => {
+  assert.deepEqual(readEarthUploadedModelCompatibility(null), {
+    known: false,
+    compatible: false,
+    reason: 'earth_compatibility_unknown',
+  });
+
+  const compatible = readEarthUploadedModelCompatibility({
+    compatible: true,
+    reasons: [],
+    warnings: [],
+    output_shape: [1, 3, 1, 36, 72],
+    declares_earth_feed: true,
+  });
+  assert.equal(compatible.known, true);
+  assert.equal(compatible.compatible, true);
+  assert.deepEqual(compatible.outputShape, [1, 3, 1, 36, 72]);
+
+  const incompatible = readEarthUploadedModelCompatibility({
+    compatible: false,
+    reasons: ['MODEL_SPEC does not declare the earth_merra2 dataset feed'],
+  });
+  assert.equal(incompatible.compatible, false);
+  assert.match(incompatible.reason, /does not declare/);
+});
+
+test('the Earth uploaded gate blocks missing, unverified and incompatible models', () => {
+  assert.equal(getEarthUploadedSelectionBlocker({ modelSource: 'official' }), null);
+  assert.equal(
+    getEarthUploadedSelectionBlocker({ modelSource: 'uploaded', uploadedModelId: '' }),
+    'uploaded_model_required',
+  );
+  assert.equal(
+    getEarthUploadedSelectionBlocker({ modelSource: 'uploaded', uploadedModelId: 'm1' }),
+    'earth_compatibility_unknown',
+  );
+  assert.equal(
+    getEarthUploadedSelectionBlocker({
+      modelSource: 'uploaded', uploadedModelId: 'm1',
+      compatibility: { compatible: false, reasons: ['grid mismatch'] },
+    }),
+    'grid mismatch',
+  );
+  assert.equal(
+    getEarthUploadedSelectionBlocker({
+      modelSource: 'uploaded', uploadedModelId: 'm1',
+      compatibility: { compatible: true, reasons: [] },
+    }),
+    null,
+  );
 });
 
 test('the shared sanitizer keeps Earth out of Mars requests unless Earth is allowed', () => {

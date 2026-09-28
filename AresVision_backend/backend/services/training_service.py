@@ -48,6 +48,15 @@ from services.earth_training_contract import (
     is_earth_dataset_id,
     require_earth_training_configuration,
 )
+from services.uploaded_model_source import (
+    UploadedModelSourceError,
+    build_reference,
+    resolve_source_text_strict,
+)
+from services.user_model_validator import UserModelValidator
+from training_backbones.uploaded_model_earth_gate import (
+    evaluate_package_earth_compatibility,
+)
 from services.personal_data_source_service import PersonalDataSourceService
 from services.model_artifacts import is_valid_model_weight_file
 from services.training_failures import CUDA_OOM_ERROR_CODE, classify_training_log
@@ -103,6 +112,18 @@ def _task_was_stopped(raw_metrics: Any) -> bool:
 
 
 class TrainingService:
+    def __init__(self, earth_model_validator: Any | None = None):
+        # The uploaded-model EARTH compatibility dry-run is the same one the upload
+        # page runs, so it is shared rather than reimplemented. Injected in tests.
+        self._earth_model_validator = earth_model_validator
+
+    def _earth_validator(self) -> Any:
+        if self._earth_model_validator is None:
+            from training_backbones.uploaded_model_earth_gate import build_validator
+
+            self._earth_model_validator = build_validator()
+        return self._earth_model_validator
+
     def get_available_scripts(self) -> list[str]:
         script_path = MODELS_DIR / UNIFIED_TRAINING_SCRIPT
         if not script_path.exists():
@@ -138,6 +159,9 @@ class TrainingService:
         # uploaded package load or subprocess scheduling happens.
         resolved_dataset_id = resolve_dataset_id(dataset_id, hyperparameters or {})
         earth_training = is_earth_dataset_id(resolved_dataset_id)
+        earth_source = model_source if earth_training else "official"
+        earth_reference: dict | None = None
+        earth_model_warnings: list[str] = []
         if not earth_training:
             # The Mars runners keep rejecting Earth identities; Earth has its own
             # preparation and training path below.
@@ -145,11 +169,11 @@ class TrainingService:
         registry = dataset_registry or DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2", legacy_earth_package_dir=EARTH_MERRA2_V1_DIR)
         dataset_binding = registry.build_training_binding(resolved_dataset_id)
         if earth_training:
-            # Reject unsupported Earth configurations (uploaded model, SPHERE,
-            # transfer learning, wrong architecture) and validate the strict
+            # Reject unsupported Earth configurations (SPHERE, transfer learning,
+            # wrong architecture, missing/extra uploaded id) and validate the strict
             # parameter contract before the task row exists.
             require_earth_training_configuration(
-                model_source=model_source,
+                model_source=earth_source,
                 uploaded_model_id=uploaded_model_id,
                 hyperparameters=hyperparameters or {},
             )
@@ -167,6 +191,15 @@ class TrainingService:
         if earth_training:
             # Earth runs its own server-side script; the client never picks it.
             model_script, raw_hypers = EARTH_TRAINING_SCRIPT, dict(hyperparameters or {})
+            if earth_source == "uploaded":
+                # Resolve the uploaded model now and keep the pinned reference, so a
+                # later upload by the same user cannot change this task's code.
+                earth_reference, earth_model_warnings = await self._resolve_earth_uploaded_model(
+                    user_id=user_id,
+                    uploaded_model_id=uploaded_model_id,
+                    user_model_service=user_model_service,
+                    custom_model_params=(hyperparameters or {}).get("custom_model_params"),
+                )
         elif model_source == "uploaded":
             model_script, raw_hypers = await self._resolve_uploaded_training_entrypoint(
                 user_id=user_id,
@@ -220,6 +253,16 @@ class TrainingService:
         payload_hypers.pop("tag_ids", None)
         payload_hypers.pop("tags", None)
         payload_hypers["_data_source"] = source
+        if earth_training and earth_reference is not None:
+            # Record the pinned uploaded model identity on the task so history,
+            # copy-config and prediction can all name the exact trained model. The
+            # values come from the server-resolved package, never from the request.
+            payload_hypers["_uploaded_model_id"] = earth_reference.package_id
+            payload_hypers["_uploaded_model_version"] = earth_reference.version
+            payload_hypers["_uploaded_model_content_hash"] = earth_reference.content_hash
+            payload_hypers["_uploaded_model_name"] = earth_reference.display_name
+            payload_hypers["_uploaded_model_param_schema"] = dict(earth_reference.param_schema)
+            payload_hypers["custom_model_params"] = dict(earth_reference.custom_model_params)
         if earth_training:
             # Earth has no transfer source; the parameter contract already rejects it.
             transfer_env_overrides = {}
@@ -282,7 +325,22 @@ class TrainingService:
                         for key, value in payload_hypers.items()
                         if not key.startswith("_")
                     },
+                    uploaded_model=(
+                        earth_reference.checkpoint_reference()
+                        if earth_reference is not None
+                        else None
+                    ),
                 )
+                if earth_reference is not None:
+                    # The child never reads the user's current upload; it gets the
+                    # pinned source through this server-side channel only.
+                    logger.info(
+                        "Earth task %s pinned uploaded model %s v%s (%s…)",
+                        task_id,
+                        earth_reference.package_id,
+                        earth_reference.version,
+                        earth_reference.content_hash[:12],
+                    )
 
             await session.commit()
             logger.info(
@@ -330,6 +388,97 @@ class TrainingService:
         }
         payload["model_source"] = "official"
         return UNIFIED_TRAINING_SCRIPT, payload
+
+    async def _resolve_earth_uploaded_model(
+        self,
+        *,
+        user_id: int | None,
+        uploaded_model_id: Any,
+        user_model_service: Any | None,
+        custom_model_params: Any,
+    ) -> tuple[dict, list[str]]:
+        """Pin one uploaded model for an Earth run.
+
+        Returns ``(reference, warnings)`` where the reference carries the package
+        identity, the verified parameter schema, the validated custom parameters and
+        the hash-verified source text. Everything is captured now, so the task keeps
+        training exactly this code even if the user uploads a newer version later.
+        """
+        if user_id is None:
+            raise ValueError("user_id is required for uploaded model training")
+        if not uploaded_model_id:
+            raise DatasetRequestError(
+                "invalid_earth_training_parameters",
+                "uploaded_model_id is required when model_source is 'uploaded'",
+                status_code=422,
+            )
+        if user_model_service is None:
+            raise ValueError("user_model_service is required for uploaded model training")
+
+        try:
+            package = await user_model_service.get_package_for_user(uploaded_model_id, user_id)
+        except (FileNotFoundError, PermissionError):
+            raise
+        if package is None:
+            raise DatasetRequestError(
+                "uploaded_model_not_found",
+                "The uploaded model could not be found for this account",
+                status_code=404,
+            )
+        if getattr(package, "validation_status", None) != "valid":
+            raise DatasetRequestError(
+                "uploaded_model_invalid",
+                "The uploaded model must be valid before it can be trained on Earth data",
+                status_code=422,
+            )
+
+        # Earth compatibility is its own question: a model validated for Mars is not
+        # thereby usable on the Earth feed.
+        verdict = evaluate_package_earth_compatibility(package, validator=self._earth_validator())
+        if not verdict.compatible:
+            raise DatasetRequestError(
+                "uploaded_model_not_earth_compatible",
+                "The uploaded model is not compatible with Earth data: "
+                + "; ".join(verdict.reasons or ["unsupported model"]),
+                status_code=422,
+            )
+
+        try:
+            param_schema = json.loads(getattr(package, "param_schema", None) or "{}")
+        except Exception:
+            param_schema = {}
+        if not isinstance(param_schema, dict):
+            param_schema = {}
+        resolved_params, param_errors = UserModelValidator.normalize_custom_params(
+            param_schema, custom_model_params
+        )
+        if param_errors:
+            raise DatasetRequestError(
+                "invalid_earth_training_parameters",
+                param_errors[0],
+                status_code=422,
+            )
+
+        reference = build_reference(
+            package=package,
+            param_schema=param_schema,
+            custom_model_params=resolved_params,
+            embed_source=True,
+        )
+        # The server must be able to prove the code it pins is the code it validated.
+        resolve_source_text_strict(
+            {
+                "source_path": reference.source_path,
+                "content_hash": reference.content_hash,
+                "source_text": reference.source_text,
+            }
+        )
+        warnings = list(verdict.warnings)
+        if verdict.output_shape:
+            warnings.append(
+                "Earth dry-run output shape: " + "x".join(str(v) for v in verdict.output_shape)
+            )
+        return reference, warnings
 
     async def _resolve_uploaded_training_entrypoint(
         self,

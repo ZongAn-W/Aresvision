@@ -12,11 +12,17 @@ import {
   getModelStructureParamLabel,
   isRecurrentArchitecture,
 } from './trainingParamSanitizers';
-import { EARTH_PARAM_BOUNDS } from './earthTrainingConfig';import { getExperimentArchitectureLabel } from './experimentCenterModel';
+import { EARTH_MODEL_ARCHITECTURE, EARTH_PARAM_BOUNDS } from './earthTrainingConfig';import { getExperimentArchitectureLabel } from './experimentCenterModel';
 import './experimentCenter.css';
 
 const OPEN_INTERVAL_FLOAT_FIELDS = new Set(['initial_history_weight', 'initial_translation_weight']);
 const BASE_INPUT_CHANNEL = 'O3';
+
+/** Earth 的模型来源选项；顺序与火星一致（官方/上传由页面控制器决定标签）。 */
+const EARTH_MODEL_SOURCE_OPTIONS = [
+  { value: 'official', label: (copy) => copy.modelSourceOfficial },
+  { value: 'uploaded', label: (copy) => copy.modelSourceUploaded },
+];
 
 /**
  * 专家参数页签。
@@ -327,11 +333,62 @@ export default function ExperimentConfigWorkspace({
         <div className="experiment-choice-block" data-active="true" data-model-block={isEarth ? 'earth' : modelBlockState}>
           {isEarth ? (
             <div className="experiment-earth-model" data-earth-model-block="true">
-              <span className="experiment-payload-lock">
-                <span>{copy.modelSourceOfficial}</span>
-                <b>{getExperimentArchitectureLabel(normalizedArchitecture)}</b>
-              </span>
-              <p className="experiment-expert-note">{copy.earthModelFixedNote}</p>
+              {/* Earth 允许官方 DLinear 与用户上传模型；SPHERE 与迁移仍然关闭。 */}
+              <div className="experiment-source-toggle" role="group" aria-label={copy.modelSource} data-model-source-toggle="true">
+                {EARTH_MODEL_SOURCE_OPTIONS.map((option) => {
+                  const active = modelSource === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className="experiment-source-option"
+                      aria-pressed={active}
+                      data-model-source-option={option.value}
+                      data-earth-model-source-option={option.value}
+                      disabled={isProcessing}
+                      onClick={() => onModelSourceChange(option.value)}
+                    >
+                      <strong>{option.label(copy)}</strong>
+                    </button>
+                  );
+                })}
+              </div>
+              {isUploaded ? (
+                <UploadedModelPanel
+                  models={uploadedModels}
+                  selectedId={selectedUploadedModelId}
+                  onSelect={onSelectUploadedModel}
+                  onUpload={onUploadModel}
+                  onRevalidate={onRevalidateModel}
+                  onDelete={onDeleteUploadedModel}
+                  uploading={resources.uploadingModel}
+                  busy={isProcessing}
+                  selectionDisabled={false}
+                  guideDownloadUrl={resources.guideDownloadUrl}
+                  templateDownloadUrl={resources.templateDownloadUrl}
+                  inlineError={resources.earthUploadedInlineError || ''}
+                  statusLabel={resources.earthUploadedStatusLabel || ''}
+                  statusTone={resources.earthUploadedStatusTone || 'ok'}
+                  labels={copy}
+                />
+              ) : (
+                <>
+                  <span className="experiment-payload-lock" data-earth-official-lock="true">
+                    <span>{copy.modelSourceOfficial}</span>
+                    <b>{getExperimentArchitectureLabel(EARTH_MODEL_ARCHITECTURE)}</b>
+                  </span>
+                  <p className="experiment-expert-note">{copy.earthModelFixedNote}</p>
+                </>
+              )}
+              {isUploaded && resources.earthUploadedNotice ? (
+                <p
+                  className="experiment-expert-note"
+                  data-earth-uploaded-notice="true"
+                  data-tone={resources.earthUploadedNoticeTone || 'ok'}
+                >
+                  {resources.earthUploadedNotice}
+                </p>
+              ) : null}
             </div>
           ) : (
           <>

@@ -2026,7 +2026,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-directory-row[data-active='true'] {
   background: rgba(121, 187, 255, 0.1);
-  box-shadow: inset 2px 0 0 #79bbff;
+  box-shadow: inset 3px 0 0 #79bbff, inset 0 0 0 1px rgba(121, 187, 255, 0.12);
 }
 
 .experiment-directory-row-top {
@@ -2100,7 +2100,7 @@ input[type='number']::-webkit-inner-spin-button {
 .experiment-directory-progress-fill {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #f19a78 0%, #79bbff 100%);
+  background: #79bbdf;
   transition: width 0.5s ease;
 }
 
@@ -3412,4 +3412,118 @@ body:has(.model-training-page) .star-field {
   .experiment-uploaded-link {
     transition: none;
   }
+}
+
+/* Directory and inspector use the same compact status geometry. */
+.experiment-directory-badge,
+.experiment-inspector-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 23px;
+  padding: 3px 8px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 7px;
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.experiment-directory-badge[data-tone='running'] { color: #91cde8; background: rgba(121, 187, 223, .12); border-color: rgba(121, 187, 223, .25); }
+.experiment-directory-badge[data-tone='pending'] { color: #e6a17f; background: rgba(241, 154, 120, .1); border-color: rgba(241, 154, 120, .25); }
+.experiment-directory-badge[data-tone='completed'],
+.experiment-inspector-badge[data-tone='ready'] { color: var(--experiment-success); background: color-mix(in srgb, var(--experiment-success) 11%, transparent); border-color: color-mix(in srgb, var(--experiment-success) 28%, transparent); }
+.experiment-directory-badge[data-tone='failed'],
+.experiment-inspector-badge[data-tone='error'] { color: var(--experiment-error); background: color-mix(in srgb, var(--experiment-error) 10%, transparent); border-color: color-mix(in srgb, var(--experiment-error) 28%, transparent); }
+.experiment-directory-status-dot { background: currentColor; }
+
+.experiment-directory-sort { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--text-60); font-size: calc(11px * var(--font-scale, 1)); }
+.experiment-directory-sort select { min-width: 0; max-width: 130px; min-height: 32px; padding: 4px 7px; border: 1px solid var(--experiment-line); border-radius: 7px; background: var(--experiment-surface-2); color: var(--text); }
+.experiment-directory-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 10px 13px; }
+.experiment-directory-filter { justify-content: space-between; min-width: 0; min-height: 32px; padding: 5px 9px; border-radius: 7px; }
+.experiment-directory-filter-count { flex-shrink: 0; }
+.experiment-directory-search { min-width: 0; padding: 10px 13px 0; }
+.experiment-directory-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 7px; padding: 0 13px 10px; }
+.experiment-directory-sort select { width: 100%; max-width: none; }
+.experiment-directory-tag-filter { min-width: 0; color: var(--text-60); font-size: calc(11px * var(--font-scale, 1)); }
+.experiment-directory-tag-filter[open] { grid-column: 1 / -1; }
+.experiment-directory-tag-filter > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--experiment-line); border-radius: 7px; cursor: pointer; list-style: none; }
+.experiment-directory-tag-filter > summary::-webkit-details-marker { display: none; }
+.experiment-directory-tag-filter > summary:hover { color: var(--text); background: var(--experiment-surface-2); }
+.experiment-directory-tag-filter > summary span { color: var(--experiment-warning); }
+.experiment-directory-tag-filter-body { display: grid; justify-items: start; gap: 7px; min-width: 0; padding: 8px 0 2px; }
+.experiment-directory-tag-filter-body .training-tag-filter { min-width: 0; width: 100%; margin: 0; }
+.experiment-directory-tag-filter-body .training-tag-filter > .training-tag-toolbar > .training-tag-hint { display: none; }
+.experiment-directory-group { display: grid; gap: 6px; min-width: 0; }
+.experiment-directory-group:not(:first-child) { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--experiment-line); }
+.experiment-directory-group-toggle { display: grid; grid-template-columns: minmax(0, 1fr) auto 14px; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 4px 3px; border: 0; background: transparent; color: var(--text-80); text-align: left; font-size: calc(12px * var(--font-scale, 1)); font-weight: 700; cursor: pointer; }
+.experiment-directory-group-toggle span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.experiment-directory-group-items { display: grid; gap: 8px; min-width: 0; }
+.experiment-directory-row { gap: 8px; padding: 12px; }
+.experiment-directory-name { font-size: calc(13px * var(--font-scale, 1)); line-height: 1.4; }
+.experiment-directory-status-line,
+.experiment-directory-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.experiment-directory-status-line time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
+.experiment-directory-facts { display: grid; gap: 4px; min-width: 0; padding: 8px 0; border-top: 1px solid var(--experiment-line); border-bottom: 1px solid var(--experiment-line); }
+.experiment-directory-facts > div { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: baseline; gap: 6px; min-width: 0; }
+.experiment-directory-facts span { color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); }
+.experiment-directory-facts strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-80); font-size: calc(11px * var(--font-scale, 1)); font-weight: 600; }
+.experiment-directory-meta > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.experiment-directory-completeness { color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
+.experiment-directory-row-details { min-width: 0; }
+.experiment-directory-row-details > summary { display: flex; align-items: center; justify-content: space-between; min-height: 24px; color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); cursor: pointer; list-style: none; }
+.experiment-directory-row-details > summary::-webkit-details-marker { display: none; }
+.experiment-directory-row-details > summary:hover { color: var(--text); }
+.experiment-directory-row-details > summary span { font-size: 14px; transition: transform 180ms ease; }
+.experiment-directory-row-details[open] > summary span { transform: rotate(180deg); }
+.experiment-directory-row-extra { display: grid; gap: 8px; min-width: 0; padding-top: 8px; }
+.experiment-directory-row-extra .experiment-directory-row-tools { justify-content: space-between; min-width: 0; }
+.experiment-directory-extra-facts { display: grid; gap: 4px; min-width: 0; color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); }
+.experiment-directory-extra-facts span { min-width: 0; overflow-wrap: anywhere; }
+.experiment-directory-row:focus-visible,
+.experiment-directory-group-toggle:focus-visible,
+.experiment-directory-sort select:focus-visible,
+.experiment-directory-filter:focus-visible,
+.experiment-directory-tag-filter > summary:focus-visible,
+.experiment-directory-row-details > summary:focus-visible,
+.experiment-inspector-group-head:focus-visible,
+.experiment-inspector-issue-action:focus-visible,
+.experiment-inspector-link:focus-visible { outline: 2px solid var(--hud-accent); outline-offset: 2px; }
+.experiment-directory-group-toggle:hover,
+.experiment-inspector-group-head:hover { color: var(--text); background: color-mix(in srgb, var(--hud-accent) 5%, transparent); }
+
+.experiment-inspector-summary { display: flex; flex-wrap: wrap; gap: 5px 10px; padding: 11px 15px; border-bottom: 1px solid var(--experiment-line); color: var(--text-60); font-size: calc(11px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
+.experiment-inspector-summary [data-tone='error'] { color: var(--experiment-error); }
+.experiment-inspector-summary [data-tone='ready'] { color: var(--experiment-success); }
+.experiment-inspector-body { gap: 8px; padding: 12px; }
+.experiment-inspector-group { min-width: 0; border: 1px solid var(--experiment-line); border-radius: 10px; background: var(--experiment-surface-2); overflow: hidden; }
+.experiment-inspector-group-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; min-height: 39px; padding: 7px 10px; color: var(--text-80); cursor: pointer; list-style: none; transition: background 180ms ease; }
+.experiment-inspector-group-head::-webkit-details-marker { display: none; }
+.experiment-inspector-group-title { min-width: 0; overflow-wrap: anywhere; font-size: calc(12px * var(--font-scale, 1)); font-weight: 700; }
+.experiment-inspector-group-body { display: grid; gap: 6px; min-width: 0; padding: 0 10px 10px; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent); }
+.experiment-inspector-group-body .experiment-inspector-value { font-size: calc(12px * var(--font-scale, 1)); font-weight: 600; }
+.experiment-inspector-group-body .experiment-inspector-readiness-row { font-size: calc(11px * var(--font-scale, 1)); }
+.experiment-inspector-blockers li { grid-template-columns: 16px minmax(0, 1fr); }
+.experiment-inspector-issue-action { grid-column: 2; justify-self: start; min-height: 28px; white-space: normal; text-align: left; }
+.experiment-inspector-link { justify-self: start; min-height: 28px; }
+
+[data-theme='light'] .experiment-directory-badge[data-tone='running'] { color: #246684; }
+[data-theme='light'] .experiment-directory-badge[data-tone='pending'] { color: #a44d28; }
+
+@media (max-width: 640px) {
+  .experiment-directory-group-toggle,
+  .experiment-directory-sort select,
+  .experiment-directory-filter,
+  .experiment-directory-tag-filter > summary,
+  .experiment-directory-row-details > summary,
+  .experiment-inspector-group-head,
+  .experiment-inspector-issue-action,
+  .experiment-inspector-link { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .experiment-inspector-group-head,
+  .experiment-directory-row-details > summary span { transition: none; }
 }

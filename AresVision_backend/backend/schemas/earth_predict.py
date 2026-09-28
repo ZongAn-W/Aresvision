@@ -89,6 +89,24 @@ class EarthPredictRunBlock(BaseModel):
     linear_hidden_layers: Optional[int] = None
 
 
+class EarthPredictModelIdentity(BaseModel):
+    """Which model produced (or will produce) the prediction.
+
+    Published so the page can name the trained model and, for an uploaded one, show
+    its pinned package, version and content hash - never a server file path.
+    """
+
+    model_config = MODEL_CONFIG
+
+    model_source: Optional[str] = None
+    model_architecture: Optional[str] = None
+    uploaded_model_id: Optional[str] = None
+    uploaded_model_name: Optional[str] = None
+    uploaded_model_version: Optional[int] = None
+    uploaded_model_content_hash: Optional[str] = None
+    uploaded_model_source_embedded: Optional[bool] = None
+
+
 class EarthPredictContextResponse(BaseModel):
     model_config = MODEL_CONFIG
 
@@ -108,6 +126,8 @@ class EarthPredictContextResponse(BaseModel):
     training_split_end: Optional[str] = None
     metrics: dict[str, Any] = Field(default_factory=dict)
     run: EarthPredictRunBlock = Field(default_factory=EarthPredictRunBlock)
+    model: EarthPredictModelIdentity = Field(default_factory=EarthPredictModelIdentity)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class EarthPredictRequest(BaseModel):
@@ -128,6 +148,9 @@ class EarthPredictResponse(BaseModel):
     target: str
     target_unit: str
     model_architecture: Optional[str] = None
+    model_source: Optional[str] = None
+    model: EarthPredictModelIdentity = Field(default_factory=EarthPredictModelIdentity)
+    warnings: list[str] = Field(default_factory=list)
     input_channel_order: list[str] = Field(default_factory=list)
     input_units: list[str] = Field(default_factory=list)
     forecast_origin: str
@@ -149,6 +172,7 @@ __all__ = [
     "EarthPredictFieldDay",
     "EarthPredictGrid",
     "EarthPredictMetrics",
+    "EarthPredictModelIdentity",
     "EarthPredictOrigins",
     "EarthPredictRequest",
     "EarthPredictResponse",

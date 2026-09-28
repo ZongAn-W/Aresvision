@@ -37,6 +37,10 @@ EARTH_DATASET_IDS = (EARTH_DATASET_ID, EARTH_DATASET_V2_ID)
 #: Only official DLinear is opened for Earth in this stage.
 EARTH_TRAINING_SCRIPT = "earth_daily.py"
 EARTH_SUPPORTED_ARCHITECTURE = "dlinear"
+#: Marker architecture for uploaded Earth models. The actual code comes from the
+#: pinned uploaded model reference, never from this label.
+EARTH_UPLOADED_ARCHITECTURE = "uploaded"
+EARTH_MODEL_SOURCES = ("official", "uploaded")
 EARTH_IMPLEMENTATION_ID = "aresvision_gridpoint_dlinear_v1"
 
 #: The target is always total column ozone, always the first model input.
@@ -90,6 +94,10 @@ EARTH_ALLOWED_PARAMETER_KEYS = frozenset({
     "use_sphere",
     "model_source",
     "transfer_learning",
+    # Values for the uploaded model's declared parameters. They are validated
+    # against the package's own schema before the task is written; the pinned
+    # reference in the training spec stays authoritative.
+    "custom_model_params",
 })
 
 
@@ -97,8 +105,8 @@ def earth_training_profile() -> dict:
     """Return a fresh copy of the published Earth training profile."""
     return {
         "profile_id": EARTH_PROFILE_ID,
-        "model_architectures": [EARTH_SUPPORTED_ARCHITECTURE],
-        "model_sources": ["official"],
+        "model_architectures": [EARTH_SUPPORTED_ARCHITECTURE, EARTH_UPLOADED_ARCHITECTURE],
+        "model_sources": list(EARTH_MODEL_SOURCES),
         "target": EARTH_TARGET_CHANNEL,
         "target_unit": EARTH_TARGET_UNIT,
         "window": EARTH_WINDOW,
@@ -259,22 +267,24 @@ def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[s
 
     architecture = hypers.get("model_architecture")
     if architecture is not None:
-        if not isinstance(architecture, str) or architecture.strip().lower() != EARTH_SUPPORTED_ARCHITECTURE:
+        if not isinstance(architecture, str) or architecture.strip().lower() not in (
+            EARTH_SUPPORTED_ARCHITECTURE,
+            EARTH_UPLOADED_ARCHITECTURE,
+        ):
             raise DatasetRequestError(
                 "dataset_training_configuration_not_supported",
-                "Earth training currently supports the official DLinear model only",
+                "Earth training supports the official DLinear and uploaded models only",
                 status_code=409,
             )
 
     model_source = hypers.get("model_source")
-    if model_source is not None and (
-        not isinstance(model_source, str) or model_source.strip().lower() != "official"
-    ):
-        raise DatasetRequestError(
-            "dataset_training_configuration_not_supported",
-            "Earth training currently supports the official model source only",
-            status_code=409,
-        )
+    if model_source is not None:
+        if not isinstance(model_source, str) or model_source.strip().lower() not in EARTH_MODEL_SOURCES:
+            raise DatasetRequestError(
+                "dataset_training_configuration_not_supported",
+                "Earth model_source must be 'official' or 'uploaded'",
+                status_code=409,
+            )
 
     if _is_truthy(hypers.get("use_sphere")):
         raise DatasetRequestError(
@@ -310,16 +320,36 @@ def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[s
         EARTH_LEARNING_RATE[1],
         EARTH_LEARNING_RATE[2],
     )
+    model_source_value = str(hypers.get("model_source") or "official").strip().lower()
     normalized["window"] = EARTH_WINDOW
     normalized["horizon"] = EARTH_HORIZON
-    normalized["model_architecture"] = EARTH_SUPPORTED_ARCHITECTURE
-    normalized["model_source"] = "official"
+    # The architecture label follows the model source: the official DLinear, or the
+    # generic uploaded marker. Nothing here decides which code runs; that is the
+    # server-side pinned model reference's job.
+    normalized["model_architecture"] = (
+        EARTH_UPLOADED_ARCHITECTURE
+        if model_source_value == "uploaded"
+        else EARTH_SUPPORTED_ARCHITECTURE
+    )
+    normalized["model_source"] = model_source_value
     normalized["use_sphere"] = False
     normalized["selected_channels"] = [
         name
         for name in canonical_channel_order(hypers.get("selected_channels"))
         if name != EARTH_TARGET_CHANNEL
     ]
+    # Uploaded-model parameter values are carried through as a plain mapping; the
+    # values were already checked against the package's own schema, and the pinned
+    # reference decides what the runner actually builds.
+    custom_params = hypers.get("custom_model_params")
+    if custom_params is not None:
+        if not isinstance(custom_params, dict):
+            raise DatasetRequestError(
+                "invalid_earth_training_parameters",
+                "custom_model_params must be an object",
+                status_code=422,
+            )
+        normalized["custom_model_params"] = dict(custom_params)
     if dataset_id is not None:
         normalized["training_dataset"] = dataset_id
     return normalized
@@ -345,21 +375,30 @@ def require_earth_training_configuration(
 ) -> dict:
     """Reject unsupported Earth configurations, then validate the parameters.
 
-    Configuration support is checked **before** parameter validation so an
-    uploaded-model or SPHERE request fails with the stable capability code
-    rather than a parameter error.
+    Both model sources are supported. The uploaded source requires an uploaded
+    model id; the official source must not carry one. The heavy compatibility work
+    (ownership, version, parameter schema, Earth tensor contract) belongs to the
+    training service, which owns the database session.
     """
-    if uploaded_model_id not in (None, "", 0):
+    normalized_source = str(model_source or "").strip().lower() or "official"
+    if normalized_source not in EARTH_MODEL_SOURCES:
         raise DatasetRequestError(
             "dataset_training_configuration_not_supported",
-            "Earth training does not accept an uploaded model",
+            "Earth model_source must be 'official' or 'uploaded'",
             status_code=409,
         )
-    if model_source not in (None, "", "official"):
+    has_uploaded_id = uploaded_model_id not in (None, "", 0)
+    if normalized_source == "uploaded" and not has_uploaded_id:
         raise DatasetRequestError(
-            "dataset_training_configuration_not_supported",
-            "Earth training currently supports the official model source only",
-            status_code=409,
+            "invalid_earth_training_parameters",
+            "uploaded_model_id is required when model_source is 'uploaded'",
+            status_code=422,
+        )
+    if normalized_source == "official" and has_uploaded_id:
+        raise DatasetRequestError(
+            "invalid_earth_training_parameters",
+            "uploaded_model_id must be empty when model_source is 'official'",
+            status_code=422,
         )
     hypers = dict(hyperparameters or {})
     if hypers.get("transfer_learning") not in (None, False, 0, "false", "False", ""):
@@ -368,7 +407,31 @@ def require_earth_training_configuration(
             "Transfer learning is not available for Earth",
             status_code=409,
         )
-    return normalize_earth_training_hyperparameters(hypers)
+    normalized = normalize_earth_training_hyperparameters(hypers)
+    # The caller (HTTP layer or uploaded-model flow) is authoritative about the
+    # source, so apply it explicitly rather than trusting a request field.
+    normalized["model_source"] = normalized_source
+    normalized["model_architecture"] = (
+        EARTH_UPLOADED_ARCHITECTURE
+        if normalized_source == "uploaded"
+        else EARTH_SUPPORTED_ARCHITECTURE
+    )
+    return normalized
+
+
+#: Keys the server owns inside the internal spec's uploaded-model block. A client
+#: must never be able to set a storage path, source text or content hash.
+SERVER_UPLOADED_REFERENCE_FIELDS = frozenset({
+    "package_id",
+    "display_name",
+    "version",
+    "content_hash",
+    "source_path",
+    "source_text",
+    "source_available",
+    "param_schema",
+    "custom_model_params",
+})
 
 
 def build_earth_training_spec(
@@ -376,14 +439,23 @@ def build_earth_training_spec(
     task_id: int,
     dataset_binding: Mapping[str, Any],
     hyperparameters: Mapping[str, Any],
+    uploaded_model: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Build the internal subprocess spec for one Earth training run.
 
     The spec is passed through the environment rather than the command line so
-    identity fields and the long snapshot never become CLI arguments.
+    identity fields and the long snapshot never become CLI arguments. When the run
+    uses an uploaded model, its pinned reference (including the verified source
+    text) travels in the same server-side channel.
     """
     normalized = normalize_earth_training_hyperparameters(hyperparameters)
-    return {
+    if uploaded_model is not None:
+        # A pinned uploaded reference *is* the model source, whatever a caller
+        # passed in the parameter dict; trusting the parameter alone would let the
+        # runner build the official DLinear and then fail to load uploaded weights.
+        normalized["model_source"] = "uploaded"
+        normalized["model_architecture"] = EARTH_UPLOADED_ARCHITECTURE
+    spec: dict[str, Any] = {
         "schema": EARTH_TRAINING_SPEC_SCHEMA,
         "task_id": int(task_id),
         "dataset_binding": {
@@ -397,6 +469,13 @@ def build_earth_training_spec(
         },
         "hyperparameters": normalized,
     }
+    if uploaded_model is not None:
+        spec["uploaded_model"] = {
+            key: copy.deepcopy(value)
+            for key, value in dict(uploaded_model).items()
+            if key in SERVER_UPLOADED_REFERENCE_FIELDS
+        }
+    return spec
 
 
 def split_window_counts(

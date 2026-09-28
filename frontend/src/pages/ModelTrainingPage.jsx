@@ -17,6 +17,7 @@ import {
   deleteTrainingWeight,
   renameTrainingModel,
   createTrainingTag,
+  fetchUploadedModelEarthCompatibility,
 } from '../services/api';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ModelTestModal from '../components/ModelTestModal';
@@ -30,6 +31,7 @@ import {
   isRecurrentArchitecture,
   sanitizeTrainingDataset,
   TRAINING_DATASET_EARTH_MERRA2_V2,
+  TRAINING_DATASET_MCD_OVERVIEW,
   TRAINING_DATASET_OPENMARS_MCD,
   sanitizeNonNegativeInteger,
   sanitizeDropout,
@@ -42,11 +44,16 @@ import {
   EARTH_HORIZON,
   EARTH_MODEL_ARCHITECTURE,
   EARTH_MODEL_SOURCE,
+  EARTH_MODEL_SOURCE_OFFICIAL,
+  EARTH_MODEL_SOURCE_UPLOADED,
   EARTH_OPTIONAL_CHANNELS,
   EARTH_WINDOW,
   buildEarthTrainingHyperparameters,
-  captureMarsTrainingSnapshot,
+  captureTrainingDraft,
+  getEarthUploadedSelectionBlocker,
   readEarthDatasetAvailability,
+  readEarthUploadedModelCompatibility,
+  resolveEarthTrainingRestore,
   resolveMarsTrainingRestore,
 } from './ModelTrainingPage/earthTrainingConfig';
 import EarthTrainingDatasetPanel from './ModelTrainingPage/EarthTrainingDatasetPanel';
@@ -168,6 +175,11 @@ export default function ModelTrainingPage() {
   const [datasetCatalogError, setDatasetCatalogError] = useState('');
   // 切到 Earth 前的火星表单快照：切回火星时恢复，避免丢失用户已经填好的配置。
   const marsSnapshotRef = useRef(null);
+  // Earth 场景自己的草稿：在 Earth 上选的上传模型与自定义参数切回时也保留。
+  const earthSnapshotRef = useRef(null);
+  // 当前选中上传模型的 Earth 兼容性结论（来自服务端上传校验的 Earth dry-run）。
+  const [earthUploadedStatus, setEarthUploadedStatus] = useState(null);
+  const [earthUploadedLoading, setEarthUploadedLoading] = useState(false);
 
   const channelOrder = useMemo(() => ['U', 'V', 'D', 'S', 'T'], []);
   const channelMap = useMemo(
@@ -219,8 +231,22 @@ export default function ModelTrainingPage() {
         ? '首期只开放官方 DLinear、过去 7 天预测未来 3 天；不支持 SPHERE、迁移学习或上传模型。'
         : 'First stage opens the official DLinear, 7 days in and 3 days out only; SPHERE, transfer learning and uploaded models are not supported.',
       earthModelFixedNote: isZh
-        ? 'Earth 首期固定使用官方 DLinear（线性隐藏层数可在「超参数」里调整）。'
-        : 'Earth is fixed to the official DLinear for this stage; adjust the linear hidden layers under Hyperparameters.',
+        ? 'Earth 官方模型固定为 DLinear（线性隐藏层数可在「超参数」里调整）。'
+        : 'The official Earth model is fixed to DLinear; adjust the linear hidden layers under Hyperparameters.',
+      earthUploadedCompatibleNote: isZh
+        ? '该上传模型已通过 Earth 兼容性校验：接收过去 7 天 × 选中通道 × 36×72 输入，输出未来 3 天 TO3。训练时会固定当前模型版本与内容指纹。'
+        : 'This uploaded model passed the Earth compatibility check: it accepts 7 days x selected channels x 36x72 and returns 3 days of TO3. The current version and content hash are pinned when training starts.',
+      earthUploadedIncompatible: isZh
+        ? '该上传模型不适用于 Earth 数据。'
+        : 'This uploaded model is not compatible with Earth data.',
+      earthCompatible: isZh ? 'Earth 兼容' : 'Earth compatible',
+      earthIncompatible: isZh ? 'Earth 不兼容' : 'Not Earth compatible',
+      earthCompatibilityChecking: isZh ? '正在检查 Earth 兼容性…' : 'Checking Earth compatibility…',
+      earthCompatibilityFailed: isZh ? '无法读取 Earth 兼容性结论。' : 'Could not read the Earth compatibility result.',
+      earthUploadedHelpTitle: isZh ? 'Earth 上传模型要求' : 'Earth uploaded model requirements',
+      earthUploadedHelpItems: isZh
+        ? '单个 .py 文件导出 MODEL_SPEC 与 build_model(config)；MODEL_SPEC.datasets 必须声明 earth_merra2；输入 [B,7,C,36,72]，输出 [B,3,1,36,72]；不得要求 Ls 或 MOLA 地形（火星专用）。'
+        : 'One .py file exporting MODEL_SPEC and build_model(config); MODEL_SPEC.datasets must declare earth_merra2; input [B,7,C,36,72] and output [B,3,1,36,72]; it must not require Ls or MOLA topography (Mars-only).',
       earthBaseInput: isZh ? 'TO3（必选）' : 'TO3 (required)',
       earthWindowField: isZh ? '过去 7 天' : 'Past 7 days',
       earthHorizonField: isZh ? '未来 3 天' : 'Next 3 days',
@@ -676,35 +702,43 @@ export default function ModelTrainingPage() {
     [earthMode, channelMap],
   );
 
-  /** 数据集切换：Earth 与火星的通道/窗口/模型来源互不相同，切换时整体换挡。 */
+  /**
+   * 数据集切换：Earth 与火星的通道/窗口/模型来源互不相同，切换时整体换挡。
+   *
+   * 两个场景各自保留完整草稿：切走时保存当前表单，切回时恢复，因此在 Earth 上
+   * 配置的上传模型与自定义参数不会被火星表单覆盖，反之亦然。
+   */
   const handleTrainingDatasetChange = useCallback((nextDataset) => {
     const normalized = sanitizeTrainingDataset(nextDataset, { allowEarth: true });
+    const currentDraft = captureTrainingDraft({
+      trainingDataset,
+      modelSource,
+      selectedUploadedModelId,
+      modelArchitecture,
+      useSphere,
+      windowValue: window_,
+      horizon,
+      transferEnabled,
+      selectedChannels,
+      customModelParams,
+    });
     if (normalized === TRAINING_DATASET_EARTH_MERRA2_V2) {
-      if (!marsSnapshotRef.current) {
-        marsSnapshotRef.current = captureMarsTrainingSnapshot({
-          trainingDataset,
-          modelSource,
-          selectedUploadedModelId,
-          modelArchitecture,
-          useSphere,
-          windowValue: window_,
-          horizon,
-          transferEnabled,
-          selectedChannels,
-        });
-      }
+      marsSnapshotRef.current = currentDraft;
+      const restore = resolveEarthTrainingRestore(earthSnapshotRef.current);
       setTrainingDataset(normalized);
-      setModelSource(EARTH_MODEL_SOURCE);
-      setSelectedUploadedModelId('');
-      setModelArchitecture(EARTH_MODEL_ARCHITECTURE);
+      setModelSource(restore ? restore.modelSource : EARTH_MODEL_SOURCE);
+      setSelectedUploadedModelId(restore ? restore.selectedUploadedModelId : '');
+      setModelArchitecture(restore ? restore.modelArchitecture : EARTH_MODEL_ARCHITECTURE);
       setUseSphere(false);
       setWindow(EARTH_WINDOW);
       setHorizon(EARTH_HORIZON);
       setTransferEnabled(false);
-      setSelectedChannels([...EARTH_OPTIONAL_CHANNELS]);
+      setSelectedChannels(restore ? restore.selectedChannels : [...EARTH_OPTIONAL_CHANNELS]);
+      setCustomModelParams(restore ? restore.customModelParams : {});
       setCopyConfigWarnings([]);
       return;
     }
+    if (earthMode) earthSnapshotRef.current = currentDraft;
     const restore = resolveMarsTrainingRestore(marsSnapshotRef.current);
     marsSnapshotRef.current = null;
     setTrainingDataset(normalized);
@@ -717,8 +751,11 @@ export default function ModelTrainingPage() {
       setHorizon(restore.horizon);
       setTransferEnabled(restore.transferEnabled);
       setSelectedChannels(restore.selectedChannels);
+      setCustomModelParams(restore.customModelParams || {});
     }
   }, [
+    customModelParams,
+    earthMode,
     horizon,
     modelArchitecture,
     modelSource,
@@ -732,8 +769,7 @@ export default function ModelTrainingPage() {
 
   // 目录在训练页挂载时读取一次；失败只提示，不影响火星训练。
   useEffect(() => {
-    const controller = new AbortController();
-    fetchDatasets({ signal: controller.signal })
+    const controller = new AbortController();    fetchDatasets({ signal: controller.signal })
       .then((payload) => setDatasetCatalog(Array.isArray(payload?.items) ? payload.items : []))
       .catch((error) => {
         if (error?.name === 'AbortError') return;
@@ -741,6 +777,72 @@ export default function ModelTrainingPage() {
       });
     return () => controller.abort();
   }, []);
+
+  /**
+   * Earth + 上传模型：读取服务端的 Earth 兼容性结论。
+   *
+   * Mars 可用不等于 Earth 可用，所以这里必须问服务端；未取到结论时按不可用处理，
+   * 不用「看起来兼容」放行提交。
+   */
+  useEffect(() => {
+    if (!earthMode || modelSource !== EARTH_MODEL_SOURCE_UPLOADED || !selectedUploadedModelId) {
+      setEarthUploadedStatus(null);
+      setEarthUploadedLoading(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    let active = true;
+    setEarthUploadedLoading(true);
+    fetchUploadedModelEarthCompatibility(selectedUploadedModelId, { signal: controller.signal })
+      .then((payload) => {
+        if (active) setEarthUploadedStatus(payload);
+      })
+      .catch((error) => {
+        if (error?.name === 'AbortError') return;
+        if (active) {
+          setEarthUploadedStatus({
+            compatible: false,
+            reasons: [error?.message || copy.earthCompatibilityFailed],
+          });
+        }
+      })
+      .finally(() => {
+        if (active) setEarthUploadedLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [copy.earthCompatibilityFailed, earthMode, modelSource, selectedUploadedModelId]);
+
+  const earthUploadedCompatibility = useMemo(
+    () => readEarthUploadedModelCompatibility(earthUploadedStatus),
+    [earthUploadedStatus],
+  );
+  // Earth + 上传模型的选择状态：未选/无结论/不兼容都在这里统一成一句可展示原因。
+  const earthUploadedBlocker = getEarthUploadedSelectionBlocker({
+    modelSource: earthMode ? modelSource : EARTH_MODEL_SOURCE_OFFICIAL,
+    uploadedModelId: selectedUploadedModelId,
+    compatibility: earthUploadedStatus,
+  });
+  const earthUploadedInlineError = earthMode
+    && modelSource === EARTH_MODEL_SOURCE_UPLOADED
+    && earthUploadedCompatibility.known
+    && !earthUploadedCompatibility.compatible
+    ? (earthUploadedCompatibility.reason || copy.earthUploadedIncompatible)
+    : '';
+  const earthUploadedStatusLabel = earthMode && modelSource === EARTH_MODEL_SOURCE_UPLOADED
+    ? (earthUploadedLoading
+        ? copy.earthCompatibilityChecking
+        : (earthUploadedCompatibility.compatible ? copy.earthCompatible : copy.earthIncompatible))
+    : '';
+  const earthUploadedStatusTone = earthUploadedCompatibility.compatible ? 'ok' : 'error';
+  const earthUploadedNotice = earthMode
+    && modelSource === EARTH_MODEL_SOURCE_UPLOADED
+    && earthUploadedCompatibility.compatible
+    ? copy.earthUploadedCompatibleNote
+    : '';
+  const earthUploadedNoticeTone = 'ok';
 
   const setRunBarNode = (node) => {
     if (runBarNodeRef.current === node) return;
@@ -917,9 +1019,31 @@ export default function ModelTrainingPage() {
     if (modelSource === 'official' && !selectedScriptAvailable) {
       blockers.push({ code: 'preset', label: copy.presetUnavailable });
     }
+    // Earth 数据不可训练（缺包/未接线）时同样阻止提交，并给出服务端原因。
+    if (earthMode && !earthAvailability.selectable) {
+      blockers.push({
+        code: 'earth-dataset',
+        label: earthAvailability.reason || copy.earthUnavailableFallback,
+      });
+    }
+    // Earth + 上传模型：必须拿到服务端的 Earth 兼容结论才允许提交。
+    if (earthMode && earthUploadedBlocker) {
+      const label = earthUploadedBlocker === 'uploaded_model_required'
+        ? copy.inspectorMissingUploadedModel
+        : earthUploadedBlocker === 'earth_compatibility_unknown'
+          ? copy.earthCompatibilityChecking
+          : earthUploadedBlocker;
+      blockers.push({ code: 'earth-uploaded', label });
+    }
     if (transferStartBlocked) blockers.push({ code: 'transfer', label: copy.transferSelectSource });
     return { canTrain: blockers.length === 0, blockers };
   }, [
+    copy.earthCompatibilityChecking,
+    copy.earthUnavailableFallback,
+    earthAvailability.reason,
+    earthAvailability.selectable,
+    earthMode,
+    earthUploadedBlocker,
     copy.inspectorCustomParamsInvalid,
     copy.inspectorLoginRequired,
     copy.inspectorMissingName,
@@ -1496,12 +1620,33 @@ export default function ModelTrainingPage() {
       return;
     }
 
-    // Earth 与火星走两条独立的提交路径：Earth 不发送迁移/上传字段，也不经过
-    // 火星的通道与窗口规范化，服务端会独立复核同一套 Earth 契约。
+    // Earth 与火星走两条独立的提交路径：Earth 不发送迁移字段，也不经过火星的
+    // 通道与窗口规范化，服务端会独立复核同一套 Earth 契约。选择上传模型时只发送
+    // 模型 ID 与自定义参数值；模型版本、内容哈希与数据快照都由服务端固定。
     if (earthMode) {
       if (!earthAvailability.selectable) {
         showToast(copy.earthUnavailableTitle, 'error');
         return;
+      }
+      const uploadedEarth = modelSource === EARTH_MODEL_SOURCE_UPLOADED;
+      if (uploadedEarth) {
+        if (!selectedUploadedModel || selectedUploadedModel.validation_status !== 'valid') {
+          showToast(copy.selectValidUploadedModel, 'error');
+          return;
+        }
+        if (!earthUploadedCompatibility.compatible) {
+          showToast(
+            earthUploadedCompatibility.reason || copy.earthUploadedIncompatible,
+            'error',
+          );
+          return;
+        }
+        const customValidation = validateCustomModelParams(selectedUploadedParamSchema, customModelParams);
+        if (!customValidation.ok) {
+          setCustomModelParamErrors(customValidation.errors);
+          showToast(copy.fixCustomModelParams, 'error');
+          return;
+        }
       }
       try {
         setIsProcessing(true);
@@ -1513,6 +1658,10 @@ export default function ModelTrainingPage() {
           seed,
           earlyStoppingPatience,
           linearHiddenLayers: architectureParamsByModel?.[EARTH_MODEL_ARCHITECTURE]?.linear_hidden_layers,
+          modelSource: uploadedEarth ? EARTH_MODEL_SOURCE_UPLOADED : EARTH_MODEL_SOURCE_OFFICIAL,
+          customModelParams: uploadedEarth
+            ? buildCustomModelParams(selectedUploadedParamSchema, customModelParams)
+            : null,
         });
         const task = await startTrainingTask(
           UNIFIED_TRAINING_SCRIPT,
@@ -1520,8 +1669,8 @@ export default function ModelTrainingPage() {
           customModelName.trim(),
           getTrainingRequestDataSource(),
           {
-            modelSource: 'official',
-            uploadedModelId: null,
+            modelSource: uploadedEarth ? 'uploaded' : 'official',
+            uploadedModelId: uploadedEarth ? selectedUploadedModelId : null,
             tagIds: newTaskTagIds,
             datasetId: TRAINING_DATASET_EARTH_MERRA2_V2,
           }
@@ -1873,6 +2022,11 @@ export default function ModelTrainingPage() {
         templateDownloadUrl: getUserModelDownloadUrl('template'),
         earthDatasetAvailability: earthAvailability,
         datasetCatalogError,
+        earthUploadedInlineError,
+        earthUploadedStatusLabel,
+        earthUploadedStatusTone,
+        earthUploadedNotice,
+        earthUploadedNoticeTone,
       }}
       validation={{
         modelNameError,
@@ -1954,6 +2108,8 @@ export default function ModelTrainingPage() {
         modelSource,
         modelArchitecture: normalizedModelArchitecture,
         useSphere,
+        trainingDatasetLabel: trainingDataset === TRAINING_DATASET_EARTH_MERRA2_V2 ? copy.datasetEarthMerra2V2
+          : trainingDataset === TRAINING_DATASET_MCD_OVERVIEW ? copy.datasetMcdOverview : copy.datasetOpenMarsMcd,
       }}
       resources={{
         user,
@@ -1969,6 +2125,7 @@ export default function ModelTrainingPage() {
       copy={copy}
       onEditCustomParams={() => setExpertTab('customParams')}
       onRequestLogin={() => openAuthModal('login')}
+      isZh={isZh}
     />
   );
 

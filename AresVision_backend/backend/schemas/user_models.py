@@ -3,11 +3,27 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class UserModelEarthVerdict(BaseModel):
+    """Whether the uploaded model may also be trained on Earth data.
+
+    Published on every upload so the training page can explain - before a task is
+    created - that a model valid for Mars is not automatically usable on Earth.
+    """
+
+    compatible: bool = False
+    errors: List[str] = Field(default_factory=list)
+    output_shape: Optional[List[int]] = None
+
+
 class UserModelValidationReport(BaseModel):
     ok: bool = False
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     output_shape: Optional[List[int]] = None
+    #: Declared dataset feeds (currently only ``earth_merra2``); omitted for models
+    #: that do not opt in, which keeps the historical report shape.
+    datasets: Optional[Dict[str, Any]] = None
+    earth: Optional[UserModelEarthVerdict] = None
 
 
 class UserModelPackageResponse(BaseModel):
