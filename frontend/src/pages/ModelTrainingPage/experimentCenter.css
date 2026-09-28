@@ -2,10 +2,8 @@
    实验中心（#/training）· AstraAtmos Atmospheric Mission Control
    ──────────────────────────────────────────────────────────────────────────
    版式参照：output/training-console-preview.html
-   · 页头：小号 eyebrow + 大标题，右侧目录开关与新建实验
-   · 阶段指示：细胶囊 + 序号
-   · 控制台：左列实验目录（sticky）/ 中间画布 / 右列配置检查器（sticky）
-     新建配置默认收起目录（两列），点「实验目录」才展开三列
+   · 页头：小号 eyebrow + 大标题，右侧配置/监控视图按钮
+   · 控制台：配置为画布 + 检查器；监控为目录 + 监控/结果
    · 底部运行条：fixed 横跨浏览器的深色细条
    · 正文（canvas 头部、任务定义、载荷条、参数矩阵、专家页签）参照预览的分区节奏
    深海军蓝面板 + 细分隔线 + 冰蓝选择线 + 火星橙主操作；绿色只表示真实就绪。
@@ -210,18 +208,18 @@
   align-items: start;
 }
 
-.experiment-center-grid[data-directory='open'][data-inspector='present'] {
-  grid-template-columns: var(--experiment-rail-width) minmax(0, 1fr) var(--experiment-inspector-width);
-}
-
-/* 展开目录但没有检查器（监控 / 结果阶段）：目录 + 画布。 */
-.experiment-center-grid[data-directory='open'][data-inspector='absent'] {
+.experiment-center-grid[data-view='monitor'] {
   grid-template-columns: var(--experiment-rail-width) minmax(0, 1fr);
 }
 
-/* 收起目录且没有检查器：单列铺满。 */
-.experiment-center-grid[data-directory='closed'][data-inspector='absent'] {
+.experiment-center-grid[data-inspector='absent']:not([data-view='monitor']) {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.experiment-center-view-button[aria-pressed='true'] {
+  border-color: var(--experiment-line-strong);
+  background: rgba(121, 187, 255, 0.12);
+  color: #79bbff;
 }
 
 .experiment-center-button {
@@ -353,6 +351,10 @@
 
 .experiment-center-workspace[hidden] {
   display: none;
+}
+
+.experiment-center-workspace[data-stage-workspace='result'] {
+  margin-top: var(--experiment-gap);
 }
 
 .experiment-center-empty {
@@ -2376,7 +2378,7 @@ input[type='number']::-webkit-inner-spin-button {
     --floating-settings-bottom: calc(var(--experiment-run-bar-gap) + 12px);
   }
 
-  .experiment-center-grid[data-directory='open'] .experiment-directory {
+  .experiment-center-grid[data-view='monitor'] .experiment-directory {
     position: sticky;
     top: var(--experiment-sticky-top);
     max-height: calc(100dvh - var(--experiment-sticky-top) - var(--experiment-run-bar-gap));
@@ -2414,15 +2416,11 @@ input[type='number']::-webkit-inner-spin-button {
 
 /* 1024 级别：侧栏收窄，但仍保持三列；自适应而不是硬塞宽列。 */
 @media (min-width: 901px) and (max-width: 1180px) {
-  .experiment-center-grid[data-directory='open'][data-inspector='present'] {
-    grid-template-columns: 200px minmax(0, 1fr) 250px;
-  }
-
-  .experiment-center-grid[data-directory='closed'] {
+  .experiment-center-grid[data-view='config'][data-inspector='present'] {
     grid-template-columns: minmax(0, 1fr) 250px;
   }
 
-  .experiment-center-grid[data-directory='open'][data-inspector='absent'] {
+  .experiment-center-grid[data-view='monitor'] {
     grid-template-columns: 200px minmax(0, 1fr);
   }
 
@@ -2470,9 +2468,8 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   .experiment-center-grid,
-  .experiment-center-grid[data-directory='open'][data-inspector='present'],
-  .experiment-center-grid[data-directory='open'][data-inspector='absent'],
-  .experiment-center-grid[data-directory='closed'][data-inspector='present'] {
+  .experiment-center-grid[data-view='config'][data-inspector='present'],
+  .experiment-center-grid[data-view='monitor'] {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2539,7 +2536,7 @@ input[type='number']::-webkit-inner-spin-button {
 
   .experiment-center-button,
   .experiment-directory-filter,
-  .experiment-center-stage-tab,
+  .experiment-center-view-button,
   .experiment-expert-tab,
   .experiment-channel-chip,
   .experiment-uploaded-upload {
@@ -2847,7 +2844,7 @@ input[type='number']::-webkit-inner-spin-button {
 @media (prefers-reduced-motion: reduce) {
   .experiment-directory-progress-fill,
   .experiment-directory-row,
-  .experiment-center-stage-tab,
+  .experiment-center-view-button,
   .experiment-config-chip,
   .experiment-channel-chip,
   .experiment-architecture-option,
@@ -3381,7 +3378,7 @@ body:has(.model-training-page) .star-field {
 
 [data-theme='light'] .experiment-section-index,
 [data-theme='light'] .experiment-expert-tab[aria-selected='true'],
-[data-theme='light'] .experiment-center-stage-tab[data-stage-state='current'],
+[data-theme='light'] .experiment-center-view-button[aria-pressed='true'],
 [data-theme='light'] .experiment-architecture-option[aria-pressed='true'],
 [data-theme='light'] .experiment-uploaded-link:not(.is-quiet),
 [data-theme='light'] .experiment-inspector-issue-action {

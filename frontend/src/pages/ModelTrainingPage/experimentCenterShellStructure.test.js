@@ -18,7 +18,7 @@ function stripComments(source) {
 }
 
 test('experiment center shell is a console with a directory, a workspace and an inspector', () => {
-  // 默认（收起目录）：画布 + 检查器两列，尺寸与设计参照一致。
+  // 配置视图：画布 + 检查器；监控视图：目录 + 画布。
   assert.match(
     cssSource,
     /\.experiment-center-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
@@ -26,22 +26,25 @@ test('experiment center shell is a console with a directory, a workspace and an 
   assert.match(cssSource, /--experiment-rail-width:\s*235px/);
   assert.match(cssSource, /--experiment-inspector-width:\s*284px/);
   assert.match(cssSource, /--experiment-gap:\s*14px/);
-  // 展开目录后是三列。
+  // 监控视图为两列。
   assert.match(
     cssSource,
-    /\.experiment-center-grid\[data-directory='open'\]\[data-inspector='present'\]\s*\{[^}]*grid-template-columns:\s*var\(--experiment-rail-width\)\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
+    /\.experiment-center-grid\[data-view='monitor'\]\s*\{[^}]*grid-template-columns:\s*var\(--experiment-rail-width\)\s*minmax\(0,\s*1fr\)/s
   );
   assert.match(shellSource, /<aside[\s\S]{0,160}?id="experiment-directory-panel"/);
   assert.match(shellSource, /data-config-inspector-panel="true"/);
   assert.match(shellSource, /data-stage=\{stage\}/);
-  assert.match(shellSource, /experiment-center-stage-nav/);
+  assert.match(shellSource, /data-view=\{view\}/);
+  assert.match(shellSource, /aria-pressed=\{view === 'config'\}/);
+  assert.match(shellSource, /aria-pressed=\{view === 'monitor'\}/);
+  assert.doesNotMatch(shellSource, /experiment-center-stage-nav/);
 });
 
 test('desktop directory and inspector stick to the viewport while the canvas scrolls', () => {
   // 侧栏用 position: sticky（不是 fixed），并扣除底部运行条净空。
   assert.match(
     cssSource,
-    /@media \(min-width: 901px\)[\s\S]*?\.experiment-center-grid\[data-directory='open'\] \.experiment-directory\s*\{[^}]*position:\s*sticky/s
+    /@media \(min-width: 901px\)[\s\S]*?\.experiment-center-grid\[data-view='monitor'\] \.experiment-directory\s*\{[^}]*position:\s*sticky/s
   );
   assert.match(cssSource, /\.experiment-directory\s*\{[^}]*top:\s*var\(--experiment-sticky-top\)/s);
   assert.match(cssSource, /--experiment-sticky-top:\s*86px/);
@@ -75,7 +78,7 @@ test('bottom run bar is fixed across the browser and reserving space below the g
   assert.match(shellSource, /runBarPortal\(/);
   // 网格按实测运行条高度预留底部空间，最后一个字段不会被底栏遮住。
   assert.match(shellSource, /paddingBottom: `\$\{runBarHeight \+ 20\}px`/);
-  assert.match(shellSource, /\{isConfigure && runBar \? \(/);
+  assert.match(shellSource, /\{view === 'config' && runBar \? \(/);
 });
 
 test('shell exposes the three experiment stages', () => {
@@ -86,19 +89,18 @@ test('shell exposes the three experiment stages', () => {
   assert.match(shellSource, /data-stage-workspace/);
 });
 
-test('shell offers a new-experiment action and a directory handoff', () => {
-  assert.match(shellSource, /onClick=\{onCreate\}/);
-  assert.match(shellSource, /onClick=\{onBackToDirectory\}/);
-  assert.match(shellSource, /experimentCenter\.newExperiment/);
+test('shell switches between configuration and the selected task without clearing form state', () => {
+  assert.match(shellSource, /onChangeView\('config'\)/);
+  assert.match(shellSource, /onChangeView\('monitor'\)/);
+  assert.match(shellSource, /view === 'monitor' && stage === 'result'/);
 });
 
 test('configuration workspace stays mounted so directory filtering cannot clear the form', () => {
   // 配置工作区用 hidden 隐藏而不是条件卸载：切换阶段/筛选时用户输入不丢失。
-  assert.match(shellSource, /data-stage-workspace="configure"[\s\S]{0,120}?hidden=\{stage !== 'configure'\}/);
-  assert.match(shellSource, /data-stage-workspace="monitor"\s*hidden=\{stage !== 'monitor'\}/);
-  assert.match(shellSource, /data-stage-workspace="result"\s*hidden=\{stage !== 'result'\}/);
-  // 只有配置阶段渲染检查器与运行条；工作区本身始终挂载。
-  assert.match(shellSource, /\{isConfigure && inspector \? \(/);
+  assert.match(shellSource, /data-stage-workspace="configure"[\s\S]{0,120}?hidden=\{view !== 'config'\}/);
+  assert.match(shellSource, /data-stage-workspace="monitor"[\s\S]*?hidden=\{view !== 'monitor' \|\| !activeTask\}/);
+  assert.match(shellSource, /data-stage-workspace="result"[\s\S]*?hidden=\{view !== 'monitor' \|\| stage !== 'result'\}/);
+  assert.match(shellSource, /\{view === 'config' && inspector \? \(/);
 });
 
 test('presentation shell does not start training or poll logs itself', () => {
@@ -175,39 +177,19 @@ test('directory rows are keyboard reachable and highlight the active experiment'
   assert.match(directorySource, /aria-pressed=\{isActive\}/);
 });
 
-test('the directory is shown by default and keeps the session choice', () => {
-  // 配置 / 监控 / 结果三个阶段都默认展开目录，用户手动收起后本次会话保持。
-  assert.match(shellSource, /const \[directoryCollapsed, setDirectoryCollapsed\] = useState\(false\)/);
-  assert.doesNotMatch(shellSource, /directoryTouchedRef/);
-  assert.match(shellSource, /data-directory=\{directoryCollapsed \? 'closed' : 'open'\}/);
-  // 展开 + 有检查器：目录 + 画布 + 检查器三列。
-  assert.match(
-    cssSource,
-    /\.experiment-center-grid\[data-directory='open'\]\[data-inspector='present'\]\s*\{[^}]*grid-template-columns:\s*var\(--experiment-rail-width\)\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
-  );
-  // 收起 + 有检查器（用户手动收起）：画布铺满剩余宽度，检查器仍然保留。
-  assert.match(
-    cssSource,
-    /\.experiment-center-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
-  );
-  // 收起且没有检查器（监控 / 结果）：单列铺满，没有残留空列。
-  assert.match(
-    cssSource,
-    /\.experiment-center-grid\[data-directory='closed'\]\[data-inspector='absent'\]\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
-  );
+test('view state selects exactly one pair of work areas', () => {
+  assert.match(pageSource, /const \[view, setView\] = useState\('config'\)/);
+  assert.match(pageSource, /if \(activeTask && !isCreating && !viewChosenRef\.current\) setView\('monitor'\)/);
+  assert.match(shellSource, /\{view === 'monitor' \? \(\s*<aside/);
+  assert.match(shellSource, /\{view === 'config' && inspector \? \(/);
+  assert.match(cssSource, /\.experiment-center-grid\[data-view='monitor'\]/);
 });
 
-test('stage indicator is a non-interactive ordered flow with completion marks', () => {
-  assert.match(shellSource, /<ol className="experiment-center-stage-nav"/);
-  assert.match(shellSource, /<li key=\{key\} className="experiment-center-stage-step">/);
-  assert.match(shellSource, /experiment-center-stage-arrow/);
-  assert.match(shellSource, /data-stage-state=\{current \? 'current' : \(done \? 'done' : 'upcoming'\)\}/);
-  assert.match(shellSource, /CheckRoundedIcon/);
-  assert.match(shellSource, /aria-current=\{current \? 'step' : undefined\}/);
-  // 阶段指示器不是控件：不能用 button 渲染，也不能显示手型光标。
-  assert.doesNotMatch(shellSource, /<button[^>]*experiment-center-stage-tab/);
-  assert.match(cssSource, /\.experiment-center-stage-tab\s*\{[^}]*cursor:\s*default/s);
-  assert.doesNotMatch(cssSource, /\.experiment-center-stage-tab[^{]*\{[^}]*cursor:\s*pointer/s);
+test('header has two accessible view buttons', () => {
+  assert.match(shellSource, /role="group" aria-label=\{t\('experimentCenter\.viewLabel'\)\}/);
+  assert.match(shellSource, /aria-pressed=\{view === 'config'\}/);
+  assert.match(shellSource, /aria-pressed=\{view === 'monitor'\}/);
+  assert.doesNotMatch(shellSource, /experiment-center-stage-nav/);
 });
 
 test('page controller owns the stage derivation and wires the three workspaces', () => {

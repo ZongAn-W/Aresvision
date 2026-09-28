@@ -1084,6 +1084,8 @@ const en = {
     stageConfigure: 'Configure',
     stageMonitor: 'Monitor',
     stageResult: 'Results',
+    viewLabel: 'Experiment center view',
+    monitorResultsView: 'Monitor / Results',
     stageNavLabel: 'Experiment center stages',
     directoryTitle: 'Experiment directory',
     directoryCount: ({ count }) => `${count} experiments`,

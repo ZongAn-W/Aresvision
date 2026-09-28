@@ -14,14 +14,14 @@
 
 ```text
 #/training
-├── 固定视图栏：只有两个按钮 —— 配置实验 / 训练监控
+├── 页头视图按钮：配置实验 / 训练监控 · 实验结果
 └── 控制台网格
     ├── 视图 1「配置实验」：配置画布 + 配置检查器（目录收起）
-    └── 视图 2「训练监控」：实验目录 + 画布（检查器收起；已完成任务在同一位置展示结果）
-底部：运行条（position: fixed，横跨浏览器；配置视图承载提交，监控视图仅在任务运行中保留以提供停止入口）
+    └── 视图 2「训练监控 · 实验结果」：实验目录 + 画布（检查器收起；已完成任务在监控下方展示结果）
+底部：配置视图的提交运行条（position: fixed，横跨浏览器）；监控区自身提供停止按钮
 ```
 
-阶段（configure / monitor / result）仍由任务状态推导，视图只决定哪几列可见，两者互不耦合：切视图不改变阶段，阶段也不自动切视图。**视图的初始值跟随当前记录**：进入训练页时若已选中任务（默认选中最新一条记录，运行中的任务优先）就直接进入监控视图——运行中看监控、已完成/失败看结果；一条记录都没有才停在配置视图。用户点「新建实验」清空选择后自动回到配置视图。配置画布在监控视图里保持挂载（只用 `hidden` 隐藏），所以切视图不会清空正在编辑的表单。
+阶段（configure / monitor / result）仍由任务状态推导，视图只决定哪几列可见。首次加载若已选中任务（运行中的任务优先，否则选列表最新记录）则进入监控视图；没有任务时默认配置视图。用户主动切换视图后，轮询不会覆盖选择。点「新建实验」或「复制配置」进入配置视图，选任务或成功开始训练进入监控视图。配置画布在监控视图里保持挂载（只用 `hidden` 隐藏），所以切视图不会清空正在编辑的表单。
 
 **监控视图里监控常驻，结果接在下面**：任务完成后 `stage` 会变成 `result`，但监控工作区（状态、进度、Loss 曲线、实时日志）不再被结果顶替，因此点「训练监控」总能同时看到运行状态与结果指标。
 
@@ -42,7 +42,7 @@
 
 ```css
 @media (min-width: 901px) {
-  .experiment-center-grid[data-directory='open'] .experiment-directory {
+  .experiment-center-grid[data-view='monitor'] .experiment-directory {
     position: sticky; top: 86px;
     max-height: calc(100dvh - 86px - 72px);   /* 扣除导航偏移与运行条净空 */
     overflow: hidden; display: flex; flex-direction: column; min-height: 0;
@@ -157,13 +157,13 @@ const readiness = useMemo(() => {
 
 | 阶段 | 进入条件 | 主要内容 |
 | --- | --- | --- |
-| 配置实验（configure） | 点击“新建实验”，或在目录中选择“返回实验目录”后重新配置 | 画布四个部分（模型名称 / 数据集 / 模型 / 超参数）+ 右侧检查器 + 底部运行条 |
+| 配置实验（configure） | 点击“新建实验”或“复制配置”进入配置视图 | 画布四个部分（模型名称 / 数据集 / 模型 / 超参数）+ 右侧检查器 + 底部运行条 |
 | 训练监控（monitor） | 当前任务状态为 `pending` 或 `running` | 进度、Epoch、当前 Loss、ETA、Loss 曲线、终端式实时日志、停止训练、自动跟随状态 |
 | 实验结果（result） | `completed`、`failed` 或已停止等其他终态 | 指标、失败/停止原因、折叠运行日志、完整参数与数据集身份、用于预测 / 去模型比较 / 复制配置 / 重命名 / 模型测试 / 删除 |
 
 阶段由纯函数 `getExperimentStage({ activeTask, isCreating })`（[experimentCenterModel.js](../frontend/src/pages/ModelTrainingPage/experimentCenterModel.js)）推导：`isCreating` → configure；无活动任务 → configure；`pending`/`running` → monitor；其他 → result。
 
-三个工作区容器**始终挂载**（`hidden` 隐藏），目录筛选、状态筛选、收起/展开目录与阶段切换都不会清空正在编辑的配置。
+配置工作区容器**始终挂载**（`hidden` 隐藏），切换视图不会清空正在编辑的配置；监控和结果工作区仅在需要时渲染。
 
 ### 任务自动选中与抑制
 
@@ -251,7 +251,7 @@ const readiness = useMemo(() => {
 
 1. **只有一条提交路径。** 画布内不得出现第二个 `onStart`，运行条不得自己调用训练接口。
 2. **侧栏 sticky、运行条 fixed + portal。** 不要给运行条套回页面外壳内，也不要给中间画布加 sticky。
-3. **目录默认展开。** 三个阶段都是 `useState(false)`；用户手动收起后本次会话保持，不要用 `useEffect` 按阶段覆盖用户选择。
+3. **目录只属于监控视图。** 配置视图不渲染目录；手动切换视图后，任务轮询不得覆盖用户选择。
 4. **就绪状态只有一个来源。** 检查器 / 画布 / 运行条都读 `readiness`，不要各自判断 `startDisabled`。
 5. **字段栅格用 `minmax(min(240px, 100%), 1fr)`**，`--experiment-*` 设计参数放 `:root`（运行条在 body 上）。
 6. **官方架构清单只改一处**：`experimentCenterModel.js` 的 `ARCHITECTURE_LABELS` 与 `trainingParamSanitizers.js` 的结构参数配置。

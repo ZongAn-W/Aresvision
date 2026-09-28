@@ -153,6 +153,12 @@ export default function ModelTrainingPage() {
     loadTasks,
   } = useTraining();
   const tagState = useTrainingTags(loadTasks);
+  const [view, setView] = useState('config');
+  const viewChosenRef = useRef(false);
+  const changeView = (nextView) => {
+    viewChosenRef.current = true;
+    setView(nextView);
+  };
   const [newTaskTagIds, setNewTaskTagIds] = useState([]);
   useEffect(() => {
     if (!tagState.loading && !tagState.error) {
@@ -873,6 +879,9 @@ export default function ModelTrainingPage() {
     () => tasks.find((task) => task.id === activeTaskId) || null,
     [activeTaskId, tasks]
   );
+  useEffect(() => {
+    if (activeTask && !isCreating && !viewChosenRef.current) setView('monitor');
+  }, [activeTask, isCreating]);
   const stage = useMemo(
     () => getExperimentStage({ activeTask, isCreating }),
     [activeTask, isCreating]
@@ -1537,6 +1546,7 @@ export default function ModelTrainingPage() {
    * 新建实验 / 返回实验目录：清空命名、标签与迁移选择，保留默认模型与数据集参数。
    */
   const handleCreateExperiment = () => {
+    changeView('config');
     restoreTransferStructureSnapshot();
     transferStructureSnapshotRef.current = null;
     copiedCustomModelParamsRef.current = '';
@@ -1569,6 +1579,7 @@ export default function ModelTrainingPage() {
   };
 
   const handleSelectTask = (taskId) => {
+    changeView('monitor');
     // 用户主动选择实验（含从目录进入运行中 / 已完成实验）时恢复自动选中行为。
     setSuppressAutoSelect?.(false);
     setIsCreating(false);
@@ -1576,6 +1587,7 @@ export default function ModelTrainingPage() {
   };
 
   const handleBackToDirectory = () => {
+    changeView('monitor');
     setSuppressAutoSelect?.(false);
     setIsCreating(false);
     setActiveTaskId(null);
@@ -1657,6 +1669,7 @@ export default function ModelTrainingPage() {
         });
         setIsCreating(false);
         setActiveTaskId(task.id);
+        changeView('monitor');
         await loadTasks();
       } catch (error) {
         alert(`${t('modelTraining.startError')}${error?.message || ''}`);
@@ -1747,6 +1760,7 @@ export default function ModelTrainingPage() {
       // 提交成功后进入监控阶段：选中新任务并结束“新建实验”状态。
       setIsCreating(false);
       setActiveTaskId(task.id);
+      changeView('monitor');
       await loadTasks();
     } catch (error) {
       alert(t('modelTraining.startError') + error.message);
@@ -1870,6 +1884,7 @@ export default function ModelTrainingPage() {
    */
   const handleCopyConfig = (task) => {
     if (!task) return;
+    changeView('config');
     const config = readExperimentConfig(task, {
       uploadedModels,
       channelOrder,
@@ -2201,6 +2216,8 @@ export default function ModelTrainingPage() {
       />
 
       <ExperimentCenterShell
+        view={view}
+        onChangeView={changeView}
         stage={stage}
         activeTask={activeTask}
         tasks={tasks}

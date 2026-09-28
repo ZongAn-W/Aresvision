@@ -1104,6 +1104,8 @@ const zh = {
     stageConfigure: '配置实验',
     stageMonitor: '训练监控',
     stageResult: '实验结果',
+    viewLabel: '实验中心视图',
+    monitorResultsView: '训练监控 / 实验结果',
     stageNavLabel: '实验中心阶段',
     directoryTitle: '实验目录',
     directoryCount: ({ count }) => `${count} 个实验`,

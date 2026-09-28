@@ -361,7 +361,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
       </button>
 
       {/* Nav Links */}
-      <div className="home-nav__links" style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+      <div className="home-nav__links" style={{ display: 'flex', gap: 2, alignItems: 'center', marginLeft: 'auto' }}>
         {NAV_IDS.map((id) => (
           <button
             key={id}
@@ -379,7 +379,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
       </div>
 
       {/* Right — bell + user entry */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 24 }}>
         {/* Bell icon — only for logged-in users */}
         {user && (
           <div style={{ position: 'relative' }}>
