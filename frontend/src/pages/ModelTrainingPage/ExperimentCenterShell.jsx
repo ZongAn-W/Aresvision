@@ -1,13 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import AddRoundedIcon from '@mui/icons-material/AddRounded';
-import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import { useT } from '../../i18n';
 import { useAuth } from '../../contexts/AuthContext';
 import './experimentCenter.css';
-
-const STAGE_KEYS = ['configure', 'monitor', 'result'];
-const STAGE_ORDER = STAGE_KEYS;
 
 /**
  * 运行条用 fixed 贴在浏览器底部，但**页面外壳带有 transform 过渡**
@@ -23,20 +18,17 @@ function runBarPortal(node) {
 /**
  * 实验中心控制台外壳。
  *
- * 桌面端网格：左列实验目录（sticky）、中间画布 / 监控 / 结果、右列配置检查器（sticky）。
- * 新建配置首次进入默认**收起**目录（画布 + 检查器两列），点击「实验目录」才展开三列；
- * 监控 / 结果阶段默认展开（那里主要靠目录切换实验）。用户本次会话的展开状态优先于默认值，
- * 表单更新、阶段内重渲染都不会重置它。
+ * 配置视图显示画布和检查器；监控视图显示目录及所选任务的监控/结果。
  *
- * 外壳只负责版式、标题与阶段指示；训练请求、轮询与 WebSocket 全部由页面控制器
+ * 外壳只负责版式与视图切换；训练请求、轮询与 WebSocket 全部由页面控制器
  * 与 TrainingContext 持有，外壳不 import 任何训练接口。
  */
 export default function ExperimentCenterShell({
+  view,
+  onChangeView,
   stage,
   activeTask,
   onCreate,
-  onSelectTask,
-  onBackToDirectory,
   directory,
   workspace,
   inspector,
@@ -47,18 +39,7 @@ export default function ExperimentCenterShell({
   const { user } = useAuth();
   const stageRef = useRef(null);
   const focusedStageRef = useRef(null);
-  const isConfigure = stage === 'configure';
-  // 整页默认显示实验目录（配置阶段也一样）；用户手动收起后本次会话保持收起。
-  const [directoryCollapsed, setDirectoryCollapsed] = useState(false);
-
-  const stageLabels = useMemo(
-    () => ({
-      configure: t('experimentCenter.stageConfigure'),
-      monitor: t('experimentCenter.stageMonitor'),
-      result: t('experimentCenter.stageResult'),
-    }),
-    [t]
-  );
+  const isConfigure = view === 'config';
   const eyebrow = t('experimentCenter.eyebrow');
 
   // 阶段切换后把焦点移到阶段标题，键盘用户不会停在已卸载的控件上。
@@ -72,10 +53,6 @@ export default function ExperimentCenterShell({
     stageRef.current?.focus();
   }, [stage]);
 
-  const toggleDirectory = () => {
-    setDirectoryCollapsed((value) => !value);
-  };
-
   return (
     <div className="experiment-center">
       <header className="experiment-center-header">
@@ -88,59 +65,34 @@ export default function ExperimentCenterShell({
           </h1>
         </div>
 
-        <div className="experiment-center-header-meta">
+        <div className="experiment-center-header-meta" role="group" aria-label={t('experimentCenter.viewLabel')}>
           <button
             type="button"
-            className="experiment-center-button"
-            aria-expanded={!directoryCollapsed}
-            aria-controls="experiment-directory-panel"
-            onClick={toggleDirectory}
+            className="experiment-center-button experiment-center-view-button"
+            aria-pressed={view === 'config'}
+            onClick={() => onChangeView('config')}
           >
-            {directoryCollapsed ? t('experimentCenter.showDirectory') : t('experimentCenter.hideDirectory')}
+            {t('experimentCenter.stageConfigure')}
           </button>
-          <button type="button" className="experiment-center-button" onClick={onCreate}>
-            <AddRoundedIcon aria-hidden="true" sx={{ fontSize: 17, verticalAlign: '-3px', marginRight: '6px' }} />
-            {t('experimentCenter.newExperiment')}
+          <button
+            type="button"
+            className="experiment-center-button experiment-center-view-button"
+            aria-pressed={view === 'monitor'}
+            onClick={() => onChangeView('monitor')}
+          >
+            {t('experimentCenter.monitorResultsView')}
           </button>
         </div>
       </header>
 
-      <ol className="experiment-center-stage-nav" aria-label={t('experimentCenter.stageNavLabel')}>
-        {STAGE_KEYS.map((key, index) => {
-          const current = stage === key;
-          const done = STAGE_ORDER.indexOf(stage) > index;
-          return (
-            <li key={key} className="experiment-center-stage-step">
-              <span
-                className="experiment-center-stage-tab"
-                aria-current={current ? 'step' : undefined}
-                data-stage-tab={key}
-                data-stage-state={current ? 'current' : (done ? 'done' : 'upcoming')}
-              >
-                <span className="experiment-center-stage-index" aria-hidden="true">
-                  {done
-                    ? <CheckRoundedIcon sx={{ fontSize: 14 }} />
-                    : String(index + 1).padStart(2, '0')}
-                </span>
-                {stageLabels[key]}
-              </span>
-              {index < STAGE_KEYS.length - 1 ? (
-                <span className="experiment-center-stage-arrow" aria-hidden="true">→</span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
-
       <div
         className="experiment-center-grid"
         data-stage={stage}
-        data-directory-collapsed={directoryCollapsed ? 'true' : 'false'}
-        data-directory={directoryCollapsed ? 'closed' : 'open'}
+        data-view={view}
         data-inspector={isConfigure && inspector ? 'present' : 'absent'}
-        style={isConfigure && runBar && runBarHeight ? { paddingBottom: `${runBarHeight + 20}px` } : undefined}
+        style={view === 'config' && runBar && runBarHeight ? { paddingBottom: `${runBarHeight + 20}px` } : undefined}
       >
-          {directoryCollapsed ? null : (
+          {view === 'monitor' ? (
             <aside
               id="experiment-directory-panel"
               className="glass-card experiment-directory"
@@ -148,51 +100,43 @@ export default function ExperimentCenterShell({
             >
               {directory}
             </aside>
-          )}
+          ) : null}
 
           <section
             className="glass-card experiment-center-panel experiment-center-canvas"
-            data-stage-panel={stage}
+            data-stage-panel={isConfigure ? 'configure' : stage}
             aria-live="off"
           >
-            <div className="experiment-center-panel-header" hidden={isConfigure}>
+            <div className="experiment-center-panel-header" hidden={isConfigure || !activeTask}>
               <div style={{ minWidth: 0 }}>
                 <h2 className="experiment-center-panel-title" tabIndex={-1} ref={stageRef} data-stage-heading={stage}>
-                  {stageLabels[stage]}
+                  {t(stage === 'result' ? 'experimentCenter.stageResult' : 'experimentCenter.stageMonitor')}
                 </h2>
-                <div className="experiment-center-hint">
+                <div className="experiment-center-hint" hidden={stage === 'result'}>
                   {activeTask
                     ? `${activeTask.custom_model_name || t('experimentCenter.unnamedExperiment')} · #${activeTask.id}`
                     : t('experimentCenter.noActiveTask')}
                 </div>
               </div>
 
-              {activeTask ? (
-                <div className="experiment-center-actions">
-                  <span className="experiment-center-hint">{`#${activeTask.id}`}</span>
-                  <button type="button" className="experiment-center-button experiment-center-button-quiet" onClick={onBackToDirectory}>
-                    {t('experimentCenter.backToDirectory')}
-                  </button>
-                </div>
-              ) : null}
             </div>
 
-            {/* 三个工作区都保持挂载（hidden 隐藏），目录筛选与阶段切换不会清空正在编辑的表单。 */}
+            {/* 配置工作区始终挂载，切换视图不会清空输入。 */}
             <div
               className="experiment-center-workspace"
               data-stage-workspace="configure"
-              hidden={stage !== 'configure'}
+              hidden={view !== 'config'}
             >
               {workspace?.configure}
             </div>
-            <div className="experiment-center-workspace" data-stage-workspace="monitor" hidden={stage !== 'monitor'}>
-              {stage === 'monitor' ? workspace?.monitor : null}
+            <div className="experiment-center-workspace" data-stage-workspace="monitor" hidden={view !== 'monitor' || stage !== 'monitor' || !activeTask}>
+              {view === 'monitor' && stage === 'monitor' && activeTask ? workspace?.monitor : null}
             </div>
-            <div className="experiment-center-workspace" data-stage-workspace="result" hidden={stage !== 'result'}>
-              {stage === 'result' ? workspace?.result : null}
+            <div className="experiment-center-workspace" data-stage-workspace="result" hidden={view !== 'monitor' || stage !== 'result'}>
+              {view === 'monitor' && stage === 'result' ? workspace?.result : null}
             </div>
 
-            {stage !== 'configure' && !activeTask ? (
+            {view === 'monitor' && !activeTask ? (
               <div className="experiment-center-empty">
                 <div>{t('experimentCenter.noActiveTask')}</div>
                 <button type="button" className="experiment-center-button" onClick={onCreate}>
@@ -202,7 +146,7 @@ export default function ExperimentCenterShell({
             ) : null}
           </section>
 
-          {isConfigure && inspector ? (
+          {view === 'config' && inspector ? (
             <aside
               className="glass-card experiment-inspector-panel"
               data-config-inspector-panel="true"
@@ -213,7 +157,7 @@ export default function ExperimentCenterShell({
           ) : null}
       </div>
 
-      {isConfigure && runBar ? (
+      {view === 'config' && runBar ? (
         runBarPortal(
           <div className="experiment-center-runbar-slot" data-run-bar-slot="true">
             {runBar}

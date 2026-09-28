@@ -58,24 +58,31 @@ export default function EarthTrainingDatasetPanel({
         </div>
       </dl>
 
-      <h4 className="experiment-expert-heading">{copy.earthSplitsTitle}</h4>
-      <div className="experiment-earth-splits" data-earth-splits="true">
-        {splits.length > 0 ? (
-          splits.map((split) => (
-            <div className="experiment-earth-split" key={split.name} data-earth-split={split.name}>
-              <span>{copy.earthSplitLabels?.[split.name] || split.name}</span>
-              <b>{`${split.start} → ${split.end}`}</b>
-              <small>{copy.earthSplitSamples(split.days, split.windows)}</small>
-            </div>
-          ))
-        ) : (
-          <p className="experiment-expert-note">{copy.earthSplitsUnavailable}</p>
-        )}
-      </div>
+      {/* 只读细节默认收起：网格/7→3/目标/指纹是提交前必须确认的，日期划分与通道
+          明细属于参考信息，展开才看。data-* 钩子在收起时仍在 DOM 中。 */}
+      <details className="experiment-earth-details" data-earth-details="true">
+        <summary className="experiment-expert-heading" data-earth-details-toggle="true">
+          {copy.earthDetailsToggle}
+        </summary>
 
-      <h4 className="experiment-expert-heading">{copy.earthChannelsTitle}</h4>
-      <p className="experiment-expert-note">{copy.earthChannelsNote}</p>
-      <ul className="experiment-earth-channels" data-earth-channels="true">
+        <h4 className="experiment-expert-heading">{copy.earthSplitsTitle}</h4>
+        <div className="experiment-earth-splits" data-earth-splits="true">
+          {splits.length > 0 ? (
+            splits.map((split) => (
+              <div className="experiment-earth-split" key={split.name} data-earth-split={split.name}>
+                <span>{copy.earthSplitLabels?.[split.name] || split.name}</span>
+                <b>{`${split.start} → ${split.end}`}</b>
+                <small>{copy.earthSplitSamples(split.days, split.windows)}</small>
+              </div>
+            ))
+          ) : (
+            <p className="experiment-expert-note">{copy.earthSplitsUnavailable}</p>
+          )}
+        </div>
+
+        <h4 className="experiment-expert-heading">{copy.earthChannelsTitle}</h4>
+        <p className="experiment-expert-note">{copy.earthChannelsNote}</p>
+        <ul className="experiment-earth-channels" data-earth-channels="true">
         <li data-earth-channel="TO3" data-locked="true">
           <span className="experiment-earth-channel-name">Total column ozone</span>
           <b>TO3</b>
@@ -106,6 +113,7 @@ export default function EarthTrainingDatasetPanel({
           <code key={entry.channel}>{`${entry.channel} [${entry.unit}]`}</code>
         ))}
       </div>
+      </details>
 
       {availability && !availability.selectable ? (
         <div className="experiment-result-note" data-tone="warning" role="status" data-earth-unavailable="true">

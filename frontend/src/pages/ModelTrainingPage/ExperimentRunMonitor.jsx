@@ -33,10 +33,9 @@ export default function ExperimentRunMonitor({
   const failure = activeTask && !isActive ? getExperimentFailureMessage(activeTask) : null;
 
   return (
-    <div className="experiment-center-stack">
-      <div className="experiment-center-card">
-        <div className="experiment-center-section-title">{copy.currentStatus}</div>
-        {/* 进度百分比、Epoch、Loss、ETA 与状态由既有进度组件统一展示，这里不重复一套卡片。 */}
+    <div className="experiment-center-stack experiment-monitor-workspace">
+      <section className="experiment-monitor-status" aria-label={copy.currentStatus}>
+        <h3 className="experiment-monitor-section-title">{copy.currentStatus}</h3>
         <TrainingProgressMonitor
           progress={resolvedProgress.progress || 0}
           currentEpoch={resolvedProgress.current_epoch || 0}
@@ -47,21 +46,23 @@ export default function ExperimentRunMonitor({
           status={status}
         />
         {failure?.hasReason ? (
-          <div className="experiment-result-note" data-tone={failure.stopped ? 'warning' : 'error'} role="status" style={{ marginTop: 12 }}>
+          <div className="experiment-result-note" data-tone={failure.stopped ? 'warning' : 'error'} role="status">
             <strong>{t(failure.messageKey)}</strong>
             {failure.suggestionKey ? <span>{t(failure.suggestionKey)}</span> : null}
             {failure.detail ? <span className="experiment-center-hint">{failure.detail}</span> : null}
           </div>
         ) : null}
-      </div>
+      </section>
 
       <LossEvolutionChart
         lossHistory={lossHistory}
         isLight={isLight}
         compact
-        height={240}
+        height={280}
         title={copy.lossTitle}
-        emptyLabel={copy.waitingLogs}
+        className="experiment-monitor-chart"
+        subtitle={lossHistory.train?.length ? copy.lossEpochCount(lossHistory.train.length) : null}
+        emptyLabel={t('modelTraining.charts.noMetrics')}
       />
 
       <ExperimentLogPanel
