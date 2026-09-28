@@ -153,6 +153,10 @@ export default function ExperimentDirectory({
   isProcessing,
   onSelectTask,
   onStop,
+  tasksLoading = false,
+  tasksError = false,
+  onCreateTask,
+  onRetryTasks,
   copy,
   locale,
   isZh,
@@ -172,8 +176,16 @@ export default function ExperimentDirectory({
     failed: t('experimentCenter.filterFailed'),
   };
 
+  // 目录只有三种需要区别对待的状态：还在取任务列表、取失败、或确实没有实验。
+  // 只看真实加载标记（tasksLoading 由首次任务请求复位），不要用 scope 之类的
+  // 登录信息推断，否则登录用户会永远停在「加载中」。这三个标记只影响展示与密度，
+  // 不参与任何筛选或选中判断。
+  const isEmptyDirectory = tasks.length === 0;
+  const isPending = isEmptyDirectory && !tasksError && tasksLoading;
+  const directoryState = tasksError ? 'error' : (isPending ? 'loading' : (isEmptyDirectory ? 'empty' : 'ready'));
+
   return (
-    <div className="experiment-directory">
+    <div className="experiment-directory" data-directory-state={directoryState}>
       <div className="experiment-directory-head">
         <div className="experiment-directory-title">{t('experimentCenter.directoryTitle')}</div>
         <span className="training-tag-hint" role="status">
@@ -203,6 +215,27 @@ export default function ExperimentDirectory({
         isZh={isZh}
         renderMode="directory"
         statusMatcher={statusMatcher}
+        emptyState={{
+          reason: isEmptyDirectory ? (tasksError ? 'error' : (isPending ? 'loading' : 'no-experiments')) : 'no-match',
+          zh: {
+            loading: '正在加载实验…',
+            error: '实验目录加载失败。',
+            noExperiments: '暂无实验。新建实验后，实验会出现在这里。',
+            noMatch: '没有匹配的实验，请调整筛选条件。',
+          },
+          en: {
+            loading: 'Loading experiments…',
+            error: 'Could not load the experiment directory.',
+            noExperiments: 'No experiments yet. Create one and it will appear here.',
+            noMatch: 'No matching experiments. Adjust your filters.',
+          },
+          actionLabel: isZh ? '新建实验' : 'New experiment',
+          retryLabel: isZh ? '重试' : 'Retry',
+          showAction: isEmptyDirectory && !tasksError && !isPending,
+          showRetry: tasksError,
+          onAction: onCreateTask,
+          onRetry: onRetryTasks,
+        }}
         renderTask={(task, tagControls) => (
           <ExperimentDirectoryRow
             key={task.id}

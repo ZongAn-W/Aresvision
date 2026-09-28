@@ -152,10 +152,10 @@ test('uploaded model param form still receives state through the canvas and insp
   assert.match(workspaceSource, /schema=\{selectedUploadedParamSchema\}/);
   assert.match(workspaceSource, /errors=\{visibleCustomModelParamErrors\}/);
   assert.match(workspaceSource, /onChange=\{onCustomModelParamChange\}/);
-  // 检查器显示自定义参数数量，并可一键把画布切到「自定义模型参数」页签。
-  assert.match(inspectorSource, /customParamCount/);
+  // 检查器保留「编辑自定义参数」入口（把画布切到「自定义模型参数」页签）；
+  // 参数数量徽标属于信息减法删除的无助统计。
   assert.match(inspectorSource, /onEditCustomParams/);
-  assert.match(pageSource, /customParamCount,/);
+  assert.doesNotMatch(inspectorSource, /customParamCount/);
 });
 
 test('model copy helpers are exported from the model module', () => {

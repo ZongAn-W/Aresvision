@@ -5,7 +5,7 @@ import { filterTaggedTasks } from './trainingTagFilters';
 import { TagChips, TagFilter, TagPicker } from './TagControls';
 import { EditTaskTagsDialog, TagManager } from './TagDialogs';
 
-export default function TrainingHistory({ tasks, tagState, isZh, renderTask, renderMode = 'list', statusMatcher = null, headerExtra = null }) {
+export default function TrainingHistory({ tasks, tagState, isZh, renderTask, renderMode = 'list', statusMatcher = null, headerExtra = null, emptyState = null }) {
   const isDirectory = renderMode === 'directory';
   const [filter, setFilter] = useState({ tagIds: [], untagged: false });
   const [search, setSearch] = useState('');
@@ -39,7 +39,7 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask, ren
     } catch (err) { setError(err.message); }
   }
 
-  if (isDirectory) return <div className="training-tag-directory">
+  if (isDirectory) return <div className={`training-tag-directory${emptyState ? ` is-${emptyState.reason}` : ''}`}>
     {headerExtra ? <div className="experiment-directory-tools">{headerExtra(selected, filtered)}</div> : null}
     <div className="training-tag-toolbar">
       <input className="training-tag-input" style={{ flex: '1 1 150px' }} type="search" aria-label={isZh ? '搜索实验名称' : 'Search experiments'} placeholder={isZh ? '搜索实验名称' : 'Search experiments'} value={search} onChange={event => { setSelected([]); setSearch(event.target.value); }} />
@@ -70,9 +70,33 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask, ren
         <button className="training-tag-button" style={{ marginLeft: 'auto' }} disabled={tagState.busy || tagState.loading || Boolean(tagState.error)} onClick={() => setEditing(task)}>{isZh ? '编辑标签' : 'Edit tags'}</button>
       </div>))}
     </div>
-    {!filtered.length && <div style={{ padding: 24, textAlign: 'center', color: C.ice60, lineHeight: 1.7 }}>
-      {tasks.length ? (isZh ? '没有匹配的实验，请调整筛选条件。' : 'No matching experiments. Adjust your filters.') : (isZh ? '暂无实验。新建实验后，实验会出现在这里。' : 'No experiments yet. Create one and it will appear here.')}
-    </div>}
+    {!filtered.length && (() => {
+      const copy = emptyState || {};
+      const strings = isZh ? copy.zh : copy.en;
+      const reason = copy.reason || (tasks.length ? 'no-match' : 'no-experiments');
+      const message = strings
+        ? (reason === 'loading' ? strings.loading
+          : reason === 'error' ? strings.error
+            : reason === 'no-match' ? strings.noMatch
+              : strings.noExperiments)
+        : (tasks.length ? (isZh ? '没有匹配的实验，请调整筛选条件。' : 'No matching experiments. Adjust your filters.') : (isZh ? '暂无实验。新建实验后，实验会出现在这里。' : 'No experiments yet. Create one and it will appear here.'));
+      return (
+        <div className="experiment-directory-empty" data-empty-reason={reason} role={reason === 'error' ? 'alert' : 'status'}>
+          <p className="experiment-directory-empty-text">{message}</p>
+          {copy.showRetry && copy.onRetry ? (
+            <div className="experiment-directory-empty-actions">
+              {/* 只有取任务列表失败时才出现：重试走页面控制器传进来的加载函数，不新增请求逻辑。 */}
+              <button type="button" className="training-tag-button" data-empty-action="retry" onClick={copy.onRetry}>{copy.retryLabel || (isZh ? '重试' : 'Retry')}</button>
+            </div>
+          ) : null}
+          {copy.showAction && copy.onAction ? (
+            <div className="experiment-directory-empty-actions">
+              <button type="button" className="experiment-center-button experiment-center-button-primary" data-empty-action="create" onClick={copy.onAction}>{copy.actionLabel}</button>
+            </div>
+          ) : null}
+        </div>
+      );
+    })()}
     {managing && <TagManager state={tagState} isZh={isZh} onClose={() => setManaging(false)} />}
     {editing && <EditTaskTagsDialog title={isZh ? `编辑标签 · ${editing.custom_model_name || editing.id}` : `Edit tags · ${editing.custom_model_name || editing.id}`} initialIds={(editing.tags || []).map(tag => tag.id)} state={tagState} isZh={isZh} onClose={() => setEditing(null)} onSave={ids => tagState.mutate(() => replaceTrainingTaskTags(editing.id, ids))} />}
   </div>;

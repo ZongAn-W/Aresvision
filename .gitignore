@@ -20,6 +20,8 @@
 # 实验中心验收夹具的临时产物（登录 JWT 与探针模型源码，由 seed-probe-profile.mjs 生成）
 scripts/audit/experiment-console/.probe-profile.json
 scripts/audit/experiment-console/.probe-surface-net.py
+# 验收截图与逐次字号读数由 verify-font-hierarchy.mjs 就地生成，按构建结果变化，不入库
+scripts/audit/experiment-console/shots/
 
 # Node / frontend build outputs
 frontend/node_modules/

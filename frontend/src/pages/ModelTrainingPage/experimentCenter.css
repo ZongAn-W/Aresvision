@@ -32,6 +32,31 @@
   --experiment-gap: 14px;
   --experiment-rail-width: 235px;
   --experiment-inspector-width: 284px;
+
+  /* 面层令牌：页面里所有的分组背景只走这三档，用明度差代替描边。
+     深色主题是「越靠内越深」，浅色主题在 [data-theme='light'] 里覆盖。 */
+  --experiment-surface-1: rgba(7, 19, 31, 0.34);
+  --experiment-surface-2: rgba(11, 24, 40, 0.5);
+  --experiment-surface-3: rgba(3, 11, 19, 0.36);
+
+  /* 文字层级令牌（三级：标题 / 标签 / 值 / 辅助说明）。
+     这里的值等于改造前各规则里的原始字号，因此手机与平板（≤ 900px）渲染完全不变；
+     桌面端（≥ 901px）在文件末尾「桌面端文字层级」媒体查询里整体上调到 12–14px。
+     9–11px 只保留给非关键的英文代码标记与装饰性序号。 */
+  --experiment-text-helper: 10px;   /* 辅助说明、字段提示、单位 */
+  --experiment-text-label: 12px;    /* 字段标签、小节标题、控制件 */
+  --experiment-text-value: 13px;    /* 字段值、正文号值 */
+  --experiment-text-small: 11px;    /* 页头与阶段指示等次级控制件 */
+  --experiment-text-control: 12px;  /* 按钮、胶囊、页签 */
+  --experiment-text-micro: 9px;     /* 英文代码标记（WINDOW / EPOCHS / .PY / v1） */
+  --experiment-text-tiny: 9px;      /* 装饰性序号与计数徽标 */
+}
+
+/* 浅色主题：同三档面层，方向相反（越靠内越亮）。 */
+[data-theme='light'] {
+  --experiment-surface-1: rgba(255, 255, 255, 0.72);
+  --experiment-surface-2: rgba(255, 255, 255, 0.9);
+  --experiment-surface-3: rgba(23, 33, 47, 0.045);
 }
 
 .experiment-center {
@@ -70,14 +95,14 @@
   justify-content: space-between;
   gap: 24px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .experiment-center-eyebrow {
   margin-bottom: 6px;
   color: #f19a78;
   font-family: var(--experiment-mono);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -98,12 +123,12 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin: 0 0 18px;
+  margin: 0 0 14px;
   padding: 0;
   list-style: none;
   color: var(--text-40);
   font-family: var(--experiment-mono);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
 }
 
 .experiment-center-stage-step {
@@ -114,7 +139,7 @@
 
 .experiment-center-stage-arrow {
   color: var(--text-30);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   user-select: none;
 }
 
@@ -130,7 +155,7 @@
   background: transparent;
   color: var(--text-60);
   font-family: var(--experiment-mono);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 700;
   cursor: default;
 }
@@ -144,7 +169,7 @@
   border-radius: 999px;
   background: rgba(126, 161, 190, 0.16);
   color: var(--text-60);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-variant-numeric: tabular-nums;
 }
 
@@ -205,7 +230,7 @@
   background: var(--bg-muted);
   color: var(--text-60);
   font-family: var(--font-body);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-control) * var(--font-scale, 1));
   font-weight: 700;
   cursor: pointer;
   transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, opacity 0.18s ease;
@@ -235,6 +260,7 @@
 .experiment-config-chip:focus-visible,
 .experiment-channel-chip:focus-visible,
 .experiment-source-option:focus-visible,
+.experiment-dataset-option:focus-visible,
 .experiment-uploaded-upload:focus-visible,
 .experiment-uploaded-link:focus-visible,
 .experiment-canvas-name:focus-visible,
@@ -309,7 +335,7 @@
 
 .experiment-center-hint {
   min-width: 0;
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   color: var(--text-60);
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -352,15 +378,13 @@
   min-width: 0;
 }
 
-/* 画布头部：可编辑实验名称 + 一行任务说明 + 右侧就绪胶囊。 */
+/* 画布 01 模型名称：与其它分区同一套底色与内边距（旧头部的蓝色渐变已去掉），
+   标题下就是可编辑名称。 */
 .experiment-canvas-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 18px 20px;
+  display: block;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--experiment-line);
-  background: linear-gradient(90deg, rgba(121, 187, 255, 0.07), transparent 70%);
+  background: transparent;
 }
 
 .experiment-canvas-head-main {
@@ -401,22 +425,13 @@
   border-bottom-color: #d95c5c;
 }
 
-.experiment-canvas-meta {
-  margin: 0;
-  color: var(--text-60);
-  font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
-  letter-spacing: 0.02em;
-}
-
 .experiment-canvas-name-error {
   margin: 6px 0 0;
   color: #e8827f;
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 600;
 }
 
-.experiment-canvas-state,
 .experiment-inspector-state {
   display: inline-flex;
   align-items: center;
@@ -425,19 +440,17 @@
   border: 1px solid transparent;
   border-radius: 999px;
   font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-weight: 700;
   white-space: nowrap;
 }
 
-.experiment-canvas-state[data-canvas-state='ready'],
 .experiment-inspector-state[data-inspector-state='ready'] {
   border-color: rgba(99, 232, 191, 0.24);
   background: rgba(99, 232, 191, 0.07);
   color: #63e8bf;
 }
 
-.experiment-canvas-state[data-canvas-state='pending'],
 .experiment-inspector-state[data-inspector-state='blocked'] {
   border-color: rgba(241, 154, 120, 0.3);
   background: rgba(241, 154, 120, 0.08);
@@ -458,9 +471,11 @@
   flex: 0 0 auto;
 }
 
-/* 分区：细线分隔，不套卡片。 */
+/* 分区：细线分隔，不套卡片。
+   上下留白各 16px，分区标题用自己的 margin 与内容拉开层级；只收紧留白，
+   不改变字号、控件尺寸与可点区域。 */
 .experiment-canvas-section {
-  padding: 20px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--experiment-line);
   min-width: 0;
 }
@@ -473,15 +488,8 @@
   display: flex;
   align-items: baseline;
   gap: 9px;
-  margin-bottom: 13px;
+  margin-bottom: 10px;
   flex-wrap: wrap;
-}
-
-.experiment-section-index {
-  color: #79bbff;
-  font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
-  font-weight: 800;
 }
 
 .experiment-section-title {
@@ -491,41 +499,75 @@
   color: var(--text) !important;
 }
 
-.experiment-section-hint {
-  margin-left: auto;
-  color: var(--text-40);
-  font-size: calc(10px * var(--font-scale, 1));
+/* 分区序号：让「模型名称 / 数据集 / 模型 / 超参数」四个部分的边界一眼可辨（第 29 节）。 */
+.experiment-section-index {
+  min-width: 18px;
+  color: #79bbff;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-/* 01 任务定义：数据集与模型来源并排 */
-.experiment-task-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
-}
+/* 数据集与模型各自独占一个分区（第 29 节）。 */
 
+/* 两个分组块：静态时只是一块比分区底色略深的「纸」，不再描边。
+   描边留给真实状态——上传模型校验失败（invalid）与校验过程（pending）。
+   `data-active` 是 JSX 里的固定值，不表示用户选择，所以不再产生强调线。 */
 .experiment-choice-block {
   min-width: 0;
-  padding: 13px;
-  border: 1px solid var(--experiment-line);
+  padding: 10px 12px;
+  border: 1px solid transparent;
   border-radius: 13px;
-  background: rgba(7, 19, 31, 0.5);
-}
-
-.experiment-choice-block[data-active='true'] {
-  border-color: rgba(121, 187, 255, 0.32);
-  box-shadow: inset 2px 0 0 #79bbff;
-}
-
-.experiment-choice-block[data-model-block='valid'] {
-  border-color: rgba(241, 154, 120, 0.3);
-  box-shadow: inset 2px 0 0 #f19a78;
+  background: var(--experiment-surface-1);
 }
 
 .experiment-choice-block[data-model-block='invalid'] {
   border-color: rgba(217, 92, 92, 0.36);
-  box-shadow: inset 2px 0 0 #d95c5c;
+}
+
+.experiment-choice-block[data-model-block='pending'] {
+  border-color: rgba(200, 148, 72, 0.3);
+}
+
+/* 数据集只有两项，直接列成单选列表：选中项与模型来源用同一条左侧强调线，
+   不再用原生 select（展开菜单多一次点击，也看不到另一项）。
+   独占「数据集」分区后两个选项横排，窄视口由 auto-fit 回落单列。 */
+.experiment-dataset-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.experiment-dataset-option {
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 8px;
+  background: var(--experiment-surface-2);
+  color: var(--text-60);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-body);
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.experiment-dataset-option strong {
+  display: block;
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-dataset-option:hover {
+  border-color: var(--experiment-line-strong);
+}
+
+.experiment-dataset-option[aria-checked='true'] {
+  border-color: transparent;
+  background: rgba(241, 154, 120, 0.12);
+  box-shadow: inset 2px 0 0 #f19a78;
+  color: var(--text);
 }
 
 .experiment-choice-label {
@@ -533,42 +575,9 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 9px;
+  margin-bottom: 8px;
   color: var(--text-60);
-  font-size: calc(10px * var(--font-scale, 1));
-}
-
-.experiment-choice-label em {
-  color: #63e8bf;
-  font-style: normal;
-  font-family: var(--experiment-mono);
-  font-size: calc(9px * var(--font-scale, 1));
-  letter-spacing: 0.06em;
-}
-
-.experiment-choice-select {
-  width: 100%;
-  min-width: 0;
-  padding: 4px 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  color: var(--text) !important;
-  font-size: calc(13px * var(--font-scale, 1)) !important;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.experiment-choice-select option {
-  background: var(--bg-elevated);
-  color: var(--text);
-}
-
-.experiment-choice-meta {
-  margin-top: 7px;
-  color: var(--text-60);
-  font-size: calc(10px * var(--font-scale, 1));
-  line-height: 1.55;
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
 }
 
 /* 模型来源切换 */
@@ -576,15 +585,15 @@
   display: grid;
   grid-template-columns: 1.25fr 1fr;
   gap: 6px;
-  margin: 5px 0 10px;
+  margin: 4px 0 8px;
 }
 
 .experiment-source-option {
-  min-height: 38px;
-  padding: 8px 10px;
+  min-height: 36px;
+  padding: 5px 10px;
   border: 1px solid var(--experiment-line);
   border-radius: 8px;
-  background: rgba(13, 29, 46, 0.6);
+  background: var(--experiment-surface-2);
   color: var(--text-60);
   cursor: pointer;
   text-align: left;
@@ -594,19 +603,12 @@
 
 .experiment-source-option strong {
   display: block;
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   font-weight: 800;
 }
 
-.experiment-source-option small {
-  display: block;
-  margin-top: 3px;
-  color: var(--text-40);
-  font-size: calc(9px * var(--font-scale, 1));
-}
-
 .experiment-source-option[aria-pressed='true'] {
-  border-color: rgba(241, 154, 120, 0.56);
+  border-color: transparent;
   background: rgba(241, 154, 120, 0.12);
   box-shadow: inset 2px 0 0 #f19a78;
   color: var(--text);
@@ -624,7 +626,7 @@
 /* 上传模型（紧凑卡片 + 次要管理入口） */
 .experiment-uploaded-model {
   display: grid;
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -637,34 +639,26 @@
   border-radius: 9px;
   background: rgba(217, 92, 92, 0.1);
   color: #e8827f;
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 700;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
+/* 已选模型卡片：位于模型来源块之内，用一层暖色底 + 左侧短强调线表达「这是当前值」，
+   不再整圈描边（否则与来源块、上传区形成连续三层框线）。
+   `.PY` 徽标删除后只剩「文件名 + 版本/参数数 + 校验状态」三列。 */
 .experiment-uploaded-card {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 10px 11px;
-  border: 1px solid rgba(241, 154, 120, 0.32);
   border-radius: 10px;
-  background: linear-gradient(100deg, rgba(241, 154, 120, 0.11), rgba(13, 29, 46, 0.5));
-}
-
-.experiment-uploaded-icon {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
-  background: rgba(241, 154, 120, 0.14);
-  color: #f19a78;
-  font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
-  font-weight: 800;
+  background:
+    linear-gradient(100deg, rgba(241, 154, 120, 0.1), transparent 62%),
+    var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 rgba(241, 154, 120, 0.5);
 }
 
 .experiment-uploaded-body {
@@ -677,19 +671,19 @@
   white-space: nowrap;
   color: var(--text);
   font-family: var(--experiment-mono);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
 }
 
 .experiment-uploaded-meta {
   margin-top: 3px;
   color: var(--text-60);
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
 }
 
 .experiment-uploaded-status {
   color: #63e8bf;
   font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-weight: 700;
   white-space: nowrap;
 }
@@ -700,19 +694,19 @@
 
 .experiment-uploaded-empty {
   display: grid;
-  gap: 4px;
-  padding: 11px;
+  gap: 3px;
+  padding: 9px 11px;
   border: 1px dashed var(--experiment-line);
   border-radius: 10px;
-  background: rgba(7, 19, 31, 0.5);
+  background: var(--experiment-surface-1);
   color: var(--text-60);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   line-height: 1.6;
 }
 
 .experiment-uploaded-empty strong {
   color: var(--text);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
 }
 
 .experiment-uploaded-actions {
@@ -730,7 +724,7 @@
   background: rgba(241, 154, 120, 0.14);
   color: #f19a78;
   font-family: var(--font-body);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   font-weight: 800;
   cursor: pointer;
   transition: background 0.18s ease, opacity 0.18s ease;
@@ -738,6 +732,13 @@
 
 .experiment-uploaded-upload:hover:not(:disabled) {
   background: rgba(241, 154, 120, 0.24);
+}
+
+/* 已选中模型时，这里的主操作在底部运行条，上传区只留「上传模型」这类次级动作：
+   实心暖底改成描边，避免与唯一的实心橙主按钮争夺焦点（未选模型时仍是实心，是那一屏的动作）。 */
+.experiment-uploaded-model[data-has-selection='true'] .experiment-uploaded-upload {
+  border-color: rgba(241, 154, 120, 0.4);
+  background: transparent;
 }
 
 .experiment-uploaded-upload:disabled {
@@ -751,7 +752,7 @@
   background: transparent;
   color: #79bbff;
   font-family: var(--font-body);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 700;
   text-decoration: none;
   cursor: pointer;
@@ -785,21 +786,24 @@
   display: grid;
   gap: 2px;
   padding: 8px 10px;
-  border: 1px solid var(--experiment-line);
-  border-left: 2px solid transparent;
   border-radius: 9px;
-  background: rgba(13, 29, 46, 0.6);
+  background: var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 transparent;
   color: var(--text-60);
   text-align: left;
   cursor: pointer;
   font-family: var(--font-body);
-  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+  transition: box-shadow 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.experiment-uploaded-item:hover {
+  background: var(--experiment-surface-1);
+  color: var(--text);
 }
 
 .experiment-uploaded-item[aria-pressed='true'] {
-  border-color: rgba(121, 187, 255, 0.4);
-  border-left-color: #79bbff;
   background: rgba(121, 187, 255, 0.1);
+  box-shadow: inset 2px 0 0 #79bbff;
   color: var(--text);
 }
 
@@ -809,7 +813,7 @@
 }
 
 .experiment-uploaded-item-name {
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -817,12 +821,12 @@
 }
 
 .experiment-uploaded-item-status {
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-weight: 800;
 }
 
 .experiment-uploaded-item-meta {
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
   color: var(--text-40);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -851,7 +855,7 @@
   margin: 0;
   padding-left: 18px;
   color: var(--text-60);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   line-height: 1.6;
 }
 
@@ -870,9 +874,13 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 4px 0 0;
+  margin: 0 0 9px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
   color: var(--text-60);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   cursor: pointer;
 }
 
@@ -895,10 +903,10 @@
   width: 100%;
   min-height: 38px;
   padding: 9px 11px;
-  border: 1px solid var(--experiment-line);
-  border-left: 2px solid #79bbff;
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: rgba(13, 29, 46, 0.6);
+  background: var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 rgba(121, 187, 255, 0.5);
   color: var(--text);
   text-align: left;
   cursor: pointer;
@@ -911,13 +919,13 @@
 
 .experiment-architecture-current-value {
   font-family: var(--experiment-mono);
-  font-size: calc(13px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-value) * var(--font-scale, 1));
   font-weight: 700;
 }
 
 .experiment-architecture-current-hint {
   color: #79bbff;
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
 }
 
 .experiment-architecture-options {
@@ -933,9 +941,9 @@
   padding: 9px 10px !important;
   border: 1px solid var(--experiment-line) !important;
   border-radius: 8px !important;
-  background: rgba(4, 13, 23, 0.72) !important;
+  background: var(--experiment-surface-2) !important;
   color: var(--text) !important;
-  font-size: calc(11px * var(--font-scale, 1)) !important;
+  font-size: calc(var(--experiment-text-control) * var(--font-scale, 1)) !important;
 }
 
 .experiment-architecture-families {
@@ -956,7 +964,7 @@
   background: transparent;
   color: var(--text-60);
   font-family: var(--font-body);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -984,16 +992,17 @@
 .experiment-architecture-option {
   min-height: 36px;
   padding: 8px 9px;
-  border: 1px solid var(--experiment-line);
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: rgba(13, 29, 46, 0.6);
+  background: var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 transparent;
   color: var(--text-60);
   text-align: left;
   cursor: pointer;
   font-family: var(--font-body);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   overflow-wrap: anywhere;
-  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease, background 0.18s ease;
 }
 
 .experiment-architecture-option:hover:not(:disabled) {
@@ -1004,6 +1013,7 @@
 .experiment-architecture-option[aria-pressed='true'] {
   border-color: rgba(121, 187, 255, 0.44);
   background: rgba(121, 187, 255, 0.12);
+  box-shadow: inset 2px 0 0 #79bbff;
   color: #79bbff;
   font-weight: 700;
 }
@@ -1018,7 +1028,7 @@
   border: 1px dashed var(--experiment-line);
   border-radius: 9px;
   color: var(--text-60);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
 }
 
 .experiment-architecture-footnote {
@@ -1032,9 +1042,9 @@
   gap: 8px;
   flex-wrap: wrap;
   padding: 11px 12px;
-  border: 1px solid var(--experiment-line);
+  border: 1px solid transparent;
   border-radius: 13px;
-  background: rgba(7, 19, 31, 0.5);
+  background: var(--experiment-surface-1);
 }
 
 .experiment-payload-lock {
@@ -1044,7 +1054,7 @@
   padding-right: 10px;
   border-right: 1px solid var(--experiment-line);
   color: #9ad9ef;
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 800;
 }
 
@@ -1053,7 +1063,7 @@
   border-radius: 5px;
   background: rgba(154, 217, 239, 0.12);
   font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
 }
 
 .experiment-channel-chip {
@@ -1062,19 +1072,25 @@
   gap: 6px;
   min-height: 32px;
   padding: 6px 9px;
-  border: 1px solid var(--experiment-line);
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: rgba(13, 29, 46, 0.6);
+  background: var(--experiment-surface-2);
   color: var(--text-60);
   cursor: pointer;
   font-family: var(--font-body);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.experiment-channel-chip:hover:not(:disabled) {
+  border-color: var(--experiment-line);
+  color: var(--text);
 }
 
 .experiment-channel-chip b {
   color: #f19a78;
   font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
 }
 
 .experiment-channel-chip[aria-pressed='true'] {
@@ -1084,134 +1100,53 @@
   font-weight: 700;
 }
 
-.experiment-channel-chip:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.experiment-payload-count {
-  margin-left: auto;
-  color: var(--text-40);
-  font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
-  white-space: nowrap;
-}
-
-.experiment-flow {
+/* --- 超参数六个页签共用的一套字段块（第 26 节） ---------------------------
+   载荷胶囊、训练参数矩阵、专家字段与自定义参数表单都用同一套度量：
+   三列网格（间距 9px）+ surface-2 面层块（内边距 9px 10px、圆角 9px、
+   标签行 + 控件行），这样切页签时右侧形态一致，不再一行一个样。
+   窄视口由后面的响应式断点统一回落两列 / 单列。 */
+.experiment-payload-bar,
+.experiment-param-grid,
+.experiment-expert-fields,
+.experiment-expert-stack {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px auto 36px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-  padding: 17px 14px;
-  border-top: 1px solid var(--experiment-line);
-  background: linear-gradient(90deg, rgba(121, 187, 255, 0.035), transparent, rgba(241, 154, 120, 0.035));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  min-width: 0;
 }
 
-.experiment-flow-end {
+/* 需要占满整行的块（成排的按钮、标签选择器等）。 */
+.experiment-field-wide,
+.experiment-payload-count,
+.experiment-expert-stack > .experiment-config-choice,
+.experiment-expert-stack > .experiment-expert-actions,
+.experiment-expert-stack > .experiment-expert-fields {
+  grid-column: 1 / -1;
+}
+
+.experiment-payload-lock,
+.experiment-channel-chip,
+.experiment-param-cell,
+.experiment-expert-field {
   display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.experiment-flow-caption {
-  color: var(--text-60);
-  font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
-  letter-spacing: 0.08em;
-}
-
-.experiment-flow-frames {
-  display: flex;
-  align-items: flex-end;
-  gap: 5px;
-  min-width: 0;
-}
-
-.experiment-flow-frame {
-  display: inline-grid;
-  place-items: center;
-  flex: 1 1 0;
-  min-width: 0;
-  max-width: 74px;
-  height: 35px;
-  border: 1px solid rgba(121, 187, 255, 0.24);
-  border-radius: 3px;
-  background-color: rgba(121, 187, 255, 0.03);
-  background-image:
-    repeating-linear-gradient(0deg, transparent 0 7px, rgba(121, 187, 255, 0.07) 7px 8px),
-    repeating-linear-gradient(90deg, transparent 0 9px, rgba(121, 187, 255, 0.07) 9px 10px);
-  color: #9ad9ef;
-  font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
-  overflow: hidden;
-}
-
-.experiment-flow-end[data-sequence='output'] .experiment-flow-frame {
-  border-color: rgba(241, 154, 120, 0.25);
-  background-color: rgba(241, 154, 120, 0.04);
-  color: #f19a78;
-}
-
-.experiment-flow-connector {
-  position: relative;
-  height: 1px;
-  background: var(--experiment-line-strong);
-}
-
-.experiment-flow-connector::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  top: -3px;
-  width: 6px;
-  height: 6px;
-  border-right: 1px solid #79bbff;
-  border-top: 1px solid #79bbff;
-  transform: rotate(45deg);
-}
-
-.experiment-flow-model {
-  padding: 14px 18px;
-  border: 1px solid var(--experiment-line-strong);
-  border-radius: 8px;
-  color: #9ad9ef;
-  font-family: var(--experiment-mono);
-  font-size: calc(12px * var(--font-scale, 1));
-  text-align: center;
-  min-width: 0;
-}
-
-.experiment-flow-model-title {
-  display: block;
-  overflow-wrap: anywhere;
-}
-
-.experiment-flow-model small {
-  display: block;
-  margin-top: 5px;
-  color: var(--text-40);
-  font-size: calc(9px * var(--font-scale, 1));
-  overflow-wrap: anywhere;
-}
-
-/* 03 参数矩阵 */
-.experiment-param-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  min-width: 0;
-}
-
-.experiment-param-cell {
-  display: grid;
+  align-content: start;
   gap: 6px;
-  padding: 11px 10px;
-  border: 1px solid var(--experiment-line);
-  border-left: 2px solid rgba(121, 187, 255, 0.4);
-  border-radius: 11px;
-  background: rgba(7, 19, 31, 0.5);
   min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
+  text-align: left;
+}
+
+/* 块里的第一行都是同一个标签行。 */
+.experiment-payload-lock,
+.experiment-param-label,
+.experiment-expert-field > span {
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-family: var(--font-body);
+  overflow-wrap: anywhere;
 }
 
 .experiment-param-label {
@@ -1219,50 +1154,96 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 6px;
-  color: var(--text-60);
-  font-size: calc(10px * var(--font-scale, 1));
   min-width: 0;
 }
 
-.experiment-param-label code {
+/* 载荷块是可以点开的开关：未选中只有面层，选中用暖色左强调线。 */
+.experiment-channel-chip {
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.experiment-channel-chip:hover:not(:disabled) {
+  border-color: var(--experiment-line);
+}
+
+.experiment-channel-chip[aria-pressed='true'] {
+  border-color: transparent;
+  background: rgba(241, 154, 120, 0.12);
+  box-shadow: inset 2px 0 0 #f19a78;
+}
+
+.experiment-channel-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 值行：载荷短码 / 参数数值都是等宽。 */
+.experiment-channel-chip b,
+.experiment-payload-lock b {
+  color: #f19a78;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+}
+
+.experiment-payload-lock b {
+  color: #9ad9ef;
+}
+
+.experiment-payload-count {
+  justify-self: end;
   color: var(--text-40);
   font-family: var(--experiment-mono);
-  font-size: calc(9px * var(--font-scale, 1));
-  letter-spacing: 0.04em;
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   white-space: nowrap;
 }
 
+/* 参数矩阵的值比专家字段更大（它们是这一屏的主要数字），
+   但基线、悬停与聚焦反馈与专家字段完全一致。 */
 .experiment-param-cell input {
   width: 100%;
   min-width: 0;
-  padding: 0;
+  padding: 0 0 3px;
   border: 0;
+  border-bottom: 1px solid var(--experiment-line);
   background: transparent;
   color: var(--text);
   font-family: var(--experiment-mono);
-  font-size: calc(19px * var(--font-scale, 1));
+  font-size: calc(18px * var(--font-scale, 1));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
+.experiment-param-cell input:hover:not(:disabled) {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-param-cell input:focus {
+  border-bottom-color: #9ad9ef;
+  outline: none;
+}
+
 .experiment-param-cell input:disabled {
+  border-bottom-color: transparent;
   opacity: 0.7;
 }
 
 .experiment-param-cell small {
   display: block;
   color: var(--text-40);
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
 }
 
-/* 04 专家参数：侧边页签 + 右侧参数 */
+/* 04 专家参数：外层只是分栏容器而不是卡片，去掉整圈描边；
+   左侧页签列用一条竖分隔线，选中态由页签自己的左强调线表达。 */
 .experiment-expert {
   display: grid;
   grid-template-columns: 148px minmax(0, 1fr);
-  border: 1px solid var(--experiment-line);
+  border: 1px solid transparent;
   border-radius: 13px;
   overflow: hidden;
-  background: rgba(7, 19, 31, 0.5);
+  background: var(--experiment-surface-1);
   min-width: 0;
 }
 
@@ -1270,7 +1251,7 @@
   display: grid;
   align-content: start;
   border-right: 1px solid var(--experiment-line);
-  background: rgba(3, 12, 21, 0.4);
+  background: var(--experiment-surface-3);
   min-width: 0;
 }
 
@@ -1288,7 +1269,7 @@
   text-align: left;
   cursor: pointer;
   font-family: var(--font-body);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 700;
 }
 
@@ -1311,13 +1292,13 @@
   border-radius: 999px;
   background: rgba(126, 161, 190, 0.2);
   font-family: var(--experiment-mono);
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
   font-variant-numeric: tabular-nums;
 }
 
 .experiment-expert-tab-flag {
   color: #f19a78;
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
 }
 
 .experiment-expert-content {
@@ -1328,7 +1309,7 @@
 .experiment-expert-heading {
   margin: 0 0 5px;
   font-family: var(--font-display);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   font-weight: 800;
   color: var(--text);
   overflow-wrap: anywhere;
@@ -1337,42 +1318,40 @@
 .experiment-expert-note {
   margin: 0 0 12px;
   color: var(--text-40);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   line-height: 1.6;
 }
 
-.experiment-expert-fields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 9px;
-  min-width: 0;
-}
+/* 专家字段沿用上面那套共用块（网格与块的度量统一在「超参数六个页签」段里）。 */
 
-.experiment-expert-field {
-  display: grid;
-  gap: 6px;
-  padding: 9px 10px;
-  border: 1px solid var(--experiment-line);
-  border-radius: 9px;
-  min-width: 0;
-}
-
-.experiment-expert-field > span {
-  color: var(--text-60);
-  font-size: calc(10px * var(--font-scale, 1));
-  overflow-wrap: anywhere;
+.experiment-expert-field small {
+  color: var(--text-40);
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+  line-height: 1.5;
 }
 
 .experiment-expert-field input,
 .experiment-expert-field select {
   width: 100%;
   min-width: 0;
-  padding: 4px 0;
+  padding: 4px 0 3px;
   border: 0;
+  border-bottom: 1px solid var(--experiment-line);
   background: transparent;
   color: var(--text);
   font-family: var(--experiment-mono);
-  font-size: calc(13px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-value) * var(--font-scale, 1));
+}
+
+.experiment-expert-field input:hover:not(:disabled),
+.experiment-expert-field select:hover:not(:disabled) {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-expert-field input:focus,
+.experiment-expert-field select:focus {
+  border-bottom-color: #9ad9ef;
+  outline: none;
 }
 
 .experiment-expert-field select option {
@@ -1381,19 +1360,91 @@
 }
 
 .experiment-expert-field input:disabled {
+  border-bottom-color: transparent;
   opacity: 0.65;
+}
+
+/* 标签页签是与其它页签同度量的整行块，但它是独立控件：只用外层度量，
+   不再套 `.experiment-expert-field` 的后代规则（那会把搜索框和标签项里
+   的 input / span 一起改掉，标签名会被压成一列一个字）。 */
+.experiment-tag-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
+}
+
+/* fieldset 保持普通块级布局：grid 化之后百分比宽度会算错（搜索框只拿到半宽），
+   间距改用相邻兄弟外边距。 */
+.experiment-tag-block .training-tag-picker {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.experiment-tag-block .training-tag-picker > * + * {
+  margin-top: 8px;
+}
+
+.experiment-tag-block .training-tag-picker legend {
+  padding: 0;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 400;
+}
+
+.experiment-tag-block .training-tag-input {
+  width: 100%;
+  /* 旧的 420px 上限在整行标签块里会让搜索框只占一半，块内改为铺满。 */
+  max-width: none;
+}
+
+/* 标签按列铺开，每个都有自己的可点面层，长标签名在 150px 起的列里正常换行。 */
+.experiment-tag-block .training-tag-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px 10px;
+  max-height: 176px;
+  margin: 0;
+}
+
+.experiment-tag-block .training-tag-option {
+  min-width: 0;
+  max-width: none;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--experiment-surface-1);
+  transition: border-color 0.18s ease;
+}
+
+.experiment-tag-block .training-tag-option:hover {
+  border-color: var(--experiment-line);
+}
+
+.experiment-tag-block .training-tag-option > span {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.experiment-tag-block .training-tag-hint {
+  display: block;
 }
 
 .experiment-expert-ok {
   color: #63e8bf;
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
 }
 
 .experiment-expert-stack {
-  display: grid;
-  gap: 10px;
   margin-top: 12px;
-  min-width: 0;
 }
 
 .experiment-expert-actions {
@@ -1410,15 +1461,21 @@
   justify-content: center;
   min-height: 34px;
   padding: 7px 12px;
-  border: 1px solid var(--experiment-line);
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: rgba(13, 29, 46, 0.6);
+  background: var(--experiment-surface-2);
   color: var(--text-60);
   font-family: var(--font-body);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 700;
   text-decoration: none;
   cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.experiment-expert-action:hover:not(:disabled) {
+  border-color: var(--experiment-line);
+  color: var(--text);
 }
 
 .experiment-expert-action.is-primary {
@@ -1446,7 +1503,7 @@
   border: 1px dashed var(--experiment-line);
   border-radius: 10px;
   color: var(--text-60);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   line-height: 1.6;
 }
 
@@ -1475,13 +1532,19 @@
   min-height: 36px;
   padding: 8px 12px;
   border-radius: 9px;
-  border: 1px solid var(--experiment-line);
-  background: rgba(13, 29, 46, 0.6);
+  border: 1px solid transparent;
+  background: var(--experiment-surface-2);
   color: var(--text-60);
   font-family: var(--font-body);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-control) * var(--font-scale, 1));
   font-weight: 600;
   cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.experiment-config-chip:hover:not(:disabled) {
+  border-color: var(--experiment-line);
+  color: var(--text);
 }
 
 .experiment-config-chip[aria-pressed='true'] {
@@ -1505,7 +1568,7 @@
   border-radius: 11px;
   background: rgba(200, 148, 72, 0.1);
   color: #c89448;
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   line-height: 1.6;
 }
 
@@ -1517,16 +1580,6 @@
 
 .experiment-center-card .training-tag-chip {
   border: 0;
-}
-
-.experiment-expert-content .training-tag-input {
-  max-width: 420px;
-}
-
-@media (max-width: 640px) {
-  .experiment-expert-content .training-tag-input {
-    max-width: none;
-  }
 }
 
 input[type='number']::-webkit-inner-spin-button {
@@ -1556,7 +1609,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-inspector-title {
   font-family: var(--font-display);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   font-weight: 800;
   letter-spacing: 0.04em;
   color: var(--text);
@@ -1585,7 +1638,7 @@ input[type='number']::-webkit-inner-spin-button {
   margin-bottom: 8px;
   color: var(--text-40);
   font-family: var(--experiment-mono);
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -1601,7 +1654,7 @@ input[type='number']::-webkit-inner-spin-button {
   margin-top: 5px;
   color: var(--text-60);
   font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -1620,7 +1673,7 @@ input[type='number']::-webkit-inner-spin-button {
   background: transparent;
   color: #79bbff;
   font-family: var(--font-body);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -1633,17 +1686,13 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--text-60);
 }
 
-.experiment-inspector-readiness {
-  display: grid;
-  gap: 7px;
-}
-
+/* 检查器的「就绪检查」区：正常时只有一行结论，有问题时逐条列出原因与定位入口。 */
 .experiment-inspector-readiness-row {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--text-60);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   line-height: 1.5;
 }
 
@@ -1653,83 +1702,73 @@ input[type='number']::-webkit-inner-spin-button {
   width: 16px;
   height: 16px;
   border-radius: 999px;
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-tiny) * var(--font-scale, 1));
   font-weight: 900;
   flex: 0 0 auto;
 }
 
 .experiment-inspector-readiness-row[data-ok='true'] .experiment-inspector-check {
-  background: #63e8bf;
-  color: #06141b;
+  background: rgba(99, 232, 191, 0.14);
+  border: 1px solid rgba(99, 232, 191, 0.45);
+  color: #63e8bf;
 }
 
 .experiment-inspector-readiness-row[data-ok='false'] .experiment-inspector-check {
-  background: rgba(241, 154, 120, 0.18);
-  border: 1px solid rgba(241, 154, 120, 0.5);
-  color: #f19a78;
+  background: #f19a78;
+  border: 1px solid #f19a78;
+  color: #1b0d07;
 }
 
 .experiment-inspector-blockers {
   display: grid;
-  gap: 6px;
-  margin: 10px 0 0;
-  padding-left: 16px;
-  color: #f19a78;
-  font-size: calc(10px * var(--font-scale, 1));
-  line-height: 1.6;
-}
-
-.experiment-inspector-telemetry {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
-}
-
-.experiment-inspector-cell {
-  padding: 9px;
-  border: 1px solid var(--experiment-line);
-  border-radius: 9px;
-  background: rgba(13, 29, 46, 0.6);
-  min-width: 0;
-}
-
-.experiment-inspector-cell small {
-  display: block;
-  color: var(--text-40);
-  font-size: calc(9px * var(--font-scale, 1));
-}
-
-.experiment-inspector-cell strong {
-  display: block;
-  margin-top: 5px;
-  color: #9ad9ef;
-  font-family: var(--experiment-mono);
-  font-size: calc(12px * var(--font-scale, 1));
-  font-variant-numeric: tabular-nums;
-}
-
-.experiment-inspector-details {
-  display: grid;
-  gap: 6px;
-  margin: 10px 0 0;
-}
-
-.experiment-inspector-details > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: calc(10px * var(--font-scale, 1));
-}
-
-.experiment-inspector-details dt {
-  color: var(--text-40);
-}
-
-.experiment-inspector-details dd {
+  gap: 8px;
   margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.experiment-inspector-blockers li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
   color: var(--text-60);
-  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.experiment-inspector-issue-mark {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #f19a78;
+  color: #1b0d07;
+  font-size: calc(var(--experiment-text-tiny) * var(--font-scale, 1));
+  font-weight: 900;
+}
+
+.experiment-inspector-issue-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.experiment-inspector-issue-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #79bbff;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.experiment-inspector-issue-action:hover {
+  text-decoration: underline;
 }
 
 .experiment-inspector-note {
@@ -1737,7 +1776,7 @@ input[type='number']::-webkit-inner-spin-button {
   border-left: 2px solid #b39bff;
   background: rgba(179, 155, 255, 0.07);
   color: var(--text-60);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   line-height: 1.6;
 }
 
@@ -1775,7 +1814,6 @@ input[type='number']::-webkit-inner-spin-button {
 .experiment-run-bar-info {
   display: flex;
   align-items: center;
-  gap: 14px;
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -1784,7 +1822,7 @@ input[type='number']::-webkit-inner-spin-button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   font-weight: 800;
   white-space: nowrap;
 }
@@ -1809,16 +1847,6 @@ input[type='number']::-webkit-inner-spin-button {
   flex: 0 0 auto;
 }
 
-.experiment-run-bar-meta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-60);
-  font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
-}
-
 .experiment-run-bar-actions {
   display: inline-flex;
   align-items: center;
@@ -1828,7 +1856,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-run-bar-note {
   color: var(--text-40);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   white-space: nowrap;
 }
 
@@ -1845,10 +1873,10 @@ input[type='number']::-webkit-inner-spin-button {
   background: #f19a78;
   color: #07121b;
   font-family: var(--font-body);
-  font-size: calc(13px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-value) * var(--font-scale, 1));
   font-weight: 800;
   cursor: pointer;
-  transition: background 0.18s ease, transform 0.18s ease, opacity 0.18s ease;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.18s ease, opacity 0.18s ease;
 }
 
 .experiment-run-bar-start:hover:not(:disabled) {
@@ -1856,9 +1884,25 @@ input[type='number']::-webkit-inner-spin-button {
   transform: translateY(-1px);
 }
 
+/* 实心火星橙只留给「真的可以开始实验」这一种情形：
+   未登录时按钮仍可点（点了弹登录），但改为中性底 + 橙色文字，不与就绪态争焦点；
+   配置未通过校验时按钮禁用，用中性底 + 次要文字，让就绪态成为页面上唯一的橙色实心按钮。 */
 .experiment-run-bar-start:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  background: var(--experiment-surface-2);
+  border: 1px solid var(--experiment-line);
+  color: var(--text-40);
+  opacity: 1;
+}
+
+.experiment-run-bar[data-run-state='guest'] .experiment-run-bar-start:not(:disabled) {
+  background: var(--experiment-surface-2);
+  border: 1px solid rgba(241, 154, 120, 0.42);
+  color: #f19a78;
+}
+
+.experiment-run-bar[data-run-state='guest'] .experiment-run-bar-start:not(:disabled):hover {
+  background: rgba(241, 154, 120, 0.14);
 }
 
 /* --- 实验目录 ------------------------------------------------------------ */
@@ -1883,7 +1927,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-directory-title {
   font-family: var(--font-display);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   font-weight: 800;
   letter-spacing: 0.04em;
   color: var(--text);
@@ -1909,7 +1953,7 @@ input[type='number']::-webkit-inner-spin-button {
   background: transparent;
   color: var(--text-60);
   font-family: var(--font-body);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-control) * var(--font-scale, 1));
   font-weight: 700;
   cursor: pointer;
   flex: 0 1 auto;
@@ -1940,9 +1984,8 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 8px;
   flex-wrap: wrap;
   padding: 9px;
-  border: 1px solid var(--experiment-line);
   border-radius: 10px;
-  background: rgba(13, 29, 46, 0.6);
+  background: var(--experiment-surface-2);
 }
 
 .experiment-directory-list {
@@ -1952,30 +1995,31 @@ input[type='number']::-webkit-inner-spin-button {
   min-height: 0;
 }
 
+/* 目录行：列表里的一行不是卡片，静态时只有面层与间距；
+   悬停提示可点，当前实验用蓝色左强调线表示。 */
 .experiment-directory-row {
   position: relative;
   display: grid;
   gap: 6px;
   width: 100%;
   padding: 11px 12px;
-  border: 1px solid var(--experiment-line);
-  border-left: 2px solid transparent;
+  border: 0;
   border-radius: 11px;
-  background: rgba(13, 29, 46, 0.5);
+  background: var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 transparent;
   color: var(--text);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.18s ease, background 0.18s ease;
+  transition: box-shadow 0.18s ease, background 0.18s ease;
 }
 
 .experiment-directory-row:hover {
-  border-color: var(--experiment-line-strong);
+  background: var(--experiment-surface-1);
 }
 
 .experiment-directory-row[data-active='true'] {
-  border-color: rgba(121, 187, 255, 0.44);
-  border-left-color: #79bbff;
   background: rgba(121, 187, 255, 0.1);
+  box-shadow: inset 2px 0 0 #79bbff;
 }
 
 .experiment-directory-row-top {
@@ -1988,7 +2032,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-directory-name {
   min-width: 0;
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   font-weight: 700;
   color: var(--text);
   overflow: hidden;
@@ -1999,7 +2043,7 @@ input[type='number']::-webkit-inner-spin-button {
 .experiment-directory-id {
   flex-shrink: 0;
   font-family: var(--experiment-mono);
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
   color: var(--text-40);
   font-variant-numeric: tabular-nums;
 }
@@ -2009,7 +2053,7 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   color: var(--text-60);
   line-height: 1.5;
 }
@@ -2027,7 +2071,7 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 6px;
   padding: 3px 9px;
   border-radius: 999px;
-  font-size: calc(9px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
   font-weight: 700;
   white-space: nowrap;
 }
@@ -2070,15 +2114,14 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-monitor-metric {
   padding: 12px 14px;
-  border: 1px solid var(--experiment-line);
   border-radius: 13px;
-  background: rgba(13, 29, 46, 0.5);
+  background: var(--experiment-surface-2);
   min-width: 0;
 }
 
 .experiment-monitor-metric-label {
   margin-bottom: 6px;
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   color: var(--text-40);
   line-height: 1.4;
 }
@@ -2093,6 +2136,7 @@ input[type='number']::-webkit-inner-spin-button {
   white-space: nowrap;
 }
 
+/* 终端日志区保留外框：它是一个有边界的滚动视口，不是普通内容卡片。 */
 .experiment-monitor-log {
   display: flex;
   flex-direction: column;
@@ -2135,7 +2179,7 @@ input[type='number']::-webkit-inner-spin-button {
   border-radius: 999px;
   border: 1px solid var(--experiment-line);
   font-family: var(--experiment-mono);
-  font-size: calc(10px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-weight: 700;
   white-space: nowrap;
 }
@@ -2148,7 +2192,7 @@ input[type='number']::-webkit-inner-spin-button {
   overscroll-behavior: contain;
   padding: 10px 0;
   font-family: var(--experiment-mono);
-  font-size: calc(12px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   line-height: 1.58;
   font-variant-numeric: tabular-nums;
   white-space: pre-wrap;
@@ -2239,15 +2283,14 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-result-metric {
   padding: 14px 16px;
-  border: 1px solid var(--experiment-line);
   border-radius: 13px;
-  background: rgba(13, 29, 46, 0.5);
+  background: var(--experiment-surface-2);
   min-width: 0;
 }
 
 .experiment-result-metric-label {
   margin-bottom: 6px;
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
   color: var(--text-40);
 }
 
@@ -2268,14 +2311,15 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 10px;
 }
 
+/* 结果说明块：静态时只有面层，出错 / 警告时才有描边与状态色。 */
 .experiment-result-note {
   display: grid;
   gap: 6px;
   padding: 12px 14px;
   border-radius: 11px;
-  border: 1px solid var(--experiment-line);
-  background: rgba(13, 29, 46, 0.5);
-  font-size: calc(12px * var(--font-scale, 1));
+  border: 1px solid transparent;
+  background: var(--experiment-surface-2);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
   line-height: 1.65;
 }
 
@@ -2375,9 +2419,7 @@ input[type='number']::-webkit-inner-spin-button {
     grid-template-columns: 200px minmax(0, 1fr);
   }
 
-  .experiment-task-grid,
-  .experiment-architecture-list,
-  .experiment-inspector-telemetry {
+  .experiment-architecture-list {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2405,7 +2447,10 @@ input[type='number']::-webkit-inner-spin-button {
     border-bottom-color: #79bbff;
   }
 
-  .experiment-expert-fields {
+  .experiment-param-grid,
+  .experiment-payload-bar,
+  .experiment-expert-fields,
+  .experiment-expert-stack {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -2438,16 +2483,9 @@ input[type='number']::-webkit-inner-spin-button {
     border-radius: 0;
   }
 
-  .experiment-run-bar-meta {
-    white-space: normal;
-    overflow: visible;
-  }
-
-  .experiment-task-grid,
   .experiment-param-grid,
   .experiment-architecture-list,
-  .experiment-expert,
-  .experiment-flow {
+  .experiment-expert {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2465,19 +2503,6 @@ input[type='number']::-webkit-inner-spin-button {
   .experiment-expert-tab[aria-selected='true'] {
     border-left-color: transparent;
     border-bottom-color: #79bbff;
-  }
-
-  .experiment-flow-connector {
-    width: 1px;
-    height: 20px;
-    justify-self: center;
-  }
-
-  .experiment-flow-connector::after {
-    right: -3px;
-    top: auto;
-    bottom: 0;
-    transform: rotate(135deg);
   }
 
   .experiment-directory .experiment-directory-list {
@@ -2520,7 +2545,9 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   .experiment-param-grid,
-  .experiment-expert-fields {
+  .experiment-payload-bar,
+  .experiment-expert-fields,
+  .experiment-expert-stack {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2533,13 +2560,15 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   .experiment-payload-count {
-    margin-left: 0;
+    justify-self: start;
   }
 }
 
 @media (max-width: 520px) {
   .experiment-param-grid,
-  .experiment-expert-fields {
+  .experiment-payload-bar,
+  .experiment-expert-fields,
+  .experiment-expert-stack {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2548,6 +2577,257 @@ input[type='number']::-webkit-inner-spin-button {
     align-items: flex-start;
     gap: 4px;
   }
+}
+
+/* --- 桌面端文字层级（≥ 901px） ------------------------------------------- */
+/* 只调整字号与字重，不改位置、结构、状态配色与交互：
+   标题 19px+ / 标签 12–13px / 字段值 13–14px / 辅助说明 12px。
+   9–11px 仅保留给英文代码标记（WINDOW、EPOCHS、v1、TASK #）与装饰性序号。
+   这些令牌的默认值等于改造前的原始字号，因此 ≤ 900px 的渲染保持原样。 */
+@media (min-width: 901px) {
+  :root {
+    --experiment-text-helper: 12px;
+    --experiment-text-label: 13px;
+    --experiment-text-value: 14px;
+    --experiment-text-small: 12px;
+    --experiment-text-control: 13px;
+    --experiment-text-micro: 10px;
+    --experiment-text-tiny: 11px;
+  }
+
+  /* 页头 / 阶段指示 / 画布头部：标签与小节标题抬到 12–13px。 */
+  .experiment-center-eyebrow {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-state {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-section-title {
+    font-size: calc(15px * var(--font-scale, 1));
+  }
+
+  /* 01 任务定义：上传卡元信息与各类辅助说明至少 12px。 */
+  .experiment-uploaded-empty,
+  .experiment-uploaded-empty strong {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-uploaded-meta {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-uploaded-status {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-uploaded-item-name,
+  .experiment-uploaded-item-status {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-uploaded-item-meta,
+  .experiment-uploaded-format ul {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 02 载荷条：渠道名与数量说明到 13px，英文短码保持小号。 */
+  .experiment-payload-lock,
+  .experiment-channel-chip {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-payload-count {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 03 参数矩阵：标签 12px、单位说明 12px、数值保持 19px 等宽。 */
+  .experiment-param-label {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-param-cell small {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 04 专家参数：页签 13px、面板标题 13px、说明与字段标签 12/13px。 */
+  .experiment-expert-tab {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-expert-tab-count {
+    font-size: calc(11px * var(--font-scale, 1));
+  }
+
+  .experiment-expert-heading {
+    font-size: calc(14px * var(--font-scale, 1));
+  }
+
+  .experiment-expert-note {
+    color: var(--text-60);
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-expert-field > span {
+    color: var(--text-60);
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  /* 配置检查器：标签 12px、字段值 14px、就绪项与详情 12px。 */
+  .experiment-inspector-title {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-label {
+    color: var(--text-60);
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-sub {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-readiness-row,
+  .experiment-inspector-blockers,
+  .experiment-inspector-note {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-link {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-issue-action {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 底部运行条：状态 13px、提交反馈 12px，主按钮保持 13px。 */
+  .experiment-run-bar-state {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-run-bar-note {
+    color: var(--text-60);
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 表单与上传区的错误说明同样不低于 12px。 */
+  .experiment-canvas-name-error,
+  .experiment-uploaded-model-error {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 实验目录：实验名视为字段值，元信息与徽标至少 12px。 */
+  .experiment-directory-name {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-directory-meta {
+    color: var(--text-60);
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-directory-badge {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 监控与结果工作区（同为桌面端说明文字，避免出现更小的一档）。 */
+  .experiment-monitor-metric-label,
+  .experiment-result-metric-label {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 就绪检查的 ✓ / ! 记号受控件尺寸限制，+1px 后不溢出 16px 圆底。 */
+  .experiment-inspector-check {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* ---- 第四步：检查器视觉权重 -------------------------------------------
+     目标：便于从上到下扫描、不与中间画布争夺焦点，但错误 / 待处理仍然醒目。
+     ① 少一条线：头部不再单独画线，最后一个区块也不画线，静态分隔线 5 → 3 条；
+     ② 拉开三级：区块标签（mono 小字）→ 字段值（14px 白）→ 辅助说明（12px）；
+     ③ 正常状态更克制：通过的 ✓ 由实心绿底改为淡底 + 绿环，未通过的 ! 保持实心；
+     ④ 次要动作更轻：展开详细信息的链接用次要文字色，悬停才转蓝。 */
+  .experiment-inspector-head {
+    padding-bottom: 6px;
+    border-bottom: 0;
+  }
+
+  .experiment-inspector-body {
+    padding-top: 12px;
+  }
+
+  .experiment-inspector-block {
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+  }
+
+  /* 只有两个区块：末块收掉下边框与下边距，首块保留与它的分隔。 */
+  .experiment-inspector-block:last-child {
+    padding-bottom: 0;
+    margin-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .experiment-inspector-label {
+    color: var(--text-30);
+  }
+
+  /* 链接的命中区横向内缩 8px，但左对齐位置与原来一致，不改变区块内的视觉位置。 */
+  .experiment-inspector-link {
+    margin: 8px -8px 0;
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+
+  .experiment-inspector-readiness-row[data-ok='true'] .experiment-inspector-check {
+    background: rgba(99, 232, 191, 0.14);
+    border: 1px solid rgba(99, 232, 191, 0.45);
+    color: #63e8bf;
+  }
+
+  .experiment-inspector-readiness-row[data-ok='false'] .experiment-inspector-check {
+    background: #f19a78;
+    border-color: #f19a78;
+    color: #1b0d07;
+  }
+
+  .experiment-inspector-readiness-row[data-ok='false'] {
+    color: var(--text-60);
+    font-weight: 700;
+  }
+
+  /* ---- 信息减法补充 -----------------------------------------------------
+     检查器现在只有「当前模型 + 就绪检查」两块，不再有常态摘要与折叠详情；
+     未通过 / 待处理的行仍是强调色，正常状态用一行结论表达。 */
+  .experiment-inspector-issue-action:hover {
+    color: #9ad9ef;
+    text-decoration: underline;
+  }
+}
+
+/* 「输入框是否可辨认」的兜底规则放在文件末尾，确保不被后面的通用/组件规则覆盖：
+   参数矩阵的五格是数字输入，静态只给一条虚线基线，悬停与聚焦才加强。 */
+.experiment-param-cell input:hover:not(:disabled) {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-param-cell input:focus:not(:disabled) {
+  border-bottom-color: #9ad9ef;
+  border-bottom-style: solid;
+  outline: none;
+}
+
+.experiment-expert-field input:hover:not(:disabled),
+.experiment-expert-field select:hover:not(:disabled) {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-expert-field input:focus,
+.experiment-expert-field select:focus {
+  border-bottom-color: #9ad9ef;
+  outline: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2559,8 +2839,85 @@ input[type='number']::-webkit-inner-spin-button {
   .experiment-architecture-option,
   .experiment-expert-tab,
   .experiment-source-option,
+  .experiment-dataset-option,
   .experiment-run-bar-start,
   .experiment-center-button {
     transition: none;
+  }
+}
+
+/* --- 实验目录的空状态 ----------------------------------------------------- */
+/* 三种状态由 `[data-directory-state]` 区分：loading（首次取任务列表）、error（取失败）、
+   empty（确实没有实验）。判定在 ExperimentDirectory 里，这里只负责展示与密度。 */
+
+.experiment-directory-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px 18px;
+  text-align: center;
+}
+
+.experiment-directory-empty-text {
+  margin: 0;
+  max-width: 30ch;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  line-height: 1.7;
+}
+
+.experiment-directory-empty[data-empty-reason='error'] .experiment-directory-empty-text {
+  color: #e8827f;
+}
+
+.experiment-directory-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 桌面端：空目录只占内容高度，不再撑满 sticky 面板留出一片空白。 */
+@media (min-width: 901px) {
+  .experiment-directory[data-directory-state='empty'],
+  .experiment-directory[data-directory-state='loading'],
+  .experiment-directory[data-directory-state='error'] {
+    align-self: start;
+    min-height: 0;
+  }
+
+  /* 没有条目时筛选栏没有可筛对象：目录内不再显示状态筛选，把重点让给空状态本身。
+     页头的「实验目录 / 新建实验」开关在目录之外，仍然可用。 */
+  .experiment-directory[data-directory-state='empty'] .experiment-directory-filters,
+  .experiment-directory[data-directory-state='loading'] .experiment-directory-filters {
+    display: none;
+  }
+
+  /* 空 / 加载中时搜索与标签控件退回次要：保留可用，但不再抢空状态的位置。 */
+  .experiment-directory[data-directory-state='empty'] .training-tag-directory .training-tag-input,
+  .experiment-directory[data-directory-state='loading'] .training-tag-directory .training-tag-input {
+    min-height: 32px;
+    padding: 5px 9px;
+    background: transparent;
+  }
+
+  .experiment-directory[data-directory-state='empty'] .training-tag-directory .training-tag-button,
+  .experiment-directory[data-directory-state='loading'] .training-tag-directory .training-tag-button {
+    min-height: 32px;
+    padding: 5px 9px;
+    background: transparent;
+  }
+
+  /* 空态下列表本身没有行可放，不再抢剩余高度。 */
+  .experiment-directory[data-directory-state='empty'] .experiment-directory-list,
+  .experiment-directory[data-directory-state='loading'] .experiment-directory-list,
+  .experiment-directory[data-directory-state='error'] .experiment-directory-list {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+
+  .experiment-directory[data-directory-state='empty'] .experiment-directory-empty,
+  .experiment-directory[data-directory-state='loading'] .experiment-directory-empty {
+    padding: 20px 14px;
   }
 }

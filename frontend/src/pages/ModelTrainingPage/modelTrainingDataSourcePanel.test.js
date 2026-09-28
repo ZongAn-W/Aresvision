@@ -27,33 +27,37 @@ function groupSource(name, nextName) {
 }
 
 test('model training parameters do not render the redundant server data source panel', () => {
-  const taskGroup = groupSource('task', 'payload');
+  const datasetGroup = groupSource('dataset', 'model');
 
   ['{copy.dataSource}', '{copy.sourceDefault}', '{copy.sourceHintDefault}'].forEach((token) => {
-    assert.equal(taskGroup.includes(token), false, `${token} should not be rendered in the task group`);
+    assert.equal(datasetGroup.includes(token), false, `${token} should not be rendered in the dataset group`);
   });
-  assert.match(taskGroup, /\{copy\.trainingDataset\}/);
-  assert.match(taskGroup, /TRAINING_DATASET_OPENMARS_MCD/);
-  assert.match(taskGroup, /TRAINING_DATASET_MCD_OVERVIEW/);
+  assert.match(datasetGroup, /\{copy\.trainingDataset\}/);
+  // 数据集选项在控制器里组好后由「数据集」分区直接列出（不再是原生下拉）。
+  assert.match(configSource, /TRAINING_DATASET_OPENMARS_MCD/);
+  assert.match(configSource, /TRAINING_DATASET_MCD_OVERVIEW/);
+  assert.match(datasetGroup, /datasetOptions\.map/);
+  assert.match(datasetGroup, /data-training-dataset-option=\{option\.value\}/);
 });
 
 test('no duplicated configuration summary remains in the canvas', () => {
-  // 摘要集中在右侧检查器；底部只留一行运行摘要。
+  // 摘要集中在右侧检查器；信息减法后画布与运行条都不再重复配置摘要。
   assert.doesNotMatch(configSource, /summaryItems/);
   assert.doesNotMatch(configSource, /copy\.summaryLabel/);
   assert.match(inspectorSource, /copy\.inspectorCurrentModel/);
   assert.match(inspectorSource, /copy\.inspectorReadiness/);
-  assert.match(inspectorSource, /copy\.inspectorSequence/);
+  // 常态时序摘要已删除：这些值在画布的参数矩阵里可直接读到。
+  assert.doesNotMatch(inspectorSource, /copy\.inspectorSequence/);
 });
 
-test('the live run bar carries a one-line dataset, model, payload and epochs summary', () => {
-  assert.match(runBarSource, /experiment-run-bar-meta/);
-  assert.match(runBarSource, /data-run-bar-summary="true"/);
-  assert.match(runBarSource, /datasetLabel/);
-  assert.match(runBarSource, /modelLabel/);
-  assert.match(runBarSource, /channelLabel/);
-  assert.match(runBarSource, /epochs/);
-  // 运行条只做摘要与提交，不自己请求训练接口。
+test('the live run bar keeps only the run state and the single call to action', () => {
+  // 信息减法：数据集 / 模型 / 输入 / 轮数的长摘要已删除。
+  assert.doesNotMatch(runBarSource, /experiment-run-bar-meta/);
+  assert.doesNotMatch(runBarSource, /data-run-bar-summary/);
+  assert.doesNotMatch(runBarSource, /datasetLabel|modelLabel|channelLabel/);
+  assert.match(runBarSource, /experiment-run-bar-state/);
+  assert.match(runBarSource, /data-run-bar-start="true"/);
+  // 运行条只做状态播报与提交，不自己请求训练接口。
   const runBarCode = stripComments(runBarSource);
   assert.doesNotMatch(runBarCode, /startTrainingTask/);
   assert.doesNotMatch(runBarCode, /fetchLogs/);

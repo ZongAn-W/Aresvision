@@ -1,7 +1,7 @@
 /**
  * 实验中心控制台验收 · 大气实验控制台版式（第四轮）。
  *
- * 覆盖：默认两列 / 展开三列、sticky 吸附、fixed 运行条与底部预留、
+ * 覆盖：默认三列（目录展开）/ 收起两列、sticky 吸附、fixed 运行条与底部预留、
  * 上传模型主入口、官方架构选择器、快捷载荷条与序列图示、参数矩阵、
  * 专家侧边页签、检查器简短摘要与状态一致性、响应式无横向溢出。
  *
@@ -240,8 +240,8 @@ console.log('\n=== 视口 1440×900 ===');
 await setViewport(1440, 900);
 await openConfigure();
 let m = await evaluate(METRICS);
-check('默认两列（画布 + 检查器）', m.columnCount === 2 && m.directory === 'closed', `columns=${m.columns}`);
-check('默认不渲染实验目录', m.rail === null);
+check('默认三列（目录 + 画布 + 检查器）', m.columnCount === 3 && m.directory === 'open', `columns=${m.columns}`);
+check('默认渲染实验目录', m.rail !== null, `rail=${m.rail ? `${m.rail.w}x${m.rail.h}` : 'null'}`);
 check('检查器列宽 284px', m.inspector && m.inspector.w === 284, `inspector=${m.inspector?.w}`);
 check('运行条 fixed 横跨浏览器', m.runBarPosition === 'fixed' && m.runBar.w === m.viewport.w, `${m.runBarPosition} w=${m.runBar?.w}/${m.viewport.w}`);
 check('运行条高度 60–80px', m.runBar.h >= 56 && m.runBar.h <= 84, `${m.runBar?.h}px`);
@@ -254,39 +254,65 @@ const canvasHeadInfo = await evaluate(`
   const nameInput = document.querySelector('.experiment-canvas-name');
   const state = document.querySelector('.experiment-canvas-state');
   const summary = document.querySelector('.experiment-config-summary');
+  // 输入与预测、训练参数现在是超参数的页签，只有激活页在 DOM 里。
+  const clickTab = async (tab) => {
+    const el = document.querySelector('[data-expert-tab="' + tab + '"]');
+    if (el) { el.click(); await new Promise((r) => setTimeout(r, 300)); }
+  };
+  const sectionOrder = [...document.querySelectorAll('[data-config-group]')].map((el) => el.dataset.configGroup);
+  const expertGrid = getComputedStyle(document.querySelector('.experiment-expert')).gridTemplateColumns;
+  const expertTabs = [...document.querySelectorAll('[data-expert-tab]')].map((el) => el.dataset.expertTab);
+  await clickTab('training');
+  const paramGrid = document.querySelector('.experiment-param-grid');
+  const paramColumns = paramGrid ? getComputedStyle(paramGrid).gridTemplateColumns : null;
+  const paramCodes = [...document.querySelectorAll('.experiment-param-label code')].map((el) => el.textContent.trim());
+  await clickTab('payload');
+  const payloadBar = Boolean(document.querySelector('.experiment-payload-bar'));
   return {
     hasNameInput: Boolean(nameInput),
     nameValue: nameInput ? nameInput.value : null,
     state: state ? state.dataset.canvasState : null,
     stateText: state ? state.innerText.trim() : '',
     duplicateSummary: Boolean(summary),
-    taskGridColumns: getComputedStyle(document.querySelector('.experiment-task-grid')).gridTemplateColumns,
-    paramColumns: getComputedStyle(document.querySelector('.experiment-param-grid')).gridTemplateColumns,
-    paramCodes: [...document.querySelectorAll('.experiment-param-label code')].map((el) => el.textContent.trim()),
-    expertGrid: getComputedStyle(document.querySelector('.experiment-expert')).gridTemplateColumns,
-    expertTabs: [...document.querySelectorAll('[data-expert-tab]')].map((el) => el.dataset.expertTab),
-    payloadBar: Boolean(document.querySelector('.experiment-payload-bar')),
+    sectionOrder,
+    paramColumns,
+    paramCodes,
+    expertGrid,
+    expertTabs,
+    payloadBar,
     flowDiagram: Boolean(document.querySelector('[data-sequence-diagram="true"]')),
   };
 `);
 check('画布头部是可编辑实验名称', canvasHeadInfo.hasNameInput);
 check('画布不再有重复的「当前配置」摘要', !canvasHeadInfo.duplicateSummary);
-check('任务定义：数据集与模型来源并排成两列', canvasHeadInfo.taskGridColumns.split(' ').length === 2, canvasHeadInfo.taskGridColumns);
-check('训练参数五列矩阵', canvasHeadInfo.paramColumns.includes('repeat(5') || canvasHeadInfo.paramColumns.split(' ').length === 5, canvasHeadInfo.paramColumns);
-check('参数辅助标识是 WINDOW / HORIZON / EPOCHS / BATCH / LR', JSON.stringify(canvasHeadInfo.paramCodes) === JSON.stringify(['WINDOW', 'HORIZON', 'EPOCHS', 'BATCH', 'LR']), canvasHeadInfo.paramCodes.join(','));
-check('专家参数是侧边页签 + 右侧内容', canvasHeadInfo.expertGrid.split(' ').length === 2, canvasHeadInfo.expertGrid);
-check('载荷条与序列图示存在', canvasHeadInfo.payloadBar && canvasHeadInfo.flowDiagram);
+check('画布四个分区：模型名称 / 数据集 / 模型 / 超参数', canvasHeadInfo.sectionOrder.join(',') === 'name,dataset,model,expert', canvasHeadInfo.sectionOrder.join(','));
+const paramTracks = canvasHeadInfo.paramColumns ? canvasHeadInfo.paramColumns.split(' ') : [];
+const minParamTrack = paramTracks.length ? Math.min(...paramTracks.map((v) => parseFloat(v))) : 0;
+check('训练参数矩阵按可用宽度自动排布（每列 ≥ 140px）', paramTracks.length >= 2 && minParamTrack >= 140, canvasHeadInfo.paramColumns);
+check('参数标签旁不再有 WINDOW / BATCH 这类英文小码', canvasHeadInfo.paramCodes.length === 0, canvasHeadInfo.paramCodes.join(','));
+check('超参数是侧边页签 + 右侧内容', canvasHeadInfo.expertGrid.split(' ').length === 2, canvasHeadInfo.expertGrid);
+check('超参数页签含输入与预测 / 训练参数', canvasHeadInfo.expertTabs.slice(0, 2).join(',') === 'payload,training', canvasHeadInfo.expertTabs.join(','));
+check('载荷条存在（序列示意图已删除）', canvasHeadInfo.payloadBar);
 
-// 展开目录 → 三列
-const expanded = await evaluate(`
+// 目录开关：默认展开（三列）→ 收起（两列）→ 再展开（三列）
+const collapsed = await evaluate(`
   const toggle = [...document.querySelectorAll('.experiment-center-header-meta button')].find((el) => /目录/.test(el.innerText));
   if (!toggle) return { missingToggle: true, buttons: [...document.querySelectorAll('.experiment-center-header-meta button')].map((el) => el.innerText.trim()) };
   toggle.click();
   await new Promise((r) => setTimeout(r, 500));
   ${METRICS}
 `);
-check('目录开关按钮存在', !expanded.missingToggle, JSON.stringify(expanded.buttons || []));
-check('展开目录后三列', expanded.columnCount === 3, `columns=${expanded.columns}`);
+check('目录开关按钮存在', !collapsed.missingToggle, JSON.stringify(collapsed.buttons || []));
+check('收起目录后两列', collapsed.columnCount === 2 && collapsed.directory === 'closed', `columns=${collapsed.columns}`);
+check('收起后不渲染目录', collapsed.rail === null);
+
+const expanded = await evaluate(`
+  const toggle = [...document.querySelectorAll('.experiment-center-header-meta button')].find((el) => /目录/.test(el.innerText));
+  toggle.click();
+  await new Promise((r) => setTimeout(r, 500));
+  ${METRICS}
+`);
+check('再次展开目录后三列', expanded.columnCount === 3, `columns=${expanded.columns}`);
 check('目录列宽 235px、检查器 284px', Math.abs(expanded.rail.w - 235) <= 1 && expanded.inspector.w === 284, `${expanded.rail?.w}/${expanded.inspector?.w}`);
 check('目录与检查器都是 sticky', expanded.railPosition === 'sticky' && expanded.inspectorPosition === 'sticky', `${expanded.railPosition}/${expanded.inspectorPosition}`);
 check('展开后无横向溢出', expanded.overflowX <= 0, `overflowX=${expanded.overflowX}`);
@@ -332,10 +358,13 @@ const mobileUsable = await evaluate(`
   const start = document.querySelector('[data-run-bar-start="true"]');
   const tabs = document.querySelectorAll('[data-expert-tab]').length;
   const upload = Boolean(document.querySelector('[data-uploaded-model-upload="true"]'));
+  // 训练参数是超参数的页签，先切过去再确认字段可读。
+  document.querySelector('[data-expert-tab="training"]')?.click();
+  await new Promise((r) => setTimeout(r, 300));
   const param = document.querySelector('[data-parameter="epochs"] input');
   return { startHeight: Math.round(start.getBoundingClientRect().height), tabs, upload, param: Boolean(param) };
 `);
-check('390 上传入口与专家页签可用', mobileUsable.upload && mobileUsable.tabs >= 4, `upload=${mobileUsable.upload} tabs=${mobileUsable.tabs}`);
+check('390 上传入口与超参数页签可用', mobileUsable.upload && mobileUsable.tabs >= 6, `upload=${mobileUsable.upload} tabs=${mobileUsable.tabs}`);
 check('390 主按钮高度 ≥ 44px', mobileUsable.startHeight >= 44, `${mobileUsable.startHeight}px`);
 
 // ---------------- 字体放大 / 浅色 / 英文 ----------------

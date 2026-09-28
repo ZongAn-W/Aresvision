@@ -48,10 +48,8 @@ export default function ExperimentCenterShell({
   const stageRef = useRef(null);
   const focusedStageRef = useRef(null);
   const isConfigure = stage === 'configure';
-  // 默认：新建配置收起目录，监控 / 结果展开。
-  const [directoryCollapsed, setDirectoryCollapsed] = useState(isConfigure);
-  // 用户本次会话是否主动切换过目录：一旦切换过，默认值不再覆盖。
-  const directoryTouchedRef = useRef(false);
+  // 整页默认显示实验目录（配置阶段也一样）；用户手动收起后本次会话保持收起。
+  const [directoryCollapsed, setDirectoryCollapsed] = useState(false);
 
   const stageLabels = useMemo(
     () => ({
@@ -62,11 +60,6 @@ export default function ExperimentCenterShell({
     [t]
   );
   const eyebrow = t('experimentCenter.eyebrow');
-
-  useEffect(() => {
-    if (directoryTouchedRef.current) return;
-    setDirectoryCollapsed(stage === 'configure');
-  }, [stage]);
 
   // 阶段切换后把焦点移到阶段标题，键盘用户不会停在已卸载的控件上。
   useEffect(() => {
@@ -80,7 +73,6 @@ export default function ExperimentCenterShell({
   }, [stage]);
 
   const toggleDirectory = () => {
-    directoryTouchedRef.current = true;
     setDirectoryCollapsed((value) => !value);
   };
 

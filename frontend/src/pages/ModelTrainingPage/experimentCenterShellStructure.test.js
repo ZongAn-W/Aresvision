@@ -173,14 +173,17 @@ test('directory rows are keyboard reachable and highlight the active experiment'
   assert.match(directorySource, /aria-pressed=\{isActive\}/);
 });
 
-test('new configuration collapses the directory by default and keeps the choice for the session', () => {
-  // 默认状态由阶段决定：新建配置收起（两列），监控 / 结果展开。
-  assert.match(shellSource, /useState\(isConfigure\)/);
-  assert.match(shellSource, /if \(directoryTouchedRef\.current\) return;/);
-  assert.match(shellSource, /setDirectoryCollapsed\(stage === 'configure'\)/);
-  assert.match(shellSource, /directoryTouchedRef\.current = true/);
+test('the directory is shown by default and keeps the session choice', () => {
+  // 配置 / 监控 / 结果三个阶段都默认展开目录，用户手动收起后本次会话保持。
+  assert.match(shellSource, /const \[directoryCollapsed, setDirectoryCollapsed\] = useState\(false\)/);
+  assert.doesNotMatch(shellSource, /directoryTouchedRef/);
   assert.match(shellSource, /data-directory=\{directoryCollapsed \? 'closed' : 'open'\}/);
-  // 收起 + 有检查器：画布铺满剩余宽度，检查器仍然保留（默认两列）。
+  // 展开 + 有检查器：目录 + 画布 + 检查器三列。
+  assert.match(
+    cssSource,
+    /\.experiment-center-grid\[data-directory='open'\]\[data-inspector='present'\]\s*\{[^}]*grid-template-columns:\s*var\(--experiment-rail-width\)\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
+  );
+  // 收起 + 有检查器（用户手动收起）：画布铺满剩余宽度，检查器仍然保留。
   assert.match(
     cssSource,
     /\.experiment-center-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s

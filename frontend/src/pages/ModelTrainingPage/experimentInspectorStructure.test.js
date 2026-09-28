@@ -16,18 +16,24 @@ function stripComments(source) {
     .join('\n');
 }
 
-test('配置检查器只摘要当前模型、输入、就绪、时序与数据集', () => {
+test('配置检查器只保留当前模型与需要处理的问题', () => {
   assert.match(inspectorSource, /data-config-inspector="true"/);
   assert.match(inspectorSource, /copy\.inspectorCurrentModel/);
   assert.match(inspectorSource, /data-inspector-field="current-model"/);
   assert.match(inspectorSource, /data-inspector-field="model-source"/);
-  assert.match(inspectorSource, /copy\.inspectorInputVars/);
-  assert.match(inspectorSource, /data-inspector-field="payload"/);
-  assert.match(inspectorSource, /copy\.inspectorChannelTotal/);
   assert.match(inspectorSource, /copy\.inspectorReadiness/);
-  assert.match(inspectorSource, /data-inspector-field="window-horizon"/);
-  assert.match(inspectorSource, /data-inspector-field="epochs"/);
-  assert.match(inspectorSource, /data-inspector-field="dataset"/);
+  assert.match(inspectorSource, /data-inspector-issues="true"/);
+  // 信息减法：常态输入变量 / 时序 / 数据集摘要与折叠详情已删除，
+  // 这些值在主表单的真实控件里都能读到。
+  assert.doesNotMatch(inspectorSource, /data-inspector-field="payload"/);
+  assert.doesNotMatch(inspectorSource, /data-inspector-field="channel-count"/);
+  assert.doesNotMatch(inspectorSource, /data-inspector-field="window-horizon"/);
+  assert.doesNotMatch(inspectorSource, /data-inspector-field="epochs"/);
+  assert.doesNotMatch(inspectorSource, /data-inspector-field="dataset"/);
+  assert.doesNotMatch(inspectorSource, /experiment-inspector-telemetry/);
+  assert.doesNotMatch(inspectorSource, /experiment-inspector-details/);
+  // 正常时只有一行结论，不逐条重复「已通过」。
+  assert.match(inspectorSource, /copy\.inspectorAllClear/);
   // 不再重复模型家族、官方架构数量、完整训练参数与多个大按钮。
   assert.doesNotMatch(inspectorSource, /MODEL_ARCHITECTURE_FAMILIES/);
   assert.doesNotMatch(inspectorSource, /inspectorFamily/);
@@ -46,16 +52,15 @@ test('检查器不编造资源估算', () => {
   assert.match(pageSource, /const readiness = useMemo\(\(\) => \{/);
 });
 
-test('检查器不复制整张表单，详细信息收在折叠区', () => {
+test('检查器不复制整张表单，也不再有折叠详情', () => {
   assert.doesNotMatch(inspectorSource, /<input/);
   assert.doesNotMatch(inspectorSource, /<select/);
   assert.doesNotMatch(inspectorSource, /<textarea/);
   assert.doesNotMatch(inspectorSource, /<DynamicModelParamsForm/);
   assert.doesNotMatch(inspectorSource, /<TagPicker/);
-  assert.match(inspectorSource, /useState\(false\)/);
-  assert.match(inspectorSource, /copy\.inspectorExpandDetails/);
-  assert.match(inspectorSource, /copy\.inspectorCollapseDetails/);
-  assert.match(inspectorSource, /experiment-inspector-details/);
+  // 信息减法：折叠详情整块删除，不再需要 open 状态。
+  assert.doesNotMatch(inspectorSource, /useState/);
+  assert.doesNotMatch(inspectorSource, /experiment-inspector-details/);
 });
 
 test('就绪状态与主按钮可点性分开，避免“有错误却显示可以开始训练”', () => {
@@ -76,8 +81,8 @@ test('就绪状态与主按钮可点性分开，避免“有错误却显示可�
   assert.match(runBarSource, /copy\.runBarReadyToStart/);
   assert.match(runBarSource, /copy\.runBarNeedsAttention/);
   assert.match(runBarSource, /copy\.runBarGuest/);
-  // 检查器里的就绪行不会全绿却同时列出问题。
-  assert.match(inspectorSource, /readinessRows/);
+  // 检查器只列出「需要处理」的原因，正常时一行结论，不会全绿却同时列出问题。
+  assert.match(inspectorSource, /data-inspector-clear="true"/);
   assert.match(inspectorSource, /data-inspector-issues="true"/);
 });
 
@@ -91,34 +96,28 @@ test('检查器与运行条都不请求训练接口、不创建轮询', () => {
   }
 });
 
-test('运行条是横跨浏览器的细条：左侧状态与摘要，右侧唯一主按钮', () => {
+test('运行条是横跨浏览器的细条：左侧状态，右侧唯一主按钮', () => {
   assert.match(runBarSource, /data-run-bar="true"/);
   assert.match(runBarSource, /experiment-run-bar-info/);
   assert.match(runBarSource, /experiment-run-bar-state/);
-  assert.match(runBarSource, /data-run-bar-summary="true"/);
   assert.match(runBarSource, /experiment-run-bar-actions/);
   assert.match(runBarSource, /data-run-bar-start="true"/);
   assert.match(runBarSource, /onClick=\{onStart\}/);
   assert.match(runBarSource, /disabled=\{startDisabled\}/);
+  assert.match(runBarSource, /pendingSubmission/);
   assert.match(pageSource, /onStart=\{handleStartTraining\}/);
-  // 摘要包含数据集、模型、输入与轮数。
-  assert.match(runBarSource, /datasetLabel/);
-  assert.match(runBarSource, /modelLabel/);
-  assert.match(runBarSource, /channelLabel/);
-  assert.match(runBarSource, /epochs \|\| '--'\} epochs/);
-  // 不再有旧的胶囊式条目列表。
+  // 信息减法：数据集 / 模型 / 输入 / 轮数的长摘要已删除，这些值在画布控件里可读。
+  assert.doesNotMatch(runBarSource, /data-run-bar-summary/);
+  assert.doesNotMatch(runBarSource, /datasetLabel|channelLabel/);
   assert.doesNotMatch(runBarSource, /data-run-bar-field/);
 });
 
-test('运行条样式：fixed 细条、细边线、长文件名截断', () => {
+test('运行条样式：fixed 细条、细边线、主按钮尺寸', () => {
   assert.match(cssSource, /\.experiment-run-bar\s*\{[^}]*position:\s*fixed/s);
   assert.match(cssSource, /\.experiment-run-bar\s*\{[^}]*border-top:\s*1px solid/s);
   assert.match(cssSource, /\.experiment-run-bar-start\s*\{[^}]*min-height:\s*44px/s);
-  // 摘要单行截断，长文件名不会把运行条撑成多行巨型卡片。
-  assert.match(cssSource, /\.experiment-run-bar-meta\s*\{[^}]*text-overflow:\s*ellipsis/s);
-  assert.match(cssSource, /\.experiment-run-bar-meta\s*\{[^}]*white-space:\s*nowrap/s);
   // 放大文字时允许换行而不是裁掉内容。
-  assert.match(cssSource, /@media \(max-width: 900px\)[\s\S]*?\.experiment-run-bar-meta\s*\{[^}]*white-space:\s*normal/s);
+  assert.match(cssSource, /\.experiment-run-bar-info\s*\{[^}]*min-width:\s*0/s);
 });
 
 test('页面控制器仍然独占训练提交、日志轮询与阶段推导', () => {

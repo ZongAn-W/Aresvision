@@ -260,9 +260,17 @@ const copied = await evaluate(`
   const canvas = document.querySelector('.experiment-center-canvas');
   const uploadedPanel = document.querySelector('[data-uploaded-model-panel="true"]');
   const nameInput = document.querySelector('.experiment-canvas-name');
+  // 训练参数与自定义参数现在是超参数的页签，逐个切过去再读。
+  const clickTab = async (tab) => {
+    const el = document.querySelector('[data-expert-tab="' + tab + '"]');
+    if (el) { el.click(); await new Promise((r) => setTimeout(r, 350)); }
+  };
+  await clickTab('training');
   const epochs = document.querySelector('[data-config-group="training"] [data-parameter="epochs"] input');
+  const epochsValue = epochs ? epochs.value : '';
   const inspector = document.querySelector('.experiment-inspector')?.innerText || '';
-  // 自定义参数按 schema 动态渲染在专家参数面板里，逐项读取实际值。
+  await clickTab('customParams');
+  // 自定义参数按 schema 动态渲染在超参数面板里，逐项读取实际值。
   const customPanel = document.querySelector('[data-expert-panel="customParams"]');
   const customValues = customPanel
     ? [...customPanel.querySelectorAll('input, select')].map((el) => ({
@@ -274,7 +282,7 @@ const copied = await evaluate(`
     found: true,
     stage: grid?.dataset.stage,
     name: nameInput ? nameInput.value : '',
-    epochs: epochs ? epochs.value : '',
+    epochs: epochsValue,
     uploadedModelShown: Boolean(uploadedPanel),
     expertTab: customPanel ? 'customParams' : 'other',
     customValues: customValues.slice(0, 5),

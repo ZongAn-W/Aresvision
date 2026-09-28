@@ -27,22 +27,17 @@ export default function DynamicModelParamsForm({
   fieldHintStyle,
   inputStyle,
   disabled = false,
+  hideTitle = false,
 }) {
   const fields = Object.entries(schema || {});
 
   if (fields.length === 0) {
     return (
       <div>
-        <div style={{ ...sectionTitleStyle, marginBottom: 10 }}>{labels.title}</div>
+        {hideTitle ? null : <div style={{ ...sectionTitleStyle, marginBottom: 10 }}>{labels.title}</div>}
         <div
-          style={{
-            ...fieldHintStyle,
-            marginTop: 0,
-            padding: '10px 12px',
-            borderRadius: 12,
-            border: `1px dashed ${C.border}`,
-            background: C.bgMuted,
-          }}
+          className="experiment-expert-field experiment-field-wide"
+          style={{ ...fieldHintStyle, borderStyle: 'dashed', borderColor: C.border }}
         >
           {labels.empty}
         </div>
@@ -52,8 +47,9 @@ export default function DynamicModelParamsForm({
 
   return (
     <div>
-      <div style={{ ...sectionTitleStyle, marginBottom: 10 }}>{labels.title}</div>
-      <div className="model-training-field-grid">
+      {hideTitle ? null : <div style={{ ...sectionTitleStyle, marginBottom: 10 }}>{labels.title}</div>}
+      {/* 与其它页签同一套字段块：三列网格 + surface-2 块（度量在 experimentCenter.css 里）。 */}
+      <div className="experiment-expert-fields">
         {fields.map(([key, field]) => {
           const value = values[key] ?? field.default ?? '';
           const label = field.label || key;
@@ -65,55 +61,45 @@ export default function DynamicModelParamsForm({
             return (
               <label
                 key={key}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  padding: '10px 12px',
-                  borderRadius: 12,
-                  border: `1px solid ${error ? '#d95c5c' : C.border}`,
-                  background: C.bgMuted,
-                  cursor: disabled ? 'not-allowed' : 'pointer',
-                  opacity: disabled ? 0.6 : 1,
-                }}
+                className="experiment-expert-field"
+                data-invalid={error ? 'true' : 'false'}
+                style={{ cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1 }}
               >
-                <span style={{ minWidth: 0 }}>
-                  <span style={{ ...fieldLabelStyle, display: 'block', marginBottom: 2 }}>{label}</span>
-                  {hintParts.length > 0 ? (
-                    <span style={{ ...fieldHintStyle, display: 'block', marginTop: 0 }}>
-                      {hintParts.join(' / ')}
-                    </span>
-                  ) : null}
-                  {error ? (
-                    <span style={{ ...fieldHintStyle, display: 'block', marginTop: 4, color: '#d95c5c' }}>
-                      {error}
-                    </span>
-                  ) : null}
-                </span>
-                <span
-                  style={{
-                    flex: '0 0 auto',
-                    width: 42,
-                    height: 24,
-                    borderRadius: 999,
-                    padding: 3,
-                    background: checked ? 'rgba(74,158,255,0.26)' : 'rgba(255,255,255,0.08)',
-                    border: `1px solid ${checked ? 'rgba(74,158,255,0.40)' : C.border}`,
-                    transition: 'all 0.18s ease',
-                  }}
-                >
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block' }}>{label}</span>
+                    {hintParts.length > 0 ? (
+                      <span style={{ display: 'block', marginTop: 2 }}>{hintParts.join(' / ')}</span>
+                    ) : null}
+                    {error ? (
+                      <span style={{ display: 'block', marginTop: 4, color: '#d95c5c' }}>{error}</span>
+                    ) : null}
+                  </span>
                   <span
+                    aria-hidden="true"
                     style={{
-                      display: 'block',
-                      width: 16,
-                      height: 16,
+                      flex: '0 0 auto',
+                      width: 42,
+                      height: 24,
                       borderRadius: 999,
-                      background: checked ? C.blue : C.ice60,
-                      transform: checked ? 'translateX(18px)' : 'translateX(0)',
-                      transition: 'transform 0.18s ease',
+                      padding: 3,
+                      background: checked ? 'rgba(74,158,255,0.26)' : 'rgba(255,255,255,0.08)',
+                      border: `1px solid ${checked ? 'rgba(74,158,255,0.40)' : C.border}`,
+                      transition: 'all 0.18s ease',
                     }}
-                  />
+                  >
+                    <span
+                      style={{
+                        display: 'block',
+                        width: 16,
+                        height: 16,
+                        borderRadius: 999,
+                        background: checked ? C.blue : C.ice60,
+                        transform: checked ? 'translateX(18px)' : 'translateX(0)',
+                        transition: 'transform 0.18s ease',
+                      }}
+                    />
+                  </span>
                 </span>
                 <input
                   type="checkbox"
@@ -127,16 +113,13 @@ export default function DynamicModelParamsForm({
           }
 
           return (
-            <div key={key}>
-              <div style={fieldLabelStyle}>{label}</div>
+            <label key={key} className="experiment-expert-field" data-invalid={error ? 'true' : 'false'}>
+              <span>{label}</span>
               {field.type === 'select' ? (
                 <select
-                  style={{
-                    ...inputStyle,
-                    borderColor: error ? '#d95c5c' : inputStyle.borderColor || C.border,
-                  }}
                   value={value}
                   disabled={disabled}
+                  style={error ? { borderBottomColor: '#d95c5c' } : undefined}
                   onChange={(event) => onChange(key, event.target.value)}
                 >
                   {(field.options || []).map((option) => (
@@ -148,23 +131,18 @@ export default function DynamicModelParamsForm({
               ) : (
                 <input
                   type={field.type === 'int' || field.type === 'float' ? 'number' : 'text'}
-                  style={{
-                    ...inputStyle,
-                    borderColor: error ? '#d95c5c' : inputStyle.borderColor || C.border,
-                  }}
                   value={value}
                   disabled={disabled}
                   min={Number.isFinite(field.min) ? field.min : undefined}
                   max={Number.isFinite(field.max) ? field.max : undefined}
                   step={getStep(field)}
+                  style={error ? { borderBottomColor: '#d95c5c' } : undefined}
                   onChange={(event) => onChange(key, event.target.value)}
                 />
               )}
-              {hintParts.length > 0 ? (
-                <div style={{ ...fieldHintStyle, marginTop: 5 }}>{hintParts.join(' / ')}</div>
-              ) : null}
-              {error ? <div style={{ ...fieldHintStyle, color: '#d95c5c' }}>{error}</div> : null}
-            </div>
+              {hintParts.length > 0 ? <small>{hintParts.join(' / ')}</small> : null}
+              {error ? <small style={{ color: '#d95c5c' }}>{error}</small> : null}
+            </label>
           );
         })}
       </div>

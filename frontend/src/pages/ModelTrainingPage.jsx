@@ -118,6 +118,9 @@ export default function ModelTrainingPage() {
   const {
     tasks,
     setTasks,
+    tasksLoading,
+    tasksError,
+    setTasksError,
     activeTaskId,
     setActiveTaskId,
     setSuppressAutoSelect,
@@ -161,12 +164,6 @@ export default function ModelTrainingPage() {
       trainingDataset: isZh ? '训练数据集' : 'Training dataset',
       datasetOpenMarsMcd: isZh ? 'OpenMARS + MCD 融合' : 'OpenMARS + MCD',
       datasetMcdOverview: isZh ? 'MCD 全量 MY24-MY35' : 'Full MCD MY24-MY35',
-      datasetHintOpenMarsMcd: isZh
-        ? '使用当前默认训练数据，OpenMARS 臭氧目标与 MCD 驱动变量融合。'
-        : 'Use the current default fused dataset: OpenMARS ozone targets with MCD drivers.',
-      datasetHintMcdOverview: isZh
-        ? '使用 data/MCD_Output_global_10m_ls_lst 中的原始 3 小时 MCD 数据，覆盖 MY24-MY35。'
-        : 'Use raw 3-hour MCD data from data/MCD_Output_global_10m_ls_lst, covering MY24-MY35.',
       sourceDefault: getTrainingSourceLabel('default', { isZh }),
       sourceHintDefault: isZh
         ? '训练数据由管理员在服务器后台维护，普通用户不再切换自有融合数据。'
@@ -199,12 +196,10 @@ export default function ModelTrainingPage() {
       uploadedModelEntry: isZh ? '上传模型（主入口）' : 'Uploaded model (primary entry)',
       uploadedModelSelected: isZh ? '当前训练模型' : 'Model used for this run',
       uploadedModelSummaryLabel: isZh ? '上传模型概况' : 'Uploaded model overview',
-      uploadedModelValidCount: (count) => (isZh ? `${count} 个可训练` : `${count} trainable`),
       uploadedModelParamCount: (count) => (isZh ? `${count} 个自定义参数` : `${count} custom params`),
       uploadedModelListToggle: (count) => (isZh ? `全部上传模型（${count}）` : `All uploaded models (${count})`),
-      uploadedModelReplace: isZh ? '替换文件' : 'Replace file',
-      uploadedModelManage: isZh ? '管理上传模型' : 'Manage uploaded models',
-      uploadedModelTypeBadge: '.PY',
+      uploadedModelReplace: isZh ? '上传模型' : 'Upload model',
+      uploadedModelManage: isZh ? '管理模型' : 'Manage models',
       uploadedModelFormatTitle: isZh ? '文件格式要求' : 'File format requirements',
       uploadedModelFormatItems: isZh
         ? [
@@ -223,7 +218,7 @@ export default function ModelTrainingPage() {
       groupTask: isZh ? '任务定义' : 'Task definition',
       groupUploadedModel: isZh ? '上传模型（主入口）' : 'Uploaded model (primary entry)',
       groupOfficialModel: isZh ? '官方模型（兼容入口）' : 'Official model (compatible entry)',
-      groupPayload: isZh ? '输入与预测' : 'Input and prediction',      groupExpert: isZh ? '专家参数' : 'Expert parameters',
+      groupPayload: isZh ? '输入与预测' : 'Input and prediction',      groupExpert: isZh ? '超参数' : 'Hyperparameters',
       groupExpertHint: isZh
         ? '自定义模型参数、模型结构、训练策略、迁移学习、实验标签与上传权重都在这里；所有字段仍然可编辑。'
         : 'Custom model params, model structure, training strategy, transfer learning, tags and uploaded weights all live here; every field stays editable.',
@@ -256,9 +251,6 @@ export default function ModelTrainingPage() {
       expertTabTags: isZh ? '实验标签' : 'Experiment tags',
       expertTabWeight: isZh ? '上传权重' : 'Uploaded weights',
       editCustomParams: isZh ? '编辑自定义参数' : 'Edit custom parameters',
-      customParamsPrimaryHint: isZh
-        ? '自定义参数按上传模型声明的 schema 动态渲染，修改后立即用于本次实验。'
-        : 'Custom parameters render from the uploaded model schema and apply to this run immediately.',
       expertNeedsUploaded: isZh
         ? '自定义模型参数只在上传模型下可用。切换到上传模型并选择一个可训练模型即可编辑。'
         : 'Custom model parameters are only available for uploaded models. Switch to an uploaded model and pick a trainable one.',
@@ -317,17 +309,14 @@ export default function ModelTrainingPage() {
       canvasEyebrow: isZh ? 'Atmospheric mission control / 01' : 'Atmospheric mission control / 01',
       newExperimentTitle: isZh ? '新建实验' : 'New experiment',
       canvasDescription: isZh ? '从输入序列到预测场，配置你的下一次火星大气实验。' : 'From input sequence to predicted field — configure your next Mars atmosphere experiment.',
-      canvasExperimentMeta: isZh ? '火星臭氧时空预测 · 新实验配置' : 'Mars ozone spatiotemporal forecast · New configuration',
       canvasNameLabel: isZh ? '实验名称' : 'Experiment name',
-      // 分区
-      sectionTask: isZh ? '任务定义' : 'Task definition',
+      // 分区（画布四个部分：模型名称 → 数据集 → 模型 → 超参数）
+      sectionName: isZh ? '模型名称' : 'Model name',
+      sectionDataset: isZh ? '数据集' : 'Dataset',
+      sectionModel: isZh ? '模型' : 'Model',
       sectionPayload: isZh ? '输入与预测' : 'Input and prediction',
       sectionTraining: isZh ? '训练参数' : 'Training parameters',
-      sectionExpert: isZh ? '专家参数' : 'Expert parameters',
-      sectionTaskHint: isZh ? '先决定实验要回答什么' : 'Decide what this run must answer',
-      sectionPayloadHint: isZh ? 'O₃ 为基础输入，可叠加气象驱动变量' : 'O₃ is the base input; add meteorological drivers',
-      sectionTrainingHint: isZh ? '直接输入精确数值' : 'Enter exact values',
-      sectionExpertHint: isZh ? '结构、策略与微调，按需展开' : 'Structure, strategy and fine-tuning on demand',
+      sectionExpert: isZh ? '超参数' : 'Hyperparameters',
       // 参数矩阵辅助标识与量纲
       codeWindow: 'WINDOW',
       codeHorizon: 'HORIZON',
@@ -341,48 +330,34 @@ export default function ModelTrainingPage() {
       unitLearningRate: isZh ? '学习率' : 'learning rate',
       // 官方模型选择器（紧凑版）
       modelOfficialPickerTitle: isZh ? '官方模型架构' : 'Official architecture',
-      officialModelDesc: isZh ? '平台模型库' : 'Platform model library',
-      uploadedModelDesc: isZh ? '你的 PyTorch 文件' : 'Your PyTorch file',
       modelPickerSearch: isZh ? '搜索模型或实验变体…' : 'Search models or variants…',
       modelPickerExpand: isZh ? '展开模型库' : 'Browse model library',
       modelPickerCollapse: isZh ? '收起模型库' : 'Collapse model library',
       // 载荷条与序列图示
       payloadDrivers: isZh ? '驱动变量' : 'Drivers',
       payloadCountLabel: (count, total) => (isZh ? `${count} / ${total} 个驱动` : `${count} / ${total} drivers`),
-      flowInputCaption: (steps) => (isZh ? `输入 / ${steps} 步` : `INPUT / ${steps} STEPS`),
-      flowOutputCaption: (steps) => (isZh ? `O₃ / ${steps} 步` : `O₃ / ${steps} STEPS`),
-      flowFramePast: (offset) => (offset === 0 ? 't' : `t−${offset}`),
-      flowFrameFuture: (offset) => `t+${offset}`,
-      flowUploadedModel: isZh ? '上传模型' : 'Uploaded model',
-      flowOfficialModel: isZh ? '官方模型' : 'Official model',
       // 检查器
       inspectorCurrentModel: isZh ? '当前模型 / CURRENT MODEL' : 'Current model',
-      inspectorInputVars: isZh ? '输入变量 / INPUT' : 'Input variables',
-      inspectorChannelTotal: (count) => (isZh ? `共 ${count} 个通道` : `${count} channels total`),
       inspectorReadiness: isZh ? '就绪检查 / READINESS' : 'Readiness',
-      inspectorSequence: isZh ? '时序配置 / SEQUENCE' : 'Sequence',
-      inspectorCollapseDetails: isZh ? '收起详细信息' : 'Hide details',
-      inspectorExpandDetails: isZh ? '展开详细信息' : 'Show details',
       checkName: isZh ? '实验名称可用' : 'Experiment name is set',
       checkNameMissing: isZh ? '实验名称待填写' : 'Experiment name is missing',
       checkDataset: isZh ? '数据集已选择' : 'Dataset selected',
-      checkModelReady: isZh ? '模型可用于训练' : 'Model ready to train',
       checkModelOfficialReady: isZh ? '官方模型结构可用' : 'Official architecture available',
       checkModelMissing: isZh ? '尚未选择可训练模型' : 'No trainable model selected',
       checkModelInvalid: isZh ? '模型未通过校验' : 'Model failed validation',
-      checkParams: isZh ? '训练参数完整' : 'Training parameters complete',
       checkParamsMissing: isZh ? '训练参数待填写' : 'Training parameters missing',
       checkParamsNeedLogin: isZh ? '登录后校验配置' : 'Sign in to validate the configuration',
       checkParamsNeedModel: isZh ? '选择有效模型后校验参数' : 'Select a valid model to validate parameters',
       uploadedModelEmptyTitle: isZh ? '添加你的训练模型' : 'Add your training model',
       uploadedModelEmptyHint: isZh ? '上传 .py 文件，或从模型列表选择已有版本。' : 'Upload a .py file or select an existing version from your models.',
       checkLogin: isZh ? '需要登录才能开始实验' : 'Sign in to start a run',
-      checkTransfer: isZh ? '迁移来源已选择' : 'Transfer source selected',
       checkTransferMissing: isZh ? '请选择迁移学习来源' : 'Select a transfer learning source',
-      inspectorNeedsWork: isZh ? '还有需要处理的问题' : 'Items still need attention',
-      inspectorFootnote: isZh
-        ? '检查器只摘要当前选择；完整参数在中间画布的各个分区里编辑。'
-        : 'The inspector summarises your choices; edit the full parameters in the canvas sections.',
+      // 信息减法后的检查器：正常时一行结论，有问题时逐条原因 + 定位入口。
+      inspectorAllClear: isZh ? '配置检查通过' : 'Configuration check passed',
+      inspectorGoLogin: isZh ? '去登录' : 'Sign in',
+      inspectorFixName: isZh ? '填写名称' : 'Set a name',
+      inspectorFixParams: isZh ? '编辑参数' : 'Edit parameters',
+      inspectorFixTransfer: isZh ? '选择来源' : 'Choose source',
       // 专家参数
       expertStructureTab: isZh ? '模型结构' : 'Model structure',
       expertStructureHint: isZh ? '结构参数按当前架构渲染，迁移来源锁定后会同步。' : 'Structure fields follow the current architecture and sync when a transfer source locks them.',
@@ -392,14 +367,9 @@ export default function ModelTrainingPage() {
       expertTagsHintLabel: isZh ? '标签用于在实验目录里分组与筛选。' : 'Tags group and filter experiments in the directory.',
       expertNoUploadedModel: isZh ? '还没有上传模型，先在「任务定义」里上传 .py 文件。' : 'No uploaded model yet — upload a .py file in “Task definition” first.',
       // 运行条
-      runBarSummaryEmpty: isZh ? '尚未配置' : 'Not configured yet',
-      runBarSelectedFile: isZh ? '已选择文件 · 待校验' : 'File selected · pending validation',
       runBarReadyToStart: isZh ? '配置就绪，可以开始实验' : 'Ready to start the run',
       runBarNeedsAttention: isZh ? '配置未完成，先处理检查器里的问题' : 'Configuration incomplete — resolve the inspector items',
       runBarGuest: isZh ? '登录后即可开始实验' : 'Sign in to start a run',
-      runBarModelUploaded: isZh ? '上传模型已校验' : 'Uploaded model validated',
-      runBarModelUploadedPending: isZh ? '上传模型待处理' : 'Uploaded model needs attention',
-      runBarModelOfficial: isZh ? '官方模型已选择' : 'Official model selected',
       uploadedModels: isZh ? '上传模型' : 'Uploaded models',
       uploadedModelsLabel: isZh ? '上传模型' : 'Uploaded model',
       officialLabel: isZh ? '官方模型' : 'Official model',
@@ -1359,8 +1329,8 @@ export default function ModelTrainingPage() {
     setArchitectureParamsByModel(createDefaultArchitectureParamsByModel());
     setArchitecturePickerOpen(false);
     setAdvancedOpen(false);
-    // 新建实验回到与当前模型来源匹配的专家参数页签。
-    setExpertTab(modelSource === 'uploaded' ? 'customParams' : 'architecture');
+    // 新建实验回到超参数模块的第一个页签（输入与预测）。
+    setExpertTab('payload');
     setIsCreating(true);
     // 进入新建配置后抑制“自动选中运行中任务”，否则任务轮询或目录重渲染
     // 会把用户从配置画布拽回监控阶段。
@@ -1805,65 +1775,33 @@ export default function ModelTrainingPage() {
     <ExperimentConfigInspector
       values={{
         customModelName,
-        trainingDataset,
         modelSource,
-        selectedChannels,
         modelArchitecture: normalizedModelArchitecture,
         useSphere,
-        epochs,
-        batchSize,
-        learningRate,
-        windowValue: window_,
-        horizon,
-        transferEnabled,
       }}
       resources={{
         user,
-        uploadedModels,
         selectedUploadedModel,
         selectedUploadedModelLabel,
-        selectedUploadedParamSchema,
       }}
       validation={{
         modelNameError,
-        visibleCustomModelParamErrors,
         transferStartBlocked,
         selectedUploadedModelInvalid,
-        customParamCount,
-        startDisabled,
       }}
       readiness={readiness}
       copy={copy}
-      isZh={isZh}
-      channelOrder={channelOrder}
-      channelMap={channelMap}
-      modelNameLabel={modelNameLabel}
       onEditCustomParams={() => setExpertTab('customParams')}
+      onRequestLogin={() => openAuthModal('login')}
     />
   );
 
   const configRunBar = (
     <ExperimentRunBar
-      values={{
-        customModelName,
-        trainingDataset,
-        modelSource,
-        selectedChannels,
-        selectedUploadedModelId,
-        modelArchitecture: normalizedModelArchitecture,
-        epochs,
-        windowValue: window_,
-        horizon,
-      }}
-      resources={{
-        user,
-        uploadedModels,
-        selectedUploadedModelLabel,
-      }}
+      resources={{ user }}
       validation={{ startDisabled, startButtonLabel }}
       readiness={readiness}
       copy={copy}
-      channelMap={channelMap}
       onStart={handleStartTraining}
       pendingSubmission={isProcessing ? copy.starting : ''}
       barRef={setRunBarNode}
@@ -1914,6 +1852,13 @@ export default function ModelTrainingPage() {
       isProcessing={isProcessing}
       onSelectTask={handleSelectTask}
       onStop={handleStopTask}
+      tasksLoading={tasksLoading}
+      tasksError={tasksError}
+      onCreateTask={handleCreateExperiment}
+      onRetryTasks={() => {
+        setTasksError(false);
+        loadTasks().catch(() => {});
+      }}
       copy={copy}
       locale={locale}
       isZh={isZh}

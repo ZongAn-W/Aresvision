@@ -36,59 +36,135 @@ function assertOrder(source, tokens) {
 test('canvas head carries the editable name and no duplicated configuration summary', () => {
   assertOrder(configSource, [
     'experiment-canvas-head',
+    'data-config-group="name"',
     'experiment-canvas-name',
-    'experiment-canvas-state',
-    'data-config-group="task"',
+    'data-config-group="dataset"',
   ]);
   // 旧的大段「当前配置」摘要已删除，摘要集中在检查器。
   assert.doesNotMatch(configSource, /experiment-config-summary/);
   assert.doesNotMatch(configSource, /copy\.summaryLabel/);
   assert.doesNotMatch(configSource, /copy\.summaryHint/);
+  // 信息减法：画布头部不再重复任务说明与就绪胶囊（就绪由运行条与检查器播报）。
+  assert.doesNotMatch(configSource, /experiment-canvas-meta/);
+  assert.doesNotMatch(configSource, /experiment-canvas-state/);
+  // 字段级错误仍然保留在名称输入旁。
+  assert.match(configSource, /experiment-canvas-name-error/);
+  assert.match(configSource, /aria-errormessage=\{modelNameError/);
+  // 四个分区同一套底色与内边距：01 不再有旧的蓝色渐变。
+  assert.match(
+    readFileSync(new URL('./experimentCenter.css', import.meta.url), 'utf8'),
+    /\.experiment-canvas-head\s*\{[^}]*padding:\s*16px 18px[^}]*background:\s*transparent/s
+  );
 });
 
 test('configuration canvas keeps the agreed section order', () => {
+  // 画布四个部分：01 模型名称 → 02 数据集 → 03 模型 → 04 超参数（超参数内含页签）。
   assertOrder(configSource, [
-    'copy.sectionTask',
-    'copy.sectionPayload',
-    'copy.sectionTraining',
+    'data-config-group="name"',
+    'copy.sectionName',
+    'data-config-group="dataset"',
+    'copy.sectionDataset',
+    'data-config-group="model"',
+    'copy.sectionModel',
+    'data-config-group="expert"',
     'copy.sectionExpert',
+    'role="tablist"',
   ]);
-  // 任务定义组内部：数据集与模型来源并排（横向组织）。
+  // 四个分区都有序号，边界一眼可辨。
   assertOrder(configSource, [
-    'experiment-task-grid',
-    'copy.trainingDataset',
-    'data-model-source-toggle="true"',
+    '<span className="experiment-section-index">01</span>',
+    '<span className="experiment-section-index">02</span>',
+    '<span className="experiment-section-index">03</span>',
+    '<span className="experiment-section-index">04</span>',
   ]);
-  assert.match(configSource, /className="experiment-task-grid"/);
+  assertOrder(configSource, [
+    "const CONFIG_EXPERT_TABS = ['payload', 'training']",
+    '...CONFIG_EXPERT_TABS',
+  ]);
   assert.match(configSource, /experiment-choice-block/);
 });
 
-test('dataset and model source sit side by side in one row', () => {
-  const taskGrid = configSource.slice(
-    configSource.indexOf('experiment-task-grid'),
-    configSource.indexOf('data-config-group="payload"')
+test('dataset and model each own one section', () => {
+  const datasetBlock = configSource.slice(
+    configSource.indexOf('data-config-group="dataset"'),
+    configSource.indexOf('data-config-group="model"')
   );
-  assert.match(taskGrid, /copy\.trainingDataset/);
-  assert.match(taskGrid, /experiment-choice-select/);
-  assert.match(taskGrid, /experiment-source-toggle/);
-  assert.match(taskGrid, /data-model-source-option=\{option\.value\}/);
+  assert.match(datasetBlock, /copy\.trainingDataset/);
+  assert.match(datasetBlock, /experiment-dataset-list/);
+  assert.match(datasetBlock, /data-training-dataset-option=\{option\.value\}/);
+  // 数据集不再用原生下拉，两个选项直接列出来。
+  assert.doesNotMatch(datasetBlock, /<select/);
+  assert.doesNotMatch(datasetBlock, /model-source-toggle/);
+
+  const modelBlock = configSource.slice(
+    configSource.indexOf('data-config-group="model"'),
+    configSource.indexOf('data-config-group="expert"')
+  );
+  assert.match(modelBlock, /experiment-source-toggle/);
+  assert.match(modelBlock, /data-model-source-option=\{option\.value\}/);
+  assert.doesNotMatch(modelBlock, /experiment-dataset-list/);
+  // 并排的两列任务定义网格已拆掉，两个部分各自独占分区。
+  assert.doesNotMatch(configSource, /experiment-task-grid/);
   assert.match(
     readFileSync(new URL('./experimentCenter.css', import.meta.url), 'utf8'),
-    /\.experiment-task-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(0,\s*1fr\)/s
+    /\.experiment-section-index\s*\{[^}]*font-family:\s*var\(--experiment-mono\)/s
   );
+});
+
+test('every hyperparameter tab renders the same field-block skeleton', () => {
+  const payloadBlock = configSource.slice(
+    configSource.indexOf('data-config-group="payload"'),
+    configSource.indexOf('data-config-group="training"')
+  );
+  // 六个页签的正文都是「标题 + 同一套字段块」，不再各自一种形态。
+  assert.match(payloadBlock, /experiment-expert-heading/);
+  assert.match(payloadBlock, /experiment-payload-bar/);
+  assert.match(payloadBlock, /experiment-channel-chip/);
+  const trainingBlock = configSource.slice(
+    configSource.indexOf('data-config-group="training"'),
+    configSource.indexOf("activeTab === 'customParams'")
+  );
+  assert.match(trainingBlock, /experiment-expert-heading/);
+  assert.match(trainingBlock, /experiment-param-grid/);
+  // 标签选择器收进同一个块里，去掉自己的 fieldset 描边。
+  assert.match(configSource, /experiment-tag-block[\s\S]{0,400}?<TagPicker/);
+
+  const css = readFileSync(new URL('./experimentCenter.css', import.meta.url), 'utf8');
+  assert.match(
+    css,
+    /\.experiment-payload-bar,\s*\.experiment-param-grid,\s*\.experiment-expert-fields,\s*\.experiment-expert-stack\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s
+  );
+  assert.match(
+    css,
+    /\.experiment-payload-lock,\s*\.experiment-channel-chip,\s*\.experiment-param-cell,\s*\.experiment-expert-field\s*\{[^}]*padding:\s*9px 10px[^}]*border-radius:\s*9px/s
+  );
+  assert.match(css, /\.experiment-tag-block \.training-tag-picker\s*\{[^}]*border:\s*0/s);
+  // 标签选择器是独立控件：它的后代规则不能挂在字段块下，否则搜索框与标签项的
+  // input / span 会被字段块的规则改掉（标签名曾被压成一列一个字）。
+  assert.doesNotMatch(css, /\.experiment-expert-field \.training-tag-/);
+  assert.match(css, /\.experiment-tag-block \.training-tag-options\s*\{[^}]*minmax\(150px,\s*1fr\)/s);
+
+  // 自定义参数表单也用同一套块，并且不再自带重复标题。
+  const formSource = readFileSync(new URL('./DynamicModelParamsForm.jsx', import.meta.url), 'utf8');
+  assert.match(formSource, /className="experiment-expert-fields"/);
+  assert.match(formSource, /className="experiment-expert-field"/);
+  assert.match(formSource, /hideTitle/);
+  assert.doesNotMatch(formSource, /model-training-field-grid/);
+  assert.match(configSource, /hideTitle/);
 });
 
 test('uploaded model is the primary entry with a compact card and secondary management', () => {
   const sourceGroup = configSource.slice(
-    configSource.indexOf('data-config-group="task"'),
-    configSource.indexOf('data-config-group="payload"')
+    configSource.indexOf('data-config-group="model"'),
+    configSource.indexOf('data-config-group="expert"')
   );
   assert.match(sourceGroup, /<UploadedModelPanel/);
   assert.match(sourceGroup, /onUpload=\{onUploadModel\}/);
   assert.match(sourceGroup, /onRevalidate=\{onRevalidateModel\}/);
   assert.match(sourceGroup, /onDelete=\{onDeleteUploadedModel\}/);
   assert.match(sourceGroup, /inlineError=\{validation\.uploadedModelInlineError\}/);
-  assert.match(sourceGroup, /onEditParams=\{\(\) => \{\s*setActiveTab\('customParams'\);/);
+  // 自定义参数编辑入口只保留在右侧检查器，画布卡片不再重复提供。
+  assert.doesNotMatch(sourceGroup, /onEditParams/);
   assert.match(sourceGroup, /templateDownloadUrl=\{resources\.templateDownloadUrl\}/);
   assert.match(sourceGroup, /guideDownloadUrl=\{resources\.guideDownloadUrl\}/);
   // 上传模型面板只在模型来源为 uploaded 时渲染；官方模型时渲染架构选择器。
@@ -103,7 +179,7 @@ test('uploaded model panel keeps management behind a disclosure instead of a per
   const panelSource = readFileSync(new URL('./UploadedModelPanel.jsx', import.meta.url), 'utf8');
   assert.match(panelSource, /experiment-uploaded-card/);
   assert.match(panelSource, /data-uploaded-model-upload="true"/);
-  assert.match(panelSource, /data-uploaded-model-params="true"/);
+  assert.doesNotMatch(panelSource, /data-uploaded-model-params/);
   assert.match(panelSource, /useState\(false\)/);
   assert.match(panelSource, /experiment-uploaded-manage/);
   assert.match(panelSource, /aria-expanded=\{manageOpen\}/);
@@ -117,8 +193,8 @@ test('uploaded model panel keeps management behind a disclosure instead of a per
 
 test('official model architecture selector only renders for the official source', () => {
   const sourceGroup = configSource.slice(
-    configSource.indexOf('data-config-group="task"'),
-    configSource.indexOf('data-config-group="payload"')
+    configSource.indexOf('data-config-group="model"'),
+    configSource.indexOf('data-config-group="expert"')
   );
   assert.match(sourceGroup, /<ModelArchitectureSelector/);
   assert.match(sourceGroup, /onSelect=\{onArchitectureSelect\}/);
@@ -128,7 +204,7 @@ test('official model architecture selector only renders for the official source'
   assert.match(pageSource, /getModelTrainingControlVisibility\(modelSource\)/);
 });
 
-test('input and prediction group is a compact payload bar with a flow diagram', () => {
+test('input and prediction group is a compact payload bar', () => {
   const payloadBlock = configSource.slice(
     configSource.indexOf('data-config-group="payload"'),
     configSource.indexOf('data-config-group="training"')
@@ -143,22 +219,18 @@ test('input and prediction group is a compact payload bar with a flow diagram', 
   // 不再把 O₃ / 驱动变量 / 计数分别扩成大块卡片。
   assert.doesNotMatch(payloadBlock, /experiment-payload-base-title/);
   assert.doesNotMatch(payloadBlock, /experiment-payload-drivers/);
-  // 输入序列 → 当前模型 → 输出序列，跟随窗口 / 步长 / 模型来源。
-  assert.match(payloadBlock, /data-sequence-diagram="true"/);
-  assert.match(payloadBlock, /data-sequence="input"/);
-  assert.match(payloadBlock, /data-sequence="model"/);
-  assert.match(payloadBlock, /data-sequence="output"/);
-  assert.match(payloadBlock, /copy\.flowInputCaption\(windowValue \|\| '--'\)/);
-  assert.match(payloadBlock, /copy\.flowOutputCaption\(horizon \|\| '--'\)/);
-  assert.match(payloadBlock, /frameCount\(windowValue\)/);
-  assert.match(payloadBlock, /frameCount\(horizon\)/);
-  assert.match(payloadBlock, /flowModelLabel/);
+  // 信息减法：整块「输入 → 模型 → 输出」序列示意图已删除；
+  // 窗口、步长与模型名仍在真实控件里呈现。
+  assert.doesNotMatch(configSource, /experiment-flow|data-sequence/);
+  assert.match(configSource, /copy\.windowLabel/);
+  assert.match(configSource, /copy\.horizonLabel/);
+  assert.match(configSource, /<ModelArchitectureSelector/);
 });
 
-test('training parameters render as a readable matrix with short helper codes', () => {
+test('training parameters render as a readable matrix', () => {
   const trainingBlock = configSource.slice(
     configSource.indexOf('data-config-group="training"'),
-    configSource.indexOf('data-config-group="expert"')
+    configSource.indexOf("activeTab === 'customParams'")
   );
   ['windowValue', 'horizon', 'epochs', 'batchSize', 'learningRate'].forEach((key) => {
     assert.match(configSource, new RegExp(`key: '${key}'`), `${key} should be a matrix field`);
@@ -171,26 +243,31 @@ test('training parameters render as a readable matrix with short helper codes', 
     configSource.indexOf('const parameterFields = ['),
     configSource.indexOf('const expertTabLabels')
   );
-  // 辅助标识用 WINDOW / BATCH 这类短码，标签里不出现内部变量名。
+  // 矩阵字段定义里仍带 code，但标签旁不再渲染 WINDOW / BATCH 这类英文小码。
   assert.match(configSource, /code: copy\.codeWindow/);
   assert.match(configSource, /code: copy\.codeBatch/);
   assert.match(configSource, /code: copy\.codeLr/);
-  assert.match(matrix, /code: copy\.code/);
   const paramLabelStart = trainingBlock.indexOf('experiment-param-label');
   const paramLabelBlock = trainingBlock.slice(paramLabelStart, trainingBlock.indexOf('</span>', paramLabelStart));
-  assert.match(paramLabelBlock, /<code>\{field\.code\}<\/code>/);
+  assert.doesNotMatch(paramLabelBlock, /<code>/);
   assert.doesNotMatch(paramLabelBlock, /field\.key/);
+  // 真正帮助理解数值的量纲仍然保留。
+  assert.match(trainingBlock, /<small>\{field\.unit\}<\/small>/);
 });
 
 test('expert parameters use side tabs whose panels render the matching real fields', () => {
-  assert.match(configSource, /const UPLOADED_EXPERT_TABS = \['customParams', 'strategy', 'transfer', 'tags'\]/);
-  assert.match(configSource, /const OFFICIAL_EXPERT_TABS = \['structure', 'strategy', 'transfer', 'tags'\]/);
+  // 超参数页签：先输入与预测 / 训练参数，再按模型来源追加专家字段页签。
+  assert.match(configSource, /const CONFIG_EXPERT_TABS = \['payload', 'training'\]/);
+  assert.match(configSource, /const UPLOADED_EXPERT_TABS = \[\.\.\.CONFIG_EXPERT_TABS, 'customParams', 'strategy', 'transfer', 'tags'\]/);
+  assert.match(configSource, /const OFFICIAL_EXPERT_TABS = \[\.\.\.CONFIG_EXPERT_TABS, 'structure', 'strategy', 'transfer', 'tags'\]/);
   assert.match(configSource, /role="tablist"/);
   assert.match(configSource, /role="tabpanel"/);
   assert.match(configSource, /aria-selected=\{activeTab === tab\}/);
   assert.match(configSource, /data-expert-panel=\{activeTab\}/);
   assert.match(configSource, /data-expert-tab=\{tab\}/);
   // 每个页签面板渲染真实字段而不是只改标题。
+  assert.match(configSource, /activeTab === 'payload' \? \(/);
+  assert.match(configSource, /activeTab === 'training' \? \(/);
   assert.match(configSource, /activeTab === 'customParams' \? \(/);
   assert.match(configSource, /activeTab === 'structure' \? \(/);
   assert.match(configSource, /activeTab === 'strategy' \? \(/);
@@ -217,8 +294,8 @@ test('custom model params stay dynamic and editing them is a first-class action'
   assert.match(configSource, /<DynamicModelParamsForm/);
   assert.match(configSource, /schema=\{selectedUploadedParamSchema\}/);
   assert.match(configSource, /onChange=\{onCustomModelParamChange\}/);
-  assert.match(configSource, /copy\.editCustomParams/);
-  assert.match(configSource, /onEditParams/);
+  assert.match(inspectorSource, /copy\.editCustomParams/);
+  assert.doesNotMatch(configSource, /onEditParams/);
   assert.match(inspectorSource, /onEditCustomParams/);
   assert.match(pageSource, /onEditCustomParams=\{\(\) => setExpertTab\('customParams'\)\}/);
 });
@@ -239,7 +316,7 @@ test('configuration canvas reuses the existing training controls instead of reim
   assert.match(configSource, /<ModelArchitectureSelector/);
   assert.match(configSource, /<TagPicker/);
   assert.match(configSource, /from '\.\/trainingParamSanitizers'/);
-  // 模型来源胶囊并入任务定义组，ModelSourceSelector 组件本身不再单独渲染。
+  // 模型来源胶囊留在「模型」分区里，ModelSourceSelector 组件本身不再单独渲染。
   assert.doesNotMatch(configSource, /<ModelSourceSelector/);
   assert.match(configSource, /experiment-source-option/);
 });
@@ -274,7 +351,7 @@ test('structure-defining controls stay locked for a synchronized transfer source
   // 结构参数与窗口/步长输入的锁定量必须落在真正的输入控件上。
   const trainingBlock = configSource.slice(
     configSource.indexOf('data-config-group="training"'),
-    configSource.indexOf('data-config-group="expert"')
+    configSource.indexOf("activeTab === 'customParams'")
   );
   assert.match(trainingBlock, /data-parameter=\{field\.key\}[\s\S]{0,900}?disabled=\{field\.locked \? transferStructureLocked : undefined\}/);
   assert.match(configSource, /value=\{values\.stlstmLayers\}[\s\S]{0,200}?disabled=\{transferStructureLocked\}/);

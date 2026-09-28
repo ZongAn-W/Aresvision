@@ -24,13 +24,9 @@ const BASE_INPUT_CHANNEL = 'O3';
  * 官方模型 → 模型结构 / 训练策略 / 迁移学习 / 实验标签。
  * 权重上传与冻结策略都在「迁移学习」里，不再单独占一个页签。
  */
-const UPLOADED_EXPERT_TABS = ['customParams', 'strategy', 'transfer', 'tags'];
-const OFFICIAL_EXPERT_TABS = ['structure', 'strategy', 'transfer', 'tags'];
-
-function frameCount(value) {
-  const numeric = Math.max(1, Math.min(12, Number(value) || 0));
-  return Array.from({ length: numeric });
-}
+const CONFIG_EXPERT_TABS = ['payload', 'training'];
+const UPLOADED_EXPERT_TABS = [...CONFIG_EXPERT_TABS, 'customParams', 'strategy', 'transfer', 'tags'];
+const OFFICIAL_EXPERT_TABS = [...CONFIG_EXPERT_TABS, 'structure', 'strategy', 'transfer', 'tags'];
 
 /**
  * 配置实验工作区（中间配置画布）。
@@ -142,7 +138,8 @@ export default function ExperimentConfigWorkspace({
   const isRecurrentModel = isRecurrentArchitecture(normalizedArchitecture);
 
   const expertTabs = isUploaded ? UPLOADED_EXPERT_TABS : OFFICIAL_EXPERT_TABS;
-  const defaultExpertTab = isUploaded ? 'customParams' : 'structure';
+  // 载荷与训练参数是每次配置都要过一遍的，作为超参数模块的头两个页签并默认打开第一页。
+  const defaultExpertTab = 'payload';
   const [localTab, setLocalTab] = useState(defaultExpertTab);
   const activeTab = expertTabs.includes(expertTab) ? expertTab : (expertTabs.includes(localTab) ? localTab : defaultExpertTab);
   const setActiveTab = (tab) => {
@@ -168,10 +165,6 @@ export default function ExperimentConfigWorkspace({
         ? (uploadedValidationStatus === 'valid' ? 'valid' : 'invalid')
         : 'empty')
     : 'official';
-  const flowModelLabel = isUploaded
-    ? (uploadedModel?.original_filename || copy.uploadedModelUnnamed)
-    : getExperimentArchitectureLabel(modelArchitecture);
-  const isReadinessReady = Boolean(readiness?.canTrain);
 
   const parameterFields = [
     {
@@ -213,12 +206,19 @@ export default function ExperimentConfigWorkspace({
     },
   ];
   const expertTabLabels = {
+    payload: copy.sectionPayload,
+    training: copy.sectionTraining,
     customParams: copy.expertTabCustomParams,
     structure: copy.expertStructureTab,
     strategy: copy.expertTabStrategy,
     transfer: copy.expertTabTransfer,
     tags: copy.expertTabTags,
   };
+  // 训练数据集直接列成可选项，不用下拉：只有两项，展开菜单反而多一次点击。
+  const datasetOptions = [
+    { value: TRAINING_DATASET_OPENMARS_MCD, label: copy.datasetOpenMarsMcd },
+    { value: TRAINING_DATASET_MCD_OVERVIEW, label: copy.datasetMcdOverview },
+  ];
 
   return (
     <div className="experiment-center-stack" data-config-canvas="true">
@@ -231,8 +231,13 @@ export default function ExperimentConfigWorkspace({
         </div>
       ) : null}
 
-      {/* 画布头部：可编辑实验名称 + 简短任务说明，不再重复整段配置摘要。 */}
-      <header className="experiment-canvas-head">
+      {/* 01 模型名称：可编辑的实验名称与字段级错误；
+          任务说明与就绪胶囊已在信息减法中删除（就绪状态由底部运行条与右侧检查器播报）。 */}
+      <header className="experiment-canvas-head" data-config-group="name">
+        <div className="experiment-section-kicker">
+          <span className="experiment-section-index">01</span>
+          <span className="experiment-section-title" style={sectionTitleStyle}>{copy.sectionName}</span>
+        </div>
         <div className="experiment-canvas-head-main">
           <label className="sr-only" htmlFor="experiment-name-input">{copy.canvasNameLabel}</label>
           <input
@@ -243,62 +248,61 @@ export default function ExperimentConfigWorkspace({
             value={customModelName}
             onChange={onModelNameChange}
             aria-invalid={Boolean(modelNameError)}
-            aria-describedby="experiment-name-hint"
+            aria-errormessage={modelNameError ? 'experiment-name-error' : undefined}
           />
-          <p className="experiment-canvas-meta" id="experiment-name-hint">
-            {copy.canvasExperimentMeta}
-          </p>
           {modelNameError ? (
-            <p className="experiment-canvas-name-error" role="alert">{modelNameError}</p>
+            <p className="experiment-canvas-name-error" id="experiment-name-error" role="alert">{modelNameError}</p>
           ) : null}
-        </div>
-        <div
-          className="experiment-canvas-state"
-          data-canvas-state={isReadinessReady ? 'ready' : 'pending'}
-          role="status"
-        >
-          {isReadinessReady ? copy.runBarReady : copy.runBarNotReady}
         </div>
       </header>
 
-      {/* 01 任务定义：数据集与模型来源并排 */}
-      <section className="experiment-canvas-section" data-config-group="task">
+      {/* 02 数据集 */}
+      <section className="experiment-canvas-section" data-config-group="dataset">
         <div className="experiment-section-kicker">
-          <span className="experiment-section-index" aria-hidden="true">01</span>
-          <span className="experiment-section-title" style={sectionTitleStyle}>{copy.sectionTask}</span>
-          <span className="experiment-section-hint">{copy.sectionTaskHint}</span>
+          <span className="experiment-section-index">02</span>
+          <span className="experiment-section-title" style={sectionTitleStyle}>{copy.sectionDataset}</span>
         </div>
 
-        <div className="experiment-task-grid">
-          <div className="experiment-choice-block" data-active="true">
-            <div className="experiment-choice-label">
-              <span>{copy.trainingDataset}</span>
-              <em>{trainingDataset === TRAINING_DATASET_MCD_OVERVIEW ? 'MCD' : 'MARS'}</em>
-            </div>
-            <select
-              className="experiment-choice-select"
-              style={inputStyle}
-              value={trainingDataset}
-              aria-label={copy.trainingDataset}
-              onChange={(event) => onTrainingDatasetChange(event.target.value)}
-            >
-              <option value={TRAINING_DATASET_OPENMARS_MCD}>{copy.datasetOpenMarsMcd}</option>
-              <option value={TRAINING_DATASET_MCD_OVERVIEW}>{copy.datasetMcdOverview}</option>
-            </select>
-            <div className="experiment-choice-meta">
-              {trainingDataset === TRAINING_DATASET_MCD_OVERVIEW ? copy.datasetHintMcdOverview : copy.datasetHintOpenMarsMcd}
-            </div>
+        <div className="experiment-choice-block" data-active="true">
+          <div className="experiment-choice-label">
+            <span>{copy.trainingDataset}</span>
           </div>
+          <div className="experiment-dataset-list" role="radiogroup" aria-label={copy.trainingDataset} data-training-dataset-list="true">
+            {datasetOptions.map((option) => {
+              const active = trainingDataset === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  className="experiment-dataset-option"
+                  data-training-dataset-option={option.value}
+                  onClick={() => onTrainingDatasetChange(option.value)}
+                >
+                  <strong>{option.label}</strong>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
 
-          <div className="experiment-choice-block" data-active="true" data-model-block={modelBlockState}>
-            <div className="experiment-choice-label">
-              <span>{copy.modelSource}</span>
-              <em>{isUploaded ? 'YOUR MODEL' : 'OFFICIAL'}</em>
-            </div>
-            <div className="experiment-source-toggle" role="group" aria-label={copy.modelSource} data-model-source-toggle="true">
+      {/* 03 模型 */}
+      <section className="experiment-canvas-section" data-config-group="model">
+        <div className="experiment-section-kicker">
+          <span className="experiment-section-index">03</span>
+          <span className="experiment-section-title" style={sectionTitleStyle}>{copy.sectionModel}</span>
+        </div>
+
+        <div className="experiment-choice-block" data-active="true" data-model-block={modelBlockState}>
+          <div className="experiment-choice-label">
+            <span>{copy.modelSource}</span>
+          </div>
+          <div className="experiment-source-toggle" role="group" aria-label={copy.modelSource} data-model-source-toggle="true">
               {[
-                { value: 'uploaded', label: copy.modelSourceUploaded, hint: copy.uploadedModelDesc },
-                { value: 'official', label: copy.modelSourceOfficial, hint: copy.officialModelDesc },
+                { value: 'uploaded', label: copy.modelSourceUploaded },
+                { value: 'official', label: copy.modelSourceOfficial },
               ].map((option) => {
                 const active = modelSource === option.value;
                 return (
@@ -312,7 +316,6 @@ export default function ExperimentConfigWorkspace({
                     onClick={() => onModelSourceChange(option.value)}
                   >
                     <strong>{option.label}</strong>
-                    <small>{option.hint}</small>
                   </button>
                 );
               })}
@@ -334,12 +337,6 @@ export default function ExperimentConfigWorkspace({
                 inlineError={validation.uploadedModelInlineError}
                 statusLabel={uploadedStatusLabel}
                 statusTone={uploadedValidationStatus === 'valid' ? 'ok' : 'warn'}
-                onEditParams={() => {
-                  setActiveTab('customParams');
-                  const tab = document.getElementById('experiment-expert-tab-customParams');
-                  tab?.scrollIntoView({ block: 'start' });
-                  tab?.focus({ preventScroll: true });
-                }}
                 labels={{
                   title: copy.groupUploadedModel,
                   upload: copy.uploadModel,
@@ -358,14 +355,11 @@ export default function ExperimentConfigWorkspace({
                   unnamed: copy.uploadedModelUnnamed,
                   noFilename: copy.uploadedModelNoFilename,
                   missing: copy.uploadedModelEmptyTitle,
-                  typeBadge: copy.uploadedModelTypeBadge,
                   hint: copy.uploadedModelEmptyHint,
                   formatTitle: copy.uploadedModelFormatTitle,
                   formatItems: copy.uploadedModelFormatItems,
                   summaryLabel: copy.uploadedModelSummaryLabel,
-                  summaryValidCount: copy.uploadedModelValidCount,
                   summaryParamCount: copy.uploadedModelParamCount,
-                  editParams: copy.editCustomParams,
                   versionLabel: copy.inspectorModelVersion,
                   validationLabel: copy.inspectorValidation,
                   officialHint: copy.modelSourceOfficialHint,
@@ -394,117 +388,14 @@ export default function ExperimentConfigWorkspace({
                 </label>
               </div>
             )}
-          </div>
         </div>
       </section>
 
-      {/* 02 输入与预测：紧凑载荷条 + 序列图示 */}
-      <section className="experiment-canvas-section" data-config-group="payload">
-        <div className="experiment-section-kicker">
-          <span className="experiment-section-index" aria-hidden="true">02</span>
-          <span className="experiment-section-title" style={sectionTitleStyle}>{copy.sectionPayload}</span>
-          <span className="experiment-section-hint">{copy.sectionPayloadHint}</span>
-        </div>
-
-        <div className="experiment-payload-bar" role="group" aria-label={t('modelTraining.inputChannels')}>
-          <span className="experiment-payload-lock" data-payload-base="true">
-            <span>O₃</span>
-            {copy.inspectorBaseInput}
-          </span>
-          {channelOrder.map((channel) => {
-            const active = selectedChannels.includes(channel);
-            return (
-              <button
-                key={channel}
-                type="button"
-                className="experiment-channel-chip"
-                aria-pressed={active}
-                data-channel={channel}
-                disabled={transferStructureLocked}
-                onClick={() => onChannelToggle(channel)}
-              >
-                <b>{channelMap[channel]?.short || channel}</b>
-                {channelMap[channel]?.name || channel}
-              </button>
-            );
-          })}
-          <span className="experiment-payload-count" data-payload-count={selectedChannels.length}>
-            {copy.payloadCountLabel(selectedChannels.length, channelOrder.length)}
-          </span>
-        </div>
-
-        <div className="experiment-flow" data-sequence-diagram="true" aria-label={copy.sectionPayload}>
-          <div className="experiment-flow-end" data-sequence="input">
-            <span className="experiment-flow-caption">{copy.flowInputCaption(windowValue || '--')}</span>
-            <div className="experiment-flow-frames" aria-hidden="true">
-              {frameCount(windowValue).map((_, index, list) => (
-                <span className="experiment-flow-frame" key={`in-${index}`}>
-                  {copy.flowFramePast(list.length - 1 - index)}
-                </span>
-              ))}
-            </div>
-          </div>
-          <span className="experiment-flow-connector" aria-hidden="true" />
-          <div className="experiment-flow-model" data-sequence="model">
-            <span className="experiment-flow-model-title">
-              {isUploaded ? copy.flowUploadedModel : getExperimentArchitectureLabel(modelArchitecture)}
-            </span>
-            <small>
-              {isUploaded
-                ? (flowModelLabel || copy.uploadedModelUnnamed)
-                : (useSphere ? `${copy.sphereToggle}: ${copy.enabled}` : copy.flowOfficialModel)}
-            </small>
-          </div>
-          <span className="experiment-flow-connector" aria-hidden="true" />
-          <div className="experiment-flow-end" data-sequence="output">
-            <span className="experiment-flow-caption">{copy.flowOutputCaption(horizon || '--')}</span>
-            <div className="experiment-flow-frames" aria-hidden="true">
-              {frameCount(horizon).map((_, index) => (
-                <span className="experiment-flow-frame" key={`out-${index}`}>
-                  {copy.flowFrameFuture(index + 1)}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* 03 训练参数矩阵 */}
-      <section className="experiment-canvas-section" data-config-group="training">
-        <div className="experiment-section-kicker">
-          <span className="experiment-section-index" aria-hidden="true">03</span>
-          <span className="experiment-section-title" style={sectionTitleStyle}>{copy.sectionTraining}</span>
-          <span className="experiment-section-hint">{copy.sectionTrainingHint}</span>
-        </div>
-        <div className="experiment-param-grid">
-          {parameterFields.map((field) => (
-            <label className="experiment-param-cell" key={field.key} data-parameter={field.key}>
-              <span className="experiment-param-label">
-                {field.label}
-                <code>{field.code}</code>
-              </span>
-              <input
-                type="number"
-                value={values[field.key]}
-                step={field.step}
-                min={field.min}
-                max={field.max}
-                disabled={field.locked ? transferStructureLocked : undefined}
-                aria-label={field.label}
-                onChange={(event) => onFoldChange(field.key, event.target.value)}
-              />
-              <small>{field.unit}</small>
-            </label>
-          ))}
-        </div>
-      </section>
-
-      {/* 04 专家参数：侧边页签 + 右侧参数 */}
+      {/* 04 超参数：输入与预测、训练参数、专家字段都在这里，用侧边页签切换 */}
       <section className="experiment-canvas-section" data-config-group="expert">
         <div className="experiment-section-kicker">
-          <span className="experiment-section-index" aria-hidden="true">04</span>
+          <span className="experiment-section-index">04</span>
           <span className="experiment-section-title" style={sectionTitleStyle}>{copy.sectionExpert}</span>
-          <span className="experiment-section-hint">{copy.sectionExpertHint}</span>
         </div>
 
         <div className="experiment-expert" data-expert-open="true">
@@ -539,6 +430,66 @@ export default function ExperimentConfigWorkspace({
             aria-labelledby={`experiment-expert-tab-${activeTab}`}
             data-expert-panel={activeTab}
           >
+            {/* 输入与预测：载荷块与其它页签同一套字段块 */}
+            {activeTab === 'payload' ? (
+              <div data-config-group="payload">
+                <h4 className="experiment-expert-heading">{copy.sectionPayload}</h4>
+                <div className="experiment-payload-bar" role="group" aria-label={t('modelTraining.inputChannels')}>
+                  <span className="experiment-payload-lock" data-payload-base="true">
+                    <span>{copy.inspectorBaseInput}</span>
+                    <b>O₃</b>
+                  </span>
+                  {channelOrder.map((channel) => {
+                    const active = selectedChannels.includes(channel);
+                    return (
+                      <button
+                        key={channel}
+                        type="button"
+                        className="experiment-channel-chip"
+                        aria-pressed={active}
+                        data-channel={channel}
+                        disabled={transferStructureLocked}
+                        onClick={() => onChannelToggle(channel)}
+                      >
+                        <span>{channelMap[channel]?.name || channel}</span>
+                        <b>{channelMap[channel]?.short || channel}</b>
+                      </button>
+                    );
+                  })}
+                  <span className="experiment-payload-count" data-payload-count={selectedChannels.length}>
+                    {copy.payloadCountLabel(selectedChannels.length, channelOrder.length)}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {/* 训练参数矩阵 */}
+            {activeTab === 'training' ? (
+              <div data-config-group="training">
+                <h4 className="experiment-expert-heading">{copy.sectionTraining}</h4>
+                <div className="experiment-param-grid">
+                  {parameterFields.map((field) => (
+                    <label className="experiment-param-cell" key={field.key} data-parameter={field.key}>
+                      <span className="experiment-param-label">
+                        {field.label}
+                      </span>
+                      <input
+                        type="number"
+                        value={values[field.key]}
+                        step={field.step}
+                        min={field.min}
+                        max={field.max}
+                        disabled={field.locked ? transferStructureLocked : undefined}
+                        aria-label={field.label}
+                        onChange={(event) => onFoldChange(field.key, event.target.value)}
+                      />
+                      <small>{field.unit}</small>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {activeTab === 'customParams' ? (
               isUploaded ? (
                 uploadedModel ? (
@@ -546,7 +497,6 @@ export default function ExperimentConfigWorkspace({
                     <h4 className="experiment-expert-heading">
                       {`${uploadedModel.original_filename || copy.uploadedModelUnnamed} / ${copy.expertTabCustomParams}`}
                     </h4>
-                    <p className="experiment-expert-note">{copy.customParamsPrimaryHint}</p>
                     <DynamicModelParamsForm
                       schema={selectedUploadedParamSchema}
                       values={values.customModelParams}
@@ -560,6 +510,7 @@ export default function ExperimentConfigWorkspace({
                         minHint: copy.paramMinHint,
                         maxHint: copy.paramMaxHint,
                       }}
+                      hideTitle
                       sectionTitleStyle={sectionTitleStyle}
                       fieldLabelStyle={fieldLabelStyle}
                       fieldHintStyle={fieldHintStyle}
@@ -802,15 +753,17 @@ export default function ExperimentConfigWorkspace({
               <>
                 <h4 className="experiment-expert-heading">{copy.expertTabTags}</h4>
                 <p className="experiment-expert-note">{copy.expertTagsHintLabel}</p>
-                <TagPicker
-                  tags={tagState.tags}
-                  value={newTaskTagIds}
-                  onChange={onTagIdsChange}
-                  onCreate={onCreateTag}
-                  disabled={!resources.user || tagState.loading || tagState.busy || isProcessing || Boolean(tagState.error)}
-                  isZh={isZh}
-                  label={copy.expertTagsLabel}
-                />
+                <div className="experiment-tag-block">
+                  <TagPicker
+                    tags={tagState.tags}
+                    value={newTaskTagIds}
+                    onChange={onTagIdsChange}
+                    onCreate={onCreateTag}
+                    disabled={!resources.user || tagState.loading || tagState.busy || isProcessing || Boolean(tagState.error)}
+                    isZh={isZh}
+                    label={copy.expertTagsLabel}
+                  />
+                </div>
                 {tagState.error && <div role="alert" className="training-tag-hint">{tagState.error}</div>}
               </>
             ) : null}

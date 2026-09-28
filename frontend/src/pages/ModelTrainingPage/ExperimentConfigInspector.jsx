@@ -1,17 +1,15 @@
-import { useState } from 'react';
 import { MODEL_ARCHITECTURES } from './experimentCenterModel';
-import { TRAINING_DATASET_MCD_OVERVIEW } from './trainingParamSanitizers';
 import './experimentCenter.css';
 
-const BASE_INPUT_CHANNEL = 'O₃';
-
 /**
- * 右侧配置检查器：简短的实时摘要，不是第二张表单。
+ * 右侧配置检查器：只回答两件事——「当前用的是什么模型」和「还有什么阻止开始训练」。
  *
- * 只显示当前模型（名称 / 来源 / 版本与校验状态）、输入变量、就绪检查、
- * 时序配置与数据集；其余信息收在「展开详细信息」里。
- * 组件不渲染任何 input / select，也不请求接口。
+ * 信息减法后删除了主表单已经显示的常态摘要（输入变量、时序配置、数据集与折叠详情），
+ * 也删除了逐条「已通过」的重复播报：
+ * - 正常时用一行简洁状态表达（「配置检查通过」）；
+ * - 有问题时逐条列出阻塞原因，能定位到字段的给出对应操作入口。
  *
+ * 组件不渲染任何 input / select，不请求接口，也不做资源估算。
  * 就绪状态来自页面控制器的 `readiness`：`canTrain` 才代表**能开始真实训练**，
  * 与主按钮是否可点（访客可点、点了弹登录）分开，避免「有错误却显示可以开始训练」。
  */
@@ -21,107 +19,83 @@ export default function ExperimentConfigInspector({
   validation,
   readiness,
   copy,
-  isZh,
-  channelOrder,
-  channelMap,
   onEditCustomParams,
+  onRequestLogin,
 }) {
-  const {
-    trainingDataset,
-    modelSource,
-    selectedChannels,
-    modelArchitecture,
-    useSphere,
-    epochs,
-    windowValue,
-    horizon,
-    transferEnabled,
-  } = values;
-  const {
-    user,
-    uploadedModels,
-    selectedUploadedModel,
-    selectedUploadedModelLabel,
-  } = resources;
-  const {
-    modelNameError,
-    transferStartBlocked,
-    selectedUploadedModelInvalid,
-    customParamCount,
-  } = validation;
-  const [detailsOpen, setDetailsOpen] = useState(false);
-
+  const { modelSource, modelArchitecture, useSphere } = values;
+  const { user, selectedUploadedModel, selectedUploadedModelLabel } = resources;
+  const { modelNameError, transferStartBlocked, selectedUploadedModelInvalid } = validation;
   const isUploaded = modelSource === 'uploaded';
-  const datasetLabel = trainingDataset === TRAINING_DATASET_MCD_OVERVIEW
-    ? copy.datasetMcdOverview
-    : copy.datasetOpenMarsMcd;
   const architectureLabel = MODEL_ARCHITECTURES.find((item) => item.id === modelArchitecture)?.label
     || modelArchitecture
     || '--';
-  const channelShorts = selectedChannels.map((channel) => channelMap[channel]?.short || channel);
-  const payloadValue = [BASE_INPUT_CHANNEL, ...channelShorts].join(' + ');
   const uploadedValidation = selectedUploadedModel?.validation_status || '';
   const canTrain = Boolean(readiness?.canTrain);
   const blockers = readiness?.blockers || [];
   const blockerCodes = new Set(blockers.map((item) => item.code));
-  const hasName = Boolean(values.customModelName.trim()) && !modelNameError;
 
   const modelReady = isUploaded
     ? Boolean(selectedUploadedModel) && uploadedValidation === 'valid' && !selectedUploadedModelInvalid
     : !blockerCodes.has('preset');
   const hasParamErrors = blockerCodes.has('custom-params')
     || [...blockerCodes].some((code) => code.startsWith('custom-param-'));
-  // 常见问题在检查行中只显示一次，保留字段级错误与其它阻塞原因。
-  const summarizedCodes = new Set([
-    'login', 'name-missing', 'name-invalid', 'model-missing', 'model-invalid',
-    'preset', 'transfer', 'custom-params',
-  ]);
-  const additionalBlockers = blockers.filter((blocker) => !summarizedCodes.has(blocker.code));
+  const hasName = Boolean(values.customModelName.trim()) && !modelNameError;
 
-  const readinessRows = [
-    {
-      key: 'login',
-      ok: Boolean(user),
-      label: user ? null : copy.checkLogin,
-    },
-    {
-      key: 'name',
-      ok: hasName,
-      label: hasName ? copy.checkName : (modelNameError || copy.checkNameMissing),
-    },
-    {
-      key: 'dataset',
-      ok: true,
-      label: copy.checkDataset,
-    },
-    {
+  // 逐条给出「需要用户处理」的原因；与字段旁的错误一一对应，不重复播报已通过项。
+  const issues = [];
+  if (!user) {
+    issues.push({ key: 'login', label: copy.checkLogin, action: onRequestLogin, actionLabel: copy.inspectorGoLogin });
+  }
+  if (!hasName) {
+    issues.push({ key: 'name', label: modelNameError || copy.checkNameMissing, action: 'name', actionLabel: copy.inspectorFixName });
+  }
+  if (!modelReady) {
+    issues.push({
       key: 'model',
-      ok: modelReady,
       label: isUploaded
-        ? (!selectedUploadedModel
-            ? copy.checkModelMissing
-            : (uploadedValidation === 'valid' && !selectedUploadedModelInvalid
-                ? copy.checkModelReady
-                : copy.checkModelInvalid))
-        : (blockerCodes.has('preset') ? copy.checkModelMissing : copy.checkModelOfficialReady),
-    },
-    {
-      key: 'params',
-      ok: Boolean(user) && modelReady && !hasParamErrors,
-      label: !user
-        ? copy.checkParamsNeedLogin
-        : (hasParamErrors
-            ? copy.checkParamsMissing
-            : (modelReady ? copy.checkParams : copy.checkParamsNeedModel)),
-    },
-  ];
-  if (transferEnabled) {
-    readinessRows.push({
-      key: 'transfer',
-      ok: !transferStartBlocked,
-      label: transferStartBlocked ? copy.checkTransferMissing : copy.checkTransfer,
+        ? (selectedUploadedModel ? copy.checkModelInvalid : copy.checkModelMissing)
+        : copy.checkModelMissing,
     });
   }
+  if (user && modelReady && hasParamErrors) {
+    issues.push({ key: 'params', label: copy.checkParamsMissing, action: 'customParams', actionLabel: copy.inspectorFixParams });
+  }
+  if (transferStartBlocked) {
+    issues.push({ key: 'transfer', label: copy.checkTransferMissing, action: 'transfer', actionLabel: copy.inspectorFixTransfer });
+  }
+  // 其余阻塞原因（目前只有登录与名称会走到这里）按原顺序补齐，避免漏报。
+  blockers.forEach((blocker) => {
+    if (issues.some((issue) => issue.key === blocker.code)) return;
+    if (blocker.code === 'name-missing' || blocker.code === 'name-invalid') return;
+    if (blocker.code === 'model-missing' || blocker.code === 'model-invalid') return;
+    if (blocker.code === 'custom-params' || blocker.code === 'transfer' || blocker.code === 'login') return;
+    issues.push({ key: blocker.code, label: blocker.label });
+  });
+
+  const handleIssueAction = (issue) => {
+    if (typeof issue.action === 'function') {
+      issue.action();
+      return;
+    }
+    if (issue.action === 'customParams') {
+      onEditCustomParams?.();
+      const tab = document.getElementById('experiment-expert-tab-customParams');
+      tab?.scrollIntoView({ block: 'start' });
+      tab?.focus({ preventScroll: true });
+      return;
+    }
+    if (issue.action === 'name') {
+      const nameInput = document.getElementById('experiment-name-input');
+      nameInput?.scrollIntoView({ block: 'center' });
+      nameInput?.focus({ preventScroll: true });
+      return;
+    }
+    if (issue.action === 'transfer') {
+      const tab = document.getElementById('experiment-expert-tab-transfer');
+      tab?.scrollIntoView({ block: 'start' });
+      tab?.focus({ preventScroll: true });
+    }
+  };
 
   return (
     <div className="experiment-inspector" data-config-inspector="true">
@@ -141,7 +115,11 @@ export default function ExperimentConfigInspector({
       <div className="experiment-inspector-body">
         <section className="experiment-inspector-block">
           <div className="experiment-inspector-label">{copy.inspectorCurrentModel}</div>
-          <div className="experiment-inspector-value" data-inspector-field="current-model" title={isUploaded ? (selectedUploadedModel?.original_filename || '') : architectureLabel}>
+          <div
+            className="experiment-inspector-value"
+            data-inspector-field="current-model"
+            title={isUploaded ? (selectedUploadedModel?.original_filename || '') : architectureLabel}
+          >
             {isUploaded
               ? (selectedUploadedModel ? (selectedUploadedModel.original_filename || selectedUploadedModelLabel) : copy.inspectorMissingUploadedModel)
               : architectureLabel}
@@ -153,100 +131,45 @@ export default function ExperimentConfigInspector({
                   : copy.modelSourceUploaded)
               : `${copy.modelSourceOfficial}${useSphere ? ` · ${copy.sphereToggle}: ${copy.enabled}` : ''}`}
           </div>
-          {isUploaded && selectedUploadedModel && customParamCount >= 0 ? (
+          {isUploaded && selectedUploadedModel && onEditCustomParams ? (
             <button
               type="button"
               className="experiment-inspector-link"
               data-inspector-action="edit-custom-params"
-              onClick={() => {
-                onEditCustomParams?.();
-                const tab = document.getElementById('experiment-expert-tab-customParams');
-                tab?.scrollIntoView({ block: 'start' });
-                tab?.focus({ preventScroll: true });
-              }}
+              onClick={() => handleIssueAction({ action: 'customParams' })}
             >
-              {`${copy.editCustomParams} (${customParamCount})`}
+              {copy.editCustomParams}
             </button>
           ) : null}
         </section>
 
         <section className="experiment-inspector-block">
-          <div className="experiment-inspector-label">{copy.inspectorInputVars}</div>
-          <div className="experiment-inspector-value" data-inspector-field="payload">{payloadValue}</div>
-          <div className="experiment-inspector-sub" data-inspector-field="channel-count">
-            {copy.inspectorChannelTotal(selectedChannels.length + 1)}
-            {selectedChannels.length === 0 ? ` · ${copy.channelSummaryEmpty}` : ''}
-          </div>
-        </section>
-
-        <section className="experiment-inspector-block">
           <div className="experiment-inspector-label">{copy.inspectorReadiness}</div>
-          <div className="experiment-inspector-readiness" data-inspector-blockers={canTrain ? 'false' : 'true'}>
-            {readinessRows.filter((row) => row.label).map((row) => (
-              <div className="experiment-inspector-readiness-row" key={row.key} data-ok={row.ok ? 'true' : 'false'}>
-                <span className="experiment-inspector-check" aria-hidden="true">{row.ok ? '✓' : '!'}</span>
-                <span>{row.label}</span>
-              </div>
-            ))}
-          </div>
-          {additionalBlockers.length > 0 ? (
+          {issues.length === 0 ? (
+            <div className="experiment-inspector-readiness-row" data-ok="true" data-inspector-clear="true">
+              <span className="experiment-inspector-check" aria-hidden="true">✓</span>
+              <span>{copy.inspectorAllClear}</span>
+            </div>
+          ) : (
             <ul className="experiment-inspector-blockers" data-inspector-issues="true">
-              {additionalBlockers.map((blocker) => (
-                <li key={blocker.code}>{blocker.label}</li>
+              {issues.map((issue) => (
+                <li key={issue.key} data-inspector-issue={issue.key}>
+                  <span className="experiment-inspector-issue-mark" aria-hidden="true">!</span>
+                  <span className="experiment-inspector-issue-text">{issue.label}</span>
+                  {issue.action ? (
+                    <button
+                      type="button"
+                      className="experiment-inspector-issue-action"
+                      onClick={() => handleIssueAction(issue)}
+                    >
+                      {issue.actionLabel}
+                    </button>
+                  ) : null}
+                </li>
               ))}
             </ul>
-          ) : null}
+          )}
         </section>
-
-        <section className="experiment-inspector-block">
-          <div className="experiment-inspector-label">{copy.inspectorSequence}</div>
-          <div className="experiment-inspector-telemetry">
-            <div className="experiment-inspector-cell">
-              <small>{`${copy.windowLabel} → ${copy.horizonLabel}`}</small>
-              <strong data-inspector-field="window-horizon">{`${windowValue || '--'} → ${horizon || '--'}`}</strong>
-            </div>
-            <div className="experiment-inspector-cell">
-              <small>{copy.epochsLabel}</small>
-              <strong data-inspector-field="epochs">{epochs || '--'}</strong>
-            </div>
-          </div>
-        </section>
-
-        <section className="experiment-inspector-block">
-          <div className="experiment-inspector-label">{copy.trainingDataset}</div>
-          <div className="experiment-inspector-sub experiment-inspector-dataset" data-inspector-field="dataset" title={datasetLabel}>
-            {datasetLabel}
-          </div>
-          <button
-            type="button"
-            className="experiment-inspector-link is-quiet"
-            aria-expanded={detailsOpen}
-            onClick={() => setDetailsOpen((value) => !value)}
-          >
-            {detailsOpen ? copy.inspectorCollapseDetails : copy.inspectorExpandDetails}
-          </button>
-          {detailsOpen ? (
-            <dl className="experiment-inspector-details">
-              <div>
-                <dt>{copy.modelSource}</dt>
-                <dd>{isUploaded ? copy.modelSourceUploaded : copy.modelSourceOfficial}</dd>
-              </div>
-              <div>
-                <dt>{copy.customModelParams}</dt>
-                <dd>{isUploaded ? `${customParamCount}` : '--'}</dd>
-              </div>
-              <div>
-                <dt>{copy.transferLearning}</dt>
-                <dd>{transferEnabled ? copy.enabled : copy.disabled}</dd>
-              </div>
-              <div>
-                <dt>{copy.uploadedModels}</dt>
-                <dd>{uploadedModels.length}</dd>
-              </div>
-            </dl>
-          ) : null}
-        </section>
-
       </div>
     </div>
   );

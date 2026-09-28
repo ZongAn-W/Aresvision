@@ -42,8 +42,9 @@ function ValidationMessages({ report, labels, fieldHintStyle }) {
  * 上传模型区域（紧凑版）。
  *
  * 默认只显示当前模型的胶囊式摘要（.py 标记、截断文件名、版本 · 校验状态 · 自定义参数数量）
- * 与两个主要动作（上传 / 替换、编辑自定义参数）。整套模型管理（列表、重新校验、删除）
- * 收在可展开的「管理上传模型」里，不抢占主上传操作的视觉层级。
+ * 与主上传动作（上传模型）。整套模型管理（列表、重新校验、删除）
+ * 收在可展开的「管理模型」里，不抢占主上传操作的视觉层级。
+ * 自定义模型参数的编辑入口只保留在右侧配置检查器，这里不再重复提供。
  *
  * 上传、替换、选择、重新校验、删除、模板与说明下载、格式说明、区内 inline error
  * 全部保留；校验失败、版本不匹配等错误通过 `inlineError` 直接显示在区域顶部。
@@ -63,7 +64,6 @@ export default function UploadedModelPanel({
   inlineError = '',
   statusLabel = '',
   statusTone = 'ok',
-  onEditParams,
   labels,
   sectionTitleStyle,
   fieldLabelStyle,
@@ -73,7 +73,6 @@ export default function UploadedModelPanel({
   const [manageOpen, setManageOpen] = useState(false);
   const [formatOpen, setFormatOpen] = useState(false);
   const selected = models.find((item) => item.id === selectedId) || null;
-  const validCount = models.filter((item) => item.validation_status === 'valid').length;
   const paramCount = Object.keys(selected?.param_schema || {}).length;
   const formatItems = Array.isArray(labels.formatItems) ? labels.formatItems : [];
   const selectedName = selected?.original_filename || selected?.display_name || labels.noFilename;
@@ -81,7 +80,7 @@ export default function UploadedModelPanel({
   const pickFile = () => fileRef.current?.click();
 
   return (
-    <div className="experiment-uploaded-model" data-uploaded-model-panel="true" data-model-state={selected ? (selected.validation_status === 'valid' ? 'valid' : 'invalid') : 'empty'}>
+    <div className="experiment-uploaded-model" data-uploaded-model-panel="true" data-has-selection={selected ? 'true' : 'false'} data-model-state={selected ? (selected.validation_status === 'valid' ? 'valid' : 'invalid') : 'empty'}>
       <input
         ref={fileRef}
         type="file"
@@ -103,11 +102,10 @@ export default function UploadedModelPanel({
 
       {selected ? (
         <div className="experiment-uploaded-card" data-uploaded-model-card="true">
-          <span className="experiment-uploaded-icon" aria-hidden="true">{labels.typeBadge}</span>
           <div className="experiment-uploaded-body">
             <div className="experiment-uploaded-name" title={selectedName}>{selectedName}</div>
             <div className="experiment-uploaded-meta">
-              {`v${selected.version ?? '--'} · ${labels.summaryParamCount ? labels.summaryParamCount(paramCount) : `${paramCount}`} · ${labels.summaryValidCount ? labels.summaryValidCount(validCount) : validCount}`}
+              {`v${selected.version ?? '--'} · ${labels.summaryParamCount ? labels.summaryParamCount(paramCount) : `${paramCount}`}`}
             </div>
           </div>
           <span className="experiment-uploaded-status" data-tone={statusTone} data-uploaded-model-status="true">
@@ -131,11 +129,6 @@ export default function UploadedModelPanel({
         >
           {uploading ? labels.uploading : (selected ? labels.uploadAgain : labels.upload)}
         </button>
-        {selected && onEditParams ? (
-          <button type="button" className="experiment-uploaded-link" data-uploaded-model-params="true" onClick={onEditParams}>
-            {labels.editParams}
-          </button>
-        ) : null}
         <button
           type="button"
           className="experiment-uploaded-link is-quiet"
