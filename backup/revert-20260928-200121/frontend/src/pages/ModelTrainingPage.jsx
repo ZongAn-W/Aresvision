@@ -89,7 +89,6 @@ import ExperimentDirectory from './ModelTrainingPage/ExperimentDirectory';
 import ExperimentConfigWorkspace from './ModelTrainingPage/ExperimentConfigWorkspace';
 import ExperimentConfigInspector from './ModelTrainingPage/ExperimentConfigInspector';
 import ExperimentRunBar from './ModelTrainingPage/ExperimentRunBar';
-import ExperimentRunMonitor from './ModelTrainingPage/ExperimentRunMonitor';
 import ExperimentResultPanel from './ModelTrainingPage/ExperimentResultPanel';
 import {
   MODEL_ARCHITECTURES,
@@ -2116,21 +2115,6 @@ export default function ModelTrainingPage() {
     />
   );
 
-  const monitorWorkspace = (
-    <ExperimentRunMonitor
-      activeTask={activeTask}
-      progress={resolvedProgress}
-      logs={logs}
-      isProcessing={isProcessing}
-      isLight={isLight}
-      autoScrollPinned={autoScrollPinned}
-      logContainerRef={logContainerRef}
-      onScroll={handleScroll}
-      onStop={handleStopTask}
-      copy={copy}
-    />
-  );
-
   const resultWorkspace = (
     <ExperimentResultPanel
       activeTask={activeTask}
@@ -2211,7 +2195,6 @@ export default function ModelTrainingPage() {
         directory={directoryWorkspace}
         workspace={{
           configure: configWorkspace,
-          monitor: monitorWorkspace,
           result: resultWorkspace,
         }}
         inspector={configInspector}

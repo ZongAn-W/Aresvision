@@ -26,15 +26,19 @@ test('experiment center shell is a console with a directory, a workspace and an 
   assert.match(cssSource, /--experiment-rail-width:\s*235px/);
   assert.match(cssSource, /--experiment-inspector-width:\s*284px/);
   assert.match(cssSource, /--experiment-gap:\s*14px/);
-  // 展开目录后是三列。
+  // 视图 1 是画布 + 检查器两列，视图 2 是目录 + 画布两列。
   assert.match(
     cssSource,
-    /\.experiment-center-grid\[data-directory='open'\]\[data-inspector='present'\]\s*\{[^}]*grid-template-columns:\s*var\(--experiment-rail-width\)\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
+    /\.experiment-center-grid\[data-mode='config'\]\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
+  );
+  assert.match(
+    cssSource,
+    /\.experiment-center-grid\[data-mode='run'\]\s*\{[^}]*grid-template-columns:\s*var\(--experiment-rail-width\)\s*minmax\(0,\s*1fr\)/s
   );
   assert.match(shellSource, /<aside[\s\S]{0,160}?id="experiment-directory-panel"/);
   assert.match(shellSource, /data-config-inspector-panel="true"/);
   assert.match(shellSource, /data-stage=\{stage\}/);
-  assert.match(shellSource, /experiment-center-stage-nav/);
+  assert.match(shellSource, /data-mode=\{mode\}/);
 });
 
 test('desktop directory and inspector stick to the viewport while the canvas scrolls', () => {
@@ -75,7 +79,9 @@ test('bottom run bar is fixed across the browser and reserving space below the g
   assert.match(shellSource, /runBarPortal\(/);
   // 网格按实测运行条高度预留底部空间，最后一个字段不会被底栏遮住。
   assert.match(shellSource, /paddingBottom: `\$\{runBarHeight \+ 20\}px`/);
-  assert.match(shellSource, /\{isConfigure && runBar \? \(/);
+  // 运行条在配置视图承载提交；监控视图只在任务真的在跑时保留（停止入口）。
+  assert.match(shellSource, /\{runBar && \(isConfigMode \? isConfigure : isRunning\) \? \(/);
+  assert.match(shellSource, /isMonitoredExperimentStatus\(activeTask\?\.status\)/);
 });
 
 test('shell exposes the three experiment stages', () => {
@@ -95,10 +101,13 @@ test('shell offers a new-experiment action and a directory handoff', () => {
 test('configuration workspace stays mounted so directory filtering cannot clear the form', () => {
   // 配置工作区用 hidden 隐藏而不是条件卸载：切换阶段/筛选时用户输入不丢失。
   assert.match(shellSource, /data-stage-workspace="configure"[\s\S]{0,120}?hidden=\{stage !== 'configure'\}/);
-  assert.match(shellSource, /data-stage-workspace="monitor"\s*hidden=\{stage !== 'monitor'\}/);
-  assert.match(shellSource, /data-stage-workspace="result"\s*hidden=\{stage !== 'result'\}/);
-  // 只有配置阶段渲染检查器与运行条；工作区本身始终挂载。
-  assert.match(shellSource, /\{isConfigure && inspector \? \(/);
+  assert.match(shellSource, /data-stage-workspace="monitor"\s*hidden=\{!showMonitor\}/);
+  assert.match(shellSource, /data-stage-workspace="result"[\s\S]{0,120}?hidden=\{!showResult\}/);
+  // 检查器只在配置视图渲染；工作区本身始终挂载，切视图不会清空表单。
+  assert.match(shellSource, /\{isConfigMode && inspector \? \(/);
+  // 监控视图里监控常驻、结果接在下面（任务完成后不再用结果顶替监控）。
+  assert.match(shellSource, /const showMonitor = !isConfigMode \|\| stage === 'monitor'/);
+  assert.match(shellSource, /const showResult = !isConfigMode \? Boolean\(activeTask\) : stage === 'result'/);
 });
 
 test('presentation shell does not start training or poll logs itself', () => {
@@ -128,7 +137,7 @@ test('directory rows show name, task id, architecture, dataset, time, status and
   assert.match(directorySource, /experiment-directory-id/);
   assert.match(directorySource, /experiment-directory-metric/);
   assert.match(directorySource, /EXPERIMENT_METRIC_KEYS/);
-  // 目录行日期按 locale 格式化；结束时间优先，未结束时回退开始时间。
+  // 目录行的日期按 locale 格式化；结束时间优先，未结束时回退开始时间。
   // （原断言写的是 task.start_time，与实现不符，一直是失败项。）
   assert.match(directorySource, /formatDirectoryDate\(task\.end_time \|\| task\.start_time, locale\)/);
   assert.match(directorySource, /experiment-directory-badge/);
@@ -175,39 +184,40 @@ test('directory rows are keyboard reachable and highlight the active experiment'
   assert.match(directorySource, /aria-pressed=\{isActive\}/);
 });
 
-test('the directory is shown by default and keeps the session choice', () => {
-  // 配置 / 监控 / 结果三个阶段都默认展开目录，用户手动收起后本次会话保持。
-  assert.match(shellSource, /const \[directoryCollapsed, setDirectoryCollapsed\] = useState\(false\)/);
-  assert.doesNotMatch(shellSource, /directoryTouchedRef/);
-  assert.match(shellSource, /data-directory=\{directoryCollapsed \? 'closed' : 'open'\}/);
-  // 展开 + 有检查器：目录 + 画布 + 检查器三列。
+test('the two views replace the old collapsible directory and stage indicator', () => {
+  // 视图状态是唯一的列组合开关：初始值跟随当前记录，有记录就直接看它。
+  assert.match(shellSource, /useState\(\(\) => \(activeTask \? 'run' : 'config'\)\)/);
+  assert.match(shellSource, /const isConfigMode = mode === 'config'/);
+  assert.match(shellSource, /if \(!activeTask\) setMode\('config'\)/);
+  assert.doesNotMatch(shellSource, /directoryCollapsed/);
+  assert.doesNotMatch(shellSource, /experiment-center-stage-nav/);
+  assert.doesNotMatch(shellSource, /experiment-center-stage-tab/);
+  assert.doesNotMatch(shellSource, /experiment-center-header/);
+  assert.doesNotMatch(shellSource, /AddRoundedIcon|CheckRoundedIcon/);
+  // 数据属性仍从视图推导，CSS 与测试都读它们。
+  assert.match(shellSource, /data-directory=\{isConfigMode \? 'closed' : 'open'\}/);
+  assert.match(shellSource, /data-inspector=\{isConfigMode && inspector \? 'present' : 'absent'\}/);
+  // 配置视图里检查器可用时是两列；没有检查器时不留空轨道。
   assert.match(
     cssSource,
-    /\.experiment-center-grid\[data-directory='open'\]\[data-inspector='present'\]\s*\{[^}]*grid-template-columns:\s*var\(--experiment-rail-width\)\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
-  );
-  // 收起 + 有检查器（用户手动收起）：画布铺满剩余宽度，检查器仍然保留。
-  assert.match(
-    cssSource,
-    /\.experiment-center-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*var\(--experiment-inspector-width\)/s
-  );
-  // 收起且没有检查器（监控 / 结果）：单列铺满，没有残留空列。
-  assert.match(
-    cssSource,
-    /\.experiment-center-grid\[data-directory='closed'\]\[data-inspector='absent'\]\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
+    /\.experiment-center-grid\[data-mode='config'\]\[data-inspector='absent'\]\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
   );
 });
 
-test('stage indicator is a non-interactive ordered flow with completion marks', () => {
-  assert.match(shellSource, /<ol className="experiment-center-stage-nav"/);
-  assert.match(shellSource, /<li key=\{key\} className="experiment-center-stage-step">/);
-  assert.match(shellSource, /experiment-center-stage-arrow/);
-  assert.match(shellSource, /data-stage-state=\{current \? 'current' : \(done \? 'done' : 'upcoming'\)\}/);
-  assert.match(shellSource, /CheckRoundedIcon/);
-  assert.match(shellSource, /aria-current=\{current \? 'step' : undefined\}/);
-  // 阶段指示器不是控件：不能用 button 渲染，也不能显示手型光标。
-  assert.doesNotMatch(shellSource, /<button[^>]*experiment-center-stage-tab/);
-  assert.match(cssSource, /\.experiment-center-stage-tab\s*\{[^}]*cursor:\s*default/s);
-  assert.doesNotMatch(cssSource, /\.experiment-center-stage-tab[^{]*\{[^}]*cursor:\s*pointer/s);
+test('the view bar is a fixed two-button group and no longer a stage flow', () => {
+  assert.match(shellSource, /className="experiment-view-bar"[\s\S]{0,80}?data-experiment-view-bar="true"/);  assert.match(shellSource, /role="group"/);
+  assert.match(shellSource, /\{\['config', 'run'\]\.map\(\(key\) => \{/);
+  assert.match(shellSource, /data-experiment-view=\{key\}/);
+  assert.match(shellSource, /data-view-state=\{active \? 'current' : 'idle'\}/);
+  assert.match(shellSource, /aria-pressed=\{active\}/);
+  assert.match(shellSource, /onClick=\{\(\) => setMode\(key\)\}/);
+  // 原来的标题、元信息按钮与阶段指示都不在外壳里了。
+  assert.doesNotMatch(shellSource, /experimentCenter\.newExperimentTitle/);
+  assert.doesNotMatch(shellSource, /experimentCenter\.hideDirectory/);
+  assert.doesNotMatch(shellSource, /experimentCenter\.showDirectory/);
+  assert.doesNotMatch(shellSource, /experiment-center-eyebrow/);
+  // 视图按钮是真实控件，且样式里不再是默认光标。
+  assert.match(cssSource, /\.experiment-view-tab\s*\{[^}]*cursor:\s*pointer/s);
 });
 
 test('page controller owns the stage derivation and wires the three workspaces', () => {
