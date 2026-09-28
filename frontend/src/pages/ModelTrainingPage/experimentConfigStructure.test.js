@@ -50,10 +50,10 @@ test('canvas head carries the editable name and no duplicated configuration summ
   // 字段级错误仍然保留在名称输入旁。
   assert.match(configSource, /experiment-canvas-name-error/);
   assert.match(configSource, /aria-errormessage=\{modelNameError/);
-  // 四个分区同一套底色与内边距：01 不再有旧的蓝色渐变。
+  // 四个分区同一套卡片与轨道：01 不再有旧的蓝色渐变。
   assert.match(
     readFileSync(new URL('./experimentCenter.css', import.meta.url), 'utf8'),
-    /\.experiment-canvas-head\s*\{[^}]*padding:\s*16px 18px[^}]*background:\s*transparent/s
+    /\.experiment-canvas-head,\s*\.experiment-canvas-section\s*\{[^}]*border-radius:\s*13px[^}]*background:\s*var\(--experiment-surface-1\)/s
   );
 });
 
@@ -184,11 +184,11 @@ test('uploaded model panel keeps management behind a disclosure instead of a per
   assert.match(panelSource, /experiment-uploaded-manage/);
   assert.match(panelSource, /aria-expanded=\{manageOpen\}/);
   assert.match(panelSource, /data-uploaded-model-manage="true"/);
-  // 管理动作仍然完整：重新校验、替换、删除、格式说明。
+  // 展开区只剩「重新校验 / 上传模型 / 删除」与校验详情；文件格式要求与校验状态行已删除。
   assert.match(panelSource, /onRevalidate\(selected\.id\)/);
   assert.match(panelSource, /onDelete\(selected\.id\)/);
   assert.match(panelSource, /labels\.replace/);
-  assert.match(panelSource, /formatItems/);
+  assert.doesNotMatch(panelSource, /formatItems|experiment-uploaded-format|experiment-uploaded-foot|validationLabel/);
 });
 
 test('official model architecture selector only renders for the official source', () => {
@@ -251,8 +251,10 @@ test('training parameters render as a readable matrix', () => {
   const paramLabelBlock = trainingBlock.slice(paramLabelStart, trainingBlock.indexOf('</span>', paramLabelStart));
   assert.doesNotMatch(paramLabelBlock, /<code>/);
   assert.doesNotMatch(paramLabelBlock, /field\.key/);
-  // 真正帮助理解数值的量纲仍然保留。
-  assert.match(trainingBlock, /<small>\{field\.unit\}<\/small>/);
+  // 参数格只留「标签 + 数值」：下面的量纲小字（时间步 / 预测步 / epochs / 样本 / 学习率）已按用户要求删除。
+  assert.doesNotMatch(trainingBlock, /field\.unit/);
+  assert.doesNotMatch(trainingBlock, /<small>/);
+  assert.doesNotMatch(configSource, /unitSteps|unitPredictSteps|unitEpochs|unitSamples|unitLearningRate/);
 });
 
 test('expert parameters use side tabs whose panels render the matching real fields', () => {

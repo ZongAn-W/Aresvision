@@ -334,7 +334,7 @@ const PROBES = {
   'params.label': '.experiment-param-label',
   'params.labelCode': REMOVED,
   'params.input': '.experiment-param-cell input',
-  'params.unit': '.experiment-param-cell small',
+  'params.unit': REMOVED,
   // 04 专家参数
   'expert.tab': '.experiment-expert-tab',
   'expert.tabCount': '.experiment-expert-tab-count',

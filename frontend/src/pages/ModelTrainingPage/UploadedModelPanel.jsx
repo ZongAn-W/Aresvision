@@ -41,13 +41,14 @@ function ValidationMessages({ report, labels, fieldHintStyle }) {
 /**
  * 上传模型区域（紧凑版）。
  *
- * 默认只显示当前模型的胶囊式摘要（.py 标记、截断文件名、版本 · 校验状态 · 自定义参数数量）
+ * 默认只显示当前模型的胶囊式摘要（截断文件名、版本 · 自定义参数数量）
  * 与主上传动作（上传模型）。整套模型管理（列表、重新校验、删除）
  * 收在可展开的「管理模型」里，不抢占主上传操作的视觉层级。
  * 自定义模型参数的编辑入口只保留在右侧配置检查器，这里不再重复提供。
  *
- * 上传、替换、选择、重新校验、删除、模板与说明下载、格式说明、区内 inline error
+ * 上传、选择、重新校验、删除、模板与说明下载、区内 inline error
  * 全部保留；校验失败、版本不匹配等错误通过 `inlineError` 直接显示在区域顶部。
+ * 展开区里的「文件格式要求」与底部「校验状态」两行已按用户要求删除。
  */
 export default function UploadedModelPanel({
   models = [],
@@ -66,15 +67,12 @@ export default function UploadedModelPanel({
   statusTone = 'ok',
   labels,
   sectionTitleStyle,
-  fieldLabelStyle,
   fieldHintStyle,
 }) {
   const fileRef = useRef(null);
   const [manageOpen, setManageOpen] = useState(false);
-  const [formatOpen, setFormatOpen] = useState(false);
   const selected = models.find((item) => item.id === selectedId) || null;
   const paramCount = Object.keys(selected?.param_schema || {}).length;
-  const formatItems = Array.isArray(labels.formatItems) ? labels.formatItems : [];
   const selectedName = selected?.original_filename || selected?.display_name || labels.noFilename;
 
   const pickFile = () => fileRef.current?.click();
@@ -216,32 +214,6 @@ export default function UploadedModelPanel({
                 </button>
               </div>
               <ValidationMessages report={selected.validation_report} labels={labels} fieldHintStyle={fieldHintStyle} />
-            </div>
-          ) : null}
-
-          {formatItems.length > 0 ? (
-            <div className="experiment-uploaded-format">
-              <button
-                type="button"
-                className="experiment-uploaded-link is-quiet"
-                aria-expanded={formatOpen}
-                onClick={() => setFormatOpen((value) => !value)}
-              >
-                {labels.formatTitle}
-              </button>
-              {formatOpen ? (
-                <ul>
-                  {formatItems.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
-
-          {fieldLabelStyle ? (
-            <div className="experiment-uploaded-foot">
-              <span style={{ ...fieldLabelStyle, marginBottom: 0 }}>{`${labels.validationLabel}: ${statusLabel || (selected ? getStatusLabel(selected.validation_status, labels) : '--')}`}</span>
             </div>
           ) : null}
         </div>

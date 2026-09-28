@@ -32,6 +32,8 @@
   --experiment-gap: 14px;
   --experiment-rail-width: 235px;
   --experiment-inspector-width: 284px;
+  /* 画布分区的左侧编号轨道宽度（第 30 节）。 */
+  --experiment-rail-gutter: 38px;
 
   /* 面层令牌：页面里所有的分组背景只走这三档，用明度差代替描边。
      深色主题是「越靠内越深」，浅色主题在 [data-theme='light'] 里覆盖。 */
@@ -374,17 +376,21 @@
 
 .experiment-center-stack {
   display: grid;
-  gap: 0;
+  /* 分区各自成卡，卡片之间留出画布底色（第 30 节）。 */
+  gap: 14px;
   min-width: 0;
 }
 
-/* 画布 01 模型名称：与其它分区同一套底色与内边距（旧头部的蓝色渐变已去掉），
-   标题下就是可编辑名称。 */
+/* 画布 01 模型名称：与其它分区同一套卡片、内边距与左侧编号轨道。 */
 .experiment-canvas-head {
-  display: block;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--experiment-line);
-  background: transparent;
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--experiment-rail-gutter) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 12px;
+  align-items: start;
+  padding: 18px;
+  min-width: 0;
 }
 
 .experiment-canvas-head-main {
@@ -471,55 +477,81 @@
   flex: 0 0 auto;
 }
 
-/* 分区：细线分隔，不套卡片。
-   上下留白各 16px，分区标题用自己的 margin 与内容拉开层级；只收紧留白，
-   不改变字号、控件尺寸与可点区域。 */
+/* 分区（第 30 节 A+B+D）：每段一张卡片 + 段间留白 + 段内左侧编号轨道。
+   轨道与标题、内容共用同一个网格：编号在第 1 列，标题与内容统一在第 2 列。 */
 .experiment-canvas-section {
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--experiment-line);
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--experiment-rail-gutter) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 12px;
+  align-items: start;
+  padding: 18px;
   min-width: 0;
 }
 
-.experiment-canvas-section:last-of-type {
-  border-bottom: 0;
+/* 四个分区都是同一张卡：面层 + 一圈极细描边 + 圆角；边界由卡片本身与段间留白表达。
+   描边只用于把卡片从画布底色里拎出来（第 30 节允许卡片套卡片）。 */
+.experiment-canvas-head,
+.experiment-canvas-section {
+  border: 1px solid var(--experiment-line);
+  border-radius: 13px;
+  background: var(--experiment-surface-1);
 }
 
+/* 轨道里的竖细线：从标题上沿延伸到分区底部留白。 */
+.experiment-canvas-head::before,
+.experiment-canvas-section::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: calc(18px + var(--experiment-rail-gutter) + 7px);
+  width: 1px;
+  background: var(--experiment-line);
+}
+
+/* 标题行只提供序号与标题两个节点，用 display: contents 让它们直接落进网格。 */
 .experiment-section-kicker {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-  margin-bottom: 10px;
-  flex-wrap: wrap;
+  display: contents;
+}
+
+.experiment-section-index {
+  grid-column: 1;
+  justify-self: center;
+  color: #79bbff;
+  font-family: var(--experiment-mono);
+  font-size: calc(16px * var(--font-scale, 1));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
 }
 
 .experiment-section-title {
+  grid-column: 2;
   font-family: var(--font-display);
-  font-size: calc(14px * var(--font-scale, 1));
+  font-size: calc(15px * var(--font-scale, 1));
   font-weight: 800;
   color: var(--text) !important;
 }
 
-/* 分区序号：让「模型名称 / 数据集 / 模型 / 超参数」四个部分的边界一眼可辨（第 29 节）。 */
-.experiment-section-index {
-  min-width: 18px;
-  color: #79bbff;
-  font-family: var(--experiment-mono);
-  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
+/* 分区内容一律落在第 2 列（标题占第 1 行，内容从第 2 行开始）。 */
+.experiment-canvas-head > *:not(.experiment-section-kicker),
+.experiment-canvas-section > *:not(.experiment-section-kicker) {
+  grid-column: 2;
 }
 
 /* 数据集与模型各自独占一个分区（第 29 节）。 */
 
-/* 两个分组块：静态时只是一块比分区底色略深的「纸」，不再描边。
+/* 分区内的分组块：外层面层已由分区卡提供，这里只留内边距，不再叠一层底；
    描边留给真实状态——上传模型校验失败（invalid）与校验过程（pending）。
-   `data-active` 是 JSX 里的固定值，不表示用户选择，所以不再产生强调线。 */
+   `data-active` 是 JSX 里的固定值，不表示用户选择，所以不产生强调线。 */
 .experiment-choice-block {
   min-width: 0;
-  padding: 10px 12px;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 13px;
-  background: var(--experiment-surface-1);
+  background: transparent;
 }
 
 .experiment-choice-block[data-model-block='invalid'] {
@@ -537,7 +569,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
-  margin: 4px 0 0;
+  margin: 0;
 }
 
 .experiment-dataset-option {
@@ -842,25 +874,6 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.experiment-uploaded-format {
-  display: grid;
-  gap: 6px;
-}
-
-.experiment-uploaded-format ul {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding-left: 18px;
-  color: var(--text-60);
-  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
-  line-height: 1.6;
-}
-
-.experiment-uploaded-foot {
-  color: var(--text-40);
 }
 
 /* 官方模型块 */
@@ -1229,13 +1242,7 @@
   opacity: 0.7;
 }
 
-.experiment-param-cell small {
-  display: block;
-  color: var(--text-40);
-  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
-}
-
-/* 04 专家参数：外层只是分栏容器而不是卡片，去掉整圈描边；
+/* 04 超参数：外层只是分栏容器，面层由分区卡提供，这里保持透明；
    左侧页签列用一条竖分隔线，选中态由页签自己的左强调线表达。 */
 .experiment-expert {
   display: grid;
@@ -1243,7 +1250,7 @@
   border: 1px solid transparent;
   border-radius: 13px;
   overflow: hidden;
-  background: var(--experiment-surface-1);
+  background: transparent;
   min-width: 0;
 }
 
@@ -2541,7 +2548,19 @@ input[type='number']::-webkit-inner-spin-button {
 
   .experiment-canvas-head,
   .experiment-canvas-section {
-    padding: 16px;
+    padding: 14px;
+    column-gap: 10px;
+  }
+
+  .experiment-canvas-head::before,
+  .experiment-canvas-section::before {
+    top: 14px;
+    bottom: 14px;
+    left: calc(14px + var(--experiment-rail-gutter) + 5px);
+  }
+
+  .experiment-section-index {
+    font-size: calc(14px * var(--font-scale, 1));
   }
 
   .experiment-param-grid,
@@ -2627,8 +2646,7 @@ input[type='number']::-webkit-inner-spin-button {
     font-size: calc(12px * var(--font-scale, 1));
   }
 
-  .experiment-uploaded-item-meta,
-  .experiment-uploaded-format ul {
+  .experiment-uploaded-item-meta {
     font-size: calc(12px * var(--font-scale, 1));
   }
 
@@ -2644,10 +2662,6 @@ input[type='number']::-webkit-inner-spin-button {
 
   /* 03 参数矩阵：标签 12px、单位说明 12px、数值保持 19px 等宽。 */
   .experiment-param-label {
-    font-size: calc(12px * var(--font-scale, 1));
-  }
-
-  .experiment-param-cell small {
     font-size: calc(12px * var(--font-scale, 1));
   }
 

@@ -71,6 +71,35 @@ class DatasetSplit(BaseModel):
     days: int
 
 
+class DatasetTrainingProfile(BaseModel):
+    """Fixed training configuration published by the server for one dataset.
+
+    Mars registrations keep this ``null``: their training entry predates the
+    registry and is not described here. Earth publishes its profile so the
+    training page renders real limits instead of guessing them, and so a client
+    never has to hard-code the window, horizon, channels or units.
+    """
+
+    model_config = MODEL_CONFIG
+
+    profile_id: str
+    model_architectures: list[str] = Field(default_factory=list)
+    model_sources: list[str] = Field(default_factory=list)
+    target: str
+    target_unit: str
+    window: int
+    horizon: int
+    step_unit: str
+    optional_channels: list[str] = Field(default_factory=list)
+    default_selected_channels: list[str] = Field(default_factory=list)
+    input_units: dict[str, str] = Field(default_factory=dict)
+    grid_shape: list[int] = Field(default_factory=list)
+    supported_planet: str
+    supports_sphere: bool
+    supports_transfer_learning: bool
+    implementation_id: Optional[str] = None
+
+
 class DatasetDescriptor(BaseModel):
     # The public field name is ``schema``; the Python attribute avoids shadowing
     # the deprecated ``BaseModel.schema`` accessor.
@@ -92,6 +121,7 @@ class DatasetDescriptor(BaseModel):
     channel_order: list[str] = Field(default_factory=list)
     variables: list[DatasetVariable] = Field(default_factory=list)
     splits: Optional[dict[str, DatasetSplit]] = None
+    training_profile: Optional[DatasetTrainingProfile] = None
     limitations: list[str] = Field(default_factory=list)
 
 
@@ -109,5 +139,6 @@ __all__ = [
     "DatasetListResponse",
     "DatasetSplit",
     "DatasetTime",
+    "DatasetTrainingProfile",
     "DatasetVariable",
 ]

@@ -200,20 +200,6 @@ export default function ModelTrainingPage() {
       uploadedModelListToggle: (count) => (isZh ? `全部上传模型（${count}）` : `All uploaded models (${count})`),
       uploadedModelReplace: isZh ? '上传模型' : 'Upload model',
       uploadedModelManage: isZh ? '管理模型' : 'Manage models',
-      uploadedModelFormatTitle: isZh ? '文件格式要求' : 'File format requirements',
-      uploadedModelFormatItems: isZh
-        ? [
-            '单文件 .py，导出一个 nn.Module 子类作为模型实现。',
-            '构造函数接收可声明的参数，平台会按 schema 生成自定义参数表单。',
-            '入口需暴露 forward(x) 并返回与预测步长一致的张量。',
-            '上传后立即校验；校验失败会在本区域内逐条列出原因。',
-          ]
-        : [
-            'A single .py file exporting one nn.Module subclass as the model implementation.',
-            'The constructor declares parameters; the platform renders them from the schema.',
-            'Expose forward(x) returning a tensor matching the prediction horizon.',
-            'Validation runs on upload; failures are listed inline in this section.',
-          ],
       // 分组
       groupTask: isZh ? '任务定义' : 'Task definition',
       groupUploadedModel: isZh ? '上传模型（主入口）' : 'Uploaded model (primary entry)',
@@ -289,7 +275,6 @@ export default function ModelTrainingPage() {
       inspectorNoBlockers: isZh ? '没有发现缺失项或错误项。' : 'No missing or invalid items found.',
       inspectorFile: isZh ? '文件名' : 'File name',
       inspectorModelVersion: isZh ? '版本' : 'Version',
-      inspectorValidation: isZh ? '校验状态' : 'Validation',
       inspectorUploadedInvalid: isZh ? '未通过校验' : 'Not validated',
       inspectorMissingUploadedModel: isZh ? '未选择上传模型' : 'No uploaded model selected',
       inspectorCustomParamsInvalid: isZh ? '自定义参数需要修正' : 'Custom parameters need fixing',
@@ -323,11 +308,6 @@ export default function ModelTrainingPage() {
       codeEpochs: 'EPOCHS',
       codeBatch: 'BATCH',
       codeLr: 'LR',
-      unitSteps: isZh ? '时间步' : 'steps',
-      unitPredictSteps: isZh ? '预测步' : 'steps ahead',
-      unitEpochs: 'epochs',
-      unitSamples: isZh ? '样本' : 'samples',
-      unitLearningRate: isZh ? '学习率' : 'learning rate',
       // 官方模型选择器（紧凑版）
       modelOfficialPickerTitle: isZh ? '官方模型架构' : 'Official architecture',
       modelPickerSearch: isZh ? '搜索模型或实验变体…' : 'Search models or variants…',

@@ -79,6 +79,11 @@
 | 03 | 模型 | 模型来源胶囊（上传模型 / 官方模型）+ 上传模型卡片或官方架构选择器 |
 | 04 | 超参数 | 侧边页签（148px）+ 右侧真实字段；页签依次是输入与预测、训练参数，再按模型来源追加专家字段页签 |
 
+四段各自是一张卡片（surface-1 + 13px 圆角 + 细描边，段间 14px 留白），卡片内左侧 38px 是编号轨道（第 30 节）。
+卡片标题已经写明「数据集」「模型」，卡内的「训练数据集」「模型来源」两个小标签已删除（第 32 节），
+分组语义保留在 `role="radiogroup"` / `role="group"` 的 `aria-label` 上。
+训练参数的每一格只有「标签 + 数值」，下面的量纲小字（时间步 / 预测步 / epochs / 样本 / 学习率）已删除（第 33 节）。
+
 - 输入与预测、训练参数是超参数模块的头两个页签（第 25 节）；画布不再有独立的载荷 / 训练参数分区。
 - 参数矩阵的辅助标识用 `WINDOW`、`BATCH`、`LR` 这类短码，界面不暴露 `windowValue`、`batchSize` 等内部变量名。
 - 参数矩阵在超参数面板里按可用宽度自动排布（`repeat(auto-fit, minmax(150px, 1fr))`），窄视口下由既有断点回落三列 / 两列 / 单列。
@@ -104,9 +109,9 @@
 | 情形 | 界面表现 |
 | --- | --- |
 | 默认 | `modelSource` 初始值就是 `uploaded`；**登出不会改回官方模型** |
-| 账号没有上传模型 | 同一区域给出「上传 .py」、`该模型尚未选择` 说明、模板 / 说明下载与文件格式要求（折叠），区内 inline error 解释原因 |
-| 已选择上传模型 | 紧凑卡片：`.PY` 标记、截断的文件名（`title` 给出全名）、`v版本 · N 个自定义参数 · M 个可训练`、校验状态；动作只有「上传模型」与次要的「管理模型」、「下载说明」、「下载模板」 |
-| 管理模型（展开） | 全部模型列表（选择）、重新校验、上传模型、删除、文件格式要求、校验详情 |
+| 账号没有上传模型 | 同一区域给出「上传 .py」、`该模型尚未选择` 说明、模板 / 说明下载，区内 inline error 解释原因 |
+| 已选择上传模型 | 紧凑卡片：截断的文件名（`title` 给出全名）、`v版本 · N 个自定义参数`、状态胶囊（可训练 / 待校验 / 不可用）；动作只有「上传模型」与次要的「管理模型」、「下载说明」、「下载模板」 |
+| 管理模型（展开） | 全部模型列表（选择）、重新校验、上传模型、删除、校验详情（第 31 节删掉了「文件格式要求」与底部「校验状态」两行） |
 | 校验失败 / 版本不匹配 | 区域内 `role="alert"` 的 inline error 逐条列出原因 |
 | 没有有效上传模型 | 运行条「开始实验」保持 `disabled` + `aria-disabled="true"`，就绪状态显示「配置未完成」 |
 | 自定义参数 | 继续由 `DynamicModelParamsForm` 按上传模型 `param_schema` 渲染；编辑入口只保留在配置检查器，画布上的上传卡片不再重复提供 |
@@ -887,8 +892,71 @@ npm run build
   `name / dataset / model / expert`，并把 `section.index` 从 REMOVED 改回 `.experiment-section-index`。
 - 本文第 3 节分区表、第 9 节能力对照表、第 152 / 230 行的入口描述与 README 的版式描述已改写；第 13–28 节属历史轮次记录。
 - 01 模型名称原先仍带画布头部的蓝色渐变底（`linear-gradient(90deg, rgba(121,187,255,0.07), transparent 70%)`）与 18/20 内边距，
-  与其它三个分区不同底色；现在改为 `background: transparent` + `16px 18px`，四个分区同底色、同内边距，
-  并加测试断言锁定（`experimentConfigStructure.test.js`）。第 20 节里「外层容器内边距」表中的 18/20 是当时的读数。
+  与其它三个分区不同底色；当时改为 `background: transparent` + `16px 18px` 拉平。第 30 节改成四张分区卡后，
+  这一段由卡片的面层与内边距统一接管。
 - 验证范围：前端 `node --test` 650 项通过、`npm run build` 通过；另外用无头 Edge 实测 1440×1200，四段高度
   116 / 156 / 278 / 326px、序号与标题正确、无横向溢出，四段计算样式均为 `background: none / rgba(0,0,0,0)`、
   `padding: 16px 18px`（探针脚本为临时文件，未入库）。
+
+## 30. 2026-09-28 四个分区改成独立卡片（+ 左侧编号轨道）
+
+第 29 节把画布拆成四段后，四段共用同一底色、只有 1px 细线分隔，「区分得不够明显」；中间试过一版
+通栏标题带，太重、也被否掉。最终方案是用户确认的 **A + B + D**：
+
+- **A 留白**：四段之间不再共用一条边，改成 `.experiment-center-stack { gap: 14px }`，卡片之间露出画布底色。
+- **B 左侧编号轨道**：分区改成两列网格 `var(--experiment-rail-gutter) minmax(0, 1fr)`（38px + 14px 间距），
+  `01–04` 放大到 16px 等宽、居中放在第 1 列，标题与全部内容统一在第 2 列；轨道右侧用 `::before` 画一条
+  从标题上沿到底部留白的竖细线。标题行 `.experiment-section-kicker` 改 `display: contents`，让序号与标题
+  直接落进网格，不需要包一层新容器。
+- **D 卡片**：`.experiment-canvas-head` 与 `.experiment-canvas-section` 统一为 `--experiment-surface-1` 卡片 +
+  `1px solid var(--experiment-line)` 细描边 + 13px 圆角 + 18px 内边距。这是用户明确允许的「卡片套卡片」，
+  因此同时把分区内多余的一层面层去掉：`.experiment-choice-block` 与 `.experiment-expert` 改为
+  `background: transparent`，避免卡片里再套一张同色卡片（校验失败 / 待校验的状态描边仍然保留在分组块上）。
+- 段间渐隐分隔线随卡片一起删除；`.experiment-canvas-section:last-of-type` 的收尾规则也不再需要。
+- 窄视口（≤900px）：内边距 14px、列间距 10px、轨道线位置与序号字号同步收小。
+- 测试：`experimentConfigStructure.test.js` 里「01 与其余分区同底色」的断言改为「同一套卡片（13px 圆角 +
+  surface-1）」，其余 649 项不变，前端共 650 项通过。
+- 验证范围：`node --test` 650 项通过、`npm run build` 通过；无头 Edge 实测 1440×1300：四张卡高度
+  119 / 143 / 265 / 334px、圆角 13px、面层 `rgba(7,19,31,0.34)`、网格 `38px 739px`、段间距 14px、无横向溢出
+  （探针脚本为临时文件，未入库）。
+
+## 31. 2026-09-28 上传卡片展开区删掉两行
+
+用户指出「管理模型」展开区里的「文件格式要求」与底部「校验状态：可训练」两行不要：
+
+- `UploadedModelPanel` 删除 `.experiment-uploaded-format` 折叠块（`formatOpen` 状态、`formatItems` 变量一起删）
+  与 `.experiment-uploaded-foot` 那一行；展开区剩下模型列表、重新校验 / 上传模型 / 删除三个动作与校验详情
+  （`ValidationMessages`：通过时一行「可以训练」，失败时逐条列出原因）。
+- 随之清理：`copy.uploadedModelFormatTitle` / `uploadedModelFormatItems` 两个文案键删除，
+  画布传入的 `formatTitle` / `formatItems` / `validationLabel` 标签与 `fieldLabelStyle` 属性移除，
+  CSS 里 `.experiment-uploaded-format*`、`.experiment-uploaded-foot` 规则（含桌面字号覆盖）删除。
+  卡片上的状态胶囊与 `labels.ready` 校验结论保留，所以状态信息没有丢。
+- 测试：`experimentConfigStructure.test.js` 里该展开区的断言改为 `assert.doesNotMatch(panelSource, /formatItems|experiment-uploaded-format|experiment-uploaded-foot|validationLabel/)`。
+- 验证范围：`node --test` 650 项通过、`npm run build` 通过；未运行浏览器审计脚本。
+
+## 32. 2026-09-28 数据集 / 模型卡片去掉卡内小标签
+
+用户指出「训练数据集」「模型来源」两个卡内小标签也不需要——卡片标题已经分别写了「数据集」「模型」：
+
+- `ExperimentConfigWorkspace` 删除 02 数据集卡与 03 模型卡里的 `.experiment-choice-label` 两处；
+  分组语义仍在无障碍标签上：数据集列表保留 `role="radiogroup" aria-label={copy.trainingDataset}`，
+  来源切换保留 `role="group" aria-label={copy.modelSource}`，读屏仍然能读出分组名。
+- `.experiment-choice-label` 这条 CSS 保留：官方模型卡里的架构选择器（`ModelArchitectureSelector`）
+  仍在用它显示「骨干模型 + 家族」。
+- 数据集列表原来的 `margin: 4px 0 0` 改为 0，让两个选项直接贴住卡片的 12px 行间距。
+- 验证范围：`node --test` 650 项通过（数据集 / 模型分区断言读的是 `aria-label`，无需改动）、
+  `npm run build` 通过；未运行浏览器审计脚本。
+
+## 33. 2026-09-28 训练参数格删掉量纲小字
+
+用户指出参数矩阵每格下方的量纲小字（时间步 / 预测步 / epochs / 样本 / 学习率）也不需要：
+
+- `parameterFields` 去掉 `unit` 字段，参数格只剩「标签 + 数值」（`<small>{field.unit}</small>` 删除）。
+- 连带清理：`copy.unitSteps` / `unitPredictSteps` / `unitEpochs` / `unitSamples` / `unitLearningRate`
+  五个文案键删除，CSS 里 `.experiment-param-cell small` 规则与桌面字号覆盖删除，
+  `verify-font-hierarchy.mjs` 的 `params.unit` 探针标为 `REMOVED`。
+- 测试：`experimentConfigStructure.test.js` 里「量纲保留」的断言改成
+  `assert.doesNotMatch(trainingBlock, /field\.unit|<small>/)` 并断言五个 `unit*` 文案键不存在。
+- 副作用：参数格只剩两行（标签 + 数值），`epochs` / 学习率这些数值不再有中文单位提示；
+  字段含义由标签本身承担（输入窗口 / 预测步长 / 训练轮次 / 批大小 / 学习率）。
+- 验证范围：`node --test` 650 项通过、`npm run build` 通过；未运行浏览器审计脚本。

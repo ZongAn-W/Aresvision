@@ -171,7 +171,6 @@ export default function ExperimentConfigWorkspace({
       key: 'windowValue',
       label: copy.windowLabel,
       code: copy.codeWindow,
-      unit: copy.unitSteps,
       step: '1',
       min: '1',
       max: '30',
@@ -181,18 +180,16 @@ export default function ExperimentConfigWorkspace({
       key: 'horizon',
       label: copy.horizonLabel,
       code: copy.codeHorizon,
-      unit: copy.unitPredictSteps,
       step: '1',
       min: '1',
       max: '30',
       locked: true,
     },
-    { key: 'epochs', label: copy.epochsLabel, code: copy.codeEpochs, unit: copy.unitEpochs, step: '1', min: '1' },
+    { key: 'epochs', label: copy.epochsLabel, code: copy.codeEpochs, step: '1', min: '1' },
     {
       key: 'batchSize',
       label: copy.batchSizeLabel,
       code: copy.codeBatch,
-      unit: copy.unitSamples,
       step: '1',
       min: '1',
     },
@@ -200,7 +197,6 @@ export default function ExperimentConfigWorkspace({
       key: 'learningRate',
       label: copy.learningRateLabel,
       code: copy.codeLr,
-      unit: copy.unitLearningRate,
       step: '0.0001',
       min: '0.000001',
     },
@@ -264,9 +260,6 @@ export default function ExperimentConfigWorkspace({
         </div>
 
         <div className="experiment-choice-block" data-active="true">
-          <div className="experiment-choice-label">
-            <span>{copy.trainingDataset}</span>
-          </div>
           <div className="experiment-dataset-list" role="radiogroup" aria-label={copy.trainingDataset} data-training-dataset-list="true">
             {datasetOptions.map((option) => {
               const active = trainingDataset === option.value;
@@ -296,9 +289,6 @@ export default function ExperimentConfigWorkspace({
         </div>
 
         <div className="experiment-choice-block" data-active="true" data-model-block={modelBlockState}>
-          <div className="experiment-choice-label">
-            <span>{copy.modelSource}</span>
-          </div>
           <div className="experiment-source-toggle" role="group" aria-label={copy.modelSource} data-model-source-toggle="true">
               {[
                 { value: 'uploaded', label: copy.modelSourceUploaded },
@@ -356,16 +346,12 @@ export default function ExperimentConfigWorkspace({
                   noFilename: copy.uploadedModelNoFilename,
                   missing: copy.uploadedModelEmptyTitle,
                   hint: copy.uploadedModelEmptyHint,
-                  formatTitle: copy.uploadedModelFormatTitle,
-                  formatItems: copy.uploadedModelFormatItems,
                   summaryLabel: copy.uploadedModelSummaryLabel,
                   summaryParamCount: copy.uploadedModelParamCount,
                   versionLabel: copy.inspectorModelVersion,
-                  validationLabel: copy.inspectorValidation,
                   officialHint: copy.modelSourceOfficialHint,
                 }}
                 sectionTitleStyle={sectionTitleStyle}
-                fieldLabelStyle={fieldLabelStyle}
                 fieldHintStyle={fieldHintStyle}
               />
             ) : (
@@ -483,7 +469,6 @@ export default function ExperimentConfigWorkspace({
                         aria-label={field.label}
                         onChange={(event) => onFoldChange(field.key, event.target.value)}
                       />
-                      <small>{field.unit}</small>
                     </label>
                   ))}
                 </div>
