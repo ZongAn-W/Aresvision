@@ -112,7 +112,7 @@ export default function ExperimentCenterShell({
                 <h2 className="experiment-center-panel-title" tabIndex={-1} ref={stageRef} data-stage-heading={stage}>
                   {t(stage === 'result' ? 'experimentCenter.stageResult' : 'experimentCenter.stageMonitor')}
                 </h2>
-                <div className="experiment-center-hint">
+                <div className="experiment-center-hint" hidden={stage === 'result'}>
                   {activeTask
                     ? `${activeTask.custom_model_name || t('experimentCenter.unnamedExperiment')} · #${activeTask.id}`
                     : t('experimentCenter.noActiveTask')}
@@ -129,8 +129,8 @@ export default function ExperimentCenterShell({
             >
               {workspace?.configure}
             </div>
-            <div className="experiment-center-workspace" data-stage-workspace="monitor" hidden={view !== 'monitor' || !activeTask}>
-              {view === 'monitor' && activeTask ? workspace?.monitor : null}
+            <div className="experiment-center-workspace" data-stage-workspace="monitor" hidden={view !== 'monitor' || stage !== 'monitor' || !activeTask}>
+              {view === 'monitor' && stage === 'monitor' && activeTask ? workspace?.monitor : null}
             </div>
             <div className="experiment-center-workspace" data-stage-workspace="result" hidden={view !== 'monitor' || stage !== 'result'}>
               {view === 'monitor' && stage === 'result' ? workspace?.result : null}

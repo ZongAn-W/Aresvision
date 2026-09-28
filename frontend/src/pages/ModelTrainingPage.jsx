@@ -1586,14 +1586,6 @@ export default function ModelTrainingPage() {
     setActiveTaskId(taskId);
   };
 
-  const handleBackToDirectory = () => {
-    changeView('monitor');
-    setSuppressAutoSelect?.(false);
-    setIsCreating(false);
-    setActiveTaskId(null);
-    setLogs([]);
-  };
-
   const handleStartTraining = async () => {
     if (!user) {
       openAuthModal('login');
@@ -2220,11 +2212,7 @@ export default function ModelTrainingPage() {
         onChangeView={changeView}
         stage={stage}
         activeTask={activeTask}
-        tasks={tasks}
-        isCreating={isCreating}
         onCreate={handleCreateExperiment}
-        onSelectTask={handleSelectTask}
-        onBackToDirectory={handleBackToDirectory}
         directory={directoryWorkspace}
         workspace={{
           configure: configWorkspace,

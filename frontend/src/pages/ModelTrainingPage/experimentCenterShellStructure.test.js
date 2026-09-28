@@ -98,7 +98,7 @@ test('shell switches between configuration and the selected task without clearin
 test('configuration workspace stays mounted so directory filtering cannot clear the form', () => {
   // 配置工作区用 hidden 隐藏而不是条件卸载：切换阶段/筛选时用户输入不丢失。
   assert.match(shellSource, /data-stage-workspace="configure"[\s\S]{0,120}?hidden=\{view !== 'config'\}/);
-  assert.match(shellSource, /data-stage-workspace="monitor"[\s\S]*?hidden=\{view !== 'monitor' \|\| !activeTask\}/);
+  assert.match(shellSource, /data-stage-workspace="monitor"[\s\S]*?hidden=\{view !== 'monitor' \|\| stage !== 'monitor' \|\| !activeTask\}/);
   assert.match(shellSource, /data-stage-workspace="result"[\s\S]*?hidden=\{view !== 'monitor' \|\| stage !== 'result'\}/);
   assert.match(shellSource, /\{view === 'config' && inspector \? \(/);
 });
