@@ -31,8 +31,32 @@ from config import (
 from database.engine import async_session_maker
 from database.models import ModelTrainingTask, PredictionAnalysisCache, TrainingTaskTag
 from services.data_service import DataService
-from services.dataset_identity import resolve_dataset_id, require_training_dataset
+from services.dataset_identity import (
+    DatasetRequestError,
+    is_earth_training_task,
+    resolve_dataset_id,
+    require_training_dataset,
+)
 from services.dataset_registry import DatasetRegistry
+from services.earth_training_artifact import (
+    EarthArtifactError,
+    load_earth_training_artifact,
+)
+from services.earth_training_contract import (
+    EARTH_TRAINING_SCRIPT,
+    build_earth_training_spec,
+    is_earth_dataset_id,
+    require_earth_training_configuration,
+)
+from services.uploaded_model_source import (
+    UploadedModelSourceError,
+    build_reference,
+    resolve_source_text_strict,
+)
+from services.user_model_validator import UserModelValidator
+from training_backbones.uploaded_model_earth_gate import (
+    evaluate_package_earth_compatibility,
+)
 from services.personal_data_source_service import PersonalDataSourceService
 from services.model_artifacts import is_valid_model_weight_file
 from services.training_failures import CUDA_OOM_ERROR_CODE, classify_training_log
@@ -71,7 +95,35 @@ def _normalize_training_data_source(data_source: str | None) -> str:
     return source
 
 
+def _task_was_stopped(raw_metrics: Any) -> bool:
+    """Return True when the stored metrics record a user stop.
+
+    Stopping a task writes ``{"note": "Stopped by user"}``. The completion
+    callback must not overwrite that terminal state with ``completed`` when the
+    killed process happens to exit with code 0.
+    """
+    if not raw_metrics:
+        return False
+    try:
+        parsed = json.loads(raw_metrics) if isinstance(raw_metrics, str) else raw_metrics
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict) and parsed.get("note") == "Stopped by user"
+
+
 class TrainingService:
+    def __init__(self, earth_model_validator: Any | None = None):
+        # The uploaded-model EARTH compatibility dry-run is the same one the upload
+        # page runs, so it is shared rather than reimplemented. Injected in tests.
+        self._earth_model_validator = earth_model_validator
+
+    def _earth_validator(self) -> Any:
+        if self._earth_model_validator is None:
+            from training_backbones.uploaded_model_earth_gate import build_validator
+
+            self._earth_model_validator = build_validator()
+        return self._earth_model_validator
+
     def get_available_scripts(self) -> list[str]:
         script_path = MODELS_DIR / UNIFIED_TRAINING_SCRIPT
         if not script_path.exists():
@@ -106,9 +158,25 @@ class TrainingService:
         # Dataset identity is resolved and authorized before any database write,
         # uploaded package load or subprocess scheduling happens.
         resolved_dataset_id = resolve_dataset_id(dataset_id, hyperparameters or {})
-        require_training_dataset(resolved_dataset_id)
+        earth_training = is_earth_dataset_id(resolved_dataset_id)
+        earth_source = model_source if earth_training else "official"
+        earth_reference: dict | None = None
+        earth_model_warnings: list[str] = []
+        if not earth_training:
+            # The Mars runners keep rejecting Earth identities; Earth has its own
+            # preparation and training path below.
+            require_training_dataset(resolved_dataset_id)
         registry = dataset_registry or DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2", legacy_earth_package_dir=EARTH_MERRA2_V1_DIR)
         dataset_binding = registry.build_training_binding(resolved_dataset_id)
+        if earth_training:
+            # Reject unsupported Earth configurations (SPHERE, transfer learning,
+            # wrong architecture, missing/extra uploaded id) and validate the strict
+            # parameter contract before the task row exists.
+            require_earth_training_configuration(
+                model_source=earth_source,
+                uploaded_model_id=uploaded_model_id,
+                hyperparameters=hyperparameters or {},
+            )
 
         source = _normalize_training_data_source(data_source)
 
@@ -120,7 +188,19 @@ class TrainingService:
             if existing.scalars().first():
                 raise ValueError(f"模型名称 '{custom_model_name}' 已被使用，请换一个名称")
 
-        if model_source == "uploaded":
+        if earth_training:
+            # Earth runs its own server-side script; the client never picks it.
+            model_script, raw_hypers = EARTH_TRAINING_SCRIPT, dict(hyperparameters or {})
+            if earth_source == "uploaded":
+                # Resolve the uploaded model now and keep the pinned reference, so a
+                # later upload by the same user cannot change this task's code.
+                earth_reference, earth_model_warnings = await self._resolve_earth_uploaded_model(
+                    user_id=user_id,
+                    uploaded_model_id=uploaded_model_id,
+                    user_model_service=user_model_service,
+                    custom_model_params=(hyperparameters or {}).get("custom_model_params"),
+                )
+        elif model_source == "uploaded":
             model_script, raw_hypers = await self._resolve_uploaded_training_entrypoint(
                 user_id=user_id,
                 uploaded_model_id=uploaded_model_id,
@@ -156,18 +236,46 @@ class TrainingService:
         # The resolved id is the authority; the legacy key is kept in sync so the
         # training CLI and older readers see the same dataset.
         raw_hypers = {**raw_hypers, "training_dataset": resolved_dataset_id}
-        payload_hypers = normalize_training_hyperparameters(raw_hypers)
+        if earth_training:
+            # Earth never runs through the tolerant Mars normalizer: a silently
+            # clamped window or a channel filtered down to an empty list would
+            # train a different model than the user asked for.
+            payload_hypers = require_earth_training_configuration(
+                model_source=model_source,
+                uploaded_model_id=uploaded_model_id,
+                hyperparameters=raw_hypers,
+            )
+            payload_hypers["training_dataset"] = resolved_dataset_id
+        else:
+            payload_hypers = normalize_training_hyperparameters(raw_hypers)
         payload_hypers.update(preserved_hypers)
         # Labels are organization metadata, never model/cache identity or runner arguments.
         payload_hypers.pop("tag_ids", None)
         payload_hypers.pop("tags", None)
         payload_hypers["_data_source"] = source
-        transfer_env_overrides = await self._resolve_transfer_source(
-            user_id=user_id,
-            is_admin=is_admin,
-            hyperparameters=payload_hypers,
-            training_weight_service=training_weight_service,
-        )
+        if earth_training and earth_reference is not None:
+            # Record the pinned uploaded model identity on the task so history,
+            # copy-config and prediction can all name the exact trained model. The
+            # values come from the server-resolved package, never from the request.
+            payload_hypers["_uploaded_model_id"] = earth_reference.package_id
+            payload_hypers["_uploaded_model_version"] = earth_reference.version
+            payload_hypers["_uploaded_model_content_hash"] = earth_reference.content_hash
+            payload_hypers["_uploaded_model_name"] = earth_reference.display_name
+            payload_hypers["_uploaded_model_param_schema"] = dict(earth_reference.param_schema)
+            payload_hypers["custom_model_params"] = dict(earth_reference.custom_model_params)
+        if earth_training:
+            # Earth has no transfer source; the parameter contract already rejects it.
+            transfer_env_overrides = {}
+        else:
+            transfer_env_overrides = await self._resolve_transfer_source(
+                user_id=user_id,
+                is_admin=is_admin,
+                hyperparameters=payload_hypers,
+                training_weight_service=training_weight_service,
+            )
+        # The internal spec is built after the task id exists; the CLI payload is
+        # never used to pass identity fields to the Earth subprocess.
+        earth_training_spec = None
 
         async with async_session_maker() as session:
             # Recheck in the same transaction that writes the task and its associations.
@@ -203,6 +311,37 @@ class TrainingService:
             env_overrides: dict[str, str] = dict(transfer_env_overrides)
             temp_data_root: Path | None = None
 
+            if earth_training:
+                # Built only now: the spec carries the real task id and the
+                # server-generated binding, and travels through the environment
+                # rather than the command line. Only the documented Earth
+                # parameters are forwarded - internal service fields (``_``
+                # prefixed) must never reach the runner.
+                earth_training_spec = build_earth_training_spec(
+                    task_id=task_id,
+                    dataset_binding=dataset_binding,
+                    hyperparameters={
+                        key: value
+                        for key, value in payload_hypers.items()
+                        if not key.startswith("_")
+                    },
+                    uploaded_model=(
+                        earth_reference.checkpoint_reference()
+                        if earth_reference is not None
+                        else None
+                    ),
+                )
+                if earth_reference is not None:
+                    # The child never reads the user's current upload; it gets the
+                    # pinned source through this server-side channel only.
+                    logger.info(
+                        "Earth task %s pinned uploaded model %s v%s (%s…)",
+                        task_id,
+                        earth_reference.package_id,
+                        earth_reference.version,
+                        earth_reference.content_hash[:12],
+                    )
+
             await session.commit()
             logger.info(
                 "Training task queued: id=%s script=%s source=%s effective=%s",
@@ -221,6 +360,7 @@ class TrainingService:
                     output_path,
                     env_overrides=env_overrides,
                     temp_data_root=temp_data_root,
+                    earth_training_spec=earth_training_spec,
                 )
             )
 
@@ -248,6 +388,97 @@ class TrainingService:
         }
         payload["model_source"] = "official"
         return UNIFIED_TRAINING_SCRIPT, payload
+
+    async def _resolve_earth_uploaded_model(
+        self,
+        *,
+        user_id: int | None,
+        uploaded_model_id: Any,
+        user_model_service: Any | None,
+        custom_model_params: Any,
+    ) -> tuple[dict, list[str]]:
+        """Pin one uploaded model for an Earth run.
+
+        Returns ``(reference, warnings)`` where the reference carries the package
+        identity, the verified parameter schema, the validated custom parameters and
+        the hash-verified source text. Everything is captured now, so the task keeps
+        training exactly this code even if the user uploads a newer version later.
+        """
+        if user_id is None:
+            raise ValueError("user_id is required for uploaded model training")
+        if not uploaded_model_id:
+            raise DatasetRequestError(
+                "invalid_earth_training_parameters",
+                "uploaded_model_id is required when model_source is 'uploaded'",
+                status_code=422,
+            )
+        if user_model_service is None:
+            raise ValueError("user_model_service is required for uploaded model training")
+
+        try:
+            package = await user_model_service.get_package_for_user(uploaded_model_id, user_id)
+        except (FileNotFoundError, PermissionError):
+            raise
+        if package is None:
+            raise DatasetRequestError(
+                "uploaded_model_not_found",
+                "The uploaded model could not be found for this account",
+                status_code=404,
+            )
+        if getattr(package, "validation_status", None) != "valid":
+            raise DatasetRequestError(
+                "uploaded_model_invalid",
+                "The uploaded model must be valid before it can be trained on Earth data",
+                status_code=422,
+            )
+
+        # Earth compatibility is its own question: a model validated for Mars is not
+        # thereby usable on the Earth feed.
+        verdict = evaluate_package_earth_compatibility(package, validator=self._earth_validator())
+        if not verdict.compatible:
+            raise DatasetRequestError(
+                "uploaded_model_not_earth_compatible",
+                "The uploaded model is not compatible with Earth data: "
+                + "; ".join(verdict.reasons or ["unsupported model"]),
+                status_code=422,
+            )
+
+        try:
+            param_schema = json.loads(getattr(package, "param_schema", None) or "{}")
+        except Exception:
+            param_schema = {}
+        if not isinstance(param_schema, dict):
+            param_schema = {}
+        resolved_params, param_errors = UserModelValidator.normalize_custom_params(
+            param_schema, custom_model_params
+        )
+        if param_errors:
+            raise DatasetRequestError(
+                "invalid_earth_training_parameters",
+                param_errors[0],
+                status_code=422,
+            )
+
+        reference = build_reference(
+            package=package,
+            param_schema=param_schema,
+            custom_model_params=resolved_params,
+            embed_source=True,
+        )
+        # The server must be able to prove the code it pins is the code it validated.
+        resolve_source_text_strict(
+            {
+                "source_path": reference.source_path,
+                "content_hash": reference.content_hash,
+                "source_text": reference.source_text,
+            }
+        )
+        warnings = list(verdict.warnings)
+        if verdict.output_shape:
+            warnings.append(
+                "Earth dry-run output shape: " + "x".join(str(v) for v in verdict.output_shape)
+            )
+        return reference, warnings
 
     async def _resolve_uploaded_training_entrypoint(
         self,
@@ -323,6 +554,16 @@ class TrainingService:
             raise PermissionError("No permission to access this transfer source task")
         if getattr(source_task, "status", None) != "completed":
             raise ValueError("Transfer source task must be completed")
+
+        # An Earth (MERRA-2) checkpoint is a different container and a different
+        # planet: it can never be a Mars transfer source, and its tensors must not
+        # be extracted and passed off as a Mars state dict.
+        if is_earth_training_task(source_task):
+            raise DatasetRequestError(
+                "dataset_transfer_not_supported",
+                "Earth tasks cannot be used as a transfer learning source for Mars models",
+                status_code=409,
+            )
 
         weight_path = Path(getattr(source_task, "output_model_path", "") or "")
         if not is_valid_model_weight_file(weight_path):
@@ -546,6 +787,7 @@ class TrainingService:
         output_path: Path,
         env_overrides: dict[str, str] | None = None,
         temp_data_root: Path | None = None,
+        earth_training_spec: dict | None = None,
     ):
         total_epochs = hyperparameters.get("epochs", 1)
         async with async_session_maker() as session:
@@ -562,14 +804,18 @@ class TrainingService:
         python_exe = getattr(config, "TRAINING_PYTHON_PATH", sys.executable)
 
         args = [python_exe, str(script_path)]
-        args.extend(build_hyperparameter_args(hyperparameters))
-        if script_name == "__user_model_runner__":
-            args.extend([
-                "--uploaded_model_path",
-                str(hyperparameters["_uploaded_model_path"]),
-                "--uploaded_model_param_schema",
-                json.dumps(hyperparameters.get("_uploaded_model_param_schema") or {}),
-            ])
+        if earth_training_spec is None:
+            args.extend(build_hyperparameter_args(hyperparameters))
+            if script_name == "__user_model_runner__":
+                args.extend([
+                    "--uploaded_model_path",
+                    str(hyperparameters["_uploaded_model_path"]),
+                    "--uploaded_model_param_schema",
+                    json.dumps(hyperparameters.get("_uploaded_model_param_schema") or {}),
+                ])
+        # The Earth runner receives its identity and parameters through the
+        # environment only: never as CLI arguments that would leak a snapshot or
+        # let a flag silently change the dataset.
         args.extend(["--output_path", str(output_path)])
 
         with open(log_file, "w", encoding="utf-8") as f:
@@ -584,6 +830,8 @@ class TrainingService:
             }
             if env_overrides:
                 process_env.update(env_overrides)
+            if earth_training_spec is not None:
+                process_env["ARESVISION_EARTH_TRAINING_SPEC"] = json.dumps(earth_training_spec)
 
             process = subprocess.Popen(
                 args,
@@ -645,30 +893,74 @@ class TrainingService:
                 classify_training_log(log_file) if returncode != 0 else None
             )
             model_artifact_valid = returncode == 0 and is_valid_model_weight_file(output_path)
+            # Earth runs add a real contract check on top of "the file exists and
+            # is not empty": the checkpoint must reload strictly, match the task
+            # binding and carry the task's own metrics.
+            earth_artifact: dict | None = None
+            earth_artifact_error: Exception | None = None
+            if earth_training_spec is not None and model_artifact_valid:
+                try:
+                    earth_artifact = await asyncio.to_thread(
+                        load_earth_training_artifact,
+                        output_path,
+                        earth_training_spec["dataset_binding"],
+                        earth_training_spec["hyperparameters"],
+                        earth_training_spec["task_id"],
+                    )
+                except Exception as exc:  # noqa: BLE001 - reported as a task failure
+                    earth_artifact_error = exc
+                    model_artifact_valid = False
             status = "completed" if model_artifact_valid else "failed"
 
             if returncode == 0 and not model_artifact_valid:
+                detail = (
+                    str(earth_artifact_error)
+                    if earth_artifact_error is not None
+                    else INVALID_MODEL_ARTIFACT_ERROR
+                )
                 with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(f"\n[System error]: {INVALID_MODEL_ARTIFACT_ERROR}\n")
+                    f.write(f"\n[System error]: {detail}\n")
                 logger.error(
-                    "%s: task_id=%s output_path=%s",
-                    INVALID_MODEL_ARTIFACT_ERROR,
+                    "Training artifact rejected: task_id=%s output_path=%s detail=%s",
                     task_id,
                     output_path,
+                    detail,
                 )
 
             async with async_session_maker() as session:
                 task = await session.get(ModelTrainingTask, task_id)
                 if task:
+                    # A user stop is terminal: a late exit-0 completion callback
+                    # must never turn a stopped run into a completed one.
+                    stopped = _task_was_stopped(task.metrics)
+                    if stopped:
+                        status = "failed"
                     task.status = status
                     task.end_time = datetime.now(timezone.utc)
                     task.progress = 100.0 if status == "completed" else task.progress
-                    if status == "completed":
-                        parsed_metrics = self._extract_metrics_from_log(log_file)
-                        task.metrics = json.dumps(parsed_metrics) if parsed_metrics else json.dumps({"note": "completed"})
+                    if stopped:
+                        task.metrics = json.dumps({"note": "Stopped by user"})
+                    elif status == "completed":
+                        if earth_artifact is not None:
+                            # The published DU metrics come from the checkpoint the
+                            # parent just verified, never from log scraping.
+                            task.metrics = json.dumps(earth_artifact.metrics)
+                        else:
+                            parsed_metrics = self._extract_metrics_from_log(log_file)
+                            task.metrics = json.dumps(parsed_metrics) if parsed_metrics else json.dumps({"note": "completed"})
                     elif returncode == 0:
                         task.progress = min(float(task.progress or 0.0), 99.0)
-                        task.metrics = json.dumps({"error": INVALID_MODEL_ARTIFACT_ERROR})
+                        if earth_artifact_error is not None:
+                            task.metrics = json.dumps({
+                                "error_code": getattr(
+                                    earth_artifact_error,
+                                    "code",
+                                    "invalid_earth_training_artifact",
+                                ),
+                                "error": str(earth_artifact_error),
+                            })
+                        else:
+                            task.metrics = json.dumps({"error": INVALID_MODEL_ARTIFACT_ERROR})
                     elif failure_code == CUDA_OOM_ERROR_CODE:
                         task.metrics = json.dumps(
                             {

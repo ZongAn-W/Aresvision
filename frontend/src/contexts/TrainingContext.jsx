@@ -16,9 +16,19 @@ export const TrainingProvider = ({ children, enabled = true }) => {
 
 const UserTrainingProvider = ({ children, enabled, user }) => {
   const [tasks, setTasks] = useState([]);
+  // 任务列表的首次加载状态：只用于区分「还在加载」与「确实没有实验」，
+  // 不参与任何查询、筛选或选中逻辑；5 秒轮询期间不会重新置为 true。
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksError, setTasksError] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [progressData, setProgressData] = useState(null);
   const [logs, setLogs] = useState([]);
+  // 用户主动进入「新建实验」后，不再让任务轮询自动选中运行中的任务
+  // （否则 5 秒轮询或目录重渲染都会把用户从配置画布拽回监控阶段）。
+  const suppressAutoSelectRef = useRef(false);
+  const setSuppressAutoSelect = useCallback((value) => {
+    suppressAutoSelectRef.current = Boolean(value);
+  }, []);
 
   const wsRef = useRef(null);
   const pollingRef = useRef(null);
@@ -56,16 +66,25 @@ const UserTrainingProvider = ({ children, enabled, user }) => {
   const loadTasks = useCallback(async () => {
     if (!enabled || !user) return;
     const request = tasksGate.current.start();
+    setTasksLoading(true);
     try {
       const data = await fetchTasks();
       if (!mountedRef.current || !tasksGate.current.isCurrent(request)) return;
       setTasks(data);
+      setTasksError(false);
       setActiveTaskId((currentTaskId) => (
-        reconcileActiveTrainingTaskId(data, currentTaskId)
+        reconcileActiveTrainingTaskId(data, currentTaskId, {
+          suppressAutoSelect: suppressAutoSelectRef.current,
+        })
       ));
     } catch (err) {
       console.error('Failed to load tasks', err);
+      if (mountedRef.current && tasksGate.current.isCurrent(request)) setTasksError(true);
       throw err;
+    } finally {
+      // 首次加载标记只看「本轮请求是否已结束」：即使结果被下一次轮询取代，
+      // 也要复位，否则目录会一直停在「加载中」。
+      if (mountedRef.current) setTasksLoading(false);
     }
   }, [enabled, user]);
 
@@ -80,11 +99,17 @@ const UserTrainingProvider = ({ children, enabled, user }) => {
     if (enabled && user) {
       loadTasks().catch(() => {});
       pollingRef.current = setInterval(() => loadTasks().catch(() => {}), 5000);
-    } else if (!user) {
-      setTasks([]);
-      setActiveTaskId(null);
-      setProgressData(null);
-      setLogs([]);
+    } else {
+      // 未登录 / 未启用时没有任务请求，加载标记必须一起复位，
+      // 否则目录会一直停在「正在加载实验…」而看不到空状态。
+      setTasksLoading(false);
+      setTasksError(false);
+      if (!user) {
+        setTasks([]);
+        setActiveTaskId(null);
+        setProgressData(null);
+        setLogs([]);
+      }
     }
 
     return () => clearTaskPolling();
@@ -211,8 +236,12 @@ const UserTrainingProvider = ({ children, enabled, user }) => {
   const value = {
     tasks,
     setTasks,
+    tasksLoading,
+    tasksError,
+    setTasksError,
     activeTaskId,
     setActiveTaskId,
+    setSuppressAutoSelect,
     progressData,
     setProgressData,
     logs,

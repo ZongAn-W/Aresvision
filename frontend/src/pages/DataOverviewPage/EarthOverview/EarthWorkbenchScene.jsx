@@ -75,6 +75,7 @@ import {
 } from './EarthResearchViews.jsx';
 import EarthInsightPanel from './EarthInsightPanel.jsx';
 import EarthMap2D from './EarthMap2D.jsx';
+import { buildAnomalyField, buildTerminatorDirection } from '../../../components/sphericalFieldLayers.js';
 import './earthOverview.css';
 
 /**
@@ -118,6 +119,16 @@ export default function EarthWorkbenchScene({
   const [showField, setShowField] = useState(true);
   const [showGeo, setShowGeo] = useState(true);
   const [showBaseMap, setShowBaseMap] = useState(true);
+  const [showSurfaceTexture, setShowSurfaceTexture] = useState(true);
+  const [baseMapStrength, setBaseMapStrength] = useState(1);
+  const [showContours, setShowContours] = useState(false);
+  const [showAnomaly, setShowAnomaly] = useState(false);
+  const [showWindVectors, setShowWindVectors] = useState(false);
+  const [showTerminator, setShowTerminator] = useState(false);
+  const [windFields, setWindFields] = useState(null);
+  const [windStatus, setWindStatus] = useState('idle');
+  const [windError, setWindError] = useState('');
+  const [windRetry, setWindRetry] = useState(0);
   const [autoRotate, setAutoRotate] = useState(true);
   const [bandId, setBandId] = useState('global');
   const [normalized, setNormalized] = useState(true);
@@ -127,9 +138,76 @@ export default function EarthWorkbenchScene({
 
   const variable = controller.variable;
   const scope = bandId;
-  const colormap = controller.field
-    ? earthColormap(controller.field.variable, settings?.colormap)
+  const displayField = useMemo(() => {
+    if (!controller.field || !showAnomaly) return controller.field;
+    const anomaly = buildAnomalyField({ field: controller.field.values }, controller.geometry || {});
+    return {
+      ...controller.field,
+      values: anomaly.field,
+      colorRange: {
+        ...anomaly.colorRange,
+        min: anomaly.minVal,
+        max: anomaly.maxVal,
+        centeredOnZero: true,
+      },
+      anomalyMean: anomaly.mean,
+      anomalyScope: 'spatial-mean',
+    };
+  }, [controller.field, controller.geometry, showAnomaly]);
+  const colormap = displayField
+    ? (showAnomaly ? 'rdbu' : earthColormap(displayField.variable, settings?.colormap))
     : earthColormap(variable, settings?.colormap);
+
+  // Wind vectors are a companion request tied to the currently displayed date.
+  // Keep them on the same request identity as the scalar field so a late response
+  // can never leave arrows from a previous date or variable on the globe.
+  useEffect(() => {
+    if (!showWindVectors || !controller.ready || !controller.date) {
+      setWindFields(null);
+      setWindStatus('idle');
+      setWindError('');
+      return undefined;
+    }
+    const abort = new AbortController();
+    let active = true;
+    setWindFields(null);
+    setWindStatus('loading');
+    setWindError('');
+    controller.loadAuxiliaryFields({
+      variables: ['U10M', 'V10M'],
+      value: controller.date,
+      signal: abort.signal,
+    }).then((fields) => {
+      if (!active || abort.signal.aborted) return;
+      const u = fields?.U10M;
+      const v = fields?.V10M;
+      if (!u?.values || !v?.values) throw new Error('Wind fields are unavailable for this date');
+      setWindFields({
+        u: { field: u.values, minVal: u.colorRange?.min, maxVal: u.colorRange?.max },
+        v: { field: v.values, minVal: v.colorRange?.min, maxVal: v.colorRange?.max },
+        latCenters: u.latCenters,
+        lonCenters: u.lonCenters,
+        stride: 2,
+        scale: 0.24,
+      });
+      setWindStatus('ready');
+    }).catch((error) => {
+      if (!active || error?.name === 'AbortError') return;
+      setWindFields(null);
+      setWindStatus('error');
+      setWindError(error?.message || 'Wind vectors failed to load');
+    });
+    return () => {
+      active = false;
+      abort.abort();
+    };
+  }, [controller.date, controller.loadAuxiliaryFields, controller.ready, showWindVectors, windRetry]);
+
+  const sunDirection = useMemo(() => (
+    showTerminator
+      ? buildTerminatorDirection({ planet: 'earth', date: controller.date, hour: 12 })
+      : null
+  ), [controller.date, showTerminator]);
 
   // 观测轨填充色：与球体、图例共用同一份色带；颜色按本轨数值范围铺满（见 railCurveFill.js）。
   const railColorMode = variable === 'U10M' || variable === 'V10M'
@@ -312,18 +390,18 @@ export default function EarthWorkbenchScene({
     return renderCard(card, { compact: true });
   }, [isZh, renderCard]);
 
-  const mapField = controller.field ? {
-    field: controller.field.values,
-    lat: controller.field.latCenters,
-    lon: controller.field.lonCenters,
-    coverage: controller.field.coverage,
+  const mapField = displayField ? {
+    field: displayField.values,
+    lat: displayField.latCenters,
+    lon: displayField.lonCenters,
+    coverage: displayField.coverage,
     color_range: {
-      min: controller.field.colorRange.min,
-      max: controller.field.colorRange.max,
-      centered_on_zero: controller.field.colorRange.centeredOnZero,
+      min: displayField.colorRange.min,
+      max: displayField.colorRange.max,
+      centered_on_zero: displayField.colorRange.centeredOnZero,
     },
-    units: controller.field.unit,
-    date: controller.field.value,
+    units: displayField.unit,
+    date: displayField.value,
   } : null;
 
   const fallback2d = mapField ? (
@@ -339,7 +417,7 @@ export default function EarthWorkbenchScene({
   const threeD = viewMode === '3d' ? (
     <OverviewScene
       planet="earth"
-      field={controller.field}
+      field={displayField}
       geometry={controller.geometry}
       selection={{ point: controller.point }}
       lighting="fixed"
@@ -347,6 +425,13 @@ export default function EarthWorkbenchScene({
       showField={showField}
       showGeoAnnotations={showGeo}
       showBaseMap={showBaseMap}
+      baseMapStrength={baseMapStrength}
+      showSurfaceTexture={showSurfaceTexture}
+      showContours={showContours}
+      showWindVectors={showWindVectors}
+      showTerminator={showTerminator}
+      windFields={windFields}
+      sunDirection={sunDirection}
       autoRotate={autoRotate}
       sceneKey={controller.sceneKey}
       poseKey={controller.poseKey}
@@ -365,19 +450,19 @@ export default function EarthWorkbenchScene({
 
   const fieldCellCount = useMemo(() => {
     let count = 0;
-    for (const row of controller.field?.values || []) {
+    for (const row of displayField?.values || []) {
       for (const value of row) {
         if (Number.isFinite(value)) count += 1;
       }
     }
     return count;
-  }, [controller.field?.values]);
+  }, [displayField?.values]);
 
-  const dataFieldLegend = controller.field ? (
+  const dataFieldLegend = displayField ? (
     <div
       className="overview-overlay-anchor overview-earth-legend"
       role="group"
-      aria-label={`${variableLabel(controller.field.variable, isZh)} (${controller.field.unit}) · ${controller.field.value}. ${isZh
+      aria-label={`${variableLabel(displayField.variable, isZh)} (${displayField.unit}) · ${displayField.value}. ${isZh
         ? '未着色区域没有数据；颜色只表示数值，不表示高度。'
         : 'Uncoloured areas have no data; colour encodes value, not altitude.'}`}
       style={{
@@ -393,8 +478,8 @@ export default function EarthWorkbenchScene({
       <GlowCard style={{ padding: '8px', background: 'var(--overview-panel-bg-strong)', border: '1px solid var(--overview-panel-border)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <div style={{ color: C.ice60, fontSize: 'calc(9px * var(--font-scale, 1))', fontWeight: 800, whiteSpace: 'nowrap' }}>
-            <span data-earth-legend="variable">{variableLabel(controller.field.variable, isZh)}</span>
-            {' ('}<span data-earth-legend="units">{controller.field.unit}</span>{')'}
+            <span data-earth-legend="variable">{variableLabel(displayField.variable, isZh)}</span>
+            {' ('}<span data-earth-legend="units">{displayField.unit}</span>{')'}
           </div>
           <span
             data-earth-legend="count"
@@ -421,15 +506,28 @@ export default function EarthWorkbenchScene({
             height: 7,
             borderRadius: 999,
             border: `1px solid ${C.border}`,
-            background: legendGradient(controller.field.variable, settings?.colormap),
+            background: showAnomaly ? 'linear-gradient(90deg, #2b6cb0 0%, #f8fafc 50%, #c2410c 100%)' : legendGradient(displayField.variable, settings?.colormap),
             marginBottom: 5,
           }}
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 'calc(8px * var(--font-scale, 1))', color: C.ice, fontWeight: 700 }}>
-          <span>{formatEarthNumber(controller.field.colorRange.min, 3)}</span>
-          <span style={{ color: C.ice60 }}>{formatEarthNumber((controller.field.colorRange.min + controller.field.colorRange.max) / 2, 3)}</span>
-          <span>{formatEarthNumber(controller.field.colorRange.max, 3)}</span>
+          <span>{showAnomaly ? `−${formatEarthNumber(Math.abs(displayField.colorRange.min), 3)}` : formatEarthNumber(displayField.colorRange.min, 3)}</span>
+          <span style={{ color: C.ice60 }}>{showAnomaly ? '0' : formatEarthNumber((displayField.colorRange.min + displayField.colorRange.max) / 2, 3)}</span>
+          <span>{showAnomaly ? `+${formatEarthNumber(displayField.colorRange.max, 3)}` : formatEarthNumber(displayField.colorRange.max, 3)}</span>
         </div>
+        <div style={{ marginTop: 5, color: C.ice50, fontSize: 'calc(8px * var(--font-scale, 1))', lineHeight: 1.35 }}>
+          {showAnomaly
+            ? (isZh ? '距当前场面积加权均值的空间偏差；原始值仍保留在点位探查。' : 'Spatial deviation from the current area-weighted field mean; point probes keep raw values.')
+            : (isZh ? '未着色区域没有数据；颜色表示数值。' : 'Uncoloured areas have no data; colour encodes value.')}
+        </div>
+        {showWindVectors && windStatus === 'error' ? (
+          <div role="alert" style={{ marginTop: 6, display: 'grid', gap: 4, color: C.marsLight, fontSize: 'calc(8px * var(--font-scale, 1))' }}>
+            <span>{windError || (isZh ? '风场加载失败。' : 'Wind fields failed to load.')}</span>
+            <button type="button" onClick={() => setWindRetry((value) => value + 1)} style={{ justifySelf: 'start', padding: '3px 6px', borderRadius: 5, border: `1px solid ${C.border}`, color: C.ice, background: 'transparent', cursor: 'pointer' }}>
+              {t('earthOverview.actions.retry')}
+            </button>
+          </div>
+        ) : null}
       </GlowCard>
     </div>
   ) : null;
@@ -576,6 +674,45 @@ export default function EarthWorkbenchScene({
             onChange={() => setShowBaseMap((value) => !value)}
             isLight={isLight}
           />
+          <InlineSwitch
+            label={t('observatory.layerPanel.surfaceTexture')}
+            checked={showSurfaceTexture}
+            onChange={() => setShowSurfaceTexture((value) => !value)}
+            isLight={isLight}
+          />
+          <label style={{ display: 'grid', gap: 6, color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+            <span>{t('observatory.layerPanel.baseMapStrength')} · {Math.round(baseMapStrength * 100)}%</span>
+            <input type="range" min="0" max="1" step="0.05" value={baseMapStrength}
+              aria-label={t('observatory.layerPanel.baseMapStrength')}
+              onChange={(event) => setBaseMapStrength(Number(event.target.value))} />
+          </label>
+          <InlineSwitch
+            label={t('observatory.layerPanel.contours')}
+            checked={showContours}
+            onChange={() => setShowContours((value) => !value)}
+            isLight={isLight}
+          />
+          <InlineSwitch
+            label={t('observatory.layerPanel.anomaly')}
+            checked={showAnomaly}
+            onChange={() => setShowAnomaly((value) => !value)}
+            isLight={isLight}
+          />
+          <InlineSwitch
+            label={t('observatory.layerPanel.windVectors')}
+            checked={showWindVectors}
+            onChange={() => setShowWindVectors((value) => !value)}
+            isLight={isLight}
+          />
+          <InlineSwitch
+            label={t('observatory.layerPanel.terminator')}
+            checked={showTerminator}
+            onChange={() => setShowTerminator((value) => !value)}
+            isLight={isLight}
+          />
+          <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.55 }}>
+            {t('observatory.layerPanel.overlayHint')}
+          </p>
         </PanelCard>
       </>
     ),

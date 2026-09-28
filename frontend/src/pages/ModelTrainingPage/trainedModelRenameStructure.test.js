@@ -5,10 +5,12 @@ import { readFileSync } from 'node:fs';
 const pageSource = readFileSync(new URL('../ModelTrainingPage.jsx', import.meta.url), 'utf8');
 const apiSource = readFileSync(new URL('../../services/api.js', import.meta.url), 'utf8');
 const dialogSource = readFileSync(new URL('./RenameModelDialog.jsx', import.meta.url), 'utf8');
+const resultSource = readFileSync(new URL('./ExperimentResultPanel.jsx', import.meta.url), 'utf8');
 
-test('completed training cards expose the rename action', () => {
-  assert.match(pageSource, /task\.status === 'completed'[\s\S]*onRename\(task\)/);
-  assert.match(pageSource, /<EditRoundedIcon/);
+test('completed experiments expose the rename action in the result workspace', () => {
+  assert.match(resultSource, /onClick=\{\(\) => onRename\(activeTask\)\}/);
+  assert.match(resultSource, /copy\.renameModel/);
+  assert.match(pageSource, /onRename=\{setRenameTask\}/);
 });
 
 test('training page saves a renamed model and refreshes shared tasks', () => {

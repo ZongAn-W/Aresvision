@@ -6,6 +6,8 @@ import { convertOzone, ozoneLabel, convertTemp, tempLabel, convertWind, windLabe
 import { getRgb } from '../../utils/colormaps';
 import { useDataOverview } from '../../contexts/DataOverviewContext';
 import { getGlobeVariableMeta } from '../../constants/globeVariables';
+import { pointsToFieldData } from './fieldGrid.js';
+import { buildAnomalyField } from '../../components/sphericalFieldLayers.js';
 
 function convertByVariable(value, variable, units) {
   if (!Number.isFinite(value)) return value;
@@ -28,7 +30,7 @@ function formatMetric(value, digits = 3) {
   return Number.isFinite(value) ? Number(value).toFixed(digits) : '--';
 }
 
-export default function GlobeLegend({ ozoneData, sceneModel, embedded = true }) {
+export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false, showWindVectors = false, windStatus = 'idle', windError = '', onRetryWind = null, embedded = true }) {
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
   const isZh = settings?.language !== 'en';
@@ -42,10 +44,13 @@ export default function GlobeLegend({ ozoneData, sceneModel, embedded = true }) 
 
   const panelWidth = gestureEnabled ? 150 : 158;
 
-  const pointsCount = ozoneData.points?.length || 0;  const maxVal = convertByVariable(ozoneData.maxVal || 0, variable, settings.units).toFixed(3);
+  const pointsCount = ozoneData.points?.length || 0;
+  const anomalyStats = showAnomaly ? buildAnomalyField(pointsToFieldData(ozoneData), {}) : null;
+  const anomalyAbs = anomalyStats ? Math.max(Math.abs(anomalyStats.minVal), Math.abs(anomalyStats.maxVal)) : 0;
+  const maxVal = convertByVariable(ozoneData.maxVal || 0, variable, settings.units).toFixed(3);
   const midVal = convertByVariable(((ozoneData.maxVal || 0) + (ozoneData.minVal || 0)) / 2, variable, settings.units).toFixed(3);
   const minVal = convertByVariable(ozoneData.minVal || 0, variable, settings.units).toFixed(3);
-  const horizontalGradient = (() => {
+  const horizontalGradient = showAnomaly ? 'linear-gradient(90deg, #2b6cb0 0%, #f8fafc 50%, #c2410c 100%)' : (() => {
     const n = 10;
     const pts = Array.from({ length: n }, (_, i) => {
       const t = i / (n - 1);
@@ -215,10 +220,26 @@ export default function GlobeLegend({ ozoneData, sceneModel, embedded = true }) 
                 fontWeight: 700,
               }}
             >
-              <span>{minVal}</span>
-              <span style={{ color: C.ice60 }}>{sceneModel?.legendMode === 'diff' ? '0.000' : midVal}</span>
-              <span>{maxVal}</span>
+              <span>{showAnomaly ? `−${formatMetric(convertByVariable(anomalyAbs, variable, settings.units))}` : minVal}</span>
+              <span style={{ color: C.ice60 }}>{sceneModel?.legendMode === 'diff' || showAnomaly ? '0.000' : midVal}</span>
+              <span>{showAnomaly ? `+${formatMetric(convertByVariable(anomalyAbs, variable, settings.units))}` : maxVal}</span>
             </div>
+            <div style={{ marginTop: 5, color: C.ice50, fontSize: 'calc(8px * var(--font-scale, 1))', lineHeight: 1.35 }}>
+              {showAnomaly
+                ? (isZh ? '距当前场空间加权均值的偏差；点位读数保留原始值。' : 'Spatial deviation from the current weighted field mean; point probes keep raw values.')
+                : (isZh ? '颜色表示当前场数值。' : 'Colour encodes the current field value.')}
+            </div>
+            {showWindVectors ? (
+              <div style={{ marginTop: 5, display: 'grid', gap: 4, color: C.ice50, fontSize: 'calc(8px * var(--font-scale, 1))' }}>
+                <span>{isZh ? '风矢量：m/s；箭头长度表示速度。' : 'Wind vectors: m/s; arrow length indicates speed.'}</span>
+                {windStatus === 'error' ? (
+                  <>
+                    <span role="alert" style={{ color: C.marsLight }}>{windError || (isZh ? '风场加载失败。' : 'Wind fields failed to load.')}</span>
+                    {onRetryWind ? <button type="button" onClick={onRetryWind} style={{ justifySelf: 'start', padding: '3px 6px', borderRadius: 5, border: `1px solid ${C.border}`, color: C.ice, background: 'transparent', cursor: 'pointer' }}>{isZh ? '重试' : 'Retry'}</button> : null}
+                  </>
+                ) : windStatus === 'loading' ? <span>{isZh ? '正在加载风场…' : 'Loading wind fields…'}</span> : null}
+              </div>
+            ) : null}
           </>
         )}
       </GlowCard>

@@ -1,6 +1,7 @@
 import React, { forwardRef, useMemo } from 'react';
 import SphericalFieldCanvas from '../../components/SphericalFieldCanvas';
 import { pointsToFieldData } from './fieldGrid';
+import { marsSunDirection } from '../../components/sphericalFieldLayers.js';
 import { useOverviewLayout } from './workbench/OverviewShell.jsx';
 import { OVERVIEW_GLOBE } from './workbench/overviewVisualContract.js';
 
@@ -18,6 +19,10 @@ const Mars3DBackground = forwardRef(({
   showConcentration3D,
   showGeoAnnotations,
   showMarsTexture,
+  showContours = false,
+  showWindVectors = false,
+  showTerminator = false,
+  windFields = null,
   solarLongitudeLs,
   onGlobeClick,
   // 视角记忆：与 Earth 共用同一套缓存，切回火星时恢复上次视角。
@@ -29,6 +34,8 @@ const Mars3DBackground = forwardRef(({
     const layers = sceneModel?.layers?.length ? sceneModel.layers : [ozoneData].filter(Boolean);
     return layers
       .map((layer, index) => {
+        // Anomaly values are transformed once at page level so the particle,
+        // contour and legend ranges all share the same zero-centred field.
         const fieldData = pointsToFieldData(layer);
         const source = layer.source || layer.id || `layer-${index}`;
         const isMultiSource = sceneModel?.renderMode === 'multi-source';
@@ -50,6 +57,10 @@ const Mars3DBackground = forwardRef(({
   }, [ozoneData, sceneModel]);
 
   const fieldData = layerFields[0]?.fieldData || null;
+  const sunDirection = useMemo(
+    () => (showTerminator ? marsSunDirection(solarLongitudeLs, 12) : null),
+    [showTerminator, solarLongitudeLs],
+  );
 
   if (!fieldData) return null;
 
@@ -78,7 +89,12 @@ const Mars3DBackground = forwardRef(({
         showConcentration={showConcentration3D}
         showGeoAnnotations={showGeoAnnotations}
         showMars={showMarsTexture}
+        showContours={showContours}
+        showWindVectors={showWindVectors}
+        showTerminator={showTerminator}
+        windFields={windFields}
         solarLongitudeLs={solarLongitudeLs}
+        sunDirection={sunDirection}
         zoom={OVERVIEW_GLOBE.zoom} // shared overview framing with the Earth particle globe
         offsetX={offsetX} // shift object to center it in remaining viewport space
         poseKey={poseKey}

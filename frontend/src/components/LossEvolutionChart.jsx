@@ -3,11 +3,12 @@ import Plot from 'react-plotly.js';
 import { useT } from '../i18n';
 import C from '../constants/colors';
 
-const LossEvolutionChart = ({ lossHistory, isLight }) => {
+const LossEvolutionChart = ({ lossHistory, isLight, compact = false, height, title, emptyLabel }) => {
   const t = useT();
   const trainLoss = lossHistory?.train || [];
   const valLoss = lossHistory?.val || [];
   const epochs = trainLoss.map((_, index) => index + 1);
+  const chartHeight = Number.isFinite(height) && height > 0 ? height : (compact ? 220 : 286);
   const plotText = isLight ? 'rgba(23,33,47,0.88)' : C.ice80;
   const plotTextMuted = isLight ? 'rgba(23,33,47,0.56)' : C.ice50;
   const plotGrid = isLight ? 'rgba(23,33,47,0.08)' : 'rgba(255,255,255,0.08)';
@@ -39,7 +40,7 @@ const LossEvolutionChart = ({ lossHistory, isLight }) => {
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     autosize: true,
-    height: 286,
+    height: chartHeight,
     margin: { l: 46, r: 18, t: 18, b: 42 },
     showlegend: true,
     legend: {
@@ -72,11 +73,12 @@ const LossEvolutionChart = ({ lossHistory, isLight }) => {
   return (
     <div
       style={{
-        marginTop: 18,
+        marginTop: compact ? 0 : 18,
         padding: '18px 18px 12px',
         borderRadius: 18,
         background: C.bgMuted,
         border: `1px solid ${C.border}`,
+        minWidth: 0,
       }}
     >
       <div
@@ -99,7 +101,7 @@ const LossEvolutionChart = ({ lossHistory, isLight }) => {
               marginBottom: 4,
             }}
           >
-            {t('modelTraining.charts.lossTitle')}
+            {title || t('modelTraining.charts.lossTitle')}
           </div>
           <div
             style={{
@@ -118,7 +120,7 @@ const LossEvolutionChart = ({ lossHistory, isLight }) => {
       {trainLoss.length === 0 ? (
         <div
           style={{
-            height: 210,
+            height: chartHeight - 76,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -129,7 +131,7 @@ const LossEvolutionChart = ({ lossHistory, isLight }) => {
             padding: '0 12px',
           }}
         >
-          {t('modelTraining.charts.noMetrics')}
+          {emptyLabel || t('modelTraining.charts.noMetrics')}
         </div>
       ) : (
         <Plot

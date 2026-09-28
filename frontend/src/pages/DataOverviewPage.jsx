@@ -11,6 +11,8 @@ import { formatTimelineLs } from './DataOverviewPage/timelineFormatting.js';
 import { lsBounds } from './DataOverviewPage/workbench/marsObservationRail.js';
 import { makeColorSpec } from '../utils/colormaps.js';
 import { filterOzoneOverlayBySourceModes } from './DataOverviewPage/uploadedSourceOptions';
+import { pointsToFieldData } from './DataOverviewPage/fieldGrid';
+import { canEnableAnomaly, transformSceneModelAnomaly } from './DataOverviewPage/globeLayerDisplay.js';
 
 // Sub-components
 import TopStatusBar from './DataOverviewPage/TopStatusBar';
@@ -62,6 +64,7 @@ const MARS_CARD_COLORS = {
 /** 只有「一张有真实序列的折线图」适合缩进 120px 的紧凑预览位。 */
 const MARS_COMPACT_PREVIEW_KEYS = new Set(['globalTrend']);
 
+
 const DataOverviewPageContent = ({
   sceneSwitch = null,
   observatoryView = 'observe',
@@ -94,6 +97,11 @@ const DataOverviewPageContent = ({
     showConcentration3D,
     showGeoAnnotations,
     showMarsTexture,
+    showContours,
+    showAnomaly,
+    showWindVectors,
+    showTerminator,
+    setShowAnomaly,
     globeVariable,
     setSelectedCoordinate,
     ozoneDisplayMode,
@@ -105,6 +113,10 @@ const DataOverviewPageContent = ({
   } = useDataOverview();
 
   const [loadingGlobe, setLoadingGlobe] = useState(false);
+  const [windFields, setWindFields] = useState(null);
+  const [windStatus, setWindStatus] = useState('idle');
+  const [windError, setWindError] = useState('');
+  const [windRetry, setWindRetry] = useState(0);
   const [pointProbe, setPointProbe] = useState(null);
   const [pointProbeLoading, setPointProbeLoading] = useState(false);
   const [pointProbeError, setPointProbeError] = useState('');
@@ -116,6 +128,7 @@ const DataOverviewPageContent = ({
   const mainAbortRef = useRef(null);
   const overlayAbortRef = useRef(null);
   const pointProbeAbortRef = useRef(null);
+  const windAbortRef = useRef(null);
   const globeCanvasRef = useRef(null);
   const landmarksCanvasRef = useRef(null);
   // 观测台画布的真实矩形：手势选点、HUD 与图例都以它为唯一依据。
@@ -190,6 +203,48 @@ const DataOverviewPageContent = ({
     }
   }, [overviewSourceParams, setMcdMainSlice, setSourceMeta]);
 
+  // Wind companions have their own identity and abort controller. A scalar
+  // reload must clear old arrows immediately, even when the new wind request
+  // is still in flight.
+  useEffect(() => {
+    if (windAbortRef.current) windAbortRef.current.abort();
+    if (!showWindVectors || observatoryView !== 'observe') {
+      setWindFields(null);
+      setWindStatus('idle');
+      setWindError('');
+      return undefined;
+    }
+    const ctrl = new AbortController();
+    windAbortRef.current = ctrl;
+    let active = true;
+    setWindFields(null);
+    setWindStatus('loading');
+    setWindError('');
+    Promise.all(['U_Wind', 'V_Wind'].map((windVariable) => (
+      fetchOverviewGlobeData(marsYear, globalTimeLs, windVariable, ctrl.signal, overviewSourceParams)
+    ))).then(([uPayload, vPayload]) => {
+      if (!active || ctrl.signal.aborted) return;
+      const u = pointsToFieldData({ points: uPayload?.points || [], minVal: uPayload?.minVal, maxVal: uPayload?.maxVal });
+      const v = pointsToFieldData({ points: vPayload?.points || [], minVal: vPayload?.minVal, maxVal: vPayload?.maxVal });
+      setWindFields({
+        u,
+        v,
+        latCenters: u?.latCenters,
+        lonCenters: u?.lonCenters,
+      });
+      setWindStatus('ready');
+    }).catch((error) => {
+      if (!active || error?.name === 'AbortError') return;
+      setWindFields(null);
+      setWindStatus('error');
+      setWindError(error?.message || 'Wind vectors failed to load');
+    });
+    return () => {
+      active = false;
+      ctrl.abort();
+    };
+  }, [globalTimeLs, marsYear, observatoryView, overviewSourceParams, showWindVectors, windRetry]);
+
   const loadOzoneOverlay = useCallback(async (ls, year) => {
     if (overlayAbortRef.current) overlayAbortRef.current.abort();
     if (globeVariable !== 'o3col' || ozoneDisplayMode === 'mcd') {
@@ -214,6 +269,7 @@ const DataOverviewPageContent = ({
 
   const handleClosePointProbe = useCallback(() => {
     if (pointProbeAbortRef.current) pointProbeAbortRef.current.abort();
+    if (windAbortRef.current) windAbortRef.current.abort();
     setPointProbe(null);
     setPointProbeLoading(false);
     setPointProbeError('');
@@ -394,6 +450,7 @@ const DataOverviewPageContent = ({
     if (mainAbortRef.current) mainAbortRef.current.abort();
     if (overlayAbortRef.current) overlayAbortRef.current.abort();
     if (pointProbeAbortRef.current) pointProbeAbortRef.current.abort();
+    if (windAbortRef.current) windAbortRef.current.abort();
     clearInterval(timerRef.current);
   }, []);
 
@@ -448,6 +505,15 @@ const DataOverviewPageContent = ({
       ozoneOverlay: ozoneOverlayPayload,
     }),
     [globeVariable, ozoneDisplayMode, ozoneDiffPair, mcdMainSlice, ozoneOverlayPayload],
+  );
+  const anomalyAllowed = canEnableAnomaly(sceneModel);
+  const effectiveShowAnomaly = showAnomaly && anomalyAllowed;
+  useEffect(() => {
+    if (showAnomaly && !anomalyAllowed) setShowAnomaly(false);
+  }, [anomalyAllowed, setShowAnomaly, showAnomaly]);
+  const displaySceneModel = useMemo(
+    () => (effectiveShowAnomaly ? transformSceneModelAnomaly(sceneModel) : sceneModel),
+    [effectiveShowAnomaly, sceneModel],
   );
 
   // 观测轨填充色：色带与球体一致，颜色由本轨数值范围铺满（不需要球体色标范围）。
@@ -713,12 +779,16 @@ const DataOverviewPageContent = ({
             <Mars3DBackground
               ref={globeCanvasRef}
               ozoneData={sceneModel.layers[0] || mcdMainSlice}
-              sceneModel={sceneModel}
+              sceneModel={displaySceneModel}
               is3DMode={true}
               autoRotate={autoRotate}
               showConcentration3D={showConcentration3D}
               showGeoAnnotations={showGeoAnnotations}
               showMarsTexture={showMarsTexture}
+              showContours={showContours}
+              showWindVectors={showWindVectors}
+              showTerminator={showTerminator}
+              windFields={windFields}
               solarLongitudeLs={globalTimeLs}
               poseKey="mars"
               onGlobeClick={handleGlobeClick}
@@ -865,7 +935,16 @@ const DataOverviewPageContent = ({
           {/* 场景状态与图例：只在画布内绝对定位，不再按窗口减栏宽 */}
           <div className="overview-mars-hud">
             <TopStatusBar embedded />
-            <GlobeLegend ozoneData={sceneModel.layers[0] || mcdMainSlice} sceneModel={sceneModel} embedded />
+            <GlobeLegend
+              ozoneData={displaySceneModel.layers[0] || mcdMainSlice}
+              sceneModel={displaySceneModel}
+              showAnomaly={effectiveShowAnomaly}
+              showWindVectors={showWindVectors}
+              windStatus={windStatus}
+              windError={windError}
+              onRetryWind={() => setWindRetry((value) => value + 1)}
+              embedded
+            />
           </div>
         </>
       ) : null}

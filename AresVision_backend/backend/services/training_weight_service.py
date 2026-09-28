@@ -14,6 +14,7 @@ from sqlalchemy import select
 from config import MAX_TRAINING_WEIGHT_SIZE_MB, TRAINING_WEIGHTS_DIR
 from database.engine import async_session_maker
 from database.models import TrainingWeightFile
+from services.earth_training_contract import EARTH_ARTIFACT_SCHEMA
 
 
 class TrainingWeightService:
@@ -122,5 +123,18 @@ class TrainingWeightService:
                 "ok": False,
                 "errors": ["Weight file must contain a PyTorch state_dict dictionary"],
                 "warnings": [],
+            }
+        # An Earth checkpoint is a *container*, not a bare state dict. It must not
+        # be reported as a compatible Mars transfer weight, and its tensors must
+        # not be extracted and passed off as one.
+        if loaded.get("artifact_schema") == EARTH_ARTIFACT_SCHEMA:
+            return {
+                "ok": False,
+                "errors": [
+                    "This file is an Earth (MERRA-2) forecast checkpoint and is not "
+                    "compatible with Mars transfer learning. Upload or select Mars weights instead."
+                ],
+                "warnings": [],
+                "artifact_kind": "earth_forecast_checkpoint",
             }
         return {"ok": True, "errors": [], "warnings": [], "tensor_count": len(loaded)}

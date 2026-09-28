@@ -3,17 +3,32 @@ export function isValidTagName(name) {
   return length >= 1 && length <= 64;
 }
 
-export function filterTaggedTasks(tasks = [], { tagIds = [], untagged = false, search = '' } = {}) {
+export function filterTaggedTasks(tasks = [], { tagIds = [], untagged = false, search = '', statusMatcher } = {}) {
   const query = search.trim().toLocaleLowerCase();
   const selected = tagIds.map(Number);
   const seen = new Set();
   return tasks.filter((task) => {
     if (seen.has(task.id)) return false;
     seen.add(task.id);
+    if (typeof statusMatcher === 'function' && !statusMatcher(task)) return false;
     const tags = (task.tags || []).map(tag => Number(tag.id));
     if (untagged ? tags.length > 0 : !selected.every(id => tags.includes(id))) return false;
     return !query || String(task.custom_model_name || `Task #${task.id}`).toLocaleLowerCase().includes(query);
   });
+}
+
+/** 目录状态分组：运行中同时覆盖排队中的任务。 */
+export const TRAINING_STATUS_GROUPS = {
+  all: null,
+  running: ['pending', 'running'],
+  completed: ['completed'],
+  failed: ['failed'],
+};
+
+export function createTrainingStatusMatcher(statusQuery) {
+  const allowed = TRAINING_STATUS_GROUPS[statusQuery];
+  if (!Array.isArray(allowed)) return null;
+  return (task) => allowed.includes(String(task?.status || '').toLowerCase());
 }
 
 export function addVisibleSelection(selected = [], visible = []) {

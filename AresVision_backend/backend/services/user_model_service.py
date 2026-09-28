@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import func, select
 
@@ -101,6 +103,49 @@ class UserModelService:
             )
             return package
 
+    async def get_earth_compatibility(self, package_id: str, user_id: int) -> dict:
+        """Report whether a stored package may be trained on Earth data.
+
+        The verdict is read from the package's own validation report, which was
+        produced by the shared upload validator (including its Earth dry-run). No
+        dry-run is repeated per request, so this stays cheap; callers that need a
+        fresh proof can use ``revalidate`` first.
+        """
+        package = await self.get_package_for_user(package_id, user_id)
+        try:
+            report = json.loads(package.validation_report or "{}")
+        except (TypeError, ValueError):
+            report = {}
+        if not isinstance(report, dict):
+            report = {}
+        earth = report.get("earth") if isinstance(report.get("earth"), dict) else {}
+        datasets = report.get("datasets") if isinstance(report.get("datasets"), dict) else {}
+        available = os.path.isfile(package.storage_path or "")
+        compatible = bool(earth.get("compatible")) and available
+        reasons = list(earth.get("errors") or [])
+        if not available:
+            compatible = False
+            reasons = [
+                "the uploaded model file is missing; re-upload or revalidate the model"
+            ] + reasons
+        elif not earth:
+            reasons = [
+                "this model has no Earth compatibility result yet; revalidate it to check"
+            ]
+        warnings = list(report.get("warnings") or [])
+        return {
+            "package_id": package.id,
+            "display_name": package.display_name,
+            "version": package.version,
+            "validation_status": package.validation_status,
+            "source_available": available,
+            "compatible": compatible,
+            "reasons": reasons,
+            "warnings": warnings,
+            "datasets": datasets,
+            "output_shape": earth.get("output_shape"),
+        }
+
     async def revalidate_package(self, package_id: str, user_id: int) -> UserModelPackage:
         async with self.sessionmaker() as session:
             package = await self._get_package_for_user_in_session(
@@ -109,10 +154,11 @@ class UserModelService:
                 user_id,
             )
             source = Path(package.storage_path).read_bytes()
-            result = self._validate_source_bytes(
-                source,
-                self._safe_filename(package.original_filename),
-            )
+            # Validate under the name the user uploaded. The stored file keeps a
+            # ``.source`` suffix so it is never importable directly, and re-using that
+            # path here would make the validator reject the extension and report a
+            # model as broken for a naming detail.
+            result = self._validate_source_bytes(source, self._upload_filename(package))
             package.validation_status = "valid" if result.ok else "invalid"
             package.validation_report = json.dumps(result.report_dict(), ensure_ascii=False)
             package.param_schema = json.dumps(result.param_schema, ensure_ascii=False)
@@ -155,6 +201,22 @@ class UserModelService:
         if not safe_name.lower().endswith(".py"):
             safe_name = f"{safe_name}.py"
         return safe_name
+
+    @staticmethod
+    def _upload_filename(package: Any) -> str:
+        """The ``.py`` name to validate a stored package under.
+
+        ``storage_path`` deliberately carries a ``.source`` suffix (and a uuid
+        prefix) so an uploaded file is never importable by accident; validation must
+        instead use the user's original filename, or the de-suffixed stored name.
+        """
+        original = getattr(package, "original_filename", None)
+        if not original:
+            stored_name = Path(str(getattr(package, "storage_path", ""))).name
+            if stored_name.endswith(".source"):
+                stored_name = stored_name[: -len(".source")]
+            original = stored_name or "model.py"
+        return UserModelService._safe_filename(original)
 
     def _validate_source_bytes(self, source: bytes, safe_name: str):
         with tempfile.TemporaryDirectory(prefix="aresvision_user_model_") as temp_dir:

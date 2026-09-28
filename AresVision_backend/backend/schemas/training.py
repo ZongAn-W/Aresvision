@@ -11,7 +11,7 @@ from pydantic import (
 from typing import Annotated, Dict, Any, Literal, Optional
 from datetime import datetime
 
-from services.dataset_identity import SERVER_IDENTITY_FIELDS
+from services.dataset_identity import EARTH_DATASET_IDS, SERVER_IDENTITY_FIELDS
 from services.model_artifacts import is_valid_model_weight_file
 
 PositiveId = Annotated[StrictInt, Field(gt=0)]
@@ -113,6 +113,38 @@ class TrainingTaskResponse(BaseModel):
     @property
     def model_available(self) -> bool:
         return self.status == "completed" and is_valid_model_weight_file(self.output_model_path)
+
+    @computed_field(return_type=bool)
+    @property
+    def is_earth_task(self) -> bool:
+        """Whether this task belongs to an Earth dataset.
+
+        The prediction page uses this to route to the Earth historical endpoint;
+        ``dataset_id`` alone is not enough because legacy rows may not carry one.
+        """
+        if self.dataset_id:
+            return self.dataset_id in EARTH_DATASET_IDS
+        try:
+            legacy = json.loads(self.hyperparameters or "{}")
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(legacy, dict):
+            return False
+        return legacy.get("training_dataset") in EARTH_DATASET_IDS
+
+    @computed_field(return_type=bool)
+    @property
+    def trained_prediction_supported(self) -> bool:
+        """Whether the **Mars** trained-model prediction paths accept this task.
+
+        Earth tasks are predicted through the Earth historical endpoint instead,
+        so they are explicitly excluded here rather than silently falling back to
+        Mars data preparation. Historical Mars rows without an identity keep the
+        old behaviour.
+        """
+        if self.dataset_id:
+            return self.dataset_id not in EARTH_DATASET_IDS
+        return not self.is_earth_task
 
     class Config:
         from_attributes = True

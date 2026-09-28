@@ -74,11 +74,15 @@ class RecordingTrainingService(training_module.TrainingService):
         self._sessions = sessions
 
     async def _run_training_subprocess(self, task_id, script_name, hyperparameters, log_file,
-                                       output_path, env_overrides=None, temp_data_root=None):
+                                       output_path, env_overrides=None, temp_data_root=None,
+                                       earth_training_spec=None):
         self.calls.append({
             "task_id": task_id,
             "script_name": script_name,
             "hyperparameters": dict(hyperparameters),
+            # Earth runs carry their identity through the environment spec, so the
+            # recorder keeps it to prove the Mars paths never receive one.
+            "earth_training_spec": earth_training_spec,
         })
 
 
@@ -203,7 +207,9 @@ def test_start_request_defers_nested_identity_rejection_to_the_service():
 
 
 @pytest.mark.parametrize("code,status,hyperparameters,dataset_id", [
-    ("dataset_training_not_supported", 409, {}, "earth_merra2_daily_v1"),
+    # Earth is no longer a "dataset not supported" rejection on the service path:
+    # it has its own training entry, bound through the registry. The dedicated
+    # tests below cover it.
     ("unknown_dataset", 400, {}, "missing"),
     ("invalid_dataset_id", 400, {}, ""),
     ("dataset_id_conflict", 400, {"training_dataset": "mcd_overview"}, "openmars_mcd"),
@@ -239,28 +245,52 @@ def test_unsupported_datasets_are_rejected_before_any_side_effect(
     assert error.status_code == status
 
 
-def test_earth_training_rejected_before_database(monkeypatch, tmp_path):
+def test_earth_training_is_bound_then_fails_on_the_unavailable_package(monkeypatch, tmp_path):
+    """Earth reaches its own path and stops before any database side effect.
+
+    The registry here points at a directory that does not exist, so the release
+    cannot be verified. The request must fail with the availability code and must
+    still not touch the database, build an output path or spawn a process.
+    """
     def forbidden_database():
         raise AssertionError("Database must not be touched")
 
+    def forbidden_build(*args, **kwargs):
+        raise AssertionError("Training subprocess must not be built")
+
     monkeypatch.setattr(training_module, "async_session_maker", forbidden_database)
+    monkeypatch.setattr(training_module, "build_task_output_path", forbidden_build)
 
     async def run():
         with pytest.raises(DatasetRequestError) as exc:
             await training_module.TrainingService().start_training(
                 user_id=7, model_script="demo3.py", hyperparameters={},
-                custom_model_name="earth-blocked", dataset_id="earth_merra2_daily_v1",
+                custom_model_name="earth-unavailable", dataset_id="earth_merra2_daily_v1",
                 dataset_registry=build_registry(tmp_path),
             )
-        assert exc.value.code == "dataset_training_not_supported"
+        return exc.value
 
-    asyncio.run(run())
+    error = asyncio.run(run())
+    assert error.code == "dataset_unavailable"
+    assert error.status_code == 503
+    assert error.availability_reason == "package_missing"
 
 
-def test_uploaded_path_also_rejects_earth_before_loading_the_package(tmp_path, monkeypatch):
+def test_earth_training_rejects_uploaded_models_before_loading_the_package(tmp_path, monkeypatch):
+    """An uploaded-model Earth request is refused with no package load or DB write.
+
+    The release is bound first, so an unverifiable package surfaces the
+    availability code; either way the uploaded model package is never loaded and
+    the database is never touched.
+    """
     class ForbiddenUserModelService:
         async def get_package_for_user(self, *args, **kwargs):
             raise AssertionError("Uploaded model package must not be loaded")
+
+    def forbidden_database():
+        raise AssertionError("Database must not be touched")
+
+    monkeypatch.setattr(training_module, "async_session_maker", forbidden_database)
 
     async def run():
         with pytest.raises(DatasetRequestError) as exc:
@@ -275,9 +305,48 @@ def test_uploaded_path_also_rejects_earth_before_loading_the_package(tmp_path, m
                 user_model_service=ForbiddenUserModelService(),
                 dataset_registry=build_registry(tmp_path),
             )
-        assert exc.value.code == "dataset_training_not_supported"
+        return exc.value
 
-    asyncio.run(run())
+    error = asyncio.run(run())
+    assert error.code in {
+        "dataset_unavailable",
+        "dataset_training_configuration_not_supported",
+    }
+    assert error.status_code in {409, 503}
+
+
+def test_earth_uploaded_configuration_is_refused_with_a_verifiable_package(
+    earth_global_release, tmp_path, monkeypatch
+):
+    """With a real package the uploaded-model refusal is the configuration code."""
+    class ForbiddenUserModelService:
+        async def get_package_for_user(self, *args, **kwargs):
+            raise AssertionError("Uploaded model package must not be loaded")
+
+    def forbidden_database():
+        raise AssertionError("Database must not be touched")
+
+    monkeypatch.setattr(training_module, "async_session_maker", forbidden_database)
+    registry = DatasetRegistry(earth_dataset_id="earth_merra2_daily_v2", **earth_global_release)
+
+    async def run():
+        with pytest.raises(DatasetRequestError) as exc:
+            await training_module.TrainingService().start_training(
+                user_id=7,
+                model_script="demo3.py",
+                hyperparameters={},
+                custom_model_name="earth-uploaded-real",
+                dataset_id="earth_merra2_daily_v2",
+                model_source="uploaded",
+                uploaded_model_id="4d24f680-5029-47d9-9890-a56a6247b20e",
+                user_model_service=ForbiddenUserModelService(),
+                dataset_registry=registry,
+            )
+        return exc.value
+
+    error = asyncio.run(run())
+    assert error.code == "dataset_training_configuration_not_supported"
+    assert error.status_code == 409
 
 
 def test_legacy_request_without_top_level_id_creates_a_mars_task(tmp_path, monkeypatch):
@@ -706,7 +775,9 @@ def test_http_start_request_records_identity_and_keeps_legacy_key(tmp_path, monk
 
 
 @pytest.mark.parametrize("payload,status,code", [
-    ({"dataset_id": "earth_merra2_daily_v1"}, 409, "dataset_training_not_supported"),
+    # Earth reaches its own bound path; with an unverifiable package the HTTP layer
+    # answers 503 and still creates no task.
+    ({"dataset_id": "earth_merra2_daily_v1"}, 503, "dataset_unavailable"),
     ({"dataset_id": "missing"}, 400, "unknown_dataset"),
     ({"dataset_id": ""}, 400, "invalid_dataset_id"),
     ({"dataset_id": "openmars_mcd", "hyperparameters": {"training_dataset": "mcd_overview"}},

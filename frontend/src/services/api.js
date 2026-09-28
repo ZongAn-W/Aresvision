@@ -653,6 +653,36 @@ export async function fetchScripts() {
   return res.json();
 }
 
+/**
+ * 把训练启动失败的响应体翻译成可展示的错误。
+ *
+ * 后端在数据集与训练契约拒绝时返回 `{detail: {code, message}}`，Pydantic 校验
+ * 失败时返回字符串或数组 detail。这里保留 code 与 HTTP 状态，避免前端只显示
+ * 裸状态码，也避免把结构化错误当成普通字符串丢掉。
+ */
+async function buildTrainingStartError(res) {
+  const payload = await res.json().catch(() => null);
+  const detail = payload?.detail;
+  const structured = detail && typeof detail === 'object' && !Array.isArray(detail) ? detail : null;
+  let message = '';
+  if (structured?.message) message = String(structured.message);
+  else if (typeof detail === 'string') message = detail;
+  else if (Array.isArray(detail)) {
+    message = detail
+      .map((item) => {
+        const loc = Array.isArray(item?.loc) ? item.loc.filter((part) => part !== 'body').join('.') : '';
+        return loc ? `${loc}: ${item?.msg || ''}` : (item?.msg || '');
+      })
+      .filter(Boolean)
+      .join('; ');
+  }
+  const error = new Error(message || `${res.status}`);
+  error.status = res.status;
+  error.code = structured?.code || 'training_start_failed';
+  error.availabilityReason = structured?.availability_reason ?? null;
+  return error;
+}
+
 export async function startTrainingTask(
   model_script,
   hyperparameters,
@@ -660,19 +690,23 @@ export async function startTrainingTask(
   data_source = 'default',
   options = {}
 ) {
+  const body = {
+    model_script,
+    hyperparameters,
+    model_name,
+    data_source,
+    model_source: options.modelSource || 'official',
+    uploaded_model_id: options.uploadedModelId || null,
+    tag_ids: options.tagIds || [],
+  };
+  // 顶层 dataset_id 是服务端身份入口；未提供时保持旧请求形态，由后端按
+  // legacy hyperparameters.training_dataset 解析。
+  if (options.datasetId) body.dataset_id = options.datasetId;
   const res = await authedFetch(`${BASE}/training/start`, {
     method: 'POST',
-    body: JSON.stringify({
-      model_script,
-      hyperparameters,
-      model_name,
-      data_source,
-      model_source: options.modelSource || 'official',
-      uploaded_model_id: options.uploadedModelId || null,
-      tag_ids: options.tagIds || [],
-    }),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) throw await buildTrainingStartError(res);
   return res.json();
 }
 
@@ -737,6 +771,24 @@ export async function fetchUserModels() {
 
 export function getUserModelDownloadUrl(kind) {
   return `${BASE}/user-models/downloads/${encodeURIComponent(kind)}`;
+}
+
+/**
+ * 上传模型的 Earth 兼容性结论。
+ *
+ * “Mars 可用”不等于“Earth 可用”，所以训练页在选择 Earth + 上传模型时必须问服务端，
+ * 不能在前端推断。结论来自上传校验时的 Earth dry-run。
+ */
+export async function fetchUploadedModelEarthCompatibility(modelId, { signal } = {}) {
+  const res = await authedFetch(
+    `${BASE}/user-models/${encodeURIComponent(modelId)}/earth-compatibility`,
+    { signal },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.json();
 }
 
 export async function revalidateUserModel(modelId) {

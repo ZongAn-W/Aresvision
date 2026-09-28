@@ -294,6 +294,14 @@ export function useMarsObservatoryPanels() {
     setShowGeoAnnotations,
     showMarsTexture,
     setShowMarsTexture,
+    showContours,
+    setShowContours,
+    showAnomaly,
+    setShowAnomaly,
+    showWindVectors,
+    setShowWindVectors,
+    showTerminator,
+    setShowTerminator,
     selectedCoordinate,
   } = useDataOverview();
   const { user, uploadOptions, loading } = useMarsUploadOptions();
@@ -313,6 +321,7 @@ export function useMarsObservatoryPanels() {
     if (isZh) return rawMessage || '';
     return /[a-zA-Z]/.test(rawMessage || '') && !/[\u4e00-\u9fff]/.test(rawMessage || '') ? rawMessage : '';
   }, [isZh, sourceMeta]);
+  const anomalyAllowed = ozoneDisplayMode === 'mcd';
 
   const handleOfficialYearChange = useCallback((value) => setMarsYear(Number(value)), [setMarsYear]);
 
@@ -455,6 +464,38 @@ export function useMarsObservatoryPanels() {
             onChange={() => setShowMarsTexture((value) => !value)}
             isLight={isLight}
           />
+          <InlineSwitch
+            label={t('observatory.layerPanel.contours')}
+            checked={showContours}
+            onChange={() => setShowContours((value) => !value)}
+            isLight={isLight}
+          />
+          <InlineSwitch
+            label={anomalyAllowed ? t('observatory.layerPanel.anomaly') : `${t('observatory.layerPanel.anomaly')} (${t('observatory.layerPanel.anomalySingleMcdOnly')})`}
+            checked={showAnomaly && anomalyAllowed}
+            onChange={() => { if (anomalyAllowed) setShowAnomaly((value) => !value); }}
+            isLight={isLight}
+          />
+          {!anomalyAllowed ? (
+            <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.45 }}>
+              {t('observatory.layerPanel.anomalySingleMcdHint')}
+            </p>
+          ) : null}
+          <InlineSwitch
+            label={t('observatory.layerPanel.windVectors')}
+            checked={showWindVectors}
+            onChange={() => setShowWindVectors((value) => !value)}
+            isLight={isLight}
+          />
+          <InlineSwitch
+            label={t('observatory.layerPanel.terminator')}
+            checked={showTerminator}
+            onChange={() => setShowTerminator((value) => !value)}
+            isLight={isLight}
+          />
+          <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.55 }}>
+            {t('observatory.layerPanel.overlayHint')}
+          </p>
         </PanelCard>
       </>
     ),

@@ -61,7 +61,7 @@ export default function StarField() {
   }, []);
 
   return (
-    <div style={{ 
+    <div className="star-field" style={{ 
       position: 'fixed', 
       inset: 0, 
       zIndex: 0, 

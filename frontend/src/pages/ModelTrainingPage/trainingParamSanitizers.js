@@ -7,7 +7,16 @@ export const TRANSFER_FREEZE_MODES = ['none', 'backbone', 'head'];
 export const UPLOADED_MODEL_TRANSFER_FREEZE_MODES = ['none'];
 export const TRAINING_DATASET_OPENMARS_MCD = 'openmars_mcd';
 export const TRAINING_DATASET_MCD_OVERVIEW = 'mcd_overview';
-export const TRAINING_DATASET_IDS = [TRAINING_DATASET_OPENMARS_MCD, TRAINING_DATASET_MCD_OVERVIEW];
+export const TRAINING_DATASET_EARTH_MERRA2_V2 = 'earth_merra2_daily_v2';
+/** Mars 训练身份；Earth 走独立的数据准备与训练路径，不进入旧 runner。 */
+export const MARS_TRAINING_DATASET_IDS = [TRAINING_DATASET_OPENMARS_MCD, TRAINING_DATASET_MCD_OVERVIEW];
+export const EARTH_TRAINING_DATASET_IDS = [TRAINING_DATASET_EARTH_MERRA2_V2];
+/** 注册表已登记、训练页可选的全部数据集（顺序即选项顺序）。 */
+export const TRAINING_DATASET_IDS = [
+  TRAINING_DATASET_OPENMARS_MCD,
+  TRAINING_DATASET_MCD_OVERVIEW,
+  TRAINING_DATASET_EARTH_MERRA2_V2,
+];
 
 export const MODEL_STRUCTURE_PARAM_CONFIG = {
   simvp: [
@@ -400,9 +409,16 @@ export function sanitizeTransferFreezeModeForModelSource(value, modelSource) {
   return getTransferFreezeModes(modelSource).includes(normalized) ? normalized : 'none';
 }
 
-export function sanitizeTrainingDataset(value) {
+/**
+ * 规范化训练数据集。
+ *
+ * 默认只接受火星数据集：通用构建器服务于旧 runner，不能因为 Earth 出现在选项
+ * 列表里就把 Earth 身份静默带进火星请求。Earth 路径显式传入 allowEarth。
+ */
+export function sanitizeTrainingDataset(value, { allowEarth = false } = {}) {
   const normalized = String(value || TRAINING_DATASET_OPENMARS_MCD).toLowerCase();
-  return TRAINING_DATASET_IDS.includes(normalized) ? normalized : TRAINING_DATASET_OPENMARS_MCD;
+  const allowed = allowEarth ? TRAINING_DATASET_IDS : MARS_TRAINING_DATASET_IDS;
+  return allowed.includes(normalized) ? normalized : TRAINING_DATASET_OPENMARS_MCD;
 }
 
 export function isRecurrentArchitecture(modelArchitecture) {

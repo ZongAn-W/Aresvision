@@ -42,6 +42,10 @@ export const DataOverviewProvider = ({ children }) => {
   const [showConcentration3D, setShowConcentration3D] = useState(true);
   const [showGeoAnnotations, setShowGeoAnnotations] = useState(true);
   const [showMarsTexture, setShowMarsTexture] = useState(true);
+  const [showContours, setShowContours] = useState(false);
+  const [showAnomaly, setShowAnomaly] = useState(false);
+  const [showWindVectors, setShowWindVectors] = useState(false);
+  const [showTerminator, setShowTerminator] = useState(false);
   const [globeVariable, setGlobeVariable] = useState('o3col');
   const [ozoneDisplayMode, setOzoneDisplayMode] = useState('mcd');
   const [ozoneDiffPair, setOzoneDiffPair] = useState('MCD-OpenMARS');
@@ -145,6 +149,14 @@ export const DataOverviewProvider = ({ children }) => {
     setShowGeoAnnotations,
     showMarsTexture,
     setShowMarsTexture,
+    showContours,
+    setShowContours,
+    showAnomaly,
+    setShowAnomaly,
+    showWindVectors,
+    setShowWindVectors,
+    showTerminator,
+    setShowTerminator,
     globeVariable,
     setGlobeVariable,
     ozoneDisplayMode,

@@ -22,6 +22,9 @@ export function normalizePredictionContext({
   selectedVars,
   marsYear,
   lsStart,
+  forecastOrigin,
+  datasetId,
+  datasetFingerprint,
 } = {}) {
   return {
     modelMode: String(modelMode || '').trim(),
@@ -30,19 +33,30 @@ export function normalizePredictionContext({
     marsYear: normalizeFiniteNumber(marsYear),
     lsStart: normalizeFiniteNumber(lsStart),
     selectedVars: normalizeVars(selectedVars),
+    // 地球历史预测按日期起点区分；火星模式不传这些字段，键保持原样。
+    forecastOrigin: String(forecastOrigin || '').trim(),
+    datasetId: String(datasetId || '').trim(),
+    datasetFingerprint: String(datasetFingerprint || '').trim(),
   };
 }
 
 export function buildPredictionContextKey(context) {
   const normalized = normalizePredictionContext(context);
-  return [
+  const parts = [
     `mode:${normalized.modelMode}`,
     `task:${normalized.trainingTaskId ?? 'none'}`,
     `h:${normalized.horizon ?? 'none'}`,
     `my:${normalized.marsYear ?? 'none'}`,
     `ls:${normalized.lsStart ?? 'none'}`,
     `vars:${normalized.selectedVars.join(',')}`,
-  ].join('|');
+  ];
+  // 只有地球上下文才追加日期与数据集身份：火星键不因新字段改变，避免旧缓存全部失效。
+  if (normalized.forecastOrigin) {
+    parts.push(`origin:${normalized.forecastOrigin}`);
+    parts.push(`ds:${normalized.datasetId || 'none'}`);
+    parts.push(`fp:${normalized.datasetFingerprint || 'none'}`);
+  }
+  return parts.join('|');
 }
 
 export function isPredictionCacheContextCurrent(cacheContextKey, context) {

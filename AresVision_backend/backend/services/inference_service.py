@@ -22,6 +22,7 @@ from services.training_channels import (
 from services.prediction_horizon import validate_prediction_horizon
 from services.netcdf_read_lock import netcdf_read_lock
 from services.model_artifacts import is_valid_model_weight_file
+from services.dataset_identity import DatasetRequestError, is_earth_training_task
 from services.prediction_analysis_cache import PredictionAnalysisCacheService
 from training_backbones.model_zoo import (
     build_forecaster,
@@ -34,6 +35,23 @@ from training_backbones.uploaded_model_contract import (
     run_uploaded_model,
     uploaded_model_requires_topography,
 )
+
+
+def require_mars_prediction_task(task) -> None:
+    """Reject an Earth task on every Mars prediction path.
+
+    Earth is predicted by ``services.earth_prediction_service`` from its own
+    verified release and checkpoint. Letting an Earth task continue here would
+    either read OpenMARS/MCD (Mars) fields for an ozone field measured in DU, or
+    silently reuse the Mars prediction cache, so the rejection is explicit and
+    carries a stable code instead of degrading into a 400/500.
+    """
+    if is_earth_training_task(task):
+        raise DatasetRequestError(
+            "dataset_prediction_not_supported",
+            "Earth tasks must be predicted through the Earth historical prediction endpoint",
+            status_code=409,
+        )
 
 
 class InferenceService:
@@ -321,6 +339,12 @@ class InferenceService:
                 raise ValueError("Training task is not completed")
             if not is_valid_model_weight_file(task.output_model_path):
                 raise ValueError("Model file not found")
+
+            # Earth tasks are predicted through the Earth historical endpoint.
+            # This rejection happens after the access check but before any Mars
+            # data preparation or cache access, so an Earth task can never reach
+            # the OpenMARS/MCD loaders or the Mars prediction cache.
+            require_mars_prediction_task(task)
 
             try:
                 hypers = json.loads(task.hyperparameters or "{}")
@@ -1414,6 +1438,10 @@ class InferenceService:
             task = await session.get(ModelTrainingTask, task_id)
             if not task or not is_valid_model_weight_file(task.output_model_path):
                 raise ValueError("Model file not found")
+
+            # Same isolation as the cached prediction path: this direct loader
+            # must not read Mars channels for an Earth task.
+            require_mars_prediction_task(task)
 
             # 1. 解析任务参数
             hypers = json.loads(task.hyperparameters)

@@ -1,0 +1,3529 @@
+/* ==========================================================================
+   实验中心（#/training）· AstraAtmos Atmospheric Mission Control
+   ──────────────────────────────────────────────────────────────────────────
+   版式参照：output/training-console-preview.html
+   · 页头：小号 eyebrow + 大标题，右侧目录开关与新建实验
+   · 阶段指示：细胶囊 + 序号
+   · 控制台：左列实验目录（sticky）/ 中间画布 / 右列配置检查器（sticky）
+     新建配置默认收起目录（两列），点「实验目录」才展开三列
+   · 底部运行条：fixed 横跨浏览器的深色细条
+   · 正文（canvas 头部、任务定义、载荷条、参数矩阵、专家页签）参照预览的分区节奏
+   深海军蓝面板 + 细分隔线 + 冰蓝选择线 + 火星橙主操作；绿色只表示真实就绪。
+   样式仅作用于训练页；业务色值仍来自 constants/colors.js。
+   ========================================================================== */
+
+/* 控制台设计参数。
+   放在 :root 而不是 .experiment-center：底部运行条被 portal 到 body，
+   必须能在页面容器之外解析这些变量（否则 max()/calc() 失效、内边距归零）。 */
+:root {
+  /* 侧栏 sticky 的公共参数：全站导航 70px 固定定位，训练页顶部留白 104px，
+     86px 是侧栏贴住导航下沿且不跳动的位置。 */
+  --experiment-sticky-top: 86px;
+  /* 运行条高度（普通字号下约 64px）与它到视口底部的净空，
+     目录 / 检查器的 max-height 必须扣除它们。 */
+  --experiment-run-bar-height: 64px;
+  --experiment-run-bar-gap: var(--experiment-run-bar-measured, 72px);
+  --experiment-line: var(--border);
+  --experiment-line-strong: rgba(121, 187, 255, 0.34);
+  --experiment-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  /* 工作区宽度与列宽（1440 / 1920 都按预览尺寸，不按视口比例放大侧栏）。 */
+  --experiment-side-pad: 28px;
+  --experiment-max-width: 1500px;
+  --experiment-gap: 14px;
+  --experiment-rail-width: 235px;
+  --experiment-inspector-width: 284px;
+  /* 画布分区的左侧编号轨道宽度（第 30 节）。 */
+  --experiment-rail-gutter: 38px;
+
+  /* 面层令牌：页面里所有的分组背景只走这三档，用明度差代替描边。
+     深色主题是「越靠内越深」，浅色主题在 [data-theme='light'] 里覆盖。 */
+  --experiment-surface-1: rgba(7, 19, 31, 0.34);
+  --experiment-surface-2: rgba(11, 24, 40, 0.5);
+  --experiment-surface-3: rgba(3, 11, 19, 0.36);
+
+  /* 文字层级令牌（三级：标题 / 标签 / 值 / 辅助说明）。
+     这里的值等于改造前各规则里的原始字号，因此手机与平板（≤ 900px）渲染完全不变；
+     桌面端（≥ 901px）在文件末尾「桌面端文字层级」媒体查询里整体上调到 12–14px。
+     9–11px 只保留给非关键的英文代码标记与装饰性序号。 */
+  --experiment-text-helper: 10px;   /* 辅助说明、字段提示、单位 */
+  --experiment-text-label: 12px;    /* 字段标签、小节标题、控制件 */
+  --experiment-text-value: 13px;    /* 字段值、正文号值 */
+  --experiment-text-small: 11px;    /* 页头与阶段指示等次级控制件 */
+  --experiment-text-control: 12px;  /* 按钮、胶囊、页签 */
+  --experiment-text-micro: 9px;     /* 英文代码标记（WINDOW / EPOCHS / .PY / v1） */
+  --experiment-text-tiny: 9px;      /* 装饰性序号与计数徽标 */
+}
+
+/* 浅色主题：同三档面层，方向相反（越靠内越亮）。 */
+[data-theme='light'] {
+  --experiment-surface-1: rgba(255, 255, 255, 0.72);
+  --experiment-surface-2: rgba(255, 255, 255, 0.9);
+  --experiment-surface-3: rgba(23, 33, 47, 0.045);
+}
+
+.experiment-center {
+  position: relative;
+  z-index: 1;
+}
+
+/* 训练页铺满可用宽度，超宽屏按预览的 1500px 上限居中。 */
+.model-training-page {
+  width: 100%;
+  max-width: none;
+}
+
+/* 工作区宽度：按预览的 1500px 上限居中，两侧留 28px 视觉边距。 */
+.experiment-center {
+  width: 100%;
+  max-width: min(var(--experiment-max-width), calc(100% - var(--experiment-side-pad) * 2));
+  margin: 0 auto;
+}
+
+/* --- 页头 ---------------------------------------------------------------- */
+
+.experiment-center-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: calc(32px * var(--font-scale, 1));
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.experiment-center-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.experiment-center-eyebrow {
+  margin-bottom: 6px;
+  color: #f19a78;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.experiment-center-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* --- 阶段指示 ------------------------------------------------------------ */
+
+.experiment-center-stage-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  color: var(--text-40);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+}
+
+.experiment-center-stage-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.experiment-center-stage-arrow {
+  color: var(--text-30);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  user-select: none;
+}
+
+/* 流程指示器：只反映训练状态推导出的阶段，不可点击、不进入 Tab 顺序。 */
+.experiment-center-stage-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 11px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-60);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 700;
+  cursor: default;
+}
+
+.experiment-center-stage-index {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(126, 161, 190, 0.16);
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.experiment-center-stage-tab[data-stage-state='current'] {
+  border-color: var(--experiment-line-strong);
+  background: rgba(121, 187, 255, 0.12);
+  color: #79bbff;
+}
+
+.experiment-center-stage-tab[data-stage-state='current'] .experiment-center-stage-index {
+  background: rgba(121, 187, 255, 0.2);
+  color: #79bbff;
+}
+
+.experiment-center-stage-tab[data-stage-state='done'] {
+  border-color: rgba(99, 232, 191, 0.28);
+  color: #63e8bf;
+}
+
+.experiment-center-stage-tab[data-stage-state='done'] .experiment-center-stage-index {
+  background: rgba(99, 232, 191, 0.16);
+  color: #63e8bf;
+}
+
+.experiment-center-stage-tab[data-stage-state='upcoming'] {
+  opacity: 0.72;
+}
+
+/* --- 控制台网格 ---------------------------------------------------------- */
+
+.experiment-center-grid {
+  display: grid;
+  gap: var(--experiment-gap);
+  /* 默认（新建配置收起目录）：画布 + 检查器两列，与预览一致。 */
+  grid-template-columns: minmax(0, 1fr) var(--experiment-inspector-width);
+  align-items: start;
+}
+
+.experiment-center-grid[data-directory='open'][data-inspector='present'] {
+  grid-template-columns: var(--experiment-rail-width) minmax(0, 1fr) var(--experiment-inspector-width);
+}
+
+/* 展开目录但没有检查器（监控 / 结果阶段）：目录 + 画布。 */
+.experiment-center-grid[data-directory='open'][data-inspector='absent'] {
+  grid-template-columns: var(--experiment-rail-width) minmax(0, 1fr);
+}
+
+/* 收起目录且没有检查器：单列铺满。 */
+.experiment-center-grid[data-directory='closed'][data-inspector='absent'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.experiment-center-button {
+  min-height: 40px;
+  padding: 9px 14px;
+  border-radius: 11px;
+  border: 1px solid var(--experiment-line);
+  background: var(--bg-muted);
+  color: var(--text-60);
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-control) * var(--font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, opacity 0.18s ease;
+}
+
+.experiment-center-button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--experiment-line-strong);
+  background: rgba(121, 187, 255, 0.1);
+}
+
+.experiment-center-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.experiment-center-button:focus-visible,
+.experiment-directory-row:focus-visible,
+.experiment-directory-filter:focus-visible,
+.experiment-expert-tab:focus-visible,
+.experiment-inspector-link:focus-visible,
+.experiment-expert-action:focus-visible,
+.experiment-run-bar-start:focus-visible,
+.experiment-architecture-option:focus-visible,
+.experiment-architecture-current:focus-visible,
+.experiment-architecture-family:focus-visible,
+.experiment-config-chip:focus-visible,
+.experiment-channel-chip:focus-visible,
+.experiment-source-option:focus-visible,
+.experiment-dataset-option:focus-visible,
+.experiment-uploaded-upload:focus-visible,
+.experiment-uploaded-link:focus-visible,
+.experiment-canvas-name:focus-visible,
+.experiment-param-cell input:focus-visible,
+.experiment-expert-field input:focus-visible,
+.experiment-expert-field select:focus-visible {
+  outline: 2px solid #9ad9ef;
+  outline-offset: 3px;
+}
+
+.experiment-center-button-primary {
+  border-color: transparent;
+  background: #f19a78;
+  color: #07121b;
+  font-weight: 800;
+}
+
+.experiment-center-button-primary:hover:not(:disabled) {
+  background: #ffae8d;
+  color: #07121b;
+}
+
+.experiment-center-button-quiet {
+  background: transparent;
+  color: var(--text-60);
+}
+
+/* 画布 / 检查器 / 目录共用的面板外观。 */
+.experiment-center-panel,
+.experiment-inspector-panel,
+.experiment-directory {
+  border-radius: 17px;
+}
+
+.experiment-center-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0;
+}
+
+/* 监控 / 结果阶段的面板头部（配置阶段用画布自己的头部）。 */
+.experiment-center-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--experiment-line);
+}
+
+.experiment-center-panel-header[hidden] {
+  display: none;
+}
+
+.experiment-center-panel-title {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: calc(19px * var(--font-scale, 1));
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.experiment-center-panel-title:focus-visible {
+  outline: 2px solid #9ad9ef;
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.experiment-center-hint {
+  min-width: 0;
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  color: var(--text-60);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.experiment-center-workspace {
+  /* 关键：允许内容收缩。grid/flex 子项默认 min-width:auto，长中文标签或
+     多列字段栅格的最小内容宽度会把整列顶宽，从而出现横向溢出。 */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.experiment-center-workspace[hidden] {
+  display: none;
+}
+
+.experiment-center-empty {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--text-60);
+  line-height: 1.7;
+}
+
+.experiment-center-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* --- 画布正文 ------------------------------------------------------------ */
+
+.experiment-center-stack {
+  display: grid;
+  /* 分区各自成卡，卡片之间留出画布底色（第 30 节）。 */
+  gap: 14px;
+  min-width: 0;
+}
+
+/* 画布 01 模型名称：与其它分区同一套卡片、内边距与左侧编号轨道。 */
+.experiment-canvas-head {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--experiment-rail-gutter) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 12px;
+  align-items: start;
+  padding: 18px;
+  min-width: 0;
+}
+
+.experiment-canvas-head-main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.experiment-canvas-name {
+  display: block;
+  width: min(100%, 490px);
+  margin-bottom: 6px;
+  padding: 0 0 4px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: calc(19px * var(--font-scale, 1));
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.experiment-canvas-name::placeholder {
+  color: var(--text-40);
+  font-weight: 600;
+}
+
+.experiment-canvas-name:hover {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-canvas-name:focus {
+  border-bottom-color: #9ad9ef;
+  outline: none;
+}
+
+.experiment-canvas-name[aria-invalid='true'] {
+  border-bottom-color: #d95c5c;
+}
+
+.experiment-canvas-name-error {
+  margin: 6px 0 0;
+  color: #e8827f;
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 600;
+}
+
+.experiment-inspector-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.experiment-inspector-state[data-inspector-state='ready'] {
+  border-color: rgba(99, 232, 191, 0.24);
+  background: rgba(99, 232, 191, 0.07);
+  color: #63e8bf;
+}
+
+.experiment-inspector-state[data-inspector-state='blocked'] {
+  border-color: rgba(241, 154, 120, 0.3);
+  background: rgba(241, 154, 120, 0.08);
+  color: #f19a78;
+}
+
+.experiment-inspector-state[data-inspector-state='guest'] {
+  border-color: var(--experiment-line);
+  background: rgba(126, 161, 190, 0.1);
+  color: var(--text-60);
+}
+
+.experiment-inspector-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+/* 分区（第 30 节 A+B+D）：每段一张卡片 + 段间留白 + 段内左侧编号轨道。
+   轨道与标题、内容共用同一个网格：编号在第 1 列，标题与内容统一在第 2 列。 */
+.experiment-canvas-section {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--experiment-rail-gutter) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 12px;
+  align-items: start;
+  padding: 18px;
+  min-width: 0;
+}
+
+/* 四个分区都是同一张卡：面层 + 一圈极细描边 + 圆角；边界由卡片本身与段间留白表达。
+   描边只用于把卡片从画布底色里拎出来（第 30 节允许卡片套卡片）。 */
+.experiment-canvas-head,
+.experiment-canvas-section {
+  border: 1px solid var(--experiment-line);
+  border-radius: 13px;
+  background: var(--experiment-surface-1);
+}
+
+/* 轨道里的竖细线：从标题上沿延伸到分区底部留白。 */
+.experiment-canvas-head::before,
+.experiment-canvas-section::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: calc(18px + var(--experiment-rail-gutter) + 7px);
+  width: 1px;
+  background: var(--experiment-line);
+}
+
+/* 标题行只提供序号与标题两个节点，用 display: contents 让它们直接落进网格。 */
+.experiment-section-kicker {
+  display: contents;
+}
+
+.experiment-section-index {
+  grid-column: 1;
+  justify-self: center;
+  color: #79bbff;
+  font-family: var(--experiment-mono);
+  font-size: calc(16px * var(--font-scale, 1));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.experiment-section-title {
+  grid-column: 2;
+  font-family: var(--font-display);
+  font-size: calc(15px * var(--font-scale, 1));
+  font-weight: 800;
+  color: var(--text) !important;
+}
+
+/* 分区内容一律落在第 2 列（标题占第 1 行，内容从第 2 行开始）。 */
+.experiment-canvas-head > *:not(.experiment-section-kicker),
+.experiment-canvas-section > *:not(.experiment-section-kicker) {
+  grid-column: 2;
+}
+
+/* 数据集与模型各自独占一个分区（第 29 节）。 */
+
+/* 分区内的分组块：外层面层已由分区卡提供，这里只留内边距，不再叠一层底；
+   描边留给真实状态——上传模型校验失败（invalid）与校验过程（pending）。
+   `data-active` 是 JSX 里的固定值，不表示用户选择，所以不产生强调线。 */
+.experiment-choice-block {
+  min-width: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: transparent;
+}
+
+.experiment-choice-block[data-model-block='invalid'] {
+  border-color: rgba(217, 92, 92, 0.36);
+}
+
+.experiment-choice-block[data-model-block='pending'] {
+  border-color: rgba(200, 148, 72, 0.3);
+}
+
+/* 数据集只有两项，直接列成单选列表：选中项与模型来源用同一条左侧强调线，
+   不再用原生 select（展开菜单多一次点击，也看不到另一项）。
+   独占「数据集」分区后两个选项横排，窄视口由 auto-fit 回落单列。 */
+.experiment-dataset-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.experiment-dataset-option {
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 8px;
+  background: var(--experiment-surface-2);
+  color: var(--text-60);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-body);
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.experiment-dataset-option strong {
+  display: block;
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-dataset-option:hover {
+  border-color: var(--experiment-line-strong);
+}
+
+.experiment-dataset-option[aria-checked='true'] {
+  border-color: transparent;
+  background: rgba(241, 154, 120, 0.12);
+  box-shadow: inset 2px 0 0 #f19a78;
+  color: var(--text);
+}
+
+.experiment-choice-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+}
+
+/* 模型来源切换 */
+.experiment-source-toggle {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.experiment-source-option {
+  min-height: 36px;
+  padding: 5px 10px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 8px;
+  background: var(--experiment-surface-2);
+  color: var(--text-60);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-body);
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.experiment-source-option strong {
+  display: block;
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-source-option[aria-pressed='true'] {
+  border-color: transparent;
+  background: rgba(241, 154, 120, 0.12);
+  box-shadow: inset 2px 0 0 #f19a78;
+  color: var(--text);
+}
+
+.experiment-source-option[aria-pressed='true'] small {
+  color: #f19a78;
+}
+
+.experiment-source-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 上传模型（紧凑卡片 + 次要管理入口） */
+.experiment-uploaded-model {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.experiment-uploaded-model-error {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid rgba(217, 92, 92, 0.32);
+  border-left: 3px solid #d95c5c;
+  border-radius: 9px;
+  background: rgba(217, 92, 92, 0.1);
+  color: #e8827f;
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 700;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* 已选模型卡片：位于模型来源块之内，用一层暖色底 + 左侧短强调线表达「这是当前值」，
+   不再整圈描边（否则与来源块、上传区形成连续三层框线）。
+   `.PY` 徽标删除后只剩「文件名 + 版本/参数数 + 校验状态」三列。 */
+.experiment-uploaded-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background:
+    linear-gradient(100deg, rgba(241, 154, 120, 0.1), transparent 62%),
+    var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 rgba(241, 154, 120, 0.5);
+}
+
+.experiment-uploaded-body {
+  min-width: 0;
+}
+
+.experiment-uploaded-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+}
+
+.experiment-uploaded-meta {
+  margin-top: 3px;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+}
+
+.experiment-uploaded-status {
+  color: #63e8bf;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.experiment-uploaded-status[data-tone='warn'] {
+  color: #f19a78;
+}
+
+.experiment-uploaded-empty {
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px dashed var(--experiment-line);
+  border-radius: 10px;
+  background: var(--experiment-surface-1);
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  line-height: 1.6;
+}
+
+.experiment-uploaded-empty strong {
+  color: var(--text);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+}
+
+.experiment-uploaded-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.experiment-uploaded-upload {
+  min-height: 38px;
+  padding: 9px 14px;
+  border: 1px solid rgba(241, 154, 120, 0.44);
+  border-radius: 9px;
+  background: rgba(241, 154, 120, 0.14);
+  color: #f19a78;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.18s ease, opacity 0.18s ease;
+}
+
+.experiment-uploaded-upload:hover:not(:disabled) {
+  background: rgba(241, 154, 120, 0.24);
+}
+
+/* 已选中模型时，这里的主操作在底部运行条，上传区只留「上传模型」这类次级动作：
+   实心暖底改成描边，避免与唯一的实心橙主按钮争夺焦点（未选模型时仍是实心，是那一屏的动作）。 */
+.experiment-uploaded-model[data-has-selection='true'] .experiment-uploaded-upload {
+  border-color: rgba(241, 154, 120, 0.4);
+  background: transparent;
+}
+
+.experiment-uploaded-upload:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.experiment-uploaded-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #79bbff;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.experiment-uploaded-link:hover {
+  text-decoration: underline;
+}
+
+.experiment-uploaded-link.is-quiet {
+  color: var(--text-60);
+}
+
+.experiment-uploaded-manage {
+  display: grid;
+  gap: 10px;
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--experiment-line);
+}
+
+.experiment-uploaded-list {
+  display: grid;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.experiment-uploaded-item {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 transparent;
+  color: var(--text-60);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: box-shadow 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.experiment-uploaded-item:hover {
+  background: var(--experiment-surface-1);
+  color: var(--text);
+}
+
+.experiment-uploaded-item[aria-pressed='true'] {
+  background: rgba(121, 187, 255, 0.1);
+  box-shadow: inset 2px 0 0 #79bbff;
+  color: var(--text);
+}
+
+.experiment-uploaded-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.experiment-uploaded-item-name {
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-uploaded-item-status {
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-uploaded-item-meta {
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+  color: var(--text-40);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-uploaded-detail {
+  display: grid;
+  gap: 8px;
+}
+
+.experiment-uploaded-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 官方模型块 */
+.experiment-official-block {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.experiment-toggle-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 9px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  cursor: pointer;
+}
+
+.experiment-toggle-line input {
+  accent-color: #9ad9ef;
+}
+
+/* 官方架构选择器（紧凑版） */
+.experiment-architecture {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.experiment-architecture-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 rgba(121, 187, 255, 0.5);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-body);
+}
+
+.experiment-architecture-current:hover {
+  border-color: var(--experiment-line-strong);
+}
+
+.experiment-architecture-current-value {
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-value) * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.experiment-architecture-current-hint {
+  color: #79bbff;
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+}
+
+.experiment-architecture-options {
+  display: grid;
+  gap: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--experiment-line);
+  min-width: 0;
+}
+
+.experiment-architecture-search {
+  width: 100%;
+  padding: 9px 10px !important;
+  border: 1px solid var(--experiment-line) !important;
+  border-radius: 8px !important;
+  background: var(--experiment-surface-2) !important;
+  color: var(--text) !important;
+  font-size: calc(var(--experiment-text-control) * var(--font-scale, 1)) !important;
+}
+
+.experiment-architecture-families {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.experiment-architecture-family {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-60);
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.experiment-architecture-family[aria-pressed='true'] {
+  border-color: var(--experiment-line-strong);
+  background: rgba(121, 187, 255, 0.12);
+  color: #79bbff;
+}
+
+.experiment-architecture-family-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.experiment-architecture-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.experiment-architecture-option {
+  min-height: 36px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 transparent;
+  color: var(--text-60);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  overflow-wrap: anywhere;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.experiment-architecture-option:hover:not(:disabled) {
+  border-color: var(--experiment-line-strong);
+  color: var(--text);
+}
+
+.experiment-architecture-option[aria-pressed='true'] {
+  border-color: rgba(121, 187, 255, 0.44);
+  background: rgba(121, 187, 255, 0.12);
+  box-shadow: inset 2px 0 0 #79bbff;
+  color: #79bbff;
+  font-weight: 700;
+}
+
+.experiment-architecture-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.experiment-architecture-empty {
+  padding: 12px;
+  border: 1px dashed var(--experiment-line);
+  border-radius: 9px;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+}
+
+.experiment-architecture-footnote {
+  margin-top: 0 !important;
+}
+
+/* 02 载荷条 + 序列图示 */
+.experiment-payload-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: var(--experiment-surface-1);
+}
+
+.experiment-payload-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding-right: 10px;
+  border-right: 1px solid var(--experiment-line);
+  color: #9ad9ef;
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-payload-lock span {
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: rgba(154, 217, 239, 0.12);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+}
+
+.experiment-channel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--experiment-surface-2);
+  color: var(--text-60);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.experiment-channel-chip:hover:not(:disabled) {
+  border-color: var(--experiment-line);
+  color: var(--text);
+}
+
+.experiment-channel-chip b {
+  color: #f19a78;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+}
+
+.experiment-channel-chip[aria-pressed='true'] {
+  border-color: rgba(241, 154, 120, 0.42);
+  background: rgba(241, 154, 120, 0.11);
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* --- 超参数六个页签共用的一套字段块（第 26 节） ---------------------------
+   载荷胶囊、训练参数矩阵、专家字段与自定义参数表单都用同一套度量：
+   三列网格（间距 9px）+ surface-2 面层块（内边距 9px 10px、圆角 9px、
+   标签行 + 控件行），这样切页签时右侧形态一致，不再一行一个样。
+   窄视口由后面的响应式断点统一回落两列 / 单列。 */
+.experiment-payload-bar,
+.experiment-param-grid,
+.experiment-expert-fields,
+.experiment-expert-stack {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  min-width: 0;
+}
+
+/* 需要占满整行的块（成排的按钮、标签选择器等）。 */
+.experiment-field-wide,
+.experiment-payload-count,
+.experiment-expert-stack > .experiment-config-choice,
+.experiment-expert-stack > .experiment-expert-actions,
+.experiment-expert-stack > .experiment-expert-fields {
+  grid-column: 1 / -1;
+}
+
+.experiment-payload-lock,
+.experiment-channel-chip,
+.experiment-param-cell,
+.experiment-expert-field {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
+  text-align: left;
+}
+
+/* 块里的第一行都是同一个标签行。 */
+.experiment-payload-lock,
+.experiment-param-label,
+.experiment-expert-field > span {
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-family: var(--font-body);
+  overflow-wrap: anywhere;
+}
+
+.experiment-param-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 载荷块是可以点开的开关：未选中只有面层，选中用暖色左强调线。 */
+.experiment-channel-chip {
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.experiment-channel-chip:hover:not(:disabled) {
+  border-color: var(--experiment-line);
+}
+
+.experiment-channel-chip[aria-pressed='true'] {
+  border-color: transparent;
+  background: rgba(241, 154, 120, 0.12);
+  box-shadow: inset 2px 0 0 #f19a78;
+}
+
+.experiment-channel-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 值行：载荷短码 / 参数数值都是等宽。 */
+.experiment-channel-chip b,
+.experiment-payload-lock b {
+  color: #f19a78;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+}
+
+.experiment-payload-lock b {
+  color: #9ad9ef;
+}
+
+.experiment-payload-count {
+  justify-self: end;
+  color: var(--text-40);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  white-space: nowrap;
+}
+
+/* 参数矩阵的值比专家字段更大（它们是这一屏的主要数字），
+   但基线、悬停与聚焦反馈与专家字段完全一致。 */
+.experiment-param-cell input {
+  width: 100%;
+  min-width: 0;
+  padding: 0 0 3px;
+  border: 0;
+  border-bottom: 1px solid var(--experiment-line);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--experiment-mono);
+  font-size: calc(18px * var(--font-scale, 1));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.experiment-param-cell input:hover:not(:disabled) {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-param-cell input:focus {
+  border-bottom-color: #9ad9ef;
+  outline: none;
+}
+
+.experiment-param-cell input:disabled {
+  border-bottom-color: transparent;
+  opacity: 0.7;
+}
+
+/* 04 超参数：外层只是分栏容器，面层由分区卡提供，这里保持透明；
+   左侧页签列用一条竖分隔线，选中态由页签自己的左强调线表达。 */
+.experiment-expert {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  border: 1px solid transparent;
+  border-radius: 13px;
+  overflow: hidden;
+  background: transparent;
+  min-width: 0;
+}
+
+.experiment-expert-tabs {
+  display: grid;
+  align-content: start;
+  border-right: 1px solid var(--experiment-line);
+  background: var(--experiment-surface-3);
+  min-width: 0;
+}
+
+.experiment-expert-tab {
+  scroll-margin-top: calc(var(--experiment-sticky-top) + 16px);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 11px 13px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text-60);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.experiment-expert-tab:hover {
+  color: var(--text);
+}
+
+.experiment-expert-tab[aria-selected='true'] {
+  border-left-color: #79bbff;
+  background: rgba(121, 187, 255, 0.1);
+  color: #79bbff;
+}
+
+.experiment-expert-tab-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(126, 161, 190, 0.2);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.experiment-expert-tab-flag {
+  color: #f19a78;
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+}
+
+.experiment-expert-content {
+  padding: 14px;
+  min-width: 0;
+}
+
+.experiment-expert-heading {
+  margin: 0 0 5px;
+  font-family: var(--font-display);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  font-weight: 800;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.experiment-expert-note {
+  margin: 0 0 12px;
+  color: var(--text-40);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  line-height: 1.6;
+}
+
+/* 专家字段沿用上面那套共用块（网格与块的度量统一在「超参数六个页签」段里）。 */
+
+.experiment-expert-field small {
+  color: var(--text-40);
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.experiment-expert-field input,
+.experiment-expert-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 0 3px;
+  border: 0;
+  border-bottom: 1px solid var(--experiment-line);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-value) * var(--font-scale, 1));
+}
+
+.experiment-expert-field input:hover:not(:disabled),
+.experiment-expert-field select:hover:not(:disabled) {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-expert-field input:focus,
+.experiment-expert-field select:focus {
+  border-bottom-color: #9ad9ef;
+  outline: none;
+}
+
+.experiment-expert-field select option {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.experiment-expert-field input:disabled {
+  border-bottom-color: transparent;
+  opacity: 0.65;
+}
+
+/* 标签页签是与其它页签同度量的整行块，但它是独立控件：只用外层度量，
+   不再套 `.experiment-expert-field` 的后代规则（那会把搜索框和标签项里
+   的 input / span 一起改掉，标签名会被压成一列一个字）。 */
+.experiment-tag-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
+}
+
+/* fieldset 保持普通块级布局：grid 化之后百分比宽度会算错（搜索框只拿到半宽），
+   间距改用相邻兄弟外边距。 */
+.experiment-tag-block .training-tag-picker {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.experiment-tag-block .training-tag-picker > * + * {
+  margin-top: 8px;
+}
+
+.experiment-tag-block .training-tag-picker legend {
+  padding: 0;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 400;
+}
+
+.experiment-tag-block .training-tag-input {
+  width: 100%;
+  /* 旧的 420px 上限在整行标签块里会让搜索框只占一半，块内改为铺满。 */
+  max-width: none;
+}
+
+/* 标签按列铺开，每个都有自己的可点面层，长标签名在 150px 起的列里正常换行。 */
+.experiment-tag-block .training-tag-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px 10px;
+  max-height: 176px;
+  margin: 0;
+}
+
+.experiment-tag-block .training-tag-option {
+  min-width: 0;
+  max-width: none;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--experiment-surface-1);
+  transition: border-color 0.18s ease;
+}
+
+.experiment-tag-block .training-tag-option:hover {
+  border-color: var(--experiment-line);
+}
+
+.experiment-tag-block .training-tag-option > span {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.experiment-tag-block .training-tag-hint {
+  display: block;
+}
+
+.experiment-expert-ok {
+  color: #63e8bf;
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+}
+
+.experiment-expert-stack {
+  margin-top: 12px;
+}
+
+.experiment-expert-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.experiment-expert-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--experiment-surface-2);
+  color: var(--text-60);
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.experiment-expert-action:hover:not(:disabled) {
+  border-color: var(--experiment-line);
+  color: var(--text);
+}
+
+.experiment-expert-action.is-primary {
+  border-color: rgba(241, 154, 120, 0.4);
+  background: rgba(241, 154, 120, 0.12);
+  color: #f19a78;
+}
+
+.experiment-expert-action.is-danger {
+  border-color: rgba(217, 92, 92, 0.3);
+  background: rgba(217, 92, 92, 0.08);
+  color: #e8827f;
+}
+
+.experiment-expert-action[data-disabled='true'],
+.experiment-expert-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.experiment-expert-empty {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px dashed var(--experiment-line);
+  border-radius: 10px;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  line-height: 1.6;
+}
+
+.experiment-expert-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--experiment-line);
+}
+
+.experiment-canvas-footnote {
+  padding: 12px 20px 18px;
+}
+
+/* 通用小组件（标签选择器、配置警告、数据集胶囊） */
+.experiment-config-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.experiment-config-chip {
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: var(--experiment-surface-2);
+  color: var(--text-60);
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-control) * var(--font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.experiment-config-chip:hover:not(:disabled) {
+  border-color: var(--experiment-line);
+  color: var(--text);
+}
+
+.experiment-config-chip[aria-pressed='true'] {
+  border-color: rgba(121, 187, 255, 0.34);
+  background: rgba(121, 187, 255, 0.12);
+  color: #79bbff;
+  font-weight: 700;
+}
+
+.experiment-config-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.experiment-config-warning {
+  display: grid;
+  gap: 6px;
+  margin: 16px 20px 0;
+  padding: 11px 13px;
+  border: 1px solid rgba(200, 148, 72, 0.28);
+  border-radius: 11px;
+  background: rgba(200, 148, 72, 0.1);
+  color: #c89448;
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  line-height: 1.6;
+}
+
+.experiment-center-card .training-tag-picker {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.experiment-center-card .training-tag-chip {
+  border: 0;
+}
+
+input[type='number']::-webkit-inner-spin-button {
+  opacity: 0.3;
+}
+
+/* --- 右侧配置检查器 ------------------------------------------------------ */
+
+.experiment-inspector-panel {
+  min-width: 0;
+  overflow: visible;
+}
+
+.experiment-inspector {
+  display: grid;
+  min-width: 0;
+}
+
+.experiment-inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--experiment-line);
+}
+
+.experiment-inspector-title {
+  font-family: var(--font-display);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.experiment-inspector-body {
+  padding: 16px;
+  display: grid;
+  gap: 0;
+}
+
+.experiment-inspector-block {
+  padding: 0 0 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--experiment-line);
+  min-width: 0;
+}
+
+.experiment-inspector-block:last-child {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+
+.experiment-inspector-label {
+  margin-bottom: 8px;
+  color: var(--text-40);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.experiment-inspector-value {
+  font-size: calc(14px * var(--font-scale, 1));
+  font-weight: 800;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.experiment-inspector-sub {
+  margin-top: 5px;
+  color: var(--text-60);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.experiment-inspector-dataset {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.experiment-inspector-link {
+  margin-top: 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #79bbff;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.experiment-inspector-link:hover {
+  text-decoration: underline;
+}
+
+.experiment-inspector-link.is-quiet {
+  color: var(--text-60);
+}
+
+/* 检查器的「就绪检查」区：正常时只有一行结论，有问题时逐条列出原因与定位入口。 */
+.experiment-inspector-readiness-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.experiment-inspector-check {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  font-size: calc(var(--experiment-text-tiny) * var(--font-scale, 1));
+  font-weight: 900;
+  flex: 0 0 auto;
+}
+
+.experiment-inspector-readiness-row[data-ok='true'] .experiment-inspector-check {
+  background: rgba(99, 232, 191, 0.14);
+  border: 1px solid rgba(99, 232, 191, 0.45);
+  color: #63e8bf;
+}
+
+.experiment-inspector-readiness-row[data-ok='false'] .experiment-inspector-check {
+  background: #f19a78;
+  border: 1px solid #f19a78;
+  color: #1b0d07;
+}
+
+.experiment-inspector-blockers {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.experiment-inspector-blockers li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.experiment-inspector-issue-mark {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #f19a78;
+  color: #1b0d07;
+  font-size: calc(var(--experiment-text-tiny) * var(--font-scale, 1));
+  font-weight: 900;
+}
+
+.experiment-inspector-issue-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.experiment-inspector-issue-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #79bbff;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.experiment-inspector-issue-action:hover {
+  text-decoration: underline;
+}
+
+.experiment-inspector-note {
+  padding: 10px;
+  border-left: 2px solid #b39bff;
+  background: rgba(179, 155, 255, 0.07);
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  line-height: 1.6;
+}
+
+/* --- 底部运行条（fixed 横跨浏览器） -------------------------------------- */
+/* 运行条由外壳 portal 到 body：页面外壳的 transform 过渡会成为 fixed 的
+   包含块，挂在页面内部时它会随页面滚动而不是贴住视口。 */
+
+.experiment-center-runbar-slot {
+  display: block;
+}
+
+.experiment-run-bar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px max(var(--experiment-side-pad), calc(50vw - var(--experiment-max-width) / 2));
+  border-top: 1px solid rgba(121, 187, 255, 0.22);
+  background: rgba(4, 12, 21, 0.94);
+  backdrop-filter: blur(18px);
+}
+
+.experiment-run-bar-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.experiment-run-bar-info {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.experiment-run-bar-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.experiment-run-bar-state[data-run-state='ready'] {
+  color: #63e8bf;
+}
+
+.experiment-run-bar-state[data-run-state='blocked'] {
+  color: #f19a78;
+}
+
+.experiment-run-bar-state[data-run-state='guest'] {
+  color: var(--text-60);
+}
+
+.experiment-run-bar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.experiment-run-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.experiment-run-bar-note {
+  color: var(--text-40);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  white-space: nowrap;
+}
+
+.experiment-run-bar-note.is-context {
+  padding-left: 2px;
+}
+
+.experiment-run-bar-start {
+  min-height: 44px;
+  min-width: 150px;
+  padding: 11px 20px;
+  border: none;
+  border-radius: 11px;
+  background: #f19a78;
+  color: #07121b;
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-value) * var(--font-scale, 1));
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.18s ease, opacity 0.18s ease;
+}
+
+.experiment-run-bar-start:hover:not(:disabled) {
+  background: #ffae8d;
+  transform: translateY(-1px);
+}
+
+/* 实心火星橙只留给「真的可以开始实验」这一种情形：
+   未登录时按钮仍可点（点了弹登录），但改为中性底 + 橙色文字，不与就绪态争焦点；
+   配置未通过校验时按钮禁用，用中性底 + 次要文字，让就绪态成为页面上唯一的橙色实心按钮。 */
+.experiment-run-bar-start:disabled {
+  cursor: not-allowed;
+  background: var(--experiment-surface-2);
+  border: 1px solid var(--experiment-line);
+  color: var(--text-40);
+  opacity: 1;
+}
+
+.experiment-run-bar[data-run-state='guest'] .experiment-run-bar-start:not(:disabled) {
+  background: var(--experiment-surface-2);
+  border: 1px solid rgba(241, 154, 120, 0.42);
+  color: #f19a78;
+}
+
+.experiment-run-bar[data-run-state='guest'] .experiment-run-bar-start:not(:disabled):hover {
+  background: rgba(241, 154, 120, 0.14);
+}
+
+/* --- 实验目录 ------------------------------------------------------------ */
+
+.experiment-directory {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.experiment-directory-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px 15px;
+  border-bottom: 1px solid var(--experiment-line);
+}
+
+.experiment-directory-title {
+  font-family: var(--font-display);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.experiment-directory-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--experiment-line);
+  min-width: 0;
+}
+
+.experiment-directory-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-60);
+  font-family: var(--font-body);
+  font-size: calc(var(--experiment-text-control) * var(--font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+  flex: 0 1 auto;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.experiment-directory-filter[aria-pressed='true'] {
+  border-color: rgba(121, 187, 255, 0.3);
+  background: rgba(121, 187, 255, 0.12);
+  color: #79bbff;
+}
+
+.experiment-directory-filter-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.experiment-directory-tools {
+  display: grid;
+  gap: 8px;
+  padding: 0 13px 10px;
+}
+
+.experiment-directory-selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px;
+  border-radius: 10px;
+  background: var(--experiment-surface-2);
+}
+
+.experiment-directory-list {
+  display: grid;
+  gap: 6px;
+  padding: 0 13px 13px;
+  min-height: 0;
+}
+
+/* 目录行：列表里的一行不是卡片，静态时只有面层与间距；
+   悬停提示可点，当前实验用蓝色左强调线表示。 */
+.experiment-directory-row {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--experiment-surface-2);
+  box-shadow: inset 2px 0 0 transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.experiment-directory-row:hover {
+  background: var(--experiment-surface-1);
+}
+
+.experiment-directory-row[data-active='true'] {
+  background: rgba(121, 187, 255, 0.1);
+  box-shadow: inset 3px 0 0 #79bbff, inset 0 0 0 1px rgba(121, 187, 255, 0.12);
+}
+
+.experiment-directory-row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.experiment-directory-name {
+  min-width: 0;
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-directory-id {
+  flex-shrink: 0;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+  color: var(--text-40);
+  font-variant-numeric: tabular-nums;
+}
+
+.experiment-directory-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  color: var(--text-60);
+  line-height: 1.5;
+}
+
+.experiment-directory-metric {
+  font-family: var(--experiment-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-80);
+  font-weight: 700;
+}
+
+.experiment-directory-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: calc(var(--experiment-text-micro) * var(--font-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.experiment-directory-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.experiment-directory-progress {
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(127, 144, 170, 0.2);
+  overflow: hidden;
+}
+
+.experiment-directory-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #79bbdf;
+  transition: width 0.5s ease;
+}
+
+.experiment-directory-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* --- 监控工作区 ---------------------------------------------------------- */
+
+.experiment-monitor-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.experiment-monitor-metric {
+  padding: 12px 14px;
+  border-radius: 13px;
+  background: var(--experiment-surface-2);
+  min-width: 0;
+}
+
+.experiment-monitor-metric-label {
+  margin-bottom: 6px;
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  color: var(--text-40);
+  line-height: 1.4;
+}
+
+.experiment-monitor-metric-value {
+  font-family: var(--font-display);
+  font-size: calc(17px * var(--font-scale, 1));
+  font-weight: 700;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 终端日志区保留外框：它是一个有边界的滚动视口，不是普通内容卡片。 */
+.experiment-monitor-log {
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+.experiment-monitor-log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--experiment-line);
+}
+
+.experiment-monitor-log-toolbar-left,
+.experiment-monitor-log-toolbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.experiment-monitor-log-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.experiment-monitor-log-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--experiment-line);
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.experiment-monitor-log-scroll {
+  flex: 1;
+  min-height: 0;
+  max-height: min(46vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 0;
+  font-family: var(--experiment-mono);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  line-height: 1.58;
+  font-variant-numeric: tabular-nums;
+  white-space: pre-wrap;
+}
+
+.experiment-monitor-log-scroll.is-empty {
+  display: grid;
+  place-items: center;
+  padding: 26px;
+}
+
+.experiment-monitor-log-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 12px;
+  padding: 4px 14px;
+  border-left: 2px solid transparent;
+}
+
+.experiment-monitor-log-row:hover {
+  background: rgba(121, 187, 255, 0.06);
+}
+
+.experiment-monitor-log-row[data-tone='error'] {
+  border-left-color: rgba(217, 92, 92, 0.88);
+  background: rgba(217, 92, 92, 0.06);
+}
+
+.experiment-monitor-log-row[data-tone='warning'] {
+  border-left-color: rgba(200, 148, 72, 0.82);
+}
+
+.experiment-monitor-log-row[data-tone='metric'] {
+  border-left-color: rgba(99, 232, 191, 0.82);
+}
+
+.experiment-monitor-log-row[data-tone='info'] {
+  border-left-color: rgba(121, 187, 255, 0.72);
+}
+
+.experiment-monitor-log-gutter {
+  color: rgba(154, 174, 199, 0.56);
+  text-align: right;
+  user-select: none;
+}
+
+.experiment-monitor-log-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.experiment-monitor-log-empty {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  max-width: 460px;
+  text-align: center;
+  line-height: 1.7;
+}
+
+.experiment-monitor-log-empty-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  font-family: var(--experiment-mono);
+  font-size: calc(15px * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+/* --- 结果工作区 ---------------------------------------------------------- */
+
+.experiment-result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.experiment-result-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.experiment-result-metric {
+  padding: 14px 16px;
+  border-radius: 13px;
+  background: var(--experiment-surface-2);
+  min-width: 0;
+}
+
+.experiment-result-metric-label {
+  margin-bottom: 6px;
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+  color: var(--text-40);
+}
+
+.experiment-result-metric-value {
+  font-family: var(--font-display);
+  font-size: calc(16px * var(--font-scale, 1));
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-result-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+/* 结果说明块：静态时只有面层，出错 / 警告时才有描边与状态色。 */
+.experiment-result-note {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: var(--experiment-surface-2);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  line-height: 1.65;
+}
+
+.experiment-result-note[data-tone='error'] {
+  border-color: rgba(217, 92, 92, 0.24);
+  background: rgba(217, 92, 92, 0.08);
+  color: #e8827f;
+}
+
+.experiment-result-note[data-tone='warning'] {
+  border-color: rgba(200, 148, 72, 0.28);
+  background: rgba(200, 148, 72, 0.1);
+  color: #c89448;
+}
+
+.experiment-log-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 13px 15px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 13px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+.experiment-log-toggle:hover {
+  background: rgba(121, 187, 255, 0.06);
+}
+
+.experiment-log-toggle:focus-visible {
+  outline: 2px solid #9ad9ef;
+  outline-offset: 3px;
+}
+
+/* --- 桌面端吸附 ---------------------------------------------------------- */
+/* 侧栏（目录 / 检查器）用 position: sticky；运行条用 position: fixed。
+   中间画布保持正常文档流，绝不加 sticky。 */
+
+@media (min-width: 901px) {
+  body:has(.experiment-run-bar) .settings-fab {
+    --floating-settings-bottom: calc(var(--experiment-run-bar-gap) + 12px);
+  }
+
+  .experiment-center-grid[data-directory='open'] .experiment-directory {
+    position: sticky;
+    top: var(--experiment-sticky-top);
+    max-height: calc(100dvh - var(--experiment-sticky-top) - var(--experiment-run-bar-gap));
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* 目录外框固定在视口中，里面的实验列表自己滚动。 */
+  .experiment-directory > .training-tag-directory {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    gap: 8px;
+  }
+
+  .experiment-directory .experiment-directory-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .experiment-inspector-panel {
+    position: sticky;
+    top: var(--experiment-sticky-top);
+    max-height: calc(100dvh - var(--experiment-sticky-top) - var(--experiment-run-bar-gap));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+/* 1024 级别：侧栏收窄，但仍保持三列；自适应而不是硬塞宽列。 */
+@media (min-width: 901px) and (max-width: 1180px) {
+  .experiment-center-grid[data-directory='open'][data-inspector='present'] {
+    grid-template-columns: 200px minmax(0, 1fr) 250px;
+  }
+
+  .experiment-center-grid[data-directory='closed'] {
+    grid-template-columns: minmax(0, 1fr) 250px;
+  }
+
+  .experiment-center-grid[data-directory='open'][data-inspector='absent'] {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+
+  .experiment-architecture-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .experiment-param-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .experiment-expert {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .experiment-expert-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--experiment-line);
+  }
+
+  .experiment-expert-tab {
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+  }
+
+  .experiment-expert-tab[aria-selected='true'] {
+    border-left-color: transparent;
+    border-bottom-color: #79bbff;
+  }
+
+  .experiment-param-grid,
+  .experiment-payload-bar,
+  .experiment-expert-fields,
+  .experiment-expert-stack {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* --- 响应式 -------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .experiment-center {
+    width: min(100% - 28px, 680px);
+  }
+
+  .experiment-center-grid,
+  .experiment-center-grid[data-directory='open'][data-inspector='present'],
+  .experiment-center-grid[data-directory='open'][data-inspector='absent'],
+  .experiment-center-grid[data-directory='closed'][data-inspector='present'] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 窄屏关闭吸附：目录与检查器回到普通流。 */
+  .experiment-directory,
+  .experiment-inspector-panel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .experiment-run-bar {
+    position: static;
+    padding: 12px 14px;
+    border-radius: 0;
+  }
+
+  .experiment-param-grid,
+  .experiment-architecture-list,
+  .experiment-expert {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .experiment-expert-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--experiment-line);
+  }
+
+  .experiment-expert-tab {
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+  }
+
+  .experiment-expert-tab[aria-selected='true'] {
+    border-left-color: transparent;
+    border-bottom-color: #79bbff;
+  }
+
+  .experiment-directory .experiment-directory-list {
+    max-height: 46vh;
+    overflow-y: auto;
+  }
+
+  .experiment-monitor-log-scroll {
+    max-height: 42vh;
+  }
+
+  .experiment-run-bar-main {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 640px) {
+  .experiment-center-header,
+  .experiment-center-actions {
+    align-items: stretch;
+  }
+
+  .experiment-center-actions > *,
+  .experiment-center-header-meta > * {
+    flex: 1 1 auto;
+  }
+
+  .experiment-center-button,
+  .experiment-directory-filter,
+  .experiment-center-stage-tab,
+  .experiment-expert-tab,
+  .experiment-channel-chip,
+  .experiment-uploaded-upload {
+    min-height: 44px;
+  }
+
+  .experiment-canvas-head,
+  .experiment-canvas-section {
+    padding: 14px;
+    column-gap: 10px;
+  }
+
+  .experiment-canvas-head::before,
+  .experiment-canvas-section::before {
+    top: 14px;
+    bottom: 14px;
+    left: calc(14px + var(--experiment-rail-gutter) + 5px);
+  }
+
+  .experiment-section-index {
+    font-size: calc(14px * var(--font-scale, 1));
+  }
+
+  .experiment-param-grid,
+  .experiment-payload-bar,
+  .experiment-expert-fields,
+  .experiment-expert-stack {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .experiment-run-bar-actions {
+    width: 100%;
+  }
+
+  .experiment-run-bar-start {
+    width: 100%;
+  }
+
+  .experiment-payload-count {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 520px) {
+  .experiment-param-grid,
+  .experiment-payload-bar,
+  .experiment-expert-fields,
+  .experiment-expert-stack {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .experiment-run-bar-info {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}
+
+/* --- 桌面端文字层级（≥ 901px） ------------------------------------------- */
+/* 只调整字号与字重，不改位置、结构、状态配色与交互：
+   标题 19px+ / 标签 12–13px / 字段值 13–14px / 辅助说明 12px。
+   9–11px 仅保留给英文代码标记（WINDOW、EPOCHS、v1、TASK #）与装饰性序号。
+   这些令牌的默认值等于改造前的原始字号，因此 ≤ 900px 的渲染保持原样。 */
+@media (min-width: 901px) {
+  :root {
+    --experiment-text-helper: 12px;
+    --experiment-text-label: 13px;
+    --experiment-text-value: 14px;
+    --experiment-text-small: 12px;
+    --experiment-text-control: 13px;
+    --experiment-text-micro: 10px;
+    --experiment-text-tiny: 11px;
+  }
+
+  /* 页头 / 阶段指示 / 画布头部：标签与小节标题抬到 12–13px。 */
+  .experiment-center-eyebrow {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-state {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-section-title {
+    font-size: calc(15px * var(--font-scale, 1));
+  }
+
+  /* 01 任务定义：上传卡元信息与各类辅助说明至少 12px。 */
+  .experiment-uploaded-empty,
+  .experiment-uploaded-empty strong {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-uploaded-meta {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-uploaded-status {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-uploaded-item-name,
+  .experiment-uploaded-item-status {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-uploaded-item-meta {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 02 载荷条：渠道名与数量说明到 13px，英文短码保持小号。 */
+  .experiment-payload-lock,
+  .experiment-channel-chip {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-payload-count {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 03 参数矩阵：标签 12px、单位说明 12px、数值保持 19px 等宽。 */
+  .experiment-param-label {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 04 专家参数：页签 13px、面板标题 13px、说明与字段标签 12/13px。 */
+  .experiment-expert-tab {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-expert-tab-count {
+    font-size: calc(11px * var(--font-scale, 1));
+  }
+
+  .experiment-expert-heading {
+    font-size: calc(14px * var(--font-scale, 1));
+  }
+
+  .experiment-expert-note {
+    color: var(--text-60);
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-expert-field > span {
+    color: var(--text-60);
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  /* 配置检查器：标签 12px、字段值 14px、就绪项与详情 12px。 */
+  .experiment-inspector-title {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-label {
+    color: var(--text-60);
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-sub {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-readiness-row,
+  .experiment-inspector-blockers,
+  .experiment-inspector-note {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-link {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-inspector-issue-action {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 底部运行条：状态 13px、提交反馈 12px，主按钮保持 13px。 */
+  .experiment-run-bar-state {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-run-bar-note {
+    color: var(--text-60);
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 表单与上传区的错误说明同样不低于 12px。 */
+  .experiment-canvas-name-error,
+  .experiment-uploaded-model-error {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 实验目录：实验名视为字段值，元信息与徽标至少 12px。 */
+  .experiment-directory-name {
+    font-size: calc(13px * var(--font-scale, 1));
+  }
+
+  .experiment-directory-meta {
+    color: var(--text-60);
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  .experiment-directory-badge {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 监控与结果工作区（同为桌面端说明文字，避免出现更小的一档）。 */
+  .experiment-monitor-metric-label,
+  .experiment-result-metric-label {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* 就绪检查的 ✓ / ! 记号受控件尺寸限制，+1px 后不溢出 16px 圆底。 */
+  .experiment-inspector-check {
+    font-size: calc(12px * var(--font-scale, 1));
+  }
+
+  /* ---- 第四步：检查器视觉权重 -------------------------------------------
+     目标：便于从上到下扫描、不与中间画布争夺焦点，但错误 / 待处理仍然醒目。
+     ① 少一条线：头部不再单独画线，最后一个区块也不画线，静态分隔线 5 → 3 条；
+     ② 拉开三级：区块标签（mono 小字）→ 字段值（14px 白）→ 辅助说明（12px）；
+     ③ 正常状态更克制：通过的 ✓ 由实心绿底改为淡底 + 绿环，未通过的 ! 保持实心；
+     ④ 次要动作更轻：展开详细信息的链接用次要文字色，悬停才转蓝。 */
+  .experiment-inspector-head {
+    padding-bottom: 6px;
+    border-bottom: 0;
+  }
+
+  .experiment-inspector-body {
+    padding-top: 12px;
+  }
+
+  .experiment-inspector-block {
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+  }
+
+  /* 只有两个区块：末块收掉下边框与下边距，首块保留与它的分隔。 */
+  .experiment-inspector-block:last-child {
+    padding-bottom: 0;
+    margin-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .experiment-inspector-label {
+    color: var(--text-30);
+  }
+
+  /* 链接的命中区横向内缩 8px，但左对齐位置与原来一致，不改变区块内的视觉位置。 */
+  .experiment-inspector-link {
+    margin: 8px -8px 0;
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+
+  .experiment-inspector-readiness-row[data-ok='true'] .experiment-inspector-check {
+    background: rgba(99, 232, 191, 0.14);
+    border: 1px solid rgba(99, 232, 191, 0.45);
+    color: #63e8bf;
+  }
+
+  .experiment-inspector-readiness-row[data-ok='false'] .experiment-inspector-check {
+    background: #f19a78;
+    border-color: #f19a78;
+    color: #1b0d07;
+  }
+
+  .experiment-inspector-readiness-row[data-ok='false'] {
+    color: var(--text-60);
+    font-weight: 700;
+  }
+
+  /* ---- 信息减法补充 -----------------------------------------------------
+     检查器现在只有「当前模型 + 就绪检查」两块，不再有常态摘要与折叠详情；
+     未通过 / 待处理的行仍是强调色，正常状态用一行结论表达。 */
+  .experiment-inspector-issue-action:hover {
+    color: #9ad9ef;
+    text-decoration: underline;
+  }
+}
+
+/* 「输入框是否可辨认」的兜底规则放在文件末尾，确保不被后面的通用/组件规则覆盖：
+   参数矩阵的五格是数字输入，静态只给一条虚线基线，悬停与聚焦才加强。 */
+.experiment-param-cell input:hover:not(:disabled) {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-param-cell input:focus:not(:disabled) {
+  border-bottom-color: #9ad9ef;
+  border-bottom-style: solid;
+  outline: none;
+}
+
+.experiment-expert-field input:hover:not(:disabled),
+.experiment-expert-field select:hover:not(:disabled) {
+  border-bottom-color: var(--experiment-line-strong);
+}
+
+.experiment-expert-field input:focus,
+.experiment-expert-field select:focus {
+  border-bottom-color: #9ad9ef;
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .experiment-directory-progress-fill,
+  .experiment-directory-row,
+  .experiment-center-stage-tab,
+  .experiment-config-chip,
+  .experiment-channel-chip,
+  .experiment-architecture-option,
+  .experiment-expert-tab,
+  .experiment-source-option,
+  .experiment-dataset-option,
+  .experiment-run-bar-start,
+  .experiment-center-button {
+    transition: none;
+  }
+}
+
+/* --- 实验目录的空状态 ----------------------------------------------------- */
+/* 三种状态由 `[data-directory-state]` 区分：loading（首次取任务列表）、error（取失败）、
+   empty（确实没有实验）。判定在 ExperimentDirectory 里，这里只负责展示与密度。 */
+
+.experiment-directory-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px 18px;
+  text-align: center;
+}
+
+.experiment-directory-empty-text {
+  margin: 0;
+  max-width: 30ch;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-label) * var(--font-scale, 1));
+  line-height: 1.7;
+}
+
+.experiment-directory-empty[data-empty-reason='error'] .experiment-directory-empty-text {
+  color: #e8827f;
+}
+
+.experiment-directory-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 桌面端：空目录只占内容高度，不再撑满 sticky 面板留出一片空白。 */
+@media (min-width: 901px) {
+  .experiment-directory[data-directory-state='empty'],
+  .experiment-directory[data-directory-state='loading'],
+  .experiment-directory[data-directory-state='error'] {
+    align-self: start;
+    min-height: 0;
+  }
+
+  /* 没有条目时筛选栏没有可筛对象：目录内不再显示状态筛选，把重点让给空状态本身。
+     页头的「实验目录 / 新建实验」开关在目录之外，仍然可用。 */
+  .experiment-directory[data-directory-state='empty'] .experiment-directory-filters,
+  .experiment-directory[data-directory-state='loading'] .experiment-directory-filters {
+    display: none;
+  }
+
+  /* 空 / 加载中时搜索与标签控件退回次要：保留可用，但不再抢空状态的位置。 */
+  .experiment-directory[data-directory-state='empty'] .training-tag-directory .training-tag-input,
+  .experiment-directory[data-directory-state='loading'] .training-tag-directory .training-tag-input {
+    min-height: 32px;
+    padding: 5px 9px;
+    background: transparent;
+  }
+
+  .experiment-directory[data-directory-state='empty'] .training-tag-directory .training-tag-button,
+  .experiment-directory[data-directory-state='loading'] .training-tag-directory .training-tag-button {
+    min-height: 32px;
+    padding: 5px 9px;
+    background: transparent;
+  }
+
+  /* 空态下列表本身没有行可放，不再抢剩余高度。 */
+  .experiment-directory[data-directory-state='empty'] .experiment-directory-list,
+  .experiment-directory[data-directory-state='loading'] .experiment-directory-list,
+  .experiment-directory[data-directory-state='error'] .experiment-directory-list {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+
+  .experiment-directory[data-directory-state='empty'] .experiment-directory-empty,
+  .experiment-directory[data-directory-state='loading'] .experiment-directory-empty {
+    padding: 20px 14px;
+  }
+}
+
+/* ── 地球训练（Earth MERRA-2）─────────────────────────────────────────
+   Earth 面板沿用实验中心的表面/描边变量与字段块度量，不引入新的设计体系。 */
+.experiment-earth-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 12px;
+  background: var(--experiment-surface-2, rgba(6, 18, 28, 0.7));
+}
+
+.experiment-earth-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.experiment-earth-head strong {
+  font-size: calc(13.5px * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-earth-badge {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid rgba(154, 217, 239, 0.4);
+  border-radius: 999px;
+  color: #9ad9ef;
+  font-size: calc(11.5px * var(--font-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.experiment-earth-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.experiment-earth-facts dt {
+  margin: 0 0 2px;
+  color: var(--text-50, rgba(226, 240, 248, 0.5));
+  font-size: calc(11.5px * var(--font-scale, 1));
+}
+
+.experiment-earth-facts dd {
+  margin: 0;
+  font-size: calc(12.5px * var(--font-scale, 1));
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.experiment-earth-fingerprint {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 600;
+}
+
+.experiment-earth-splits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.experiment-earth-split {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 9px;
+}
+
+.experiment-earth-split span {
+  color: var(--text-50, rgba(226, 240, 248, 0.5));
+  font-size: calc(11.5px * var(--font-scale, 1));
+}
+
+.experiment-earth-split b {
+  font-size: calc(12.5px * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.experiment-earth-split small {
+  color: var(--text-60, rgba(226, 240, 248, 0.62));
+  font-size: calc(11.5px * var(--font-scale, 1));
+}
+
+.experiment-earth-channels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.experiment-earth-channels li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 9px;
+}
+
+.experiment-earth-channels li[data-selected='true'] {
+  border-color: rgba(241, 154, 120, 0.4);
+}
+
+.experiment-earth-channels li[data-locked='true'] {
+  border-color: transparent;
+  background: rgba(241, 154, 120, 0.1);
+  box-shadow: inset 2px 0 0 #f19a78;
+}
+
+.experiment-earth-channel-name {
+  min-width: 0;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.experiment-earth-channels b {
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-earth-channels small {
+  color: var(--text-60, rgba(226, 240, 248, 0.62));
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+.experiment-earth-channels em {
+  grid-column: 1 / -1;
+  color: var(--text-50, rgba(226, 240, 248, 0.5));
+  font-size: calc(11px * var(--font-scale, 1));
+  font-style: normal;
+}
+
+.experiment-earth-units {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: calc(11.5px * var(--font-scale, 1));
+  color: var(--text-50, rgba(226, 240, 248, 0.5));
+}
+
+.experiment-earth-units code {
+  padding: 2px 7px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 6px;
+  font-size: calc(11.5px * var(--font-scale, 1));
+}
+
+.experiment-earth-model {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Training console visual finish. Keep the existing grid, sticky rules and states. */
+body:has(.model-training-page) {
+  background: color-mix(in srgb, var(--bg-elevated) 88%, var(--bg));
+}
+
+body:has(.model-training-page) .star-field {
+  display: none;
+}
+
+:root {
+  --experiment-line: color-mix(in srgb, var(--border) 78%, transparent);
+  --experiment-line-strong: color-mix(in srgb, var(--hud-accent) 32%, transparent);
+  --experiment-surface-1: color-mix(in srgb, var(--bg-elevated) 96%, var(--hud-accent));
+  --experiment-surface-2: color-mix(in srgb, var(--bg-elevated) 91%, var(--hud-accent));
+  --experiment-surface-3: var(--bg-elevated);
+  --experiment-success: #63e8bf;
+  --experiment-error: #e8827f;
+  --experiment-text-helper: 12px;
+}
+
+[data-theme='light'] {
+  --experiment-surface-1: color-mix(in srgb, var(--bg-elevated) 78%, var(--bg));
+  --experiment-surface-2: color-mix(in srgb, var(--bg-elevated) 55%, var(--bg));
+  --experiment-surface-3: color-mix(in srgb, var(--bg-elevated) 70%, var(--bg));
+  --experiment-success: #22765f;
+  --experiment-error: #b24646;
+}
+
+.experiment-center-title,
+.experiment-canvas-name {
+  letter-spacing: 0;
+}
+
+.experiment-center .glass-card,
+.experiment-center .glass-card:hover {
+  border-color: var(--experiment-line);
+  background: var(--experiment-surface-1);
+  border-radius: 13px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.experiment-center .experiment-center-canvas[data-stage-panel='configure'] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.experiment-canvas-head,
+.experiment-canvas-section {
+  background: var(--experiment-surface-1);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.experiment-canvas-section[data-config-group='expert'] {
+  background: color-mix(in srgb, var(--experiment-surface-1) 70%, var(--experiment-surface-2));
+}
+
+.experiment-canvas-head::before,
+.experiment-canvas-section::before {
+  background: color-mix(in srgb, var(--experiment-line) 70%, transparent);
+}
+
+.experiment-section-index {
+  color: var(--hud-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.experiment-canvas-name {
+  font-weight: 600;
+  transition: border-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.experiment-canvas-name::placeholder {
+  color: var(--text-60);
+  font-weight: 400;
+  opacity: 1;
+}
+
+.experiment-canvas-name:focus-visible,
+.experiment-param-cell input:focus-visible,
+.experiment-expert-field input:focus-visible,
+.experiment-expert-field select:focus-visible {
+  outline: none;
+  border-bottom-color: var(--hud-accent);
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--hud-accent) 25%, transparent);
+}
+
+.experiment-canvas-name[aria-invalid='true'],
+.experiment-canvas-name[aria-invalid='true']:focus-visible {
+  border-bottom-color: var(--experiment-error);
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--experiment-error) 22%, transparent);
+}
+
+.experiment-dataset-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+
+.experiment-dataset-option,
+.experiment-source-option {
+  min-width: 0;
+  min-height: 38px;
+  transition: border-color 180ms ease-out, background-color 180ms ease-out, color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.experiment-dataset-option strong,
+.experiment-source-option strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.experiment-dataset-option:hover:not(:disabled),
+.experiment-source-option:hover:not(:disabled) {
+  border-color: var(--experiment-line-strong);
+  color: var(--text);
+}
+
+.experiment-dataset-option[aria-checked='true'],
+.experiment-source-option[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--brand-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--brand-accent) 6%, var(--experiment-surface-3));
+  box-shadow: inset 2px 0 0 var(--brand-accent), inset 0 1px 3px color-mix(in srgb, var(--bg) 30%, transparent);
+  color: var(--text);
+}
+
+.experiment-source-option:disabled {
+  opacity: 0.52;
+}
+
+.experiment-uploaded-card {
+  background: var(--experiment-surface-2);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.experiment-uploaded-name {
+  font-weight: 600;
+}
+
+.experiment-uploaded-meta {
+  margin-top: 5px;
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.experiment-uploaded-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  color: var(--experiment-success);
+  line-height: 1.4;
+}
+
+.experiment-uploaded-status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.experiment-uploaded-status[data-tone='warn'] {
+  color: var(--brand-accent);
+}
+
+.experiment-uploaded-status[data-validation-status='invalid'] {
+  color: var(--experiment-error);
+}
+
+.experiment-uploaded-upload {
+  background: color-mix(in srgb, var(--brand-accent) 12%, var(--experiment-surface-1));
+  border-color: color-mix(in srgb, var(--brand-accent) 42%, transparent);
+  color: var(--brand-accent);
+  transition: background-color 180ms ease-out, border-color 180ms ease-out, transform 180ms ease-out;
+}
+
+.experiment-uploaded-model[data-has-selection='true'] .experiment-uploaded-upload {
+  background: color-mix(in srgb, var(--brand-accent) 8%, var(--experiment-surface-1));
+}
+
+.experiment-uploaded-upload:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--brand-accent) 18%, var(--experiment-surface-1));
+}
+
+.experiment-uploaded-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 4px 0;
+}
+
+.experiment-expert-tab {
+  overflow-wrap: anywhere;
+  outline-offset: -3px;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out, color 180ms ease-out;
+}
+
+.experiment-expert-tab[aria-selected='true'] {
+  border-left-color: var(--hud-accent);
+  background: var(--bg-muted);
+  color: var(--hud-accent);
+}
+
+.experiment-expert-tab-count {
+  flex: 0 0 auto;
+  background: var(--bg-muted);
+  color: var(--text-40);
+}
+
+.experiment-expert-heading {
+  margin-bottom: 12px;
+  color: var(--text-60);
+  font-weight: 600;
+}
+
+.experiment-payload-lock,
+.experiment-channel-chip,
+.experiment-param-cell,
+.experiment-expert-field {
+  background: var(--experiment-surface-2);
+}
+
+.experiment-param-cell input,
+.experiment-expert-field input,
+.experiment-expert-field select {
+  font-variant-numeric: tabular-nums;
+  transition: border-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.experiment-expert-field input:disabled,
+.experiment-expert-field select:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.experiment-inspector-note {
+  border-left-color: var(--hud-accent);
+  background: var(--bg-muted);
+}
+
+.experiment-run-bar {
+  border-top-color: var(--experiment-line);
+  background: var(--experiment-surface-3);
+  backdrop-filter: none;
+}
+
+.experiment-run-bar-start:hover:not(:disabled) {
+  transform: none;
+}
+
+.experiment-center-button:active:not(:disabled),
+.experiment-uploaded-upload:active:not(:disabled),
+.experiment-run-bar-start:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+@media (min-width: 901px) and (max-width: 1180px), (max-width: 900px) {
+  .experiment-expert-tab[aria-selected='true'] {
+    border-left-color: transparent;
+    border-bottom-color: var(--hud-accent);
+  }
+}
+
+@media (max-width: 640px) {
+  .experiment-dataset-option,
+  .experiment-source-option,
+  .experiment-uploaded-link {
+    min-height: 44px;
+  }
+}
+
+[data-theme='light'] .experiment-section-index,
+[data-theme='light'] .experiment-expert-tab[aria-selected='true'],
+[data-theme='light'] .experiment-center-stage-tab[data-stage-state='current'],
+[data-theme='light'] .experiment-architecture-option[aria-pressed='true'],
+[data-theme='light'] .experiment-uploaded-link:not(.is-quiet),
+[data-theme='light'] .experiment-inspector-issue-action {
+  color: var(--hud-accent);
+}
+
+[data-theme='light'] .experiment-inspector-state[data-inspector-state='ready'],
+[data-theme='light'] .experiment-run-bar-state[data-run-state='ready'],
+[data-theme='light'] .experiment-expert-ok {
+  color: var(--experiment-success);
+}
+
+[data-theme='light'] .experiment-run-bar-note,
+[data-theme='light'] .experiment-payload-lock,
+[data-theme='light'] .experiment-inspector-note,
+[data-theme='light'] .experiment-earth-badge {
+  color: color-mix(in srgb, var(--hud-accent) 78%, var(--text));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .experiment-canvas-name,
+  .experiment-dataset-option,
+  .experiment-source-option,
+  .experiment-uploaded-upload,
+  .experiment-param-cell input,
+  .experiment-expert-field input,
+  .experiment-expert-field select,
+  .experiment-uploaded-link {
+    transition: none;
+  }
+}
+
+/* Directory and inspector use the same compact status geometry. */
+.experiment-directory-badge,
+.experiment-inspector-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 23px;
+  padding: 3px 8px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 7px;
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.experiment-directory-badge[data-tone='running'] { color: #91cde8; background: rgba(121, 187, 223, .12); border-color: rgba(121, 187, 223, .25); }
+.experiment-directory-badge[data-tone='pending'] { color: #e6a17f; background: rgba(241, 154, 120, .1); border-color: rgba(241, 154, 120, .25); }
+.experiment-directory-badge[data-tone='completed'],
+.experiment-inspector-badge[data-tone='ready'] { color: var(--experiment-success); background: color-mix(in srgb, var(--experiment-success) 11%, transparent); border-color: color-mix(in srgb, var(--experiment-success) 28%, transparent); }
+.experiment-directory-badge[data-tone='failed'],
+.experiment-inspector-badge[data-tone='error'] { color: var(--experiment-error); background: color-mix(in srgb, var(--experiment-error) 10%, transparent); border-color: color-mix(in srgb, var(--experiment-error) 28%, transparent); }
+.experiment-directory-status-dot { background: currentColor; }
+
+.experiment-directory-sort { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--text-60); font-size: calc(11px * var(--font-scale, 1)); }
+.experiment-directory-sort select { min-width: 0; max-width: 130px; min-height: 32px; padding: 4px 7px; border: 1px solid var(--experiment-line); border-radius: 7px; background: var(--experiment-surface-2); color: var(--text); }
+.experiment-directory-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 10px 13px; }
+.experiment-directory-filter { justify-content: space-between; min-width: 0; min-height: 32px; padding: 5px 9px; border-radius: 7px; }
+.experiment-directory-filter-count { flex-shrink: 0; }
+.experiment-directory-search { min-width: 0; padding: 10px 13px 0; }
+.experiment-directory-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 7px; padding: 0 13px 10px; }
+.experiment-directory-sort select { width: 100%; max-width: none; }
+.experiment-directory-tag-filter { min-width: 0; color: var(--text-60); font-size: calc(11px * var(--font-scale, 1)); }
+.experiment-directory-tag-filter[open] { grid-column: 1 / -1; }
+.experiment-directory-tag-filter > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--experiment-line); border-radius: 7px; cursor: pointer; list-style: none; }
+.experiment-directory-tag-filter > summary::-webkit-details-marker { display: none; }
+.experiment-directory-tag-filter > summary:hover { color: var(--text); background: var(--experiment-surface-2); }
+.experiment-directory-tag-filter > summary span { color: var(--experiment-warning); }
+.experiment-directory-tag-filter-body { display: grid; justify-items: start; gap: 7px; min-width: 0; padding: 8px 0 2px; }
+.experiment-directory-tag-filter-body .training-tag-filter { min-width: 0; width: 100%; margin: 0; }
+.experiment-directory-tag-filter-body .training-tag-filter > .training-tag-toolbar > .training-tag-hint { display: none; }
+.experiment-directory-group { display: grid; gap: 6px; min-width: 0; }
+.experiment-directory-group:not(:first-child) { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--experiment-line); }
+.experiment-directory-group-toggle { display: grid; grid-template-columns: minmax(0, 1fr) auto 14px; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 4px 3px; border: 0; background: transparent; color: var(--text-80); text-align: left; font-size: calc(12px * var(--font-scale, 1)); font-weight: 700; cursor: pointer; }
+.experiment-directory-group-toggle span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.experiment-directory-group-items { display: grid; gap: 8px; min-width: 0; }
+.experiment-directory-row { gap: 8px; padding: 12px; }
+.experiment-directory-name { font-size: calc(13px * var(--font-scale, 1)); line-height: 1.4; }
+.experiment-directory-status-line,
+.experiment-directory-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.experiment-directory-status-line time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
+.experiment-directory-facts { display: grid; gap: 4px; min-width: 0; padding: 8px 0; border-top: 1px solid var(--experiment-line); border-bottom: 1px solid var(--experiment-line); }
+.experiment-directory-facts > div { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: baseline; gap: 6px; min-width: 0; }
+.experiment-directory-facts span { color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); }
+.experiment-directory-facts strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-80); font-size: calc(11px * var(--font-scale, 1)); font-weight: 600; }
+.experiment-directory-meta > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.experiment-directory-completeness { color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
+.experiment-directory-row-details { min-width: 0; }
+.experiment-directory-row-details > summary { display: flex; align-items: center; justify-content: space-between; min-height: 24px; color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); cursor: pointer; list-style: none; }
+.experiment-directory-row-details > summary::-webkit-details-marker { display: none; }
+.experiment-directory-row-details > summary:hover { color: var(--text); }
+.experiment-directory-row-details > summary span { font-size: 14px; transition: transform 180ms ease; }
+.experiment-directory-row-details[open] > summary span { transform: rotate(180deg); }
+.experiment-directory-row-extra { display: grid; gap: 8px; min-width: 0; padding-top: 8px; }
+.experiment-directory-row-extra .experiment-directory-row-tools { justify-content: space-between; min-width: 0; }
+.experiment-directory-extra-facts { display: grid; gap: 4px; min-width: 0; color: var(--text-60); font-size: calc(10px * var(--font-scale, 1)); }
+.experiment-directory-extra-facts span { min-width: 0; overflow-wrap: anywhere; }
+.experiment-directory-row:focus-visible,
+.experiment-directory-group-toggle:focus-visible,
+.experiment-directory-sort select:focus-visible,
+.experiment-directory-filter:focus-visible,
+.experiment-directory-tag-filter > summary:focus-visible,
+.experiment-directory-row-details > summary:focus-visible,
+.experiment-inspector-group-head:focus-visible,
+.experiment-inspector-issue-action:focus-visible,
+.experiment-inspector-link:focus-visible { outline: 2px solid var(--hud-accent); outline-offset: 2px; }
+.experiment-directory-group-toggle:hover,
+.experiment-inspector-group-head:hover { color: var(--text); background: color-mix(in srgb, var(--hud-accent) 5%, transparent); }
+
+.experiment-inspector-summary { display: flex; flex-wrap: wrap; gap: 5px 10px; padding: 11px 15px; border-bottom: 1px solid var(--experiment-line); color: var(--text-60); font-size: calc(11px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
+.experiment-inspector-summary [data-tone='error'] { color: var(--experiment-error); }
+.experiment-inspector-summary [data-tone='ready'] { color: var(--experiment-success); }
+.experiment-inspector-body { gap: 8px; padding: 12px; }
+.experiment-inspector-group { min-width: 0; border: 1px solid var(--experiment-line); border-radius: 10px; background: var(--experiment-surface-2); overflow: hidden; }
+.experiment-inspector-group-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; min-height: 39px; padding: 7px 10px; color: var(--text-80); cursor: pointer; list-style: none; transition: background 180ms ease; }
+.experiment-inspector-group-head::-webkit-details-marker { display: none; }
+.experiment-inspector-group-title { min-width: 0; overflow-wrap: anywhere; font-size: calc(12px * var(--font-scale, 1)); font-weight: 700; }
+.experiment-inspector-group-body { display: grid; gap: 6px; min-width: 0; padding: 0 10px 10px; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent); }
+.experiment-inspector-group-body .experiment-inspector-value { font-size: calc(12px * var(--font-scale, 1)); font-weight: 600; }
+.experiment-inspector-group-body .experiment-inspector-readiness-row { font-size: calc(11px * var(--font-scale, 1)); }
+.experiment-inspector-blockers li { grid-template-columns: 16px minmax(0, 1fr); }
+.experiment-inspector-issue-action { grid-column: 2; justify-self: start; min-height: 28px; white-space: normal; text-align: left; }
+.experiment-inspector-link { justify-self: start; min-height: 28px; }
+
+[data-theme='light'] .experiment-directory-badge[data-tone='running'] { color: #246684; }
+[data-theme='light'] .experiment-directory-badge[data-tone='pending'] { color: #a44d28; }
+
+@media (max-width: 640px) {
+  .experiment-directory-group-toggle,
+  .experiment-directory-sort select,
+  .experiment-directory-filter,
+  .experiment-directory-tag-filter > summary,
+  .experiment-directory-row-details > summary,
+  .experiment-inspector-group-head,
+  .experiment-inspector-issue-action,
+  .experiment-inspector-link { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .experiment-inspector-group-head,
+  .experiment-directory-row-details > summary span { transition: none; }
+}

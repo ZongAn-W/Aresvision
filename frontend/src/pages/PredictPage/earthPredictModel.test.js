@@ -1,0 +1,203 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  buildEarthFieldPayload,
+  buildEarthPredictKey,
+  getEarthTrainingModelOptions,
+  isEarthTask,
+  isOriginSelectable,
+  pickDefaultOrigin,
+  readEarthLeadMetric,
+  readEarthMetric,
+  readEarthPredictRequestFromHash,
+  resolveEarthColorRanges,
+  resolveEarthPredictErrorMessage,
+  shouldClearEarthResult,
+} from './earthPredictModel.js';
+
+function buildEarthResponse(overrides = {}) {
+  const day = (offset) => ({
+    field: [[280 + offset, 300 + offset], [260 + offset, 320 + offset]],
+    minVal: 260 + offset,
+    maxVal: 320 + offset,
+    valid_cells: 4,
+  });
+  return {
+    planet: 'earth',
+    task_id: 12,
+    dataset_id: 'earth_merra2_daily_v2',
+    dataset_version: 'v2',
+    dataset_fingerprint: 'a'.repeat(64),
+    target: 'TO3',
+    target_unit: 'DU',
+    forecast_origin: '2021-07-08',
+    input_dates: ['2021-07-02', '2021-07-03', '2021-07-04', '2021-07-05', '2021-07-06', '2021-07-07', '2021-07-08'],
+    target_dates: ['2021-07-09', '2021-07-10', '2021-07-11'],
+    window: 7,
+    horizon: 3,
+    grid: {
+      shape: [2, 2],
+      latitude: [-45, 45],
+      longitude: [-135, 135],
+      latitude_range: [-90, 90],
+      longitude_range: [-180, 180],
+    },
+    prediction: [day(1), day(2), day(3)],
+    reference: [day(0), day(0), day(0)],
+    residual: [
+      { field: [[1, 1], [1, 1]], minVal: 1, maxVal: 1, valid_cells: 4 },
+      { field: [[2, 2], [2, 2]], minVal: 2, maxVal: 2, valid_cells: 4 },
+      { field: [[-3, -3], [-3, -3]], minVal: -3, maxVal: -3, valid_cells: 4 },
+    ],
+    metrics: {
+      unit: 'DU',
+      target: 'TO3',
+      aggregation: 'user_forecast_origin_lead_grid_uniform',
+      reference_available: true,
+      overall: { rmse: 2.5, mae: 1.5 },
+      by_lead: [
+        { lead_day: 1, rmse: 1, mae: 0.5 },
+        { lead_day: 2, rmse: 2, mae: 1.5 },
+        { lead_day: 3, rmse: 3, mae: 2.5 },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+test('hash query opens Earth mode only for the explicit earth mode', () => {
+  assert.deepEqual(readEarthPredictRequestFromHash('#/predict?from=training&mode=earth'), {
+    fromTraining: true,
+    taskId: null,
+  });
+  assert.deepEqual(readEarthPredictRequestFromHash('#/predict?mode=earth&task_id=42'), {
+    fromTraining: false,
+    taskId: 42,
+  });
+  assert.equal(readEarthPredictRequestFromHash('#/predict?mode=trained'), null);
+  assert.equal(readEarthPredictRequestFromHash('#/predict'), null);
+  assert.equal(readEarthPredictRequestFromHash(''), null);
+});
+
+test('Earth cache key separates planet, dataset identity, task and origin', () => {
+  const base = buildEarthPredictKey({
+    taskId: 12,
+    datasetId: 'earth_merra2_daily_v2',
+    datasetVersion: 'v2',
+    datasetFingerprint: 'a'.repeat(64),
+    forecastOrigin: '2021-07-08',
+    targetDates: ['2021-07-09', '2021-07-10', '2021-07-11'],
+  });
+  assert.match(base, /^planet:earth\|/);
+  assert.match(base, /task:12/);
+  assert.match(base, /origin:2021-07-08/);
+  assert.match(base, /targets:2021-07-09,2021-07-10,2021-07-11/);
+
+  const otherOrigin = buildEarthPredictKey({
+    taskId: 12,
+    datasetId: 'earth_merra2_daily_v2',
+    datasetVersion: 'v2',
+    datasetFingerprint: 'a'.repeat(64),
+    forecastOrigin: '2021-07-09',
+  });
+  assert.notEqual(base, otherOrigin);
+
+  assert.equal(buildEarthPredictKey({ taskId: 0, forecastOrigin: '2021-07-08' }), null);
+  assert.equal(buildEarthPredictKey({ taskId: 12 }), null);
+});
+
+test('changing the Earth result identity clears the previous result', () => {
+  assert.equal(shouldClearEarthResult(null, 'planet:earth|task:1'), false);
+  assert.equal(shouldClearEarthResult('planet:earth|task:1', 'planet:earth|task:1'), false);
+  assert.equal(shouldClearEarthResult('planet:earth|task:1', 'planet:earth|task:2'), true);
+});
+
+test('field payload keeps DU values and uses the published grid', () => {
+  const response = buildEarthResponse();
+  const payload = buildEarthFieldPayload({
+    response,
+    dayIndex: 0,
+    kind: 'prediction',
+    colormap: 'inferno',
+    colorRange: { min: 200, max: 400 },
+  });
+  assert.deepEqual(payload.lat, [-45, 45]);
+  assert.deepEqual(payload.lon, [-135, 135]);
+  assert.deepEqual(payload.color_range, { min: 200, max: 400 });
+  assert.equal(payload.unit, 'DU');
+  // 值必须原样保留：地球 TO3 本身就是 DU，不能套用火星的 μm-atm 换算。
+  assert.deepEqual(payload.field[0], [281, 301]);
+  assert.deepEqual(payload.coverage.latitude_range, [-90, 90]);
+
+  // 网格与场形状不一致时返回 null 而不是画出错位的图。
+  const mismatched = { ...response, grid: { ...response.grid, latitude: [-45] } };
+  assert.equal(buildEarthFieldPayload({ response: mismatched, dayIndex: 0, kind: 'prediction', colormap: 'inferno' }), null);
+  assert.equal(buildEarthFieldPayload({ response, dayIndex: 9, kind: 'prediction', colormap: 'inferno' }), null);
+});
+
+test('physical color range is shared by prediction and reference, residual is centred', () => {
+  const ranges = resolveEarthColorRanges(buildEarthResponse());
+  assert.deepEqual(ranges.physical, { min: 260, max: 323 });
+  assert.deepEqual(ranges.residual, { min: -3, max: 3 });
+});
+
+test('metrics read only finite values', () => {
+  const response = buildEarthResponse();
+  assert.equal(readEarthMetric(response.metrics, 'rmse'), 2.5);
+  assert.equal(readEarthMetric(response.metrics, 'mae'), 1.5);
+  assert.equal(readEarthMetric({ overall: { rmse: Number.NaN } }, 'rmse'), null);
+  assert.equal(readEarthLeadMetric(response.metrics, 3, 'rmse'), 3);
+  assert.equal(readEarthLeadMetric(response.metrics, 9, 'rmse'), null);
+});
+
+test('origin selection follows the server provided range', () => {
+  const origins = {
+    start: '2020-01-08',
+    end: '2021-12-28',
+    count: 721,
+    dates: ['2020-01-08', '2020-01-09', '2021-12-28'],
+  };
+  assert.equal(isOriginSelectable(origins, '2020-01-09'), true);
+  assert.equal(isOriginSelectable(origins, '2020-01-07'), false);
+  assert.equal(isOriginSelectable(origins, ''), false);
+  // 没有显式日期列表时退化为闭区间判断。
+  assert.equal(isOriginSelectable({ start: '2020-01-08', end: '2021-12-28' }, '2020-06-01'), true);
+  assert.equal(isOriginSelectable({ start: '2020-01-08', end: '2021-12-28' }, '2022-01-01'), false);
+
+  assert.equal(pickDefaultOrigin(origins, '2020-06-01'), '2020-01-09');
+  assert.equal(pickDefaultOrigin(origins, '2019-01-01'), '2020-01-08');
+  assert.equal(pickDefaultOrigin(origins), '2021-12-28');
+  assert.equal(pickDefaultOrigin({ end: '2021-12-28' }), '2021-12-28');
+});
+
+test('server error codes map to translation keys without losing the message', () => {
+  assert.equal(
+    resolveEarthPredictErrorMessage({ code: 'earth_prediction_origin_out_of_range', message: 'x' }).key,
+    'earthOriginOutOfRange'
+  );
+  assert.equal(resolveEarthPredictErrorMessage({ code: 'dataset_version_changed' }).key, 'earthDatasetChanged');
+  assert.equal(resolveEarthPredictErrorMessage({ code: 'invalid_earth_training_artifact' }).key, 'earthArtifactInvalid');
+  const unknown = resolveEarthPredictErrorMessage({ code: 'weird', message: 'boom' });
+  assert.equal(unknown.key, null);
+  assert.equal(unknown.fallback, 'boom');
+});
+
+test('Earth task selection only offers completed Earth tasks with weights', () => {
+  const tasks = [
+    { id: 1, status: 'completed', model_available: true, dataset_id: 'earth_merra2_daily_v2', custom_model_name: 'Earth A' },
+    { id: 2, status: 'completed', model_available: true, dataset_id: 'openmars_mcd', custom_model_name: 'Mars A' },
+    { id: 3, status: 'running', model_available: false, dataset_id: 'earth_merra2_daily_v2' },
+    { id: 4, status: 'completed', model_available: true, is_earth_task: true, dataset_id: null, custom_model_name: 'Legacy flag' },
+    { id: 5, status: 'completed', model_available: false, dataset_id: 'earth_merra2_daily_v2' },
+  ];
+  const options = getEarthTrainingModelOptions(tasks);
+  assert.deepEqual(options.map((option) => option.id), [1, 4]);
+  assert.equal(options[0].label, 'Earth A');
+  assert.equal(getEarthTrainingModelOptions(null).length, 0);
+
+  assert.equal(isEarthTask(tasks[0]), true);
+  assert.equal(isEarthTask(tasks[1]), false);
+  assert.equal(isEarthTask(tasks[3]), true);
+  assert.equal(isEarthTask(null), false);
+});

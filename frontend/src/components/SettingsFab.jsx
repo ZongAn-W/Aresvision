@@ -222,7 +222,7 @@ export default function SettingsFab({ onOpenSettings, onOpenAdmin }) {
   const activeOptions = activeSubmenu ? SUB_OPTIONS[activeSubmenu] : null;
 
   return (
-    <div ref={containerRef} style={{ position: 'fixed', left: 24, bottom: 24, zIndex: 1500 }}>
+    <div className="settings-fab" ref={containerRef} style={{ position: 'fixed', left: 24, bottom: 'var(--floating-settings-bottom, 24px)', zIndex: 1500 }}>
       <style>{`
         @keyframes _sfadeup { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes _sfadein  { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: translateX(0); } }

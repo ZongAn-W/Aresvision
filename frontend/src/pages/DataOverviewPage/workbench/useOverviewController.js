@@ -525,6 +525,23 @@ export function useOverviewController({
 
   const retryCards = useCallback(() => setCardReloadToken((value) => value + 1), []);
 
+  const loadAuxiliaryFields = useCallback(async ({ variables = [], value = selection.value, signal } = {}) => {
+    if (!ready || !value || !sourceFingerprint || typeof adapter.loadField !== 'function') return {};
+    const entries = await Promise.all(variables.map(async (variable) => {
+      const payload = await adapter.loadField({ value, variable, signal });
+      if (!adapter.validateField(payload, {
+        sourceId: adapter.sourceId,
+        sourceFingerprint,
+        variable,
+        value,
+      })) {
+        throw new Error(`Invalid auxiliary field payload for ${variable}`);
+      }
+      return [variable, adapter.normalizeField ? adapter.normalizeField(payload) : payload];
+    }));
+    return Object.fromEntries(entries);
+  }, [adapter, ready, selection.value, sourceFingerprint]);
+
   // ── 卡片目录与状态 ────────────────────────────────────────────────────
   const capabilities = resolved?.capabilities || {};
   const modeCards = useMemo(
@@ -765,6 +782,7 @@ export function useOverviewController({
     retrySource,
     retryField,
     retryCards,
+    loadAuxiliaryFields,
   };
 }
 

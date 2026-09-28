@@ -19,14 +19,16 @@ from services.dataset_identity import (
     DATASET_IDS,
     EARTH_DATASET_ID,
     EARTH_DATASET_V2_ID,
-    REGISTERED_DATASET_IDS,
     IDENTITY_STATUS_UNVERSIONED,
+    IDENTITY_STATUS_VERIFIED,
+    REGISTERED_DATASET_IDS,
     REGISTRY_BINDING_BASIS,
     UNVERSIONED_VERSION_STATUS,
     DatasetRequestError,
     build_identity_snapshot,
     require_training_dataset,
 )
+from services.earth_training_contract import earth_training_profile
 from services.earth_dataset_metadata import (
     DATA_FILE_NAME,
     REASON_PACKAGE_CHANGED,
@@ -75,8 +77,12 @@ EARTH_DESCRIPTOR_CAPABILITIES = {
     # The 2D overview entry is wired for this dataset. Data requests still
     # require availability=available, so a missing package keeps returning 503.
     "web_overview": True,
-    "training": False,
-    "trained_prediction": False,
+    # Earth training and historical prediction are wired for both Earth releases
+    # (the v1 legacy package and the default v2). Entrance wiring is independent
+    # of whether the package is currently verifiable: `availability` stays the
+    # separate gate, exactly as it is for the overview.
+    "training": True,
+    "trained_prediction": True,
 }
 
 MARS_TIME = {
@@ -101,12 +107,15 @@ _STALE_LIMITATION_MARKERS = (
     "web overview",
     "web/api dataset registry",
     "not connected yet",
+    "training and prediction remain disabled",
+    "training and prediction are not connected",
     "尚未接入",
     "未接入",
 )
 EARTH_APPLICATION_LIMITATIONS = [
     "Coverage mean refers to the published covered area; it is not a total atmospheric mass",
-    "Earth training and prediction are not connected yet",
+    "Earth prediction is limited to historical forecast origins that have published reference days",
+    "Earth and Mars results cannot be compared in one request yet",
 ]
 
 
@@ -220,15 +229,23 @@ class DatasetRegistry:
         return copy.deepcopy(self._mars_descriptor(normalized))
 
     def build_training_binding(self, dataset_id: str) -> dict:
-        """Return the five task identity column values for a trainable dataset."""
-        dataset_id = require_training_dataset(dataset_id)
+        """Return the five task identity column values for a trainable dataset.
+
+        Earth returns a *verified* binding built from the same verified release
+        that the run will read, so the task, the checkpoint and the prediction
+        request all agree on one published identity. Mars keeps the legacy
+        unversioned binding.
+        """
+        normalized = self._require_trainable(dataset_id)
+        if normalized in (EARTH_DATASET_ID, EARTH_DATASET_V2_ID):
+            return self._earth_training_binding(normalized)
         return {
-            "dataset_id": dataset_id,
+            "dataset_id": normalized,
             "dataset_version": None,
             "dataset_fingerprint": None,
             "dataset_identity_status": IDENTITY_STATUS_UNVERSIONED,
             "dataset_snapshot": build_identity_snapshot({
-                "dataset_id": dataset_id,
+                "dataset_id": normalized,
                 "planet": "mars",
                 "dataset_version": None,
                 "binding_basis": REGISTRY_BINDING_BASIS,
@@ -236,14 +253,52 @@ class DatasetRegistry:
             }),
         }
 
-    def get_earth_overview_snapshot(
-        self, dataset_id: str, expected_fingerprint: str
-    ) -> VerifiedEarthRelease:
-        """Return the verified release arrays for read-only overview queries.
+    def _require_trainable(self, dataset_id: Any) -> str:
+        """Accept a registered Earth id or a legacy Mars training id, else raise."""
+        if isinstance(dataset_id, str):
+            normalized = dataset_id.strip().lower()
+            if normalized in (EARTH_DATASET_ID, EARTH_DATASET_V2_ID):
+                return normalized
+        return require_training_dataset(dataset_id)
 
-        Only this registry touches the package path and pinned hashes; callers
-        get an immutable snapshot whose arrays can be read after the NetCDF
-        handle is closed.
+    def _earth_training_binding(self, dataset_id: str) -> dict:
+        release = self.get_earth_snapshot(dataset_id)
+        metadata = release.metadata
+        snapshot = {
+            "dataset_id": dataset_id,
+            "planet": "earth",
+            "dataset_version": metadata.get("dataset_version"),
+            "schema": metadata.get("schema"),
+            "manifest_sha256": metadata.get("manifest_sha256"),
+            "data_sha256": metadata.get("data_sha256"),
+            "dataset_fingerprint": metadata.get("dataset_fingerprint"),
+            "time": copy.deepcopy(metadata.get("time")),
+            "grid": copy.deepcopy(metadata.get("grid")),
+            "variables": copy.deepcopy(metadata.get("variables")),
+            "channel_order": list(metadata.get("channel_order") or []),
+            "splits": copy.deepcopy(metadata.get("splits")),
+            "binding_basis": REGISTRY_BINDING_BASIS,
+            "version_status": IDENTITY_STATUS_VERIFIED,
+        }
+        return {
+            "dataset_id": dataset_id,
+            "dataset_version": metadata.get("dataset_version"),
+            "dataset_fingerprint": metadata.get("dataset_fingerprint"),
+            "dataset_identity_status": IDENTITY_STATUS_VERIFIED,
+            "dataset_snapshot": build_identity_snapshot(snapshot),
+        }
+
+    def get_earth_snapshot(
+        self, dataset_id: str, expected_fingerprint: Optional[str] = None
+    ) -> VerifiedEarthRelease:
+        """Return the verified release for any supported Earth purpose.
+
+        This is the neutral entry point shared by the overview API, training and
+        historical prediction. Only this registry touches the package path and
+        the pinned hashes; callers get an immutable snapshot whose arrays stay
+        readable after the NetCDF handle is closed.
+
+        ``expected_fingerprint=None`` takes the currently verified release.
         """
         normalized = self._require_registered_earth(dataset_id)
         release = self._earth_release(normalized)
@@ -256,13 +311,23 @@ class DatasetRegistry:
                 status_code=503,
                 availability_reason=descriptor.get("availability_reason"),
             )
-        if expected_fingerprint != release.metadata["dataset_fingerprint"]:
+        if expected_fingerprint is not None and expected_fingerprint != release.metadata["dataset_fingerprint"]:
             raise DatasetRequestError(
                 "dataset_version_changed",
                 "The dataset version changed; reload the catalog",
                 status_code=409,
             )
         return release
+
+    def get_earth_overview_snapshot(
+        self, dataset_id: str, expected_fingerprint: str
+    ) -> VerifiedEarthRelease:
+        """Return the verified release arrays for read-only overview queries.
+
+        Kept as a thin wrapper over :meth:`get_earth_snapshot` so the overview
+        error contract (an explicit expected fingerprint) does not change.
+        """
+        return self.get_earth_snapshot(dataset_id, expected_fingerprint=expected_fingerprint)
 
     @staticmethod
     def _require_registered_earth(dataset_id: Any) -> str:
@@ -298,6 +363,7 @@ class DatasetRegistry:
             "channel_order": [],
             "variables": [],
             "splits": None,
+            "training_profile": None,
             "limitations": list(MARS_LIMITATIONS),
         }
 
@@ -313,6 +379,10 @@ class DatasetRegistry:
             "capabilities": dict(EARTH_DESCRIPTOR_CAPABILITIES),
         }
         descriptor.update(_blank_dynamic_earth_fields())
+        # The profile describes the wired entry point, so it is published even
+        # when the package is currently missing or invalid: the client can show
+        # real limits and still disable the button on `availability`.
+        descriptor["training_profile"] = earth_training_profile()
         return descriptor
 
     def _primary_earth_id(self) -> str:

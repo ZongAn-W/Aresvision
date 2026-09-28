@@ -8,7 +8,7 @@ import { fmtNum } from '../../utils/fmt';
 import { useSettings } from '../../contexts/SettingsContext';
 import { buildTrainedModelParameterItems } from './trainedModelSelection';
 import { buildCompareModelSummary, getCompareSelectionState } from './CompareTrainingModels/compareTrainingModelsData';
-import { PREDICT_MODEL_MODE_COMPARE, PREDICT_MODEL_MODE_TRAINED } from './predictModelModes';
+import { PREDICT_MODEL_MODE_COMPARE, PREDICT_MODEL_MODE_EARTH, PREDICT_MODEL_MODE_TRAINED } from './predictModelModes';
 import { clampPredictionHorizon } from './predictionHorizon';
 import { useTrainingTags } from '../../components/TrainingTags/useTrainingTags';
 import { TagChips, TagFilter } from '../../components/TrainingTags/TagControls';
@@ -323,6 +323,14 @@ function ModelSourceControl({
       background: 'rgba(74,207,172,0.12)',
       color: C.green,
     },
+    {
+      // 地球历史预测：日期起点 + DU，独立于火星 MY/Ls 分析。
+      value: PREDICT_MODEL_MODE_EARTH,
+      label: isZh ? '地球历史预测' : 'Earth forecast',
+      borderColor: C.orange ?? C.mars,
+      background: 'rgba(241,154,120,0.12)',
+      color: C.orange ?? C.mars,
+    },
   ];
 
   return (
@@ -332,6 +340,10 @@ function ModelSourceControl({
         subtitle={
           modelMode === PREDICT_MODEL_MODE_COMPARE
             ? (isZh ? '选择多个已完成训练任务，比较完整测试集表现。' : 'Compare completed training tasks across the full test set.')
+            : modelMode === PREDICT_MODEL_MODE_EARTH
+            ? (isZh
+                ? '选择已完成的地球任务与历史预测起点，查看未来 3 天逐日 TO3 场（DU）。'
+                : 'Pick a completed Earth task and a historical forecast origin to view 3 daily TO3 fields in DU.')
             : modelMode === PREDICT_MODEL_MODE_TRAINED
             ? (isZh ? '使用训练页面已完成任务的模型权重进行预测。' : 'Use weights produced by a completed training task.')
             : ''

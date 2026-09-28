@@ -56,9 +56,21 @@ import {
 } from './PredictPage/predictRequestCoordinator';
 import {
   PREDICT_MODEL_MODE_COMPARE,
+  PREDICT_MODEL_MODE_EARTH,
   PREDICT_MODEL_MODE_TRAINED,
   normalizePredictModelMode,
+  readPredictModeFromHash,
 } from './PredictPage/predictModelModes';
+import EarthPredictPanel from './PredictPage/EarthPredictPanel';
+import {
+  buildEarthPredictKey,
+  getEarthTrainingModelOptions,
+  isEarthTask,
+  pickDefaultOrigin,
+  resolveEarthPredictErrorMessage,
+  shouldClearEarthResult,
+} from './PredictPage/earthPredictModel';
+import { fetchEarthPredictContext, runEarthPrediction } from '../services/earthPredict';
 import CompareTrainingModelsPanel from './PredictPage/CompareTrainingModels/CompareTrainingModelsPanel';
 import { getCompareSelectionState } from './PredictPage/CompareTrainingModels/compareTrainingModelsData';
 import {
@@ -106,7 +118,11 @@ export default function PredictPage() {
   const [lsStart, setLsStart] = useState(90);
   const [marsYear, setMarsYear] = useState(27);
   const dataSourceMode = 'default';
-  const [modelMode, setModelMode] = useState(() => normalizePredictModelMode());
+  // 训练页可以通过 hash query 显式请求模式（如 mode=trained_compare）。
+  const [hashRequestedMode, setHashRequestedMode] = useState(() => readPredictModeFromHash(window.location.hash));
+  const [modelMode, setModelMode] = useState(
+    () => readPredictModeFromHash(window.location.hash) || normalizePredictModelMode()
+  );
   const [trainingTasks, setTrainingTasks] = useState([]);
   const [trainingTasksScope, setTrainingTasksScope] = useState(null);
   const [trainingTasksLoading, setTrainingTasksLoading] = useState(false);
@@ -148,6 +164,19 @@ export default function PredictPage() {
 
   const [compareConfigs, setCompareConfigs] = useState([]);
   const [selectedCompareIds, setSelectedCompareIds] = useState([]);
+
+  // ── 地球历史预测（与火星模式完全分离的状态）─────────────────────────
+  const [earthTaskId, setEarthTaskId] = useState('');
+  const [earthOrigin, setEarthOrigin] = useState('');
+  const [earthDay, setEarthDay] = useState(0);
+  const [earthContext, setEarthContext] = useState(null);
+  const [earthContextLoading, setEarthContextLoading] = useState(false);
+  const [earthContextError, setEarthContextError] = useState(null);
+  const [earthResult, setEarthResult] = useState(null);
+  const [earthResultKey, setEarthResultKey] = useState(null);
+  const [earthResultError, setEarthResultError] = useState(null);
+  const [earthLoading, setEarthLoading] = useState(false);
+  const earthRequestRef = useRef(null);
 
   const analysisVisibility = useMemo(
     () => getPredictAnalysisVisibility(modelMode),
@@ -418,9 +447,12 @@ export default function PredictPage() {
       pendingTrainingTaskHandoffRef.current = null;
     }
 
+    // hash 显式请求的模式（训练页「去模型比较」/ 单模型 handoff）优先于缓存里的模式：
+    // 否则上次浏览留下的 trained 模式会把比较模式顶掉，URL 与实际界面不一致。
+    const urlRequestedMode = readPredictModeFromHash(window.location.hash);
     const effectiveRestoredModelMode = handoff
       ? PREDICT_MODEL_MODE_TRAINED
-      : restoredModelMode;
+      : (urlRequestedMode || restoredModelMode);
     const restoredContext = {
       modelMode: effectiveRestoredModelMode,
       trainingTaskId: effectiveRestoredModelMode === PREDICT_MODEL_MODE_TRAINED
@@ -530,6 +562,23 @@ export default function PredictPage() {
   useLayoutEffect(() => {
     cacheReadyScopeRef.current = cacheReadyScope === predictScope ? predictScope : null;
   }, [cacheReadyScope, predictScope]);
+
+  // 监听 hash：训练页每次跳转都带着希望进入的模式。
+  useEffect(() => {
+    const syncRequestedMode = () => setHashRequestedMode(readPredictModeFromHash(window.location.hash));
+    window.addEventListener('hashchange', syncRequestedMode);
+    syncRequestedMode();
+    return () => window.removeEventListener('hashchange', syncRequestedMode);
+  }, []);
+
+  /**
+   * hash 显式请求的模式优先于预测缓存里的模式：进入 #/predict?mode=trained_compare
+   * 与单模型 handoff 都从训练页发起，必须由 URL 决定，而不是上次浏览留下的缓存。
+   */
+  useEffect(() => {
+    if (!hashRequestedMode) return;
+    setModelMode(hashRequestedMode);
+  }, [hashRequestedMode]);
 
   useEffect(() => {
     if (modelMode !== PREDICT_MODEL_MODE_TRAINED || trainingTasksLoading || !trainingTasksLoaded) return;
@@ -1022,6 +1071,164 @@ export default function PredictPage() {
     setPfiData(null);
   }, [modelMode]);
 
+  // ── 地球历史预测 ───────────────────────────────────────────────────
+  const earthTasks = trainingTasksScope === predictScope ? trainingTasks : [];
+  const earthTaskOptions = useMemo(() => getEarthTrainingModelOptions(earthTasks), [earthTasks]);
+
+  const selectedEarthTask = useMemo(
+    () => earthTaskOptions.find((option) => String(option.id) === String(earthTaskId)) || null,
+    [earthTaskOptions, earthTaskId],
+  );
+
+  /**
+   * 加载地球预测上下文（可选日期范围、网格、单位、已训练指标）。
+   *
+   * 没有可选起点时立即提示，并且不发送预测请求；服务器仍会独立复核起点。
+   */
+  const loadEarthContext = useCallback(async (taskId) => {
+    const normalized = Number(taskId);
+    if (!Number.isFinite(normalized) || normalized <= 0) {
+      setEarthContext(null);
+      setEarthContextError(null);
+      return;
+    }
+    setEarthContextLoading(true);
+    setEarthContextError(null);
+    try {
+      const payload = await fetchEarthPredictContext(normalized);
+      setEarthContext(payload);
+      setEarthOrigin((current) => (
+        current && payload?.origins?.dates?.includes(current)
+          ? current
+          : pickDefaultOrigin(payload?.origins)
+      ));
+    } catch (requestError) {
+      setEarthContext(null);
+      const resolved = resolveEarthPredictErrorMessage(requestError);
+      setEarthContextError(resolved.key ? t(`predict.${resolved.key}`) : resolved.fallback);
+    } finally {
+      setEarthContextLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    if (modelMode !== PREDICT_MODEL_MODE_EARTH) return;
+    if (!earthTaskId && earthTaskOptions.length > 0) {
+      setEarthTaskId(String(earthTaskOptions[0].id));
+      return;
+    }
+    if (earthTaskId) loadEarthContext(earthTaskId);
+  }, [modelMode, earthTaskId, earthTaskOptions, loadEarthContext]);
+
+  /** 切换模式或任务时丢弃地球结果，避免显示上一个任务/起点的场。 */
+  useEffect(() => {
+    if (modelMode === PREDICT_MODEL_MODE_EARTH) return;
+    setEarthResult(null);
+    setEarthResultKey(null);
+    setEarthResultError(null);
+    setEarthDay(0);
+  }, [modelMode]);
+
+  const handleEarthTaskChange = useCallback((value) => {
+    setEarthTaskId(value);
+    setEarthResult(null);
+    setEarthResultKey(null);
+    setEarthResultError(null);
+    setEarthDay(0);
+    setEarthContext(null);
+    setEarthOrigin('');
+  }, []);
+
+  const handleEarthOriginChange = useCallback((value) => {
+    setEarthOrigin(value);
+    setEarthResult(null);
+    setEarthResultKey(null);
+    setEarthResultError(null);
+    setEarthDay(0);
+  }, []);
+
+  /**
+   * 运行地球历史预测。
+   *
+   * 用「星球 + 数据集身份 + 任务 + 起点」作为结果身份：服务端返回的指纹与本地
+   * 计算不一致时丢弃迟到响应，避免旧结果覆盖新起点。
+   */
+  const handleRunEarthPredict = useCallback(async () => {
+    const taskId = Number(earthTaskId);
+    if (!Number.isFinite(taskId) || taskId <= 0 || !earthOrigin || earthLoading) return;
+    setEarthLoading(true);
+    setEarthResultError(null);
+    try {
+      const payload = await runEarthPrediction({ trainingTaskId: taskId, forecastOrigin: earthOrigin });
+      const nextKey = buildEarthPredictKey({
+        taskId,
+        datasetId: payload?.dataset_id,
+        datasetVersion: payload?.dataset_version,
+        datasetFingerprint: payload?.dataset_fingerprint,
+        forecastOrigin: payload?.forecast_origin,
+        targetDates: payload?.target_dates,
+      });
+      if (earthRequestRef.current
+        && shouldClearEarthResult(earthRequestRef.current, nextKey)) {
+        setEarthResult(null);
+      }
+      earthRequestRef.current = nextKey;
+      setEarthResultKey(nextKey);
+      setEarthResult(payload);
+      setEarthDay(0);
+    } catch (requestError) {
+      const resolved = resolveEarthPredictErrorMessage(requestError);
+      setEarthResultError(resolved.key ? t(`predict.${resolved.key}`) : resolved.fallback);
+    } finally {
+      setEarthLoading(false);
+    }
+  }, [earthLoading, earthOrigin, earthTaskId, t]);
+
+  const earthCopy = useMemo(() => ({
+    title: t('predict.earthTitle'),
+    note: t('predict.earthNote'),
+    taskLabel: t('predict.earthTaskLabel'),
+    taskPlaceholder: t('predict.earthTaskPlaceholder'),
+    originLabel: t('predict.earthOriginLabel'),
+    originRange: (start, end, count) => `${start} → ${end} · ${count}`,
+    originRangeUnknown: t('predict.earthOriginRangeUnknown'),
+    originOutOfRange: t('predict.earthOriginOutOfRange'),
+    run: t('predict.earthRun'),
+    running: t('predict.earthRunning'),
+    reload: t('predict.earthReload'),
+    loadingContext: t('predict.earthLoadingContext'),
+    emptyReady: t('predict.earthEmptyReady'),
+    emptyNoTask: t('predict.earthEmptyNoTask'),
+    fieldEmpty: t('predict.earthFieldEmpty'),
+    dayTabsLabel: t('predict.earthDayTabsLabel'),
+    originLine: (origin, first, last) => t('predict.earthOriginLine')(origin, first, last),
+    rangeLabel: t('predict.earthRangeLabel'),
+    validCellsLabel: t('predict.earthValidCells'),
+    leadHeader: t('predict.earthLeadHeader'),
+    dateHeader: t('predict.earthDateHeader'),
+    referenceNote: t('predict.earthReferenceNote'),
+    residualUnit: t('predict.earthResidualUnit'),
+    residualMode: t('predict.earthResidualMode'),
+    physicalMode: t('predict.earthPhysicalMode'),
+    dayUnit: t('predict.earthDayUnit'),
+    factDataset: t('predict.earthFactDataset'),
+    factModel: t('predict.earthFactModel'),
+    official: t('predict.earthModelOfficial'),
+    uploadedFallback: t('predict.earthModelUploadedFallback'),
+    factGrid: t('predict.earthFactGrid'),
+    factWindow: t('predict.earthFactWindow'),
+    factChannels: t('predict.earthFactChannels'),
+    factBestEpoch: t('predict.earthFactBestEpoch'),
+    factTestRmse: t('predict.earthFactTestRmse'),
+    fieldLabels: {
+      prediction: t('predict.earthFieldPrediction'),
+      reference: t('predict.earthFieldReference'),
+      residual: t('predict.earthFieldResidual'),
+    },
+  }), [t]);
+
+  const isEarthMode = modelMode === PREDICT_MODEL_MODE_EARTH;
+
   const step = activeResults ? Math.min(activeHorizon, (activeResults.horizon || 1) - 1) : 0;
   const truthField = activeResults?.ground_truth?.[step] ?? null;
   const predField = activeResults?.prediction?.[step] ?? null;
@@ -1034,7 +1241,14 @@ export default function PredictPage() {
     <div className="page-enter" style={{ padding: '100px 40px 60px', maxWidth: 1400, margin: '0 auto' }}>
       <SectionTitle title={t('predict.title')} subtitle={t('predict.subtitle')} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 24 }}>
+      {hashRequestedMode === PREDICT_MODEL_MODE_COMPARE && modelMode === PREDICT_MODEL_MODE_COMPARE ? (
+        <div className="predict-mode-hint" role="status">
+          {t('experimentCenter.compareModeHint')}
+        </div>
+      ) : null}
+
+      <div style={{ display: 'grid', gridTemplateColumns: isEarthMode ? '1fr' : '300px 1fr', gap: 24 }}>
+        {!isEarthMode ? (
         <PredictSidebar
           isLight={isLight}
           loading={modelMode === PREDICT_MODEL_MODE_COMPARE ? compareTrainingLoading : loading}
@@ -1065,8 +1279,38 @@ export default function PredictPage() {
           handlePredict={handlePredict}
           precision={precision}
         />
+        ) : null}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* 地球模式：日期起点 + DU 三场 + 指标，不进入火星场图与 Ls 控件 */}
+          {isEarthMode ? (
+            <>
+              {earthTaskOptions.length === 0 ? (
+                <div className="predict-mode-hint" role="status" data-earth-no-task-hint="true">
+                  {t('predict.earthNoCompletedTask')}
+                </div>
+              ) : null}
+              <EarthPredictPanel
+                copy={earthCopy}
+                context={earthContext}
+                contextLoading={earthContextLoading}
+                contextError={earthContextError}
+                result={earthResult}
+                resultError={earthResultError}
+                loading={earthLoading}
+                origin={earthOrigin}
+                onOriginChange={handleEarthOriginChange}
+                onRun={handleRunEarthPredict}
+                onReloadContext={() => loadEarthContext(earthTaskId)}
+                selectedDay={earthDay}
+                onSelectDay={setEarthDay}
+                taskOptions={earthTaskOptions}
+                selectedTaskId={earthTaskId}
+                onSelectTask={handleEarthTaskChange}
+              />
+            </>
+          ) : null}
+
           {analysisVisibility.predictionFields ? (
           <PredictDisplay
             viewMode={viewMode}

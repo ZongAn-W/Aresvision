@@ -449,8 +449,10 @@ def test_overview_capability_is_declared_for_registered_earth(earth_overview):
     _service, descriptor, _registry = earth_overview
     assert descriptor["capabilities"]["web_overview"] is True
     assert descriptor["capabilities"]["metadata"] is True
-    assert descriptor["capabilities"]["training"] is False
-    assert descriptor["capabilities"]["trained_prediction"] is False
+    # Earth training and historical prediction entries are wired as well; this
+    # test only pins the overview capability plus that the three are separate.
+    assert descriptor["capabilities"]["training"] is True
+    assert descriptor["capabilities"]["trained_prediction"] is True
 
 
 def test_snapshot_arrays_are_read_only_and_survive_the_closed_file(earth_overview):

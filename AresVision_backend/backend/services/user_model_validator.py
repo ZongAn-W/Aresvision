@@ -24,12 +24,33 @@ from training_backbones.uploaded_model_contract import (
     run_uploaded_model,
     uploaded_model_requires_topography,
 )
+from training_backbones.uploaded_model_dataset_spec import (
+    DatasetCapabilityError,
+    declares_earth_feed,
+    earth_incompatibility_reasons,
+    normalize_dataset_declarations,
+)
+from training_backbones.uploaded_model_source_check import (
+    ALLOWED_IMPORT_ROOTS,
+    DISALLOWED_ATTRIBUTE_CALLS,
+    DISALLOWED_DIRECT_CALLS,
+    call_name as _call_name,
+    validate_uploaded_model_ast,
+)
 
 
-ALLOWED_IMPORT_ROOTS = {"torch", "numpy"}
-DISALLOWED_DIRECT_CALLS = {"open", "eval", "exec", "compile", "__import__"}
-DISALLOWED_ATTRIBUTE_CALLS = {"system", "popen", "Popen", "run"}
 EXPECTED_OUTPUT_SHAPE = [2, 3, 1, 8, 16]
+
+#: Earth dry-run contract: the published global grid, the fixed 7 -> 3 window and
+#: both boundary channel counts (ozone only, and all five published channels). A
+#: model must satisfy every one of these before it can be trained on Earth data.
+EARTH_DRY_RUN_BATCH = 1
+EARTH_DRY_RUN_WINDOW = 7
+EARTH_DRY_RUN_HORIZON = 3
+EARTH_DRY_RUN_HEIGHT = 36
+EARTH_DRY_RUN_WIDTH = 72
+EARTH_DRY_RUN_CHANNELS = (1, 5)
+EARTH_EXPECTED_OUTPUT_TAIL = (1, EARTH_DRY_RUN_HEIGHT, EARTH_DRY_RUN_WIDTH)
 
 
 @dataclass
@@ -41,14 +62,32 @@ class UserModelValidationResult:
     description: str | None = None
     param_schema: dict[str, Any] = field(default_factory=dict)
     output_shape: list[int] | None = None
+    #: Normalized ``MODEL_SPEC.datasets`` block (empty when the model declares none).
+    datasets: dict[str, Any] = field(default_factory=dict)
+    #: Whether this model may be trained on the Earth feed. Defaults to False, so a
+    #: spec without an explicit declaration can never be treated as Earth-capable.
+    earth_ok: bool = False
+    earth_errors: list[str] = field(default_factory=list)
+    earth_output_shape: list[int] | None = None
+    earth_checked: bool = False
 
     def report_dict(self) -> dict[str, Any]:
-        return {
+        report = {
             "ok": self.ok,
             "errors": self.errors,
             "warnings": self.warnings,
             "output_shape": self.output_shape,
         }
+        # Only publish the Earth block when the model opts in, so existing uploads
+        # keep the historical report shape.
+        if self.datasets or self.earth_checked or self.earth_errors:
+            report["datasets"] = self.datasets
+            report["earth"] = {
+                "compatible": self.earth_ok,
+                "errors": self.earth_errors,
+                "output_shape": self.earth_output_shape,
+            }
+        return report
 
 
 class UserModelValidator:
@@ -111,6 +150,11 @@ class UserModelValidator:
             description=payload.get("description"),
             param_schema=dict(payload.get("param_schema", {})),
             output_shape=payload.get("output_shape"),
+            datasets=dict(payload.get("datasets", {})),
+            earth_ok=bool(payload.get("earth_ok", False)),
+            earth_errors=list(payload.get("earth_errors", [])),
+            earth_output_shape=payload.get("earth_output_shape"),
+            earth_checked=bool(payload.get("earth_checked", False)),
         )
 
     @staticmethod
@@ -189,35 +233,13 @@ class UserModelValidator:
 
     @staticmethod
     def _validate_ast(tree: ast.AST) -> list[str]:
-        errors: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    root = alias.name.split(".", 1)[0]
-                    if root not in ALLOWED_IMPORT_ROOTS:
-                        errors.append(f"Disallowed import: {root}")
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:
-                    errors.append("Disallowed import: relative import")
-                    continue
-                root = (node.module or "").split(".", 1)[0]
-                if root not in ALLOWED_IMPORT_ROOTS:
-                    errors.append(f"Disallowed import: {root or '<unknown>'}")
-            elif isinstance(node, ast.Call):
-                call_name = UserModelValidator._call_name(node.func)
-                if isinstance(node.func, ast.Name) and call_name in DISALLOWED_DIRECT_CALLS:
-                    errors.append(f"Disallowed call: {call_name}")
-                elif isinstance(node.func, ast.Attribute) and call_name in DISALLOWED_ATTRIBUTE_CALLS:
-                    errors.append(f"Disallowed call: {call_name}")
-        return errors
+        # Shared with the execution path so upload validation and actual runs can
+        # never disagree about what an uploaded model may do.
+        return validate_uploaded_model_ast(tree)
 
     @staticmethod
     def _call_name(func: ast.expr) -> str | None:
-        if isinstance(func, ast.Name):
-            return func.id
-        if isinstance(func, ast.Attribute):
-            return func.attr
-        return None
+        return _call_name(func)
 
     @staticmethod
     def _import_module(path: Path, module_name: str):
@@ -268,8 +290,19 @@ class UserModelValidator:
             )
 
         try:
-            normalize_auxiliary_inputs(model_spec)
+            auxiliary_inputs = normalize_auxiliary_inputs(model_spec)
         except ValueError as exc:
+            return UserModelValidationResult(
+                ok=False,
+                errors=[str(exc)],
+                warnings=warnings,
+                display_name=display_name,
+                description=description,
+            )
+
+        try:
+            datasets = normalize_dataset_declarations(model_spec)
+        except DatasetCapabilityError as exc:
             return UserModelValidationResult(
                 ok=False,
                 errors=[str(exc)],
@@ -361,6 +394,7 @@ class UserModelValidator:
                 display_name=display_name,
                 description=description,
                 param_schema=param_schema,
+                datasets=datasets,
             )
 
         output_shape = list(output.shape) if hasattr(output, "shape") else None
@@ -376,7 +410,22 @@ class UserModelValidator:
                 description=description,
                 param_schema=param_schema,
                 output_shape=output_shape,
+                datasets=datasets,
             )
+
+        # The Mars dry-run passed. Whether the model may also be trained on Earth
+        # data is a separate question, answered only by its own declaration and its
+        # own dry-run against the Earth tensor contract.
+        earth_ok, earth_errors, earth_output_shape, earth_checked = (
+            UserModelValidator._validate_earth_compatibility(
+                model=model,
+                build_model=build_model,
+                model_spec=model_spec,
+                auxiliary_inputs=auxiliary_inputs,
+                param_schema=param_schema,
+                warnings=warnings,
+            )
+        )
 
         return UserModelValidationResult(
             ok=True,
@@ -386,7 +435,120 @@ class UserModelValidator:
             description=description,
             param_schema=param_schema,
             output_shape=output_shape,
+            datasets=datasets,
+            earth_ok=earth_ok,
+            earth_errors=earth_errors,
+            earth_output_shape=earth_output_shape,
+            earth_checked=earth_checked,
         )
+
+    @staticmethod
+    def _validate_earth_compatibility(
+        *,
+        model: Any,
+        build_model: Any,
+        model_spec: Any,
+        auxiliary_inputs: dict[str, Any],
+        param_schema: dict[str, Any],
+        warnings: list[str],
+    ) -> tuple[bool, list[str], list[int] | None, bool]:
+        """Return ``(compatible, errors, output_shape, checked)`` for the Earth feed.
+
+        A model that never declares the Earth feed is reported as incompatible
+        without being built again - "works on Mars" must not imply Earth support.
+        A declared model is built with Earth's real window/horizon/grid and run on
+        that exact tensor contract, so a shape assumption baked into ``build_model``
+        fails here instead of in the middle of a training run.
+        """
+        import torch
+
+        if not declares_earth_feed(model_spec):
+            reasons = earth_incompatibility_reasons(
+                model_spec,
+                auxiliary_inputs,
+                height=EARTH_DRY_RUN_HEIGHT,
+                width=EARTH_DRY_RUN_WIDTH,
+                channel_count=len(EARTH_DRY_RUN_CHANNELS),
+                window=EARTH_DRY_RUN_WINDOW,
+                horizon=EARTH_DRY_RUN_HORIZON,
+            )
+            return False, reasons, None, False
+
+        reasons = earth_incompatibility_reasons(
+            model_spec,
+            auxiliary_inputs,
+            height=EARTH_DRY_RUN_HEIGHT,
+            width=EARTH_DRY_RUN_WIDTH,
+            channel_count=len(EARTH_DRY_RUN_CHANNELS),
+            window=EARTH_DRY_RUN_WINDOW,
+            horizon=EARTH_DRY_RUN_HORIZON,
+        )
+        if reasons:
+            return False, reasons, None, True
+
+        last_shape: list[int] | None = None
+        for channel_count in EARTH_DRY_RUN_CHANNELS:
+            config = {
+                "in_channels": int(channel_count),
+                "window": EARTH_DRY_RUN_WINDOW,
+                "horizon": EARTH_DRY_RUN_HORIZON,
+                "height": EARTH_DRY_RUN_HEIGHT,
+                "width": EARTH_DRY_RUN_WIDTH,
+                "selected_channels": ["earth"] * max(0, int(channel_count) - 1),
+            }
+            config.update({name: schema["default"] for name, schema in param_schema.items()})
+            try:
+                earth_model = build_model(config)
+            except Exception as exc:  # noqa: BLE001
+                return False, [f"build_model(config) failed for the Earth feed: {exc}"], last_shape, True
+            if not isinstance(earth_model, torch.nn.Module):
+                return False, ["build_model(config) must return torch.nn.Module"], last_shape, True
+            attach_uploaded_model_contract(earth_model, model_spec)
+            try:
+                earth_model.eval()
+                with torch.no_grad():
+                    inputs = torch.zeros(
+                        EARTH_DRY_RUN_BATCH,
+                        EARTH_DRY_RUN_WINDOW,
+                        int(channel_count),
+                        EARTH_DRY_RUN_HEIGHT,
+                        EARTH_DRY_RUN_WIDTH,
+                    )
+                    output = run_uploaded_model(
+                        earth_model,
+                        inputs,
+                        ls=None,
+                        topography=None,
+                        context="Earth dry-run",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                return (
+                    False,
+                    [
+                        "the model cannot be built and run on Earth's "
+                        f"[{EARTH_DRY_RUN_BATCH}, {EARTH_DRY_RUN_WINDOW}, {channel_count}, "
+                        f"{EARTH_DRY_RUN_HEIGHT}, {EARTH_DRY_RUN_WIDTH}] input: {exc}"
+                    ],
+                    last_shape,
+                    True,
+                )
+            last_shape = list(output.shape) if hasattr(output, "shape") else None
+            expected = [
+                EARTH_DRY_RUN_BATCH,
+                EARTH_DRY_RUN_HORIZON,
+                *EARTH_EXPECTED_OUTPUT_TAIL,
+            ]
+            if last_shape != expected:
+                return (
+                    False,
+                    [
+                        "Earth output shape mismatch: "
+                        f"expected {expected}, got {last_shape}"
+                    ],
+                    last_shape,
+                    True,
+                )
+        return True, [], last_shape, True
 
     @staticmethod
     def _normalize_parameters(parameters: Any) -> tuple[dict[str, Any], list[str]]:
@@ -436,6 +598,63 @@ class UserModelValidator:
             normalized[name] = normalized_schema
 
         return normalized, errors
+
+    @staticmethod
+    def normalize_custom_params(
+        param_schema: Any,
+        custom_params: Any,
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Validate user-supplied parameter values against a normalized schema.
+
+        Returns ``(resolved_values, errors)``. Missing values fall back to the
+        schema default, unknown keys are reported, and a value outside its declared
+        range or of the wrong type is an error rather than a silent clamp.
+        """
+        if not isinstance(param_schema, dict):
+            return {}, []
+        supplied = custom_params if isinstance(custom_params, dict) else {}
+        errors: list[str] = []
+        unknown = sorted(set(supplied) - set(param_schema))
+        if unknown:
+            errors.append(f"Unknown custom model parameter: {unknown[0]}")
+
+        resolved: dict[str, Any] = {}
+        for name, schema in param_schema.items():
+            if not isinstance(schema, dict):
+                continue
+            if name not in supplied:
+                resolved[name] = schema.get("default")
+                continue
+            value = supplied[name]
+            field_type = schema.get("type")
+            if field_type == "int":
+                if not UserModelValidator._is_int(value):
+                    errors.append(f"Parameter {name} must be an int")
+                    continue
+            elif field_type == "float":
+                if not UserModelValidator._is_number(value):
+                    errors.append(f"Parameter {name} must be a number")
+                    continue
+                value = float(value)
+            elif field_type == "bool":
+                if not isinstance(value, bool):
+                    errors.append(f"Parameter {name} must be a bool")
+                    continue
+            elif field_type == "select":
+                options = schema.get("options") or []
+                if value not in options:
+                    errors.append(f"Parameter {name} must be one of {options}")
+                    continue
+            if field_type in {"int", "float"}:
+                minimum, maximum = schema.get("min"), schema.get("max")
+                if UserModelValidator._is_number(minimum) and value < minimum:
+                    errors.append(f"Parameter {name} must be at least {minimum}")
+                    continue
+                if UserModelValidator._is_number(maximum) and value > maximum:
+                    errors.append(f"Parameter {name} must be at most {maximum}")
+                    continue
+            resolved[name] = value
+        return resolved, errors
 
     @staticmethod
     def _normalize_numeric_param(
@@ -519,20 +738,28 @@ class UserModelValidator:
         return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _validation_payload(result: UserModelValidationResult) -> dict[str, Any]:
+    """Serialize a validation result for the timeout child process queue."""
+    return {
+        "ok": result.ok,
+        "errors": result.errors,
+        "warnings": result.warnings,
+        "display_name": result.display_name,
+        "description": result.description,
+        "param_schema": result.param_schema,
+        "output_shape": result.output_shape,
+        "datasets": result.datasets,
+        "earth_ok": result.earth_ok,
+        "earth_errors": result.earth_errors,
+        "earth_output_shape": result.earth_output_shape,
+        "earth_checked": result.earth_checked,
+    }
+
+
 def _validate_file_child(file_path: str, result_queue: Any) -> None:
     try:
         result = UserModelValidator._validate_file_in_process(Path(file_path))
-        result_queue.put(
-            {
-                "ok": result.ok,
-                "errors": result.errors,
-                "warnings": result.warnings,
-                "display_name": result.display_name,
-                "description": result.description,
-                "param_schema": result.param_schema,
-                "output_shape": result.output_shape,
-            }
-        )
+        result_queue.put(_validation_payload(result))
     except BaseException as exc:  # noqa: BLE001 - child process must report failures.
         result_queue.put(
             {
@@ -543,5 +770,10 @@ def _validate_file_child(file_path: str, result_queue: Any) -> None:
                 "description": None,
                 "param_schema": {},
                 "output_shape": None,
+                "datasets": {},
+                "earth_ok": False,
+                "earth_errors": [],
+                "earth_output_shape": None,
+                "earth_checked": False,
             }
         )

@@ -28,6 +28,10 @@ import {
   buildRegionalParticleGeometry,
   updateRegionalParticlePositions,
 } from './sphericalRegionalParticles.js';
+import {
+  buildContourSegments,
+  buildWindVectors,
+} from './sphericalFieldLayers.js';
 
 /** 场单元壳层半径：略高于地球底球与海岸线以外的可分层级由调用方决定。 */
 const EARTH_FIELD_RADIUS = 0.872;
@@ -310,10 +314,14 @@ function getParticleSeed(key) {
   return hash >>> 0;
 }
 
-function getGridLayerSignature(fieldData, particleDensity, radiusOffset) {
+function getGridLayerSignature(fieldData, geometry, particleDensity, radiusOffset) {
   const nLat = fieldData?.field?.length || 0;
   const nLon = fieldData?.field?.[0]?.length || 0;
-  return `grid:${nLat}x${nLon}:${particleDensity}:${radiusOffset}`;
+  const latCenters = fieldData?.latCenters || geometry?.latCenters;
+  const lonCenters = fieldData?.lonCenters || geometry?.lonCenters;
+  const lat = latCenters?.length === nLat ? latCenters.join(',') : '';
+  const lon = lonCenters?.length === nLon ? lonCenters.join(',') : '';
+  return `grid:${nLat}x${nLon}:${particleDensity}:${radiusOffset}:${lat}:${lon}`;
 }
 
 function getPointLayerSignature(points, radiusOffset) {
@@ -336,6 +344,147 @@ function disposeParticleMesh(mesh) {
   if (mesh.material) mesh.material.dispose();
 }
 
+function overlayCoordinates(fieldData, geometry, isEarth) {
+  const field = fieldData?.field;
+  const rows = field?.length || 0;
+  const cols = field?.[0]?.length || 0;
+  const latCenters = geometry?.latCenters?.length === rows
+    ? geometry.latCenters
+    : Array.from({ length: rows }, (_, index) => (90 - (index / Math.max(1, rows - 1)) * 180));
+  const lonCenters = geometry?.lonCenters?.length === cols
+    ? geometry.lonCenters
+    : Array.from({ length: cols }, (_, index) => -180 + (index / Math.max(1, cols)) * 360);
+  return { latCenters, lonCenters };
+}
+
+function setOverlayGroup(parent, ref, next) {
+  if (ref.current && parent) {
+    parent.remove(ref.current);
+    disposeObject3D(ref.current);
+  }
+  ref.current = next || null;
+  if (next && parent) parent.add(next);
+}
+
+function buildGeoLineGroup(records, { color, opacity, radius = 0.925, name }) {
+  if (!records?.length) return null;
+  const group = new THREE.Group();
+  group.name = name;
+  const material = new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+  });
+  const positions = [];
+  records.forEach((record) => {
+    const points = record.points || [];
+    if (points.length < 2) return;
+    for (let index = 0; index + 1 < points.length; index += 1) {
+      const start = latLonToVec3(points[index][0], points[index][1], radius);
+      const end = latLonToVec3(points[index + 1][0], points[index + 1][1], radius);
+      positions.push(start.x, start.y, start.z, end.x, end.y, end.z);
+    }
+  });
+  if (positions.length < 6) {
+    material.dispose();
+    return null;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const lines = new THREE.LineSegments(geometry, material);
+  lines.name = name;
+  lines.renderOrder = 7;
+  group.add(lines);
+  return group;
+}
+
+function buildWindOverlay(vectors, isLight) {
+  if (!vectors?.length) return null;
+  const positions = [];
+  vectors.forEach((vector) => {
+    const radius = 1.135;
+    const start = latLonToVec3(vector.start[0], vector.start[1], radius);
+    const end = latLonToVec3(vector.end[0], vector.end[1], radius);
+    const tangent = end.clone().sub(start);
+    const length = tangent.length();
+    if (length < 1e-5) return;
+    tangent.divideScalar(length);
+    const normal = end.clone().normalize();
+    const side = new THREE.Vector3().crossVectors(normal, tangent);
+    if (side.lengthSq() < 1e-8) return;
+    side.normalize();
+    const headLength = Math.min(0.052, Math.max(0.018, length * 0.34));
+    const halfWidth = headLength * 0.56;
+    const wingCenter = end.clone().addScaledVector(tangent, -headLength);
+    const wingA = wingCenter.clone().addScaledVector(side, halfWidth);
+    const wingB = wingCenter.clone().addScaledVector(side, -halfWidth);
+    // Three independent line segments per arrow: shaft + two arrow-head wings.
+    positions.push(
+      start.x, start.y, start.z, end.x, end.y, end.z,
+      end.x, end.y, end.z, wingA.x, wingA.y, wingA.z,
+      end.x, end.y, end.z, wingB.x, wingB.y, wingB.z,
+    );
+  });
+  if (!positions.length) return null;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const material = new THREE.LineBasicMaterial({
+    color: isLight ? 0x155e75 : 0x9ad9ef,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+  });
+  const lines = new THREE.LineSegments(geometry, material);
+  lines.name = 'wind-vector-overlay';
+  lines.renderOrder = 8;
+  return lines;
+}
+
+function buildTerminatorOverlay(direction, isLight) {
+  if (!direction) return null;
+  const normal = new THREE.Vector3(direction.x, direction.y, direction.z).normalize();
+  const basis = Math.abs(normal.y) < 0.92
+    ? new THREE.Vector3(0, 1, 0)
+    : new THREE.Vector3(1, 0, 0);
+  const tangent = new THREE.Vector3().crossVectors(normal, basis).normalize();
+  const bitangent = new THREE.Vector3().crossVectors(normal, tangent).normalize();
+  const points = [];
+  for (let index = 0; index <= 128; index += 1) {
+    const angle = (index / 128) * Math.PI * 2;
+    const point = tangent.clone().multiplyScalar(Math.cos(angle) * 1.145)
+      .add(bitangent.clone().multiplyScalar(Math.sin(angle) * 1.145));
+    points.push(point);
+  }
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color: isLight ? 0xc76543 : 0xf19a78,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+  });
+  const line = new THREE.Line(geometry, material);
+  line.name = 'solar-terminator-overlay';
+  line.renderOrder = 9;
+  return line;
+}
+
+function applyBaseMapStrength(material, strength) {
+  if (!material) return;
+  const normalized = Math.max(0, Math.min(1, Number(strength) || 0));
+  // Keep the reference sphere opaque at every strength.  Scaling the albedo
+  // preserves depth and lets the data shell remain readable when the map is dimmed.
+  const base = material.userData?.baseColor || material.color.clone();
+  material.userData = material.userData || {};
+  material.userData.baseColor = base;
+  const albedo = 0.18 + normalized * 0.82;
+  material.color.copy(base).multiplyScalar(albedo);
+  material.opacity = 1;
+  material.transparent = false;
+  material.depthWrite = true;
+  material.needsUpdate = true;
+}
+
 const SphericalFieldCanvas = forwardRef(({
   fieldData,
   fieldLayers,
@@ -348,6 +497,13 @@ const SphericalFieldCanvas = forwardRef(({
   showConcentration = true,
   showGeoAnnotations = true,
   showBaseMap = true,
+  showSurfaceTexture = true,
+  baseMapStrength = 1,
+  showContours = false,
+  showWindVectors = false,
+  showTerminator = false,
+  windFields = null,
+  sunDirection = null,
   offsetX = 0,
   solarLongitudeLs = 0,
   onGlobeClick,
@@ -389,6 +545,9 @@ const SphericalFieldCanvas = forwardRef(({
   const regionalMeshRef = useRef(null);
   const regionalGeometryRef = useRef(null);
   const selectionMarkerRef = useRef(null);
+  const contourOverlayRef = useRef(null);
+  const windOverlayRef = useRef(null);
+  const terminatorRef = useRef(null);
   const directionalLightRef = useRef(null);
   const pickingMeshRef = useRef(null);
   const onGlobeClickRef = useRef(onGlobeClick);
@@ -458,7 +617,7 @@ const SphericalFieldCanvas = forwardRef(({
     if (!globeGroup || earthGlobeRef.current) return;
     const options = createEarthGlobeMaterial({ isLight }) || {};
     const globeGeometry = new THREE.SphereGeometry(EARTH_GLOBE_RADIUS, 96, 64);
-    const earthTexture = getEarthTexture(isLight);
+    const earthTexture = showSurfaceTexture ? getEarthTexture(isLight) : null;
     const material = new THREE.MeshPhongMaterial({
       map: earthTexture,
       color: earthTexture ? 0xffffff : (options.color ?? (isLight ? OVERVIEW_GLOBE.lightGlobeColor : OVERVIEW_GLOBE.darkGlobeColor)),
@@ -466,7 +625,9 @@ const SphericalFieldCanvas = forwardRef(({
       emissiveIntensity: options.emissiveIntensity,
       shininess: globeMaterial === 'shared' ? OVERVIEW_GLOBE.globeShininess : 6,
       transparent: false,
+      opacity: 1,
     });
+    applyBaseMapStrength(material, baseMapStrength);
     const globeMesh = new THREE.Mesh(globeGeometry, material);
     globeMesh.name = 'earth-globe-base';
     globeGroup.add(globeMesh);
@@ -488,13 +649,15 @@ const SphericalFieldCanvas = forwardRef(({
   const applyEarthGlobeColor = () => {
     if (!earthGlobeRef.current) return;
     const options = createEarthGlobeMaterial({ isLight }) || {};
-    const earthTexture = getEarthTexture(isLight);
+    const earthTexture = showSurfaceTexture ? getEarthTexture(isLight) : null;
     earthGlobeRef.current.material.map = earthTexture;
     earthGlobeRef.current.material.color.setHex(earthTexture ? 0xffffff : (options.color ?? (isLight ? OVERVIEW_GLOBE.lightGlobeColor : OVERVIEW_GLOBE.darkGlobeColor)));
+    earthGlobeRef.current.material.userData = earthGlobeRef.current.material.userData || {};
+    earthGlobeRef.current.material.userData.baseColor = earthGlobeRef.current.material.color.clone();
     earthGlobeRef.current.material.emissive.set(options.emissive || '#000000');
     earthGlobeRef.current.material.emissiveIntensity = options.emissiveIntensity ?? 0;
     if (earthTexture) earthTexture.needsUpdate = true;
-    earthGlobeRef.current.material.needsUpdate = true;
+    applyBaseMapStrength(earthGlobeRef.current.material, baseMapStrength);
   };
 
   const ensureEarthCoastline = (globeGroup, isActive) => {
@@ -950,7 +1113,7 @@ const SphericalFieldCanvas = forwardRef(({
         seasonalSunlight.position.z,
       );
     }
-  }, [isEarth, isLight, solarLongitudeLs, lightingMode]);
+  }, [baseMapStrength, isEarth, isLight, lightingMode, showSurfaceTexture, solarLongitudeLs]);
 
   useEffect(() => {
     if (sphereMeshRef.current) {
@@ -1123,7 +1286,7 @@ const SphericalFieldCanvas = forwardRef(({
       const layerColorMode = layerConfig.colorMode || colorMode;
       const radiusOffset = layerConfig.radiusOffset || 0;
       const layerParticleDensity = isLayeredMode ? Math.max(24, Math.round(particleDensity * 0.46)) : particleDensity;
-      const signature = getGridLayerSignature(layerFieldData, layerParticleDensity, radiusOffset);
+      const signature = getGridLayerSignature(layerFieldData, geometry, layerParticleDensity, radiusOffset);
       const cachedEntry = particleLayerCacheRef.current.get(key);
       const samples = cachedEntry?.signature === signature
         ? cachedEntry.samples
@@ -1131,6 +1294,8 @@ const SphericalFieldCanvas = forwardRef(({
           particleDensity: layerParticleDensity,
           radiusOffset,
           seed: getParticleSeed(key),
+          latCenters: layerFieldData.latCenters || geometry?.latCenters,
+          lonCenters: layerFieldData.lonCenters || geometry?.lonCenters,
         });
       const entry = ensureParticleEntry({
         key,
@@ -1165,7 +1330,62 @@ const SphericalFieldCanvas = forwardRef(({
     removeUnusedParticleEntries(activeKeys, globeGroup);
     particleLayersRef.current = nextLayers;
     particlesMeshRef.current = nextLayers[0] || null;
-  }, [field, fieldData, fieldLayers, colorMode, geometry, isEarth, selection, settings.colormap, showBaseMap, showConcentration, showMars, isLight, fontScale, showGeoAnnotations, particleDensity, particlePalette, particleSize, pointParticleSize]);
+  }, [field, fieldData, fieldLayers, colorMode, geometry, isEarth, selection, settings.colormap, showBaseMap, showConcentration, showMars, showSurfaceTexture, baseMapStrength, isLight, fontScale, showGeoAnnotations, particleDensity, particlePalette, particleSize, pointParticleSize]);
+
+  // Analysis overlays intentionally live in their own disposable groups so they can be
+  // toggled without rebuilding the data field or the camera.  They are derived from
+  // the same current slice shown by the globe; the optional wind pair is supplied by
+  // the page controller only when the user requests it.
+  useEffect(() => {
+    const globeGroup = sphereMeshRef.current;
+    if (!globeGroup) return;
+    const firstLayer = Array.isArray(fieldLayers) && fieldLayers.length
+      ? fieldLayers.find((layer) => layer?.fieldData?.field)
+      : null;
+    const activeFieldData = isEarth && field?.values
+      ? {
+        field: field.values,
+        minVal: field.colorRange?.min,
+        maxVal: field.colorRange?.max,
+      }
+      : firstLayer?.fieldData || fieldData;
+    const activeGeometry = isEarth
+      ? { latCenters: field?.latCenters || geometry?.latCenters, lonCenters: field?.lonCenters || geometry?.lonCenters, wrapLongitude: geometry?.wrapLongitude }
+      : geometry;
+    const { latCenters, lonCenters } = overlayCoordinates(activeFieldData, activeGeometry);
+
+    if (showContours && activeFieldData?.field && latCenters.length && lonCenters.length) {
+      const contours = buildContourSegments(activeFieldData, {
+        levels: 6,
+        latCenters,
+        lonCenters,
+        wrapLongitude: Boolean(activeGeometry?.wrapLongitude),
+      });
+      setOverlayGroup(globeGroup, contourOverlayRef, buildGeoLineGroup(contours, {
+        color: isLight ? 0x17324d : 0xd5f5ff,
+        opacity: isLight ? 0.52 : 0.56,
+        // Analysis lines sit just above the tallest particle shell, so they
+        // remain legible for both sequential and anomaly (signed) fields.
+        radius: 1.13,
+        name: 'field-contour-overlay',
+      }));
+    } else {
+      setOverlayGroup(globeGroup, contourOverlayRef, null);
+    }
+
+    const wind = windFields?.u && windFields?.v && showWindVectors
+      ? buildWindVectors(windFields.u, windFields.v, {
+        latCenters: windFields.latCenters || latCenters,
+        lonCenters: windFields.lonCenters || lonCenters,
+        stride: windFields.stride || 2,
+        scale: windFields.scale || 0.24,
+      })
+      : [];
+    setOverlayGroup(globeGroup, windOverlayRef, buildWindOverlay(wind, isLight));
+
+    const direction = showTerminator ? sunDirection : null;
+    setOverlayGroup(globeGroup, terminatorRef, buildTerminatorOverlay(direction, isLight));
+  }, [field, fieldData, fieldLayers, geometry, isEarth, isLight, sunDirection, showContours, showTerminator, showWindVectors, windFields]);
 
 
   // 组件完全卸载时，清空 sphereMeshRef / 材质资源
@@ -1201,6 +1421,9 @@ const SphericalFieldCanvas = forwardRef(({
         regionalMeshRef.current = null;
         regionalGeometryRef.current = null;
         selectionMarkerRef.current = null;
+        contourOverlayRef.current = null;
+        windOverlayRef.current = null;
+        terminatorRef.current = null;
         directionalLightRef.current = null;
         pickingMeshRef.current = null;
       }

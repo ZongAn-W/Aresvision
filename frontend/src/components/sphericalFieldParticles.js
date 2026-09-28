@@ -77,6 +77,41 @@ function latLonDirection(latDeg, lonDeg) {
   ];
 }
 
+function axisIndex(axis, coordinate, { periodic = false, descending = false } = {}) {
+  if (!Array.isArray(axis) || axis.length < 2 || !Number.isFinite(coordinate)) return 0;
+  const values = descending ? axis.map((value) => -value) : axis;
+  let target = descending ? -coordinate : coordinate;
+  if (periodic) {
+    const periodStart = values[0];
+    target = periodStart + ((((target - periodStart) % 360) + 360) % 360);
+    const end = values[values.length - 1];
+    if (target > end && target < periodStart + 360) {
+      const step = (periodStart + 360 - end);
+      return values.length - 1 + (target - end) / Math.max(1e-9, step);
+    }
+  }
+  if (target <= values[0]) return 0;
+  if (target >= values[values.length - 1]) return values.length - 1;
+  let low = 0;
+  let high = values.length - 1;
+  while (high - low > 1) {
+    const middle = (low + high) >> 1;
+    if (values[middle] <= target) low = middle;
+    else high = middle;
+  }
+  return low + (target - values[low]) / Math.max(1e-9, values[high] - values[low]);
+}
+
+function axisStep(axis, index, fallback) {
+  if (!Array.isArray(axis) || axis.length < 2) return fallback;
+  const current = axis[index];
+  const previous = axis[Math.max(0, index - 1)];
+  const next = axis[Math.min(axis.length - 1, index + 1)];
+  const left = Math.abs(current - previous);
+  const right = Math.abs(next - current);
+  return Math.max(1e-6, (left + right) / (left && right ? 2 : 1));
+}
+
 function resolveRange(field, minVal, maxVal, colorMode) {
   if (colorMode === 'rdbu') {
     let absMax = 0;
@@ -117,6 +152,8 @@ export function buildGridParticleSamples(field, {
   particleDensity = 120,
   radiusOffset = 0,
   seed = 1,
+  latCenters = null,
+  lonCenters = null,
 } = {}) {
   const nLat = field?.length || 0;
   const nLon = field?.[0]?.length || 0;
@@ -128,20 +165,31 @@ export function buildGridParticleSamples(field, {
   const radiusJitter = [];
   const directions = [];
   const random = createRandom(seed);
+  const latAxis = Array.isArray(latCenters) && latCenters.length === nLat ? latCenters : null;
+  const lonAxis = Array.isArray(lonCenters) && lonCenters.length === nLon ? lonCenters : null;
+  const hasCoordinates = Boolean(latAxis && lonAxis);
+  const latDescending = hasCoordinates && latAxis[0] > latAxis[latAxis.length - 1];
+  const periodicLongitude = hasCoordinates && nLon > 2;
 
   for (let li = 0; li < nLat; li += 1) {
     for (let lj = 0; lj < nLon; lj += 1) {
-      const latCenter = nLat > 1 ? 90 - (li / (nLat - 1)) * 180 : 0;
-      const lonCenter = (lj / Math.max(1, nLon)) * 360;
+      const latCenter = latAxis?.[li] ?? (nLat > 1 ? 90 - (li / (nLat - 1)) * 180 : 0);
+      const lonCenter = lonAxis?.[lj] ?? (lj / Math.max(1, nLon)) * 360;
+      const latJitterSpan = latAxis ? axisStep(latAxis, li, 180 / Math.max(1, nLat)) : 180 / Math.max(1, nLat);
+      const lonJitterSpan = lonAxis ? axisStep(lonAxis, lj, 360 / Math.max(1, nLon)) : 360 / Math.max(1, nLon);
       for (let p = 0; p < safeDensity; p += 1) {
-        const latJitter = latCenter + (random() - 0.5) * (180 / Math.max(1, nLat));
-        const lonJitter = lonCenter + (random() - 0.5) * (360 / Math.max(1, nLon));
+        const latJitter = Math.max(-90, Math.min(90, latCenter + (random() - 0.5) * latJitterSpan));
+        const lonJitter = lonCenter + (random() - 0.5) * lonJitterSpan;
         const [x, y, z] = latLonDirection(latJitter, lonJitter);
 
         latitudes.push(latJitter);
         longitudes.push(lonJitter);
-        const liFloat = nLat > 1 ? ((90 - latJitter) / 180) * (nLat - 1) : 0;
-        const ljFloat = (lonJitter / 360) * Math.max(1, nLon);
+        const liFloat = latAxis
+          ? axisIndex(latAxis, latJitter, { descending: latDescending })
+          : (nLat > 1 ? ((90 - latJitter) / 180) * (nLat - 1) : 0);
+        const ljFloat = lonAxis
+          ? axisIndex(lonAxis, lonJitter, { periodic: periodicLongitude })
+          : (lonJitter / 360) * Math.max(1, nLon);
         const interpolationCell = buildInterpolationCell(nLat, nLon, liFloat, ljFloat);
         cellIndexes.push(...interpolationCell.indexes);
         cellWeights.push(...interpolationCell.weights);
@@ -153,7 +201,7 @@ export function buildGridParticleSamples(field, {
 
   return {
     type: 'grid',
-    signature: `grid:${nLat}x${nLon}:${safeDensity}:${radiusOffset}`,
+    signature: `grid:${nLat}x${nLon}:${safeDensity}:${radiusOffset}${hasCoordinates ? `:${latAxis.join(',')}:${lonAxis.join(',')}` : ''}`,
     count: latitudes.length,
     latitudes: Float32Array.from(latitudes),
     longitudes: Float32Array.from(longitudes),

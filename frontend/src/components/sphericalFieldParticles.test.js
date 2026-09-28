@@ -43,6 +43,21 @@ test('grid particle samples precompute interpolation cells and weights', () => {
   }
 });
 
+test('grid particle samples honor supplied geographic axes', () => {
+  const samples = buildGridParticleSamples([
+    [0, 1],
+    [2, 3],
+  ], {
+    particleDensity: 1,
+    seed: 11,
+    latCenters: [87.5, 82.5],
+    lonCenters: [-180, -175],
+  });
+  assert.equal(samples.signature.includes(':87.5,82.5:-180,-175'), true);
+  assert.ok(Array.from(samples.latitudes).every((value) => value >= 80 && value <= 90));
+  assert.ok(Array.from(samples.longitudes).every((value) => value >= -183 && value <= -172));
+});
+
 test('grid particle buffers update typed arrays in place across concentration frames', () => {
   const samples = buildGridParticleSamples([
     [0, 1],
