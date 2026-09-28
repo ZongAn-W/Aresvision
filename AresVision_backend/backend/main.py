@@ -65,6 +65,7 @@ from routers import user_models as user_models_router_module
 from routers import datasets as datasets_router_module
 from routers import earth_overview as earth_overview_router_module
 from routers import earth_analysis as earth_analysis_router_module
+from routers import earth_predict as earth_predict_router_module
 
 # ─── 日志配置 ───
 logging.basicConfig(
@@ -416,6 +417,7 @@ app.include_router(user_models_router_module.router,      prefix=API_PREFIX)
 app.include_router(datasets_router_module.router,         prefix=API_PREFIX)
 app.include_router(earth_overview_router_module.router,   prefix=API_PREFIX)
 app.include_router(earth_analysis_router_module.router,   prefix=API_PREFIX)
+app.include_router(earth_predict_router_module.router,    prefix=API_PREFIX)
 
 
 # ─── 健康检查 ───

@@ -31,7 +31,43 @@ test('prediction context normalizes selected variables without dropping request 
     marsYear: 27,
     lsStart: 90,
     selectedVars: ['Temperature', 'U_Wind'],
+    // 地球历史预测身份：火星上下文留空，键不变。
+    forecastOrigin: '',
+    datasetId: '',
+    datasetFingerprint: '',
   });
+});
+
+test('地球历史预测上下文把预测起点与数据集身份并入键，火星键不受影响', () => {
+  const earthContext = {
+    modelMode: 'earth',
+    trainingTaskId: 7,
+    horizon: 3,
+    selectedVars: [],
+    forecastOrigin: '2021-07-08',
+    datasetId: 'earth_merra2_daily_v2',
+    datasetFingerprint: 'a'.repeat(64),
+  };
+  const earthKey = buildPredictionContextKey(earthContext);
+  assert.match(earthKey, /mode:earth/);
+  assert.match(earthKey, /origin:2021-07-08/);
+  assert.match(earthKey, /ds:earth_merra2_daily_v2/);
+  assert.match(earthKey, /fp:a{64}/);
+  // 起点变化必须改变键，避免两个起点共用一条缓存。
+  assert.notEqual(
+    earthKey,
+    buildPredictionContextKey({ ...earthContext, forecastOrigin: '2021-07-09' })
+  );
+  // 数据集发布变化同样改变键。
+  assert.notEqual(
+    earthKey,
+    buildPredictionContextKey({ ...earthContext, datasetFingerprint: 'b'.repeat(64) })
+  );
+  // 火星键保持原有构成，不因新增字段而失效。
+  assert.equal(
+    buildPredictionContextKey(TRAINED_CONTEXT),
+    'mode:trained|task:42|h:3|my:27|ls:90|vars:Temperature,U_Wind'
+  );
 });
 
 test('prediction context key is stable for reordered variables', () => {

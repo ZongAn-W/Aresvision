@@ -18,8 +18,8 @@ from schemas.training import (
     TrainingWeightFileListResponse,
     TrainingWeightFileResponse,
 )
-from services.inference_service import InferenceService
 from services.dataset_identity import DatasetRequestError
+from services.inference_service import InferenceService, require_mars_prediction_task
 from services.training_service import TrainingService
 from services.training_weight_service import TrainingWeightService
 from services.training_tag_service import TagNameConflict, TrainingTagService
@@ -324,6 +324,15 @@ async def perform_task_action(
         raise HTTPException(status_code=400, detail="Cannot perform action on incomplete task")
 
     if action == "test":
+        # Earth tasks are predicted through the Earth historical endpoint. The
+        # rejection happens before the Mars inference data environment is built.
+        try:
+            require_mars_prediction_task(task)
+        except DatasetRequestError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
         temp_data_root = None
         try:
             data_dirs, temp_data_root = await training_service.prepare_task_inference_data_env(
@@ -333,6 +342,8 @@ async def perform_task_action(
             )
             results = await inference_service.get_test_results(task_id, data_dirs=data_dirs)
             return {"status": "success", "data": results}
+        except DatasetRequestError:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
         finally:

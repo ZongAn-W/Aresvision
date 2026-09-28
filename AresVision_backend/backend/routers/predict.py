@@ -17,6 +17,7 @@ from schemas.predict import (
 )
 from config import DEFAULT_MARS_YEAR
 from services.analysis_service import AnalysisService
+from services.dataset_identity import DatasetRequestError
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,11 @@ async def run_prediction(
             "metrics": result.get("metrics"),
             "source_meta": source_meta,
         }
+    except DatasetRequestError as e:
+        detail = {"code": e.code, "message": str(e)}
+        if e.availability_reason:
+            detail["availability_reason"] = e.availability_reason
+        raise HTTPException(status_code=e.status_code, detail=detail)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:
@@ -171,6 +177,11 @@ async def get_eval_metrics(
             "mars_year": body.mars_year,
         }
         return metrics
+    except DatasetRequestError as e:
+        detail = {"code": e.code, "message": str(e)}
+        if e.availability_reason:
+            detail["availability_reason"] = e.availability_reason
+        raise HTTPException(status_code=e.status_code, detail=detail)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:
@@ -202,6 +213,11 @@ async def compare_training_models(
             data_service=getattr(request.app.state, "data_service", None),
             personal_source_service=getattr(request.app.state, "personal_data_source_service", None),
         )
+    except DatasetRequestError as e:
+        detail = {"code": e.code, "message": str(e)}
+        if e.availability_reason:
+            detail["availability_reason"] = e.availability_reason
+        raise HTTPException(status_code=e.status_code, detail=detail)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:
@@ -227,6 +243,11 @@ async def compare_training_model_error_distributions(
             data_service=getattr(request.app.state, "data_service", None),
             personal_source_service=getattr(request.app.state, "personal_data_source_service", None),
         )
+    except DatasetRequestError as e:
+        detail = {"code": e.code, "message": str(e)}
+        if e.availability_reason:
+            detail["availability_reason"] = e.availability_reason
+        raise HTTPException(status_code=e.status_code, detail=detail)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:
@@ -252,6 +273,11 @@ async def compare_training_model_pfi(
             data_service=getattr(request.app.state, "data_service", None),
             personal_source_service=getattr(request.app.state, "personal_data_source_service", None),
         )
+    except DatasetRequestError as e:
+        detail = {"code": e.code, "message": str(e)}
+        if e.availability_reason:
+            detail["availability_reason"] = e.availability_reason
+        raise HTTPException(status_code=e.status_code, detail=detail)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:
@@ -279,6 +305,11 @@ async def get_diurnal_data(
         result = vs.get_diurnal_data(resolved_year, ls, lat_band)
         result["source_meta"] = source_meta
         return result
+    except DatasetRequestError as e:
+        detail = {"code": e.code, "message": str(e)}
+        if e.availability_reason:
+            detail["availability_reason"] = e.availability_reason
+        raise HTTPException(status_code=e.status_code, detail=detail)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -305,6 +336,11 @@ async def get_error_distribution(
             data_service=getattr(request.app.state, "data_service", None),
             personal_source_service=getattr(request.app.state, "personal_data_source_service", None),
         )
+    except DatasetRequestError as e:
+        detail = {"code": e.code, "message": str(e)}
+        if e.availability_reason:
+            detail["availability_reason"] = e.availability_reason
+        raise HTTPException(status_code=e.status_code, detail=detail)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:
@@ -342,6 +378,11 @@ async def get_permutation_importance(
             data_service=getattr(request.app.state, "data_service", None),
             personal_source_service=getattr(request.app.state, "personal_data_source_service", None),
         )
+    except DatasetRequestError as e:
+        detail = {"code": e.code, "message": str(e)}
+        if e.availability_reason:
+            detail["availability_reason"] = e.availability_reason
+        raise HTTPException(status_code=e.status_code, detail=detail)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:

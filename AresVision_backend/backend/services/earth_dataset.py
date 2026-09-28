@@ -114,9 +114,15 @@ def canonical_input_channels(selected_channels=None):
     if selected_channels is None:
         return [TARGET_CHANNEL, *OPTIONAL_CHANNELS]
     requested = set()
+    target_seen = False
     for item in selected_channels:
         name = str(item).strip().upper()
         if name == TARGET_CHANNEL:
+            # TO3 is mandatory and already first; naming it is accepted, naming
+            # it twice is still a duplicate.
+            if target_seen:
+                raise ValueError(f'Duplicate Earth input channel: {item}')
+            target_seen = True
             continue
         if name not in OPTIONAL_CHANNELS:
             raise ValueError(f'Unsupported Earth input channel: {item}')

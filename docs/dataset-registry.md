@@ -6,7 +6,7 @@
 
 [二维地球数据总览实施方案](plans/2026-09-23-earth-overview-2d.md) 对应阶段已实现；当前总览行为见 [二维地球数据总览](earth-overview.md)，默认 v2 全球数据契约见 [地球小数据包](earth-compact-dataset.md)。
 
-其后的 [DLinear 地球训练接入实施方案](plans/2026-09-23-earth-dlinear-training.md) 规定 Earth 训练能力开放、任务身份与 checkpoint 绑定、通道/归一化协议及跨场景隔离；这是待实施计划，不代表本文当前的 Earth 训练拒绝规则已改变。
+[DLinear 地球训练接入实施方案](plans/2026-09-23-earth-dlinear-training.md)（2026-09-27 修订版）规定 Earth 训练与历史预测能力、任务身份与 checkpoint 绑定、通道/归一化协议及跨场景隔离；**该方案已实施**，实现契约见 [地球训练与历史预测](earth-training.md)。
 
 ## 已实现范围
 
@@ -23,11 +23,12 @@
 | 地球年度分析、极区统计（`\|latitude\| >= 60°`）与图表 AI 解读 | 已实现 |
 | 地球昼夜变化 | 未实现且当前数据不可支持：日平均没有日内采样 |
 | 风场粒子、派生风速 | 未实现 |
-| Earth 训练、可选 Earth 通道、checkpoint 内容改造 | 未实现 |
-| 日期预测 API、历史回测、持久性基线、模型比较 | 未实现 |
+| Earth 训练（官方 DLinear、可选 Earth 通道、单文件 checkpoint 与完成前严格重载） | 已实现，见 [地球训练与历史预测](earth-training.md) |
+| 地球历史日期预测 API（可选起点、三天日期、预测/参考/残差与指标） | 已实现，见 [地球训练与历史预测](earth-training.md) |
+| 持久性基线、Earth/Mars 混合比较、无真值外推 | 未实现 |
 | 用户上传数据注册、在线下载、数据集管理后台 | 未实现 |
 
-**地球总览已接入，训练仍未接通。** `capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=false`、`trained_prediction=false` 表示这两条路径仍未开放；metadata 与训练能力必须分开理解。分析接口的 `capabilities.diurnal=false` 是**数据能力**声明：日平均数据没有日内采样，与接口是否实现无关。
+**地球总览、训练与历史预测三条入口均已接入。** `capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=true` 表示官方 DLinear 训练入口已接通，`trained_prediction=true` 表示历史日期预测入口已接通；三者都是**入口接线**，数据是否可用仍由 `availability` 单独表达（缺包时目录仍返回 200，但训练与预测请求返回 503）。metadata 与训练能力必须分开理解。分析接口的 `capabilities.diurnal=false` 是**数据能力**声明：日平均数据没有日内采样，与接口是否实现无关。
 
 ## 注册身份：ID、版本与指纹分开
 
@@ -271,9 +272,9 @@ python -m pytest tests/test_dataset_identity.py tests/test_dataset_registry.py t
 
 ## 当前边界
 
-- 训练页仍只发送原有两种 Mars 来源；二维 Earth 总览默认请求 v2。
+- 训练页数据集选项现为三项：两个 Mars 来源与 `earth_merra2_daily_v2`；二维 Earth 总览默认请求 v2。
 - 地球已开放**二维日数据总览**（见 [二维地球数据总览](earth-overview.md)）：区域热力图、逐日播放、点位曲线与覆盖区域加权均值；**没有**三维地球、风场粒子、派生风速、自选多边形区域、重网格、平滑/插值、臭氧单位换算、导出、PFI 或 Earth Copilot。
-- Earth **训练与预测仍未开放**：训练请求返回 409 `dataset_training_not_supported`。
+- Earth **训练与历史预测已开放**（官方 DLinear、固定 7→3、TO3 为唯一目标）；首期不开放 SPHERE、迁移学习、上传模型、地球其他架构、无参考真值的未来外推、Earth/Mars 混合比较与 Earth 预测持久化缓存。Earth 任务在火星推理、`metrics`、比较、PFI、`action=test` 与迁移来源路径上一律 409 `dataset_prediction_not_supported` / `dataset_transfer_not_supported`，不回退到火星数据。契约与错误码见 [地球训练与历史预测](earth-training.md)。
 - `web_overview=true` 只表示入口已适配，与数据是否齐备分开：缺包时数据接口返回 503，前端同时要求 `availability=available`。
 - manifest 中“读取器尚未接注册表”一类构建期说明会被过滤；`limitations` 只保留物理数据限制与当前应用能力说明。
 - Mars 身份不伪造版本；`openmars_mcd` 与 `mcd_overview` 何时成为不可变发布版本属于另一个数据发布任务。
@@ -283,9 +284,9 @@ python -m pytest tests/test_dataset_identity.py tests/test_dataset_registry.py t
 
 2026-09-23 使用 conda 环境 `AresVision` 的解释器在本地执行：
 
-- 本地固定小包只读校验：`availability=available`、731 天、31 × 49、步长 4°/5°、`wrap_longitude=false`、`TO3` 单位为 `DU`、`capabilities.training=false`；两个实际 SHA 与上表发布定义一致。
+- 本地固定小包只读校验（当时训练入口尚未开放，故记录 `capabilities.training=false`）：`availability=available`、731 天、31 × 49、步长 4°/5°、`wrap_longitude=false`、`TO3` 单位为 `DU`；两个实际 SHA 与上表发布定义一致。
 - 新增测试全部通过：`tests/test_dataset_identity.py`（44）、`tests/test_dataset_registry.py`、`tests/test_dataset_routes.py`、`tests/test_training_dataset_identity_migration.py`（9）、`tests/test_training_dataset_identity.py`（41，含 HTTP 请求到数据库的集成用例）。
 - 方案第 7 节列出的既有回归中，`test_training_channel_contract.py`、`test_training_channels.py`、`test_training_dataset_loader.py`、`test_official_training_runner.py`、`test_user_model_schema.py`、`test_training_tags.py`、`test_earth_dataset.py`、`test_prediction_analysis_cache_identity.py`、`test_uploaded_model_runner.py`、`test_uploaded_model_ls_inference.py` 全部通过（合计 265 项通过）。
-- 应用装配与真实小包联调：在真实 SQLite 数据库的临时副本上用 `TestClient` 启动完整 `main.app`，`GET /api/datasets` 返回三个条目、Earth 为 `available` 且指纹为 `74ce…d31`、`training=false`；`GET /api/datasets/missing` 返回 404；响应不含小包绝对路径；启动迁移把 14 条历史任务全部回填为 `legacy_inferred`，旧超参数、状态、权重路径与指标逐字不变。
-- 第二阶段（二维地球总览）完成后，`capabilities.web_overview` 改为 `true`，并新增 `test_available_earth_does_not_claim_the_overview_is_unconnected` 等测试，确认目录不再宣称地球总览未接入；Earth 训练拒绝、发布 SHA 与版本断言保持不变。总览接口与真实数据比对结果见 [二维地球数据总览](earth-overview.md) 的“验证记录”。
-- 未开放能力仍为未开放：没有运行 Earth 训练或 Earth 预测。
+- 应用装配与真实小包联调（同一阶段记录）：在真实 SQLite 数据库的临时副本上用 `TestClient` 启动完整 `main.app`，`GET /api/datasets` 返回三个条目、Earth 为 `available` 且指纹为 `74ce…d31`；`GET /api/datasets/missing` 返回 404；响应不含小包绝对路径；启动迁移把 14 条历史任务全部回填为 `legacy_inferred`，旧超参数、状态、权重路径与指标逐字不变。
+- 第二阶段（二维地球总览）完成后，`capabilities.web_overview` 改为 `true`，并新增 `test_available_earth_does_not_claim_the_overview_is_unconnected` 等测试，确认目录不再宣称地球总览未接入；当时 Earth 训练拒绝、发布 SHA 与版本断言保持不变。总览接口与真实数据比对结果见 [二维地球数据总览](earth-overview.md) 的“验证记录”。
+- 第三阶段（2026-09-28，地球训练与历史预测）完成后，Earth 的 `capabilities.training` 与 `trained_prediction` 改为 `true`，目录新增 `training_profile`，Earth 训练绑定改为 `verified` 并携带发布指纹与快照；上表中“Earth 训练拒绝”的旧断言已按新契约更新为「Earth 走独立路径、按 `availability` 决定可用性」。本阶段的实测结果、任务 ID 与错误码见 [地球训练与历史预测](earth-training.md)。

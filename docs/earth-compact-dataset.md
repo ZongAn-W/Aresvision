@@ -4,7 +4,7 @@
 
 项目默认 Earth 数据集是 `earth_merra2_daily_v2`（版本 `v2`），目录为 `data/earth/merra2_daily_v2/`。旧的 `earth_merra2_daily_v1` 保留在原目录并继续按 v1 指纹和 31×49 区域契约提供只读兼容访问；v1 请求不会映射到 v2。
 
-v2 来源是 E 盘 `MERRA2/raw` 的 SLV 与 RAD 产品，从原始文件重新计算，生成后运行时不再读取原始盘。当前仅使用五个变量：`TO3`、`U10M`、`V10M`、`T2M`、`SWGDN`。Earth 总览已开放，训练与预测尚未开放；训练请求返回 409 `dataset_training_not_supported`。
+v2 来源是 E 盘 `MERRA2/raw` 的 SLV 与 RAD 产品，从原始文件重新计算，生成后运行时不再读取原始盘。当前仅使用五个变量：`TO3`、`U10M`、`V10M`、`T2M`、`SWGDN`。Earth 总览、官方 DLinear 网页训练与历史日期预测均已开放，见 [地球训练与历史预测](earth-training.md)；仍不开放 SPHERE、迁移学习、上传模型与地球其他架构，也不提供无参考真值的未来外推。
 
 ## v2 数据契约
 
@@ -80,7 +80,7 @@ conda run -n AresVision python -m scripts.check_earth_ozone_dataset `
 
 区域序列的 v2 聚合标识为 `spherical_cell_area_mean`，按纬度单元的 `sin(north)-sin(south)` 面积和等经度单元计算。v1 仍返回 `cos_lat_sample_mean`。所有响应保留物理单位；五变量顺序固定为 `TO3,U10M,V10M,T2M,SWGDN`。
 
-地球页面仍是二维日数据总览：日期播放、五变量切换、全球地图、点位曲线和全球单元面积加权均值。三维地球、风场粒子、Earth 训练与预测、自选区域、重网格、导出和 Earth Copilot 仍未开放。
+地球页面与训练/预测的当前边界：数据总览提供三维日数据分析观测台、日期播放、五变量切换、全球地图、点位曲线和全球单元面积加权均值；训练开放官方 DLinear（7→3、TO3 + 四个可选辅助输入）；预测开放按历史起点的三天回测。自选区域、重网格、导出、Earth 预测持久化缓存与 Earth/Mars 混合比较仍未开放。
 
 ## 验证入口
 

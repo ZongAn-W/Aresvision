@@ -1,9 +1,12 @@
 export const PREDICT_MODEL_MODE_TRAINED = 'trained';
 export const PREDICT_MODEL_MODE_COMPARE = 'trained_compare';
+/** 地球历史预测：按日期起点回测，单位 DU，与火星 MY/Ls 模式完全分开。 */
+export const PREDICT_MODEL_MODE_EARTH = 'earth';
 
 export const PREDICT_MODEL_MODES = [
   PREDICT_MODEL_MODE_TRAINED,
   PREDICT_MODEL_MODE_COMPARE,
+  PREDICT_MODEL_MODE_EARTH,
 ];
 
 export const DEFAULT_PREDICT_MODEL_MODE = PREDICT_MODEL_MODE_TRAINED;

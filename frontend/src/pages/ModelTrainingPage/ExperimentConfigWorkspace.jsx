@@ -3,14 +3,16 @@ import C from '../../constants/colors';
 import UploadedModelPanel from './UploadedModelPanel';
 import DynamicModelParamsForm from './DynamicModelParamsForm';
 import ModelArchitectureSelector from './ModelArchitectureSelector';
+import EarthTrainingDatasetPanel from './EarthTrainingDatasetPanel';
 import { TagPicker } from '../../components/TrainingTags/TagControls';
 import {
+  TRAINING_DATASET_EARTH_MERRA2_V2,
   TRAINING_DATASET_MCD_OVERVIEW,
   TRAINING_DATASET_OPENMARS_MCD,
   getModelStructureParamLabel,
   isRecurrentArchitecture,
 } from './trainingParamSanitizers';
-import { getExperimentArchitectureLabel } from './experimentCenterModel';
+import { EARTH_PARAM_BOUNDS } from './earthTrainingConfig';import { getExperimentArchitectureLabel } from './experimentCenterModel';
 import './experimentCenter.css';
 
 const OPEN_INTERVAL_FLOAT_FIELDS = new Set(['initial_history_weight', 'initial_translation_weight']);
@@ -134,10 +136,15 @@ export default function ExperimentConfigWorkspace({
   const structureSummary = values.structureSummary;
   const officialModelControls = controlVisibility.officialModelControls;
   const isUploaded = modelSource === 'uploaded';
+  // Earth 首期只支持官方 DLinear：不显示模型来源切换、上传卡与架构选择器，
+  // 也不显示迁移学习，避免出现选了也不会生效的控件。
+  const isEarth = trainingDataset === TRAINING_DATASET_EARTH_MERRA2_V2;
   const architecturePickerOpen = resources.architecturePickerOpen;
   const isRecurrentModel = isRecurrentArchitecture(normalizedArchitecture);
 
-  const expertTabs = isUploaded ? UPLOADED_EXPERT_TABS : OFFICIAL_EXPERT_TABS;
+  const expertTabs = isEarth
+    ? ['payload', 'training', 'strategy', 'tags']
+    : (isUploaded ? UPLOADED_EXPERT_TABS : OFFICIAL_EXPERT_TABS);
   // 载荷与训练参数是每次配置都要过一遍的，作为超参数模块的头两个页签并默认打开第一页。
   const defaultExpertTab = 'payload';
   const [localTab, setLocalTab] = useState(defaultExpertTab);
@@ -152,6 +159,16 @@ export default function ExperimentConfigWorkspace({
   useEffect(() => {
     setLocalTab(defaultExpertTab);
   }, [defaultExpertTab]);
+
+  // Earth 的参数范围与火星不同：用 Earth 自己的上下限，不悄悄夹到火星范围。
+  const earthBounds = isEarth
+    ? {
+        epochs: { min: EARTH_PARAM_BOUNDS.epochs.min, max: EARTH_PARAM_BOUNDS.epochs.max },
+        batchSize: { min: EARTH_PARAM_BOUNDS.batch_size.min, max: EARTH_PARAM_BOUNDS.batch_size.max },
+        learningRate: { min: '0.000001', max: '1' },
+      }
+    : {};
+  const boundFor = (key, fallback) => earthBounds[key] || fallback;
 
   const uploadedModel = selectedUploadedModel;
   const uploadedValidationStatus = uploadedModel?.validation_status || '';
@@ -185,20 +202,29 @@ export default function ExperimentConfigWorkspace({
       max: '30',
       locked: true,
     },
-    { key: 'epochs', label: copy.epochsLabel, code: copy.codeEpochs, step: '1', min: '1' },
+    {
+      key: 'epochs',
+      label: copy.epochsLabel,
+      code: copy.codeEpochs,
+      step: '1',
+      min: boundFor('epochs', { min: '1' }).min,
+      max: boundFor('epochs', {}).max,
+    },
     {
       key: 'batchSize',
       label: copy.batchSizeLabel,
       code: copy.codeBatch,
       step: '1',
-      min: '1',
+      min: boundFor('batchSize', { min: '1' }).min,
+      max: boundFor('batchSize', {}).max,
     },
     {
       key: 'learningRate',
       label: copy.learningRateLabel,
       code: copy.codeLr,
       step: '0.0001',
-      min: '0.000001',
+      min: boundFor('learningRate', { min: '0.000001' }).min,
+      max: boundFor('learningRate', {}).max,
     },
   ];
   const expertTabLabels = {
@@ -210,12 +236,13 @@ export default function ExperimentConfigWorkspace({
     transfer: copy.expertTabTransfer,
     tags: copy.expertTabTags,
   };
-  // 训练数据集直接列成可选项，不用下拉：只有两项，展开菜单反而多一次点击。
+  // 训练数据集直接列成可选项，不用下拉：展开菜单反而多一次点击。
+  // Earth 选项即使当前不可用也保留可见，原因显示在下方 Earth 面板里。
   const datasetOptions = [
     { value: TRAINING_DATASET_OPENMARS_MCD, label: copy.datasetOpenMarsMcd },
     { value: TRAINING_DATASET_MCD_OVERVIEW, label: copy.datasetMcdOverview },
+    { value: TRAINING_DATASET_EARTH_MERRA2_V2, label: copy.datasetEarthMerra2V2 },
   ];
-
   return (
     <div className="experiment-center-stack" data-config-canvas="true">
       {copyConfigWarnings.length > 0 ? (
@@ -278,6 +305,15 @@ export default function ExperimentConfigWorkspace({
               );
             })}
           </div>
+          {isEarth ? (
+            <EarthTrainingDatasetPanel
+              availability={resources.earthDatasetAvailability}
+              selectedChannels={selectedChannels}
+              copy={copy}
+              sectionTitleStyle={sectionTitleStyle}
+              fieldHintStyle={fieldHintStyle}
+            />
+          ) : null}
         </div>
       </section>
 
@@ -288,7 +324,17 @@ export default function ExperimentConfigWorkspace({
           <span className="experiment-section-title" style={sectionTitleStyle}>{copy.sectionModel}</span>
         </div>
 
-        <div className="experiment-choice-block" data-active="true" data-model-block={modelBlockState}>
+        <div className="experiment-choice-block" data-active="true" data-model-block={isEarth ? 'earth' : modelBlockState}>
+          {isEarth ? (
+            <div className="experiment-earth-model" data-earth-model-block="true">
+              <span className="experiment-payload-lock">
+                <span>{copy.modelSourceOfficial}</span>
+                <b>{getExperimentArchitectureLabel(normalizedArchitecture)}</b>
+              </span>
+              <p className="experiment-expert-note">{copy.earthModelFixedNote}</p>
+            </div>
+          ) : (
+          <>
           <div className="experiment-source-toggle" role="group" aria-label={copy.modelSource} data-model-source-toggle="true">
               {[
                 { value: 'uploaded', label: copy.modelSourceUploaded },
@@ -374,6 +420,8 @@ export default function ExperimentConfigWorkspace({
                 </label>
               </div>
             )}
+          </>
+          )}
         </div>
       </section>
 
@@ -422,8 +470,8 @@ export default function ExperimentConfigWorkspace({
                 <h4 className="experiment-expert-heading">{copy.sectionPayload}</h4>
                 <div className="experiment-payload-bar" role="group" aria-label={t('modelTraining.inputChannels')}>
                   <span className="experiment-payload-lock" data-payload-base="true">
-                    <span>{copy.inspectorBaseInput}</span>
-                    <b>O₃</b>
+                    <span>{isEarth ? copy.earthBaseInput : copy.inspectorBaseInput}</span>
+                    <b>{isEarth ? 'TO3' : 'O₃'}</b>
                   </span>
                   {channelOrder.map((channel) => {
                     const active = selectedChannels.includes(channel);

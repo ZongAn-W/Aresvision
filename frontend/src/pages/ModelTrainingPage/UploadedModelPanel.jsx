@@ -106,7 +106,7 @@ export default function UploadedModelPanel({
               {`v${selected.version ?? '--'} · ${labels.summaryParamCount ? labels.summaryParamCount(paramCount) : `${paramCount}`}`}
             </div>
           </div>
-          <span className="experiment-uploaded-status" data-tone={statusTone} data-uploaded-model-status="true">
+          <span className="experiment-uploaded-status" data-tone={statusTone} data-validation-status={selected.validation_status} data-uploaded-model-status="true">
             {statusLabel || getStatusLabel(selected.validation_status, labels)}
           </span>
         </div>

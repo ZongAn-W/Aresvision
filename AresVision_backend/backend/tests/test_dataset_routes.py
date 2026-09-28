@@ -57,12 +57,18 @@ def test_earth_release_is_described_from_real_metadata(earth_release):
     assert result["manifest_sha256"] == earth_release["expected_manifest_sha256"]
     assert result["data_sha256"] == earth_release["expected_data_sha256"]
     assert len(result["dataset_fingerprint"]) == 64
+    # Earth training and historical prediction entries are wired; availability
+    # stays the separate gate for whether the package can actually be used.
     assert result["capabilities"] == {
         "metadata": True,
         "web_overview": True,
-        "training": False,
-        "trained_prediction": False,
+        "training": True,
+        "trained_prediction": True,
     }
+    assert result["training_profile"]["profile_id"] == "earth_daily_dlinear_v1"
+    assert result["training_profile"]["window"] == 7
+    assert result["training_profile"]["horizon"] == 3
+    assert result["training_profile"]["target_unit"] == "DU"
     assert result["time"]["kind"] == "date"
     assert result["time"]["calendar"] == "proleptic_gregorian"
     assert result["time"]["start"] == "2020-01-01"
@@ -134,14 +140,17 @@ def test_missing_earth_package_keeps_the_catalog_usable(tmp_path):
         assert earth["time"]["kind"] == "date"
         assert earth["time"]["count"] is None
         assert earth["grid"] is None
-        # The overview entry is wired even while the package is missing; the
-        # data endpoints answer 503 until the release is present again.
+        # The overview, training and prediction entries are wired even while the
+        # package is missing; the data endpoints answer 503 until it returns.
         assert earth["capabilities"] == {
             "metadata": True,
             "web_overview": True,
-            "training": False,
-            "trained_prediction": False,
+            "training": True,
+            "trained_prediction": True,
         }
+        # The published training profile is static entry-point metadata, so it is
+        # available even when the package cannot be verified.
+        assert earth["training_profile"]["profile_id"] == "earth_daily_dlinear_v1"
 
         detail = client.get("/api/datasets/earth_merra2_daily_v1")
         assert detail.status_code == 200
@@ -170,7 +179,10 @@ def test_corrupted_earth_package_is_invalid_not_missing(earth_release, tmp_path)
     assert earth["availability"] == "invalid"
     assert earth["availability_reason"] == "manifest_fingerprint_mismatch"
     assert earth["dataset_fingerprint"] is None
-    assert earth["capabilities"]["training"] is False
+    # An invalid package keeps the wired training entry but cannot be trained on,
+    # because the client must also require availability=available.
+    assert earth["capabilities"]["training"] is True
+    assert earth["availability"] != "available"
 
 
 def test_changed_data_file_stops_reporting_available(earth_release, tmp_path):
@@ -229,12 +241,14 @@ def test_callers_cannot_mutate_the_cached_descriptor(earth_release):
     first = registry.get_dataset("earth_merra2_daily_v1")
     first["grid"]["shape"][0] = 999
     first["limitations"].append("injected")
-    first["capabilities"]["training"] = True
+    first["capabilities"]["training"] = False
+    first["training_profile"]["window"] = 99
 
     second = registry.get_dataset("earth_merra2_daily_v1")
     assert second["grid"]["shape"] == [31, 49]
     assert "injected" not in second["limitations"]
-    assert second["capabilities"]["training"] is False
+    assert second["capabilities"]["training"] is True
+    assert second["training_profile"]["window"] == 7
 
 
 def test_available_earth_does_not_claim_the_overview_is_unconnected(earth_release):
@@ -246,19 +260,26 @@ def test_available_earth_does_not_claim_the_overview_is_unconnected(earth_releas
     assert earth["availability"] == "available"
     assert earth["capabilities"]["web_overview"] is True
     assert earth["capabilities"]["metadata"] is True
-    # Training and prediction stay closed at this stage.
-    assert earth["capabilities"]["training"] is False
-    assert earth["capabilities"]["trained_prediction"] is False
+    assert earth["capabilities"]["training"] is True
+    assert earth["capabilities"]["trained_prediction"] is True
+    assert earth["training_profile"]["profile_id"] == "earth_daily_dlinear_v1"
 
     joined = " ".join(earth["limitations"]).lower()
-    # The manifest's build-time note about the reader not being connected to the
-    # registry must not survive; training/prediction remaining closed may.
-    for stale in ("web overview", "reader is separate", "web/api dataset registry"):
+    # Build-time notes about the entry being unwired must not survive, including
+    # the manifest's "training and prediction remain disabled" sentence.
+    for stale in (
+        "web overview",
+        "reader is separate",
+        "web/api dataset registry",
+        "training and prediction remain disabled",
+        "not connected yet",
+    ):
         assert stale not in joined, stale
-    assert any("training and prediction" in item.lower() for item in earth["limitations"])
     assert any("covered area" in item.lower() for item in earth["limitations"])
     # Physical data limitations from the manifest are preserved verbatim.
     assert any("regional" in item.lower() for item in earth["limitations"])
+    # The current application boundary is published instead of the stale sentence.
+    assert any("historical forecast origins" in item.lower() for item in earth["limitations"])
 
 
 def test_openapi_exposes_both_dataset_routes(earth_release):
@@ -286,15 +307,21 @@ def test_registry_construction_does_not_read_the_package(tmp_path):
 
 
 @pytest.mark.parametrize("dataset_id", ["openmars_mcd", "mcd_overview", "earth_merra2_daily_v1"])
-def test_training_binding_is_rejected_for_earth_and_unversioned_for_mars(earth_release, dataset_id):
+def test_training_binding_is_verified_for_earth_and_unversioned_for_mars(earth_release, dataset_id):
     from services.dataset_identity import DatasetRequestError
 
     registry = DatasetRegistry(**earth_release)
     if dataset_id == "earth_merra2_daily_v1":
-        with pytest.raises(DatasetRequestError) as exc:
-            registry.build_training_binding(dataset_id)
-        assert exc.value.code == "dataset_training_not_supported"
-        assert exc.value.status_code == 409
+        # Earth is trainable now and binds a *verified* release identity.
+        binding = registry.build_training_binding(dataset_id)
+        assert binding["dataset_id"] == dataset_id
+        assert binding["dataset_version"] == "v1"
+        assert binding["dataset_identity_status"] == "verified"
+        assert len(binding["dataset_fingerprint"]) == 64
+        snapshot = json.loads(binding["dataset_snapshot"])
+        assert snapshot["planet"] == "earth"
+        assert snapshot["binding_basis"] == "server_registry"
+        assert snapshot["version_status"] == "verified"
         return
 
     binding = registry.build_training_binding(dataset_id)

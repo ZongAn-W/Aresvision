@@ -31,6 +31,20 @@ export function getPredictAnalysisVisibility(modelMode = 'system') {
     };
   }
 
+  if (modelMode === 'earth') {
+    // 地球模式自己渲染 DU 场图与指标，不显示火星的 MY/Ls 侧栏输入与系统超参数，
+    // 也不显示火星场图/误差分布/PFI：这些分析当前只对火星口径定义。
+    return {
+      ...FULL_VISIBILITY,
+      predictionFields: false,
+      errorDistribution: false,
+      permutationImportance: false,
+      inputVariables: false,
+      systemHyperparams: false,
+      trainedModelParameters: true,
+    };
+  }
+
   if (modelMode !== 'trained') return { ...FULL_VISIBILITY };
 
   return {

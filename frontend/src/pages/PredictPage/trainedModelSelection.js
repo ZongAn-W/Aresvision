@@ -70,9 +70,17 @@ function addItem(items, label, value) {
   items.push({ label, value: formatted });
 }
 
+/**
+ * 火星已训练模型选项。
+ *
+ * Earth 任务被排除：它们由地球历史预测接口按日期起点回测，走另一条数据准备
+ * 路径，不能出现在火星模型下拉里被误选。缺少 `is_earth_task` 字段的旧任务保持
+ * 原有行为（继续可选），因此旧后端响应不会让历史任务消失。
+ */
 export function getCompletedTrainingModelOptions(tasks = []) {
   return (Array.isArray(tasks) ? tasks : [])
     .filter((task) => task?.status === 'completed' && task?.model_available === true)
+    .filter((task) => task?.is_earth_task !== true)
     .map((task) => ({
       id: Number(task.id),
       label: task.custom_model_name || `Task #${task.id}`,

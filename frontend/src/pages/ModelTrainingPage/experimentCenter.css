@@ -2935,3 +2935,481 @@ input[type='number']::-webkit-inner-spin-button {
     padding: 20px 14px;
   }
 }
+
+/* ── 地球训练（Earth MERRA-2）─────────────────────────────────────────
+   Earth 面板沿用实验中心的表面/描边变量与字段块度量，不引入新的设计体系。 */
+.experiment-earth-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 12px;
+  background: var(--experiment-surface-2, rgba(6, 18, 28, 0.7));
+}
+
+.experiment-earth-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.experiment-earth-head strong {
+  font-size: calc(13.5px * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-earth-badge {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid rgba(154, 217, 239, 0.4);
+  border-radius: 999px;
+  color: #9ad9ef;
+  font-size: calc(11.5px * var(--font-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.experiment-earth-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.experiment-earth-facts dt {
+  margin: 0 0 2px;
+  color: var(--text-50, rgba(226, 240, 248, 0.5));
+  font-size: calc(11.5px * var(--font-scale, 1));
+}
+
+.experiment-earth-facts dd {
+  margin: 0;
+  font-size: calc(12.5px * var(--font-scale, 1));
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.experiment-earth-fingerprint {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 600;
+}
+
+.experiment-earth-splits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.experiment-earth-split {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 9px;
+}
+
+.experiment-earth-split span {
+  color: var(--text-50, rgba(226, 240, 248, 0.5));
+  font-size: calc(11.5px * var(--font-scale, 1));
+}
+
+.experiment-earth-split b {
+  font-size: calc(12.5px * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.experiment-earth-split small {
+  color: var(--text-60, rgba(226, 240, 248, 0.62));
+  font-size: calc(11.5px * var(--font-scale, 1));
+}
+
+.experiment-earth-channels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.experiment-earth-channels li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 9px;
+}
+
+.experiment-earth-channels li[data-selected='true'] {
+  border-color: rgba(241, 154, 120, 0.4);
+}
+
+.experiment-earth-channels li[data-locked='true'] {
+  border-color: transparent;
+  background: rgba(241, 154, 120, 0.1);
+  box-shadow: inset 2px 0 0 #f19a78;
+}
+
+.experiment-earth-channel-name {
+  min-width: 0;
+  font-size: calc(12px * var(--font-scale, 1));
+}
+
+.experiment-earth-channels b {
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 800;
+}
+
+.experiment-earth-channels small {
+  color: var(--text-60, rgba(226, 240, 248, 0.62));
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+.experiment-earth-channels em {
+  grid-column: 1 / -1;
+  color: var(--text-50, rgba(226, 240, 248, 0.5));
+  font-size: calc(11px * var(--font-scale, 1));
+  font-style: normal;
+}
+
+.experiment-earth-units {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: calc(11.5px * var(--font-scale, 1));
+  color: var(--text-50, rgba(226, 240, 248, 0.5));
+}
+
+.experiment-earth-units code {
+  padding: 2px 7px;
+  border: 1px solid var(--experiment-line);
+  border-radius: 6px;
+  font-size: calc(11.5px * var(--font-scale, 1));
+}
+
+.experiment-earth-model {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Training console visual finish. Keep the existing grid, sticky rules and states. */
+body:has(.model-training-page) {
+  background: color-mix(in srgb, var(--bg-elevated) 88%, var(--bg));
+}
+
+body:has(.model-training-page) .star-field {
+  display: none;
+}
+
+:root {
+  --experiment-line: color-mix(in srgb, var(--border) 78%, transparent);
+  --experiment-line-strong: color-mix(in srgb, var(--hud-accent) 32%, transparent);
+  --experiment-surface-1: color-mix(in srgb, var(--bg-elevated) 96%, var(--hud-accent));
+  --experiment-surface-2: color-mix(in srgb, var(--bg-elevated) 91%, var(--hud-accent));
+  --experiment-surface-3: var(--bg-elevated);
+  --experiment-success: #63e8bf;
+  --experiment-error: #e8827f;
+  --experiment-text-helper: 12px;
+}
+
+[data-theme='light'] {
+  --experiment-surface-1: color-mix(in srgb, var(--bg-elevated) 78%, var(--bg));
+  --experiment-surface-2: color-mix(in srgb, var(--bg-elevated) 55%, var(--bg));
+  --experiment-surface-3: color-mix(in srgb, var(--bg-elevated) 70%, var(--bg));
+  --experiment-success: #22765f;
+  --experiment-error: #b24646;
+}
+
+.experiment-center-title,
+.experiment-canvas-name {
+  letter-spacing: 0;
+}
+
+.experiment-center .glass-card,
+.experiment-center .glass-card:hover {
+  border-color: var(--experiment-line);
+  background: var(--experiment-surface-1);
+  border-radius: 13px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.experiment-center .experiment-center-canvas[data-stage-panel='configure'] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.experiment-canvas-head,
+.experiment-canvas-section {
+  background: var(--experiment-surface-1);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.experiment-canvas-section[data-config-group='expert'] {
+  background: color-mix(in srgb, var(--experiment-surface-1) 70%, var(--experiment-surface-2));
+}
+
+.experiment-canvas-head::before,
+.experiment-canvas-section::before {
+  background: color-mix(in srgb, var(--experiment-line) 70%, transparent);
+}
+
+.experiment-section-index {
+  color: var(--hud-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.experiment-canvas-name {
+  font-weight: 600;
+  transition: border-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.experiment-canvas-name::placeholder {
+  color: var(--text-60);
+  font-weight: 400;
+  opacity: 1;
+}
+
+.experiment-canvas-name:focus-visible,
+.experiment-param-cell input:focus-visible,
+.experiment-expert-field input:focus-visible,
+.experiment-expert-field select:focus-visible {
+  outline: none;
+  border-bottom-color: var(--hud-accent);
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--hud-accent) 25%, transparent);
+}
+
+.experiment-canvas-name[aria-invalid='true'],
+.experiment-canvas-name[aria-invalid='true']:focus-visible {
+  border-bottom-color: var(--experiment-error);
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--experiment-error) 22%, transparent);
+}
+
+.experiment-dataset-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+
+.experiment-dataset-option,
+.experiment-source-option {
+  min-width: 0;
+  min-height: 38px;
+  transition: border-color 180ms ease-out, background-color 180ms ease-out, color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.experiment-dataset-option strong,
+.experiment-source-option strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.experiment-dataset-option:hover:not(:disabled),
+.experiment-source-option:hover:not(:disabled) {
+  border-color: var(--experiment-line-strong);
+  color: var(--text);
+}
+
+.experiment-dataset-option[aria-checked='true'],
+.experiment-source-option[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--brand-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--brand-accent) 6%, var(--experiment-surface-3));
+  box-shadow: inset 2px 0 0 var(--brand-accent), inset 0 1px 3px color-mix(in srgb, var(--bg) 30%, transparent);
+  color: var(--text);
+}
+
+.experiment-source-option:disabled {
+  opacity: 0.52;
+}
+
+.experiment-uploaded-card {
+  background: var(--experiment-surface-2);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.experiment-uploaded-name {
+  font-weight: 600;
+}
+
+.experiment-uploaded-meta {
+  margin-top: 5px;
+  font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.experiment-uploaded-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  color: var(--experiment-success);
+  line-height: 1.4;
+}
+
+.experiment-uploaded-status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.experiment-uploaded-status[data-tone='warn'] {
+  color: var(--brand-accent);
+}
+
+.experiment-uploaded-status[data-validation-status='invalid'] {
+  color: var(--experiment-error);
+}
+
+.experiment-uploaded-upload {
+  background: color-mix(in srgb, var(--brand-accent) 12%, var(--experiment-surface-1));
+  border-color: color-mix(in srgb, var(--brand-accent) 42%, transparent);
+  color: var(--brand-accent);
+  transition: background-color 180ms ease-out, border-color 180ms ease-out, transform 180ms ease-out;
+}
+
+.experiment-uploaded-model[data-has-selection='true'] .experiment-uploaded-upload {
+  background: color-mix(in srgb, var(--brand-accent) 8%, var(--experiment-surface-1));
+}
+
+.experiment-uploaded-upload:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--brand-accent) 18%, var(--experiment-surface-1));
+}
+
+.experiment-uploaded-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 4px 0;
+}
+
+.experiment-expert-tab {
+  overflow-wrap: anywhere;
+  outline-offset: -3px;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out, color 180ms ease-out;
+}
+
+.experiment-expert-tab[aria-selected='true'] {
+  border-left-color: var(--hud-accent);
+  background: var(--bg-muted);
+  color: var(--hud-accent);
+}
+
+.experiment-expert-tab-count {
+  flex: 0 0 auto;
+  background: var(--bg-muted);
+  color: var(--text-40);
+}
+
+.experiment-expert-heading {
+  margin-bottom: 12px;
+  color: var(--text-60);
+  font-weight: 600;
+}
+
+.experiment-payload-lock,
+.experiment-channel-chip,
+.experiment-param-cell,
+.experiment-expert-field {
+  background: var(--experiment-surface-2);
+}
+
+.experiment-param-cell input,
+.experiment-expert-field input,
+.experiment-expert-field select {
+  font-variant-numeric: tabular-nums;
+  transition: border-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.experiment-expert-field input:disabled,
+.experiment-expert-field select:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.experiment-inspector-note {
+  border-left-color: var(--hud-accent);
+  background: var(--bg-muted);
+}
+
+.experiment-run-bar {
+  border-top-color: var(--experiment-line);
+  background: var(--experiment-surface-3);
+  backdrop-filter: none;
+}
+
+.experiment-run-bar-start:hover:not(:disabled) {
+  transform: none;
+}
+
+.experiment-center-button:active:not(:disabled),
+.experiment-uploaded-upload:active:not(:disabled),
+.experiment-run-bar-start:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+@media (min-width: 901px) and (max-width: 1180px), (max-width: 900px) {
+  .experiment-expert-tab[aria-selected='true'] {
+    border-left-color: transparent;
+    border-bottom-color: var(--hud-accent);
+  }
+}
+
+@media (max-width: 640px) {
+  .experiment-dataset-option,
+  .experiment-source-option,
+  .experiment-uploaded-link {
+    min-height: 44px;
+  }
+}
+
+[data-theme='light'] .experiment-section-index,
+[data-theme='light'] .experiment-expert-tab[aria-selected='true'],
+[data-theme='light'] .experiment-center-stage-tab[data-stage-state='current'],
+[data-theme='light'] .experiment-architecture-option[aria-pressed='true'],
+[data-theme='light'] .experiment-uploaded-link:not(.is-quiet),
+[data-theme='light'] .experiment-inspector-issue-action {
+  color: var(--hud-accent);
+}
+
+[data-theme='light'] .experiment-inspector-state[data-inspector-state='ready'],
+[data-theme='light'] .experiment-run-bar-state[data-run-state='ready'],
+[data-theme='light'] .experiment-expert-ok {
+  color: var(--experiment-success);
+}
+
+[data-theme='light'] .experiment-run-bar-note,
+[data-theme='light'] .experiment-payload-lock,
+[data-theme='light'] .experiment-inspector-note,
+[data-theme='light'] .experiment-earth-badge {
+  color: color-mix(in srgb, var(--hud-accent) 78%, var(--text));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .experiment-canvas-name,
+  .experiment-dataset-option,
+  .experiment-source-option,
+  .experiment-uploaded-upload,
+  .experiment-param-cell input,
+  .experiment-expert-field input,
+  .experiment-expert-field select,
+  .experiment-uploaded-link {
+    transition: none;
+  }
+}

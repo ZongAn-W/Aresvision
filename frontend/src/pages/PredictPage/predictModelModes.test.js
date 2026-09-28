@@ -10,8 +10,16 @@ import {
 } from './predictModelModes.js';
 
 test('predict model source options hide the system model mode', () => {
-  assert.deepEqual(PREDICT_MODEL_MODES, ['trained', 'trained_compare']);
+  // 地球历史预测是与火星两种模式并列的独立模式；旧 system 模式仍然隐藏。
+  assert.deepEqual(PREDICT_MODEL_MODES, ['trained', 'trained_compare', 'earth']);
   assert.equal(PREDICT_MODEL_MODES.includes('system'), false);
+});
+
+test('从 hash query 读取地球历史预测模式', () => {
+  assert.equal(readPredictModeFromHash('#/predict?from=training&mode=earth'), 'earth');
+  assert.equal(readPredictModeFromHash('#/predict?mode=earth'), 'earth');
+  assert.equal(normalizePredictModelMode('earth'), 'earth');
+  assert.equal(buildPredictHash({ from: 'training', mode: 'earth' }), '#/predict?from=training&mode=earth');
 });
 
 test('predict model mode falls back to trained when cache contains removed system mode', () => {

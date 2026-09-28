@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../i18n';import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -28,12 +28,29 @@ import {
   getModelStructureParamLabel,
   getTransferFreezeModes,
   isRecurrentArchitecture,
+  sanitizeTrainingDataset,
+  TRAINING_DATASET_EARTH_MERRA2_V2,
   TRAINING_DATASET_OPENMARS_MCD,
   sanitizeNonNegativeInteger,
   sanitizeDropout,
   sanitizePositiveInteger,
   sanitizePositiveNumber,
 } from './ModelTrainingPage/trainingParamSanitizers';
+import {
+  EARTH_CHANNEL_META,
+  EARTH_CHANNEL_ORDER,
+  EARTH_HORIZON,
+  EARTH_MODEL_ARCHITECTURE,
+  EARTH_MODEL_SOURCE,
+  EARTH_OPTIONAL_CHANNELS,
+  EARTH_WINDOW,
+  buildEarthTrainingHyperparameters,
+  captureMarsTrainingSnapshot,
+  readEarthDatasetAvailability,
+  resolveMarsTrainingRestore,
+} from './ModelTrainingPage/earthTrainingConfig';
+import EarthTrainingDatasetPanel from './ModelTrainingPage/EarthTrainingDatasetPanel';
+import { fetchDatasets } from '../services/datasets';
 import {
   buildCustomModelParams,
   createDefaultCustomModelParams,
@@ -146,6 +163,11 @@ export default function ModelTrainingPage() {
   const [isCreating, setIsCreating] = useState(false);
   // 「复制配置」带回来的警告：载入成功但有字段缺失时提示用户先修正。
   const [copyConfigWarnings, setCopyConfigWarnings] = useState([]);
+  // 数据集目录：训练数据集选项与 Earth 可用性都来自服务器 registry。
+  const [datasetCatalog, setDatasetCatalog] = useState([]);
+  const [datasetCatalogError, setDatasetCatalogError] = useState('');
+  // 切到 Earth 前的火星表单快照：切回火星时恢复，避免丢失用户已经填好的配置。
+  const marsSnapshotRef = useRef(null);
 
   const channelOrder = useMemo(() => ['U', 'V', 'D', 'S', 'T'], []);
   const channelMap = useMemo(
@@ -164,6 +186,44 @@ export default function ModelTrainingPage() {
       trainingDataset: isZh ? '训练数据集' : 'Training dataset',
       datasetOpenMarsMcd: isZh ? 'OpenMARS + MCD 融合' : 'OpenMARS + MCD',
       datasetMcdOverview: isZh ? 'MCD 全量 MY24-MY35' : 'Full MCD MY24-MY35',
+      datasetEarthMerra2V2: isZh ? '地球 MERRA-2 全球 5°' : 'Earth MERRA-2 global 5°',
+      earthDatasetTitle: isZh ? '地球 MERRA-2 日数据（v2）' : 'Earth MERRA-2 daily (v2)',
+      earthDatasetNote: isZh
+        ? '地球走独立的数据准备与训练路径：使用 UTC 日期与真实经纬网格，单位为 DU，不进入火星的 MY/Ls 与通道逻辑。'
+        : 'Earth uses its own preparation and training path: UTC dates, the real lat/lon grid and DU units, never the Mars MY/Ls or channel logic.',
+      earthGridLabel: isZh ? '网格' : 'Grid',
+      earthWindowLabel: isZh ? '输入 / 输出' : 'Input / output',
+      earthWindowValue: (window, horizon) => (isZh
+        ? `过去 ${window} 天 → 未来 ${horizon} 天`
+        : `past ${window} days → next ${horizon} days`),
+      earthTargetLabel: isZh ? '目标变量' : 'Target',
+      earthFingerprintLabel: isZh ? '发布指纹' : 'Release fingerprint',
+      earthFingerprintUnavailable: isZh ? '不可用' : 'unavailable',
+      earthSplitsTitle: isZh ? '官方日期划分（只读）' : 'Published date splits (read-only)',
+      earthSplitsUnavailable: isZh ? '数据包不可用，暂时无法读取日期划分。' : 'The package is unavailable, so date splits cannot be read.',
+      earthSplitLabels: { train: isZh ? '训练' : 'Train', validation: isZh ? '验证' : 'Validation', test: isZh ? '测试' : 'Test' },
+      earthSplitSamples: (days, windows) => (isZh
+        ? `${days} 天 · ${windows} 个 7→3 窗口`
+        : `${days} days · ${windows} 7→3 windows`),
+      earthChannelsTitle: isZh ? '输入变量与单位' : 'Input variables and units',
+      earthChannelsNote: isZh
+        ? 'TO3 必选且是唯一目标；四个辅助变量可单独勾选，允许只用 TO3。请求顺序不影响模型通道顺序。'
+        : 'TO3 is mandatory and is the only target; the four auxiliary variables are independently optional, and TO3 alone is allowed. Request order never changes model channel order.',
+      earthChannelRequired: isZh ? '必选' : 'required',
+      earthChannelOptional: isZh ? '可选' : 'optional',
+      earthChannelSelected: isZh ? '已选' : 'selected',
+      earthInputUnitsLabel: isZh ? '实际送入模型的通道与单位' : 'Channels and units actually fed to the model',
+      earthUnavailableTitle: isZh ? '当前不可训练' : 'Not trainable right now',
+      earthUnavailableFallback: isZh ? '数据集状态不可用。' : 'The dataset state is unavailable.',
+      earthLimitationsNote: isZh
+        ? '首期只开放官方 DLinear、过去 7 天预测未来 3 天；不支持 SPHERE、迁移学习或上传模型。'
+        : 'First stage opens the official DLinear, 7 days in and 3 days out only; SPHERE, transfer learning and uploaded models are not supported.',
+      earthModelFixedNote: isZh
+        ? 'Earth 首期固定使用官方 DLinear（线性隐藏层数可在「超参数」里调整）。'
+        : 'Earth is fixed to the official DLinear for this stage; adjust the linear hidden layers under Hyperparameters.',
+      earthBaseInput: isZh ? 'TO3（必选）' : 'TO3 (required)',
+      earthWindowField: isZh ? '过去 7 天' : 'Past 7 days',
+      earthHorizonField: isZh ? '未来 3 天' : 'Next 3 days',
       sourceDefault: getTrainingSourceLabel('default', { isZh }),
       sourceHintDefault: isZh
         ? '训练数据由管理员在服务器后台维护，普通用户不再切换自有融合数据。'
@@ -593,6 +653,94 @@ export default function ModelTrainingPage() {
   const [runBarHeight, setRunBarHeight] = useState(0);
   const runBarNodeRef = useRef(null);
   const runBarObserverRef = useRef(null);
+
+  // ── Earth 模式派生值 ────────────────────────────────────────────────
+  const earthMode = trainingDataset === TRAINING_DATASET_EARTH_MERRA2_V2;
+  const earthDatasetDescriptor = useMemo(
+    () => datasetCatalog.find((item) => item.dataset_id === TRAINING_DATASET_EARTH_MERRA2_V2) || null,
+    [datasetCatalog],
+  );
+  const earthAvailability = useMemo(
+    () => readEarthDatasetAvailability(earthDatasetDescriptor),
+    [earthDatasetDescriptor],
+  );
+  // Earth 使用规范通道顺序；火星保持原有 U/V/D/S/T 顺序。
+  const activeChannelOrder = earthMode ? EARTH_CHANNEL_ORDER : channelOrder;
+  const activeChannelMap = useMemo(
+    () => (earthMode
+      ? Object.fromEntries(EARTH_CHANNEL_ORDER.map((channel) => [
+          channel,
+          { name: EARTH_CHANNEL_META[channel]?.name || channel, short: channel },
+        ]))
+      : channelMap),
+    [earthMode, channelMap],
+  );
+
+  /** 数据集切换：Earth 与火星的通道/窗口/模型来源互不相同，切换时整体换挡。 */
+  const handleTrainingDatasetChange = useCallback((nextDataset) => {
+    const normalized = sanitizeTrainingDataset(nextDataset, { allowEarth: true });
+    if (normalized === TRAINING_DATASET_EARTH_MERRA2_V2) {
+      if (!marsSnapshotRef.current) {
+        marsSnapshotRef.current = captureMarsTrainingSnapshot({
+          trainingDataset,
+          modelSource,
+          selectedUploadedModelId,
+          modelArchitecture,
+          useSphere,
+          windowValue: window_,
+          horizon,
+          transferEnabled,
+          selectedChannels,
+        });
+      }
+      setTrainingDataset(normalized);
+      setModelSource(EARTH_MODEL_SOURCE);
+      setSelectedUploadedModelId('');
+      setModelArchitecture(EARTH_MODEL_ARCHITECTURE);
+      setUseSphere(false);
+      setWindow(EARTH_WINDOW);
+      setHorizon(EARTH_HORIZON);
+      setTransferEnabled(false);
+      setSelectedChannels([...EARTH_OPTIONAL_CHANNELS]);
+      setCopyConfigWarnings([]);
+      return;
+    }
+    const restore = resolveMarsTrainingRestore(marsSnapshotRef.current);
+    marsSnapshotRef.current = null;
+    setTrainingDataset(normalized);
+    if (normalized === TRAINING_DATASET_OPENMARS_MCD && restore) {
+      setModelSource(restore.modelSource);
+      setSelectedUploadedModelId(restore.selectedUploadedModelId);
+      setModelArchitecture(restore.modelArchitecture);
+      setUseSphere(restore.useSphere);
+      setWindow(restore.windowValue);
+      setHorizon(restore.horizon);
+      setTransferEnabled(restore.transferEnabled);
+      setSelectedChannels(restore.selectedChannels);
+    }
+  }, [
+    horizon,
+    modelArchitecture,
+    modelSource,
+    selectedChannels,
+    selectedUploadedModelId,
+    trainingDataset,
+    transferEnabled,
+    useSphere,
+    window_,
+  ]);
+
+  // 目录在训练页挂载时读取一次；失败只提示，不影响火星训练。
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchDatasets({ signal: controller.signal })
+      .then((payload) => setDatasetCatalog(Array.isArray(payload?.items) ? payload.items : []))
+      .catch((error) => {
+        if (error?.name === 'AbortError') return;
+        setDatasetCatalogError(error?.message || String(error));
+      });
+    return () => controller.abort();
+  }, []);
 
   const setRunBarNode = (node) => {
     if (runBarNodeRef.current === node) return;
@@ -1348,6 +1496,52 @@ export default function ModelTrainingPage() {
       return;
     }
 
+    // Earth 与火星走两条独立的提交路径：Earth 不发送迁移/上传字段，也不经过
+    // 火星的通道与窗口规范化，服务端会独立复核同一套 Earth 契约。
+    if (earthMode) {
+      if (!earthAvailability.selectable) {
+        showToast(copy.earthUnavailableTitle, 'error');
+        return;
+      }
+      try {
+        setIsProcessing(true);
+        const earthHyperparameters = buildEarthTrainingHyperparameters({
+          selectedChannels,
+          epochs,
+          batchSize,
+          learningRate,
+          seed,
+          earlyStoppingPatience,
+          linearHiddenLayers: architectureParamsByModel?.[EARTH_MODEL_ARCHITECTURE]?.linear_hidden_layers,
+        });
+        const task = await startTrainingTask(
+          UNIFIED_TRAINING_SCRIPT,
+          earthHyperparameters,
+          customModelName.trim(),
+          getTrainingRequestDataSource(),
+          {
+            modelSource: 'official',
+            uploadedModelId: null,
+            tagIds: newTaskTagIds,
+            datasetId: TRAINING_DATASET_EARTH_MERRA2_V2,
+          }
+        );
+        setTasks((previous) => {
+          const exists = previous.find((item) => item.id === task.id);
+          if (exists) return previous;
+          return [task, ...previous];
+        });
+        setIsCreating(false);
+        setActiveTaskId(task.id);
+        await loadTasks();
+      } catch (error) {
+        alert(`${t('modelTraining.startError')}${error?.message || ''}`);
+      } finally {
+        setIsProcessing(false);
+      }
+      return;
+    }
+
     if (modelSource === 'official' && !selectedScriptAvailable) {
       alert(copy.presetUnavailable);
       return;
@@ -1677,6 +1871,8 @@ export default function ModelTrainingPage() {
         modelArchitectures: MODEL_ARCHITECTURES,
         guideDownloadUrl: getUserModelDownloadUrl('guide'),
         templateDownloadUrl: getUserModelDownloadUrl('template'),
+        earthDatasetAvailability: earthAvailability,
+        datasetCatalogError,
       }}
       validation={{
         modelNameError,
@@ -1695,7 +1891,7 @@ export default function ModelTrainingPage() {
       readiness={readiness}
       actions={{
         onModelNameChange: handleModelNameChange,
-        onTrainingDatasetChange: setTrainingDataset,
+        onTrainingDatasetChange: handleTrainingDatasetChange,
         onModelSourceChange: setModelSource,
         onSelectUploadedModel: setSelectedUploadedModelId,
         onUploadModel: handleUploadModel,
@@ -1737,8 +1933,8 @@ export default function ModelTrainingPage() {
       t={t}
       isLight={isLight}
       isZh={isZh}
-      channelOrder={channelOrder}
-      channelMap={channelMap}
+      channelOrder={activeChannelOrder}
+      channelMap={activeChannelMap}
       modelNameLabel={modelNameLabel}
       structureLabelLanguage={structureLabelLanguage}
       availableTransferFreezeModes={availableTransferFreezeModes}
@@ -1811,8 +2007,8 @@ export default function ModelTrainingPage() {
       isLight={isLight}
       isProcessing={isProcessing}
       copy={copy}
-      channelOrder={channelOrder}
-      channelMap={channelMap}
+      channelOrder={activeChannelOrder}
+      channelMap={activeChannelMap}
       baselineLabel={baselineLabel}
       onPredict={handleAnalyzeTask}
       onCompare={handleCompareTask}
@@ -1842,8 +2038,8 @@ export default function ModelTrainingPage() {
       copy={copy}
       locale={locale}
       isZh={isZh}
-      channelOrder={channelOrder}
-      channelMap={channelMap}
+      channelOrder={activeChannelOrder}
+      channelMap={activeChannelMap}
       baselineLabel={baselineLabel}
     />
   );
