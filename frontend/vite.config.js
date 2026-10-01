@@ -9,7 +9,7 @@ export default defineConfig({
     allowedHosts: ['ares-vision.xyz'], // 允许你的花生壳域名
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true,
       },
     },

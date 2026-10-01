@@ -38,6 +38,16 @@ def test_channel_order_and_ozone_only_selection():
 def test_missing_selection_defaults_to_every_auxiliary_channel():
     normalized = normalize_earth_training_hyperparameters({})
     assert normalized["selected_channels"] == list(EARTH_OPTIONAL_CHANNELS)
+    assert (normalized["train_ratio"], normalized["validation_ratio"], normalized["test_ratio"]) == (0.7, 0.2, 0.1)
+
+
+def test_custom_split_ratios_are_preserved_in_earth_spec():
+    normalized = normalize_earth_training_hyperparameters({
+        "train_ratio": 0.6,
+        "validation_ratio": 0.3,
+        "test_ratio": 0.1,
+    })
+    assert (normalized["train_ratio"], normalized["validation_ratio"], normalized["test_ratio"]) == (0.6, 0.3, 0.1)
 
 
 def test_explicit_to3_in_the_selection_is_ignored_not_duplicated():

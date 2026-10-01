@@ -34,6 +34,8 @@ from services.training_channels import (  # noqa: E402
     extract_architecture_params,
 )
 from services.transfer_learning_strategy import apply_freeze_strategy  # noqa: E402
+from services.training_split import split_time_boundary
+from services.training_split import split_sample_ranges
 from training_backbones.model_zoo import (  # noqa: E402
     SpherePhaseWarpFrontEnd,
     build_forecaster,
@@ -476,6 +478,9 @@ def _prepare_training_data(
     window: int,
     horizon: int,
     training_dataset: Any = TRAINING_DATASET_OPENMARS_MCD,
+    train_ratio: float = 0.7,
+    validation_ratio: float = 0.2,
+    test_ratio: float = 0.1,
 ) -> PreparedTrainingData:
     from sklearn.preprocessing import StandardScaler
 
@@ -517,7 +522,11 @@ def _prepare_training_data(
             f"time={time_count}, window={window}, horizon={horizon}"
         )
 
-    split_time_index = int(0.8 * sample_count) + window
+    split_time_index = split_time_boundary(
+        sample_count,
+        window,
+        {"train_ratio": train_ratio, "validation_ratio": validation_ratio, "test_ratio": test_ratio},
+    )
     split_time_index = max(1, min(time_count, split_time_index))
     scaled_inputs = np.zeros_like(raw_inputs, dtype=np.float32)
     for channel_index in range(raw_inputs.shape[-1]):
@@ -562,6 +571,9 @@ def prepare_training_tensors(
     window: int,
     horizon: int,
     training_dataset: Any = TRAINING_DATASET_OPENMARS_MCD,
+    train_ratio: float = 0.7,
+    validation_ratio: float = 0.2,
+    test_ratio: float = 0.1,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int]:
     prepared = _prepare_training_data(
         openmars_dir=openmars_dir,
@@ -571,6 +583,9 @@ def prepare_training_tensors(
         window=window,
         horizon=horizon,
         training_dataset=training_dataset,
+        train_ratio=train_ratio,
+        validation_ratio=validation_ratio,
+        test_ratio=test_ratio,
     )
     return prepared.x, prepared.ls, prepared.y, prepared.height, prepared.width
 
@@ -655,23 +670,13 @@ def _assert_prediction_shape(prediction: Any, target: Any, context: str) -> None
 
 def _split_training_data(
     prepared: PreparedTrainingData,
-) -> tuple[TensorDataset, TensorDataset]:
-    if len(prepared.x) < 2:
-        raise ValueError("At least two training samples are required")
-    split_index = int(0.8 * len(prepared.x))
-    split_index = min(max(1, split_index), len(prepared.x) - 1)
-    return (
-        TensorDataset(
-            prepared.x[:split_index],
-            prepared.ls[:split_index],
-            prepared.y[:split_index],
-        ),
-        TensorDataset(
-            prepared.x[split_index:],
-            prepared.ls[split_index:],
-            prepared.y[split_index:],
-        ),
-    )
+    ratios: dict[str, float] | None = None,
+) -> tuple[TensorDataset, TensorDataset, TensorDataset]:
+    ranges = split_sample_ranges(len(prepared.x), ratios or {"train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": 0.1})
+    def make_dataset(start_end):
+        start, end = start_end
+        return TensorDataset(prepared.x[start:end], prepared.ls[start:end], prepared.y[start:end])
+    return make_dataset(ranges["train"]), make_dataset(ranges["validation"]), make_dataset(ranges["test"])
 
 
 def _evaluate_metrics(
@@ -707,6 +712,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=0.001)
+    parser.add_argument("--train_ratio", type=float, default=0.7)
+    parser.add_argument("--validation_ratio", type=float, default=0.2)
+    parser.add_argument("--test_ratio", type=float, default=0.1)
     parser.add_argument("--window", type=int, default=3)
     parser.add_argument("--horizon", type=int, default=3)
     parser.add_argument("--early_stopping_patience", type=int, default=0)
@@ -784,8 +792,14 @@ def main() -> None:
         window=args.window,
         horizon=args.horizon,
         training_dataset=args.training_dataset,
+        train_ratio=args.train_ratio,
+        validation_ratio=args.validation_ratio,
+        test_ratio=args.test_ratio,
     )
-    train_dataset, validation_dataset = _split_training_data(prepared)
+    train_dataset, validation_dataset, test_dataset = _split_training_data(
+        prepared,
+        {"train_ratio": args.train_ratio, "validation_ratio": args.validation_ratio, "test_ratio": args.test_ratio},
+    )
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=False)
 
@@ -821,6 +835,7 @@ def main() -> None:
     print("\n[Step 3] Start Training...", flush=True)
 
     best_validation_loss = float("inf")
+    best_state = None
     patience_counter = 0
     for epoch in range(1, epochs + 1):
         model.train()
@@ -870,6 +885,7 @@ def main() -> None:
             if validation_loss < best_validation_loss:
                 best_validation_loss = validation_loss
                 patience_counter = 0
+                best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
@@ -880,11 +896,15 @@ def main() -> None:
                     )
                     break
 
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
     model.eval()
     target_batches: list[np.ndarray] = []
     prediction_batches: list[np.ndarray] = []
     with torch.no_grad():
-        for batch_index, (inputs, ls_values, targets) in enumerate(validation_loader, start=1):
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        for batch_index, (inputs, ls_values, targets) in enumerate(test_loader, start=1):
             predictions = model(inputs.to(device), ls_values.to(device))
             _assert_prediction_shape(
                 predictions,
@@ -894,7 +914,7 @@ def main() -> None:
             prediction_batches.append(predictions.cpu().numpy())
             target_batches.append(targets.numpy())
     if not target_batches:
-        raise ValueError("No validation batches available for metrics")
+        raise ValueError("No test batches available for metrics")
 
     metrics = _evaluate_metrics(
         np.concatenate(target_batches, axis=0),

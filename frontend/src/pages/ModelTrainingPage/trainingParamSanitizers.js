@@ -475,6 +475,9 @@ export function buildTrainingHyperparameters({
   architectureParamsByModel = {},
   transferLearning = null,
   trainingDataset = TRAINING_DATASET_OPENMARS_MCD,
+  trainRatio = 0.7,
+  validationRatio = 0.2,
+  testRatio = 0.1,
 }) {
   const normalizedArchitecture = String(modelArchitecture || '').toLowerCase();
   const hyperparameters = {
@@ -489,6 +492,9 @@ export function buildTrainingHyperparameters({
     selected_channels: channelOrder.filter((channel) => selectedChannels.includes(channel)),
     model_architecture: normalizedArchitecture,
     use_sphere: Boolean(useSphere),
+    train_ratio: Number(trainRatio),
+    validation_ratio: Number(validationRatio),
+    test_ratio: Number(testRatio),
   };
 
   const transferEnabled = Boolean(transferLearning?.enabled);

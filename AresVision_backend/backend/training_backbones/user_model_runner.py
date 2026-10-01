@@ -28,6 +28,7 @@ from services.dataset_identity import require_training_dataset, resolve_dataset_
 from services.ozone_units import normalize_ozone_column_units
 from services.netcdf_read_lock import netcdf_read_lock
 from services.transfer_learning_strategy import apply_freeze_strategy
+from services.training_split import split_sample_ranges, split_time_boundary
 from training_backbones.uploaded_model_contract import (
     attach_uploaded_model_contract,
     expand_topography_batch,
@@ -817,6 +818,9 @@ def prepare_tensors(
     return_coordinates: bool = False,
     require_coordinates: Optional[bool] = None,
     return_scaled_volume: bool = False,
+    train_ratio: float = 0.7,
+    validation_ratio: float = 0.2,
+    test_ratio: float = 0.1,
 ):
     """加载并标准化数据。
 
@@ -914,8 +918,16 @@ def prepare_tensors(
             f"time={total_time}, window={window}, horizon={horizon}"
         )
 
-    split_idx = int(0.8 * sample_count) + window
-    split_idx = max(1, min(total_time, split_idx))
+    split_boundaries = split_time_boundary(
+        sample_count,
+        window,
+        {
+            "train_ratio": float(train_ratio),
+            "validation_ratio": float(validation_ratio),
+            "test_ratio": float(test_ratio),
+        },
+    )
+    split_idx = max(1, min(total_time, split_boundaries["train_end"]))
     x_scaled = np.zeros_like(x_raw, dtype=np.float32)
     for channel_idx in range(channel_count):
         scaler = StandardScaler()
@@ -1076,6 +1088,9 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=0.001)
+    parser.add_argument("--train_ratio", type=float, default=0.7)
+    parser.add_argument("--validation_ratio", type=float, default=0.2)
+    parser.add_argument("--test_ratio", type=float, default=0.1)
     parser.add_argument("--window", type=int, default=3)
     parser.add_argument("--horizon", type=int, default=3)
     parser.add_argument("--early_stopping_patience", type=int, default=0)
@@ -1139,6 +1154,9 @@ def main() -> None:
         return_ls=True,
         return_coordinates=True,
         require_coordinates=False,
+        train_ratio=args.train_ratio,
+        validation_ratio=args.validation_ratio,
+        test_ratio=args.test_ratio,
     )
 
     param_schema = parse_json_arg(args.uploaded_model_param_schema)
@@ -1176,8 +1194,30 @@ def main() -> None:
             "uploaded training dataset",
         )
 
-    train_dataset, test_dataset = _split_train_test(x_torch, y_torch, model_ls)
+    split_ratios = {
+        "train_ratio": args.train_ratio,
+        "validation_ratio": args.validation_ratio,
+        "test_ratio": args.test_ratio,
+    }
+    try:
+        ranges = split_sample_ranges(len(x_torch), split_ratios)
+    except ValueError:
+        # Tiny legacy fixtures cannot provide three non-empty partitions; retain
+        # the historical two-way behavior for those inputs only.
+        legacy_train, legacy_test = _split_train_test(x_torch, y_torch, model_ls)
+        train_dataset, validation_dataset, test_dataset = legacy_train, legacy_test, legacy_test
+        ranges = None
+    def make_dataset(start_end):
+        start, end = start_end
+        if model_ls is None:
+            return TensorDataset(x_torch[start:end], y_torch[start:end])
+        return TensorDataset(x_torch[start:end], model_ls[start:end], y_torch[start:end])
+    if ranges is not None:
+        train_dataset = make_dataset(ranges["train"])
+        validation_dataset = make_dataset(ranges["validation"])
+        test_dataset = make_dataset(ranges["test"])
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     apply_transfer_learning(model, args, device)
@@ -1194,6 +1234,7 @@ def main() -> None:
     print("\n[Step 3] Start Training...", flush=True)
 
     best_val_loss = float("inf")
+    best_state = None
     patience_counter = 0
     for epoch in range(1, epochs + 1):
         model.train()
@@ -1223,7 +1264,7 @@ def main() -> None:
         model.eval()
         val_loss_sum = 0.0
         with torch.no_grad():
-            for batch_idx, batch in enumerate(test_loader, start=1):
+            for batch_idx, batch in enumerate(validation_loader, start=1):
                 pred, target = _forward_uploaded_batch(
                     model,
                     batch,
@@ -1233,13 +1274,14 @@ def main() -> None:
                 )
                 val_loss_sum += float(criterion(pred, target).item())
         train_loss = loss_sum / max(1, len(train_loader))
-        val_loss = val_loss_sum / max(1, len(test_loader))
+        val_loss = val_loss_sum / max(1, len(validation_loader))
         print(f"Epoch {epoch}/{epochs} Loss={train_loss:.4f} Val Loss={val_loss:.4f}", flush=True)
 
         if patience > 0:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
+                best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
@@ -1249,6 +1291,9 @@ def main() -> None:
                         flush=True,
                     )
                     break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
     model.eval()
     true_batches: list[np.ndarray] = []

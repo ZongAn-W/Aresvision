@@ -37,6 +37,7 @@ yarn-error.log*
 **/*.py[cod]
 *.egg-info/
 .pytest_cache/
+backend-test-tmp*/
 **/.venv/
 **/venv/
 **/ENV/

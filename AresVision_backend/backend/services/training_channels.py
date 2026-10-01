@@ -3,6 +3,7 @@ from typing import Any, Optional
 
 from services.dataset_identity import resolve_dataset_id, require_training_dataset
 from training_backbones.model_zoo import normalize_model_architecture, normalize_use_sphere
+from services.training_split import normalize_split_ratios
 
 
 UNIFIED_TRAINING_SCRIPT = "demo3.py"
@@ -214,6 +215,7 @@ def extract_architecture_params(hyperparameters: Optional[dict[str, Any]]) -> di
 
 def normalize_training_hyperparameters(hyperparameters: Optional[dict[str, Any]]) -> dict[str, Any]:
     normalized = dict(hyperparameters or {})
+    normalized.update(normalize_split_ratios(normalized))
 
     normalized["epochs"] = _positive_int(normalized.get("epochs"), 10)
     normalized["batch_size"] = _positive_int(normalized.get("batch_size"), 32)

@@ -53,6 +53,9 @@ test('sanitizes negative core training parameters before they are submitted', ()
     selected_channels: ['D', 'T'],
     model_architecture: 'simvp',
     use_sphere: true,
+    train_ratio: 0.7,
+    validation_ratio: 0.2,
+    test_ratio: 0.1,
     spatial_hidden_dim: 1,
     temporal_hidden_dim: 128,
     temporal_depth: 3,
@@ -177,6 +180,9 @@ test('submits only structure parameters used by the selected architecture', () =
     selected_channels: ['U', 'D'],
     model_architecture: 'patchtst',
     use_sphere: false,
+    train_ratio: 0.7,
+    validation_ratio: 0.2,
+    test_ratio: 0.1,
     patch_len: 1,
     stride: 2,
     d_model: 96,
@@ -226,6 +232,9 @@ test('submits migrated ablation structure parameters with numeric list sanitizin
     selected_channels: ['D'],
     model_architecture: 'earthformer',
     use_sphere: false,
+    train_ratio: 0.7,
+    validation_ratio: 0.2,
+    test_ratio: 0.1,
     d_model: 96,
     n_heads: 4,
     e_layers: 2,
@@ -234,6 +243,30 @@ test('submits migrated ablation structure parameters with numeric list sanitizin
     mlp_ratio: 2,
     dropout: 0,
   });
+});
+
+test('submits configured dataset split ratios', () => {
+  const hyperparameters = buildTrainingHyperparameters({
+    epochs: 10,
+    batchSize: 32,
+    learningRate: 0.001,
+    windowValue: 3,
+    horizon: 3,
+    earlyStoppingPatience: 0,
+    seed: 11,
+    selectedChannels: ['D'],
+    channelOrder: ['U', 'V', 'D', 'S', 'T'],
+    modelArchitecture: 'predrnnv2',
+    useSphere: false,
+    architectureParamsByModel: {},
+    trainRatio: 0.6,
+    validationRatio: 0.25,
+    testRatio: 0.15,
+  });
+
+  assert.equal(hyperparameters.train_ratio, 0.6);
+  assert.equal(hyperparameters.validation_ratio, 0.25);
+  assert.equal(hyperparameters.test_ratio, 0.15);
 });
 
 test('adds transfer learning parameters when a task source is enabled', () => {
