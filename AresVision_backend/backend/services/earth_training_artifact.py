@@ -47,6 +47,7 @@ from services.earth_training_contract import (
     EARTH_UPLOADED_ARCHITECTURE,
     EARTH_WINDOW,
 )
+from services.training_split import normalize_split_ratios, TrainingSplitError
 from services.earth_model_source import (
     MODEL_SOURCE_OFFICIAL,
     MODEL_SOURCE_UPLOADED,
@@ -333,6 +334,8 @@ def build_checkpoint_payload(
     run: Mapping[str, Any],
     metrics: Mapping[str, Any],
     split_window_counts: Mapping[str, int],
+    split_ratios: Mapping[str, float] | None = None,
+    split_ranges: Mapping[str, Sequence[int]] | None = None,
     task_id: Optional[int] = None,
     model_source: str = MODEL_SOURCE_OFFICIAL,
     uploaded_model: Optional[Mapping[str, Any]] = None,
@@ -340,6 +343,10 @@ def build_checkpoint_payload(
     """Assemble the complete checkpoint payload as plain, serialisable data."""
     order = require_earth_channel_order(input_channel_order)
     binding = _binding_payload(dataset_binding)
+    try:
+        normalized_split_ratios = normalize_split_ratios(split_ratios)
+    except TrainingSplitError as exc:
+        raise EarthArtifactError(str(exc)) from exc
     contract = {
         "target": EARTH_TARGET_CHANNEL,
         "target_unit": EARTH_TARGET_UNIT,
@@ -351,6 +358,8 @@ def build_checkpoint_payload(
         "horizon": EARTH_HORIZON,
         "strict_split_windows": True,
         "split_window_counts": {str(key): int(value) for key, value in dict(split_window_counts).items()},
+        "split_ratios": _plain(normalized_split_ratios),
+        "split_ranges": _plain({str(key): list(value) for key, value in dict(split_ranges or {}).items()}),
     }
     run_block = {str(key): _plain(value) for key, value in dict(run).items()}
     resolved_task_id = int(task_id if task_id is not None else run_block.get("task_id", 0))

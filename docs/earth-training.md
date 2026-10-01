@@ -47,8 +47,8 @@
 | 划分 | 日期范围（含首尾） | 天数 | 7→3 窗口数 |
 | --- | --- | --- | --- |
 | train | 2020-01-01…2020-12-31 | 366 | 357 |
-| validation | 2021-01-01…2021-06-30 | 181 | 172 |
-| test | 2021-07-01…2021-12-31 | 184 | 175 |
+| validation | task-level chronological split | depends on configured ratio |
+| test | task-level chronological split | depends on configured ratio |
 
 窗口严格留在所属划分内：样本 `i` 使用输入索引 `[i, i+6]`、目标索引 `[i+7, i+9]`，不向前一划分借 7 天。
 
@@ -88,6 +88,8 @@
   }
 }
 ```
+
+`train_ratio`、`validation_ratio`、`test_ratio` 可在 `hyperparameters` 中独立设置，三者必须合计为 `1.0`；省略时默认为 `0.7 / 0.2 / 0.1`。Earth 使用完整发布窗口按时间顺序切分任务级训练、验证和测试集，checkpoint 会保存比例及实际窗口范围。
 
 `model_script` 仅为兼容现有客户端保留；服务端会按数据集选择 `earth_daily.py` 并写入任务，实际执行的脚本与客户端提交值无关。
 

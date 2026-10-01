@@ -16,6 +16,7 @@ import {
   sanitizePositiveNumber,
   sanitizeTrainingDataset,
 } from './trainingParamSanitizers.js';
+import { EARTH_DEFAULT_SPLIT_RATIOS } from './earthTrainingConfig.js';
 
 export const EXPERIMENT_STAGES = ['configure', 'monitor', 'result'];
 export const EXPERIMENT_STATUS_FILTERS = ['all', 'running', 'completed', 'failed'];
@@ -553,6 +554,9 @@ export function readExperimentConfig(task, {
     epochs: 10,
     batchSize: 32,
     learningRate: 0.001,
+    trainRatio: EARTH_DEFAULT_SPLIT_RATIOS.train_ratio,
+    validationRatio: EARTH_DEFAULT_SPLIT_RATIOS.validation_ratio,
+    testRatio: EARTH_DEFAULT_SPLIT_RATIOS.test_ratio,
     windowValue: 3,
     horizon: 3,
     earlyStoppingPatience: 0,
@@ -687,6 +691,9 @@ export function readExperimentConfig(task, {
     epochs: epochs ?? base.epochs,
     batchSize: batchSize ?? base.batchSize,
     learningRate: learningRate ?? base.learningRate,
+    trainRatio: Number.isFinite(Number(hyperparameters.train_ratio)) ? Number(hyperparameters.train_ratio) : base.trainRatio,
+    validationRatio: Number.isFinite(Number(hyperparameters.validation_ratio)) ? Number(hyperparameters.validation_ratio) : base.validationRatio,
+    testRatio: Number.isFinite(Number(hyperparameters.test_ratio)) ? Number(hyperparameters.test_ratio) : base.testRatio,
     windowValue: windowValue ?? base.windowValue,
     horizon: horizon ?? base.horizon,
     earlyStoppingPatience: sanitizeNonNegativeInteger(

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../i18n';import { useSettings } from '../contexts/SettingsContext';
+import { normalizeTrainingDefaults } from '../utils/trainingDefaults.js';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import {
@@ -49,6 +50,8 @@ import {
   EARTH_OPTIONAL_CHANNELS,
   EARTH_WINDOW,
   buildEarthTrainingHyperparameters,
+  EARTH_DEFAULT_SPLIT_RATIOS,
+  normalizeEarthSplitRatios,
   captureTrainingDraft,
   getEarthUploadedSelectionBlocker,
   readEarthDatasetAvailability,
@@ -135,6 +138,10 @@ export default function ModelTrainingPage() {
   const { showToast } = useToast();
   const isLight = settings.theme === 'light';
   const isZh = settings.language !== 'en';
+  const trainingDefaults = useMemo(
+    () => normalizeTrainingDefaults(settings.trainingDefaults),
+    [settings.trainingDefaults],
+  );
   const structureLabelLanguage = isZh ? 'zh' : 'en';
   const locale = isZh ? 'zh-CN' : 'en-US';
 
@@ -622,16 +629,19 @@ export default function ModelTrainingPage() {
   const [selectedTrainingWeightId, setSelectedTrainingWeightId] = useState('');
   const [uploadingWeight, setUploadingWeight] = useState(false);
   const [trainingDataset, setTrainingDataset] = useState(TRAINING_DATASET_OPENMARS_MCD);
-  const [transferEnabled, setTransferEnabled] = useState(false);
+  const [transferEnabled, setTransferEnabled] = useState(trainingDefaults.transferEnabled);
   const [transferSourceType, setTransferSourceType] = useState('task');
   const [transferSourceTaskId, setTransferSourceTaskId] = useState('');
-  const [transferFreezeMode, setTransferFreezeMode] = useState('none');
-  const [finetuneLearningRate, setFinetuneLearningRate] = useState(0.0001);
+  const [transferFreezeMode, setTransferFreezeMode] = useState(trainingDefaults.transferFreezeMode);
+  const [finetuneLearningRate, setFinetuneLearningRate] = useState(trainingDefaults.finetuneLearningRate);
   const [modelArchitecture, setModelArchitecture] = useState('predrnnv2');
   const [useSphere, setUseSphere] = useState(false);
-  const [epochs, setEpochs] = useState(10);
-  const [batchSize, setBatchSize] = useState(32);
-  const [learningRate, setLearningRate] = useState(0.001);
+  const [epochs, setEpochs] = useState(trainingDefaults.epochs);
+  const [batchSize, setBatchSize] = useState(trainingDefaults.batchSize);
+  const [learningRate, setLearningRate] = useState(trainingDefaults.learningRate);
+  const [trainRatio, setTrainRatio] = useState(trainingDefaults.trainRatio);
+  const [validationRatio, setValidationRatio] = useState(trainingDefaults.validationRatio);
+  const [testRatio, setTestRatio] = useState(trainingDefaults.testRatio);
   const [stlstmLayers, setStlstmLayers] = useState(3);
   const [customModelName, setCustomModelName] = useState('');
   const [modelNameError, setModelNameError] = useState('');
@@ -639,10 +649,10 @@ export default function ModelTrainingPage() {
   const [architectureParamsByModel, setArchitectureParamsByModel] = useState(() =>
     createDefaultArchitectureParamsByModel()
   );
-  const [window_, setWindow] = useState(3);
-  const [horizon, setHorizon] = useState(3);
-  const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(0);
-  const [seed, setSeed] = useState(11);
+  const [window_, setWindow] = useState(trainingDefaults.window);
+  const [horizon, setHorizon] = useState(trainingDefaults.horizon);
+  const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(trainingDefaults.earlyStoppingPatience);
+  const [seed, setSeed] = useState(trainingDefaults.seed);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [testTaskId, setTestTaskId] = useState(null);
   const [renameTask, setRenameTask] = useState(null);
@@ -1546,6 +1556,7 @@ export default function ModelTrainingPage() {
    * 新建实验 / 返回实验目录：清空命名、标签与迁移选择，保留默认模型与数据集参数。
    */
   const handleCreateExperiment = () => {
+    const defaults = normalizeTrainingDefaults(settings.trainingDefaults);
     changeView('config');
     restoreTransferStructureSnapshot();
     transferStructureSnapshotRef.current = null;
@@ -1553,11 +1564,21 @@ export default function ModelTrainingPage() {
     setCustomModelName('');
     setModelNameError('');
     setNewTaskTagIds([]);
-    setTransferEnabled(false);
+    setTransferEnabled(earthMode ? false : defaults.transferEnabled);
     setTransferSourceType('task');
     setTransferSourceTaskId('');
-    setTransferFreezeMode('none');
-    setFinetuneLearningRate(0.0001);
+    setTransferFreezeMode(defaults.transferFreezeMode);
+    setFinetuneLearningRate(defaults.finetuneLearningRate);
+    setEpochs(defaults.epochs);
+    setBatchSize(defaults.batchSize);
+    setLearningRate(defaults.learningRate);
+    setTrainRatio(defaults.trainRatio);
+    setValidationRatio(defaults.validationRatio);
+    setTestRatio(defaults.testRatio);
+    setWindow(earthMode ? EARTH_WINDOW : defaults.window);
+    setHorizon(earthMode ? EARTH_HORIZON : defaults.horizon);
+    setEarlyStoppingPatience(defaults.earlyStoppingPatience);
+    setSeed(defaults.seed);
     setSelectedUploadedModelId((current) => current);
     setModelArchitecture('predrnnv2');
     setUseSphere(false);
@@ -1596,6 +1617,12 @@ export default function ModelTrainingPage() {
     if (nameError) {
       alert(!customModelName.trim() ? t('modelTraining.namePrompt') : nameError);
       setModelNameError(nameError);
+      return;
+    }
+
+    const splitRatios = normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio);
+    if (!splitRatios.valid) {
+      showToast(isZh ? '训练集、验证集、测试集比例之和必须为 100%' : 'Train, validation and test ratios must total 100%', 'error');
       return;
     }
 
@@ -1641,6 +1668,9 @@ export default function ModelTrainingPage() {
           customModelParams: uploadedEarth
             ? buildCustomModelParams(selectedUploadedParamSchema, customModelParams)
             : null,
+          trainRatio: splitRatios.train_ratio,
+          validationRatio: splitRatios.validation_ratio,
+          testRatio: splitRatios.test_ratio,
         });
         const task = await startTrainingTask(
           UNIFIED_TRAINING_SCRIPT,
@@ -1721,6 +1751,9 @@ export default function ModelTrainingPage() {
           freezeMode: transferFreezeMode,
           finetuneLearningRate,
         },
+        trainRatio: splitRatios.train_ratio,
+        validationRatio: splitRatios.validation_ratio,
+        testRatio: splitRatios.test_ratio,
       });
       const hyperparameters =
         modelSource === 'uploaded'
@@ -1911,6 +1944,9 @@ export default function ModelTrainingPage() {
     setEpochs(config.epochs);
     setBatchSize(config.batchSize);
     setLearningRate(config.learningRate);
+    setTrainRatio(config.trainRatio ?? EARTH_DEFAULT_SPLIT_RATIOS.train_ratio);
+    setValidationRatio(config.validationRatio ?? EARTH_DEFAULT_SPLIT_RATIOS.validation_ratio);
+    setTestRatio(config.testRatio ?? EARTH_DEFAULT_SPLIT_RATIOS.test_ratio);
     setSeed(config.seed);
     setEarlyStoppingPatience(config.earlyStoppingPatience);
     // 复制配置不把原任务当成迁移学习来源。
@@ -1965,6 +2001,9 @@ export default function ModelTrainingPage() {
         epochs,
         batchSize,
         learningRate,
+        trainRatio,
+        validationRatio,
+        testRatio,
         windowValue: window_,
         horizon,
         earlyStoppingPatience,
@@ -2052,6 +2091,11 @@ export default function ModelTrainingPage() {
         onUploadWeight: handleUploadWeight,
         onDeleteWeight: handleDeleteWeight,
         onFoldChange: handleFoldChange,
+        onSplitRatioChange: (key, value) => {
+          if (key === 'trainRatio') setTrainRatio(value);
+          if (key === 'validationRatio') setValidationRatio(value);
+          if (key === 'testRatio') setTestRatio(value);
+        },
         onTagIdsChange: handleTagIdsChange,
         onCreateTag: handleCreateTag,
         onStart: handleStartTraining,

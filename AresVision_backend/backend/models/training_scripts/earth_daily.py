@@ -57,6 +57,7 @@ from services.earth_training_contract import (  # noqa: E402
     normalize_earth_training_hyperparameters,
     split_window_counts,
 )
+from services.training_split import split_sample_ranges
 from services.earth_model_source import (  # noqa: E402
     MODEL_SOURCE_OFFICIAL,
     MODEL_SOURCE_UPLOADED,
@@ -103,28 +104,29 @@ def _build_loaders(
     assert_release_matches_binding(release, binding)
 
     selected = hyperparameters["selected_channels"]
+    full_dates = np.asarray(release.dates, dtype="datetime64[D]")
+    # Fit statistics only on the published training period; task-level windows
+    # are then allocated chronologically across the full release timeline.
     normalization = normalization_from_release(release, ["TO3", *selected])
-    splits = {}
-    for name in ("train", "validation", "test"):
-        splits[name] = EarthOzoneWindows.from_release(
-            release,
-            split=name,
-            window=EARTH_WINDOW,
-            horizon=EARTH_HORIZON,
-            selected_channels=selected,
-            normalization=normalization,
-        )
-    counts = split_window_counts(
-        {name: len(dataset.dates) for name, dataset in splits.items()}
+    full = EarthOzoneWindows.from_release(
+        release,
+        split="train",
+        window=EARTH_WINDOW,
+        horizon=EARTH_HORIZON,
+        selected_channels=selected,
+        normalization=normalization,
+        require_split_coverage=False,
     )
-    expected = (release.metadata.get("splits") or {})
-    for name in ("train", "validation", "test"):
-        published_days = int(expected.get(name, {}).get("days", 0) or 0)
-        if published_days and published_days != len(splits[name].dates):
-            raise EarthTrainingError(
-                f"Published {name} split has {published_days} days but the release "
-                f"yielded {len(splits[name].dates)}"
-            )
+    ranges = split_sample_ranges(len(full), {
+        "train_ratio": hyperparameters["train_ratio"],
+        "validation_ratio": hyperparameters["validation_ratio"],
+        "test_ratio": hyperparameters["test_ratio"],
+    })
+    splits = {
+        name: _WindowSlice(full, start, end)
+        for name, (start, end) in ranges.items()
+    }
+    counts = {name: len(dataset) for name, dataset in splits.items()}
     generator = torch.Generator()
     generator.manual_seed(seed)
     train_loader = torch.utils.data.DataLoader(
@@ -152,6 +154,7 @@ def _build_loaders(
         "input_channel_order": ["TO3", *selected],
         "splits": splits,
         "counts": counts,
+        "split_ranges": ranges,
         "train_loader": train_loader,
         "validation_loader": validation_loader,
         "test_loader": test_loader,
@@ -175,6 +178,26 @@ class _ArrayDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         return self.inputs[index], self.targets[index]
+
+
+class _WindowSlice:
+    """View of a chronological window range with shared normalization."""
+
+    def __init__(self, source, start: int, end: int):
+        self.source = source
+        self.start = int(start)
+        self.end = int(end)
+        self.dates = source.dates[self.start:self.end]
+        self.normalization = source.normalization
+
+    def __len__(self):
+        return self.end - self.start
+
+    def __getitem__(self, index):
+        return self.source[self.start + index]
+
+    def denormalize_ozone(self, values):
+        return self.source.denormalize_ozone(values)
 
 
 def _evaluate_split(
@@ -478,6 +501,12 @@ def run_training(
         run=run,
         metrics=metrics,
         split_window_counts=prepared["counts"],
+        split_ratios={
+            "train_ratio": hyperparameters["train_ratio"],
+            "validation_ratio": hyperparameters["validation_ratio"],
+            "test_ratio": hyperparameters["test_ratio"],
+        },
+        split_ranges=prepared["split_ranges"],
         task_id=task_id,
         model_source=model_source,
         uploaded_model=uploaded_block,

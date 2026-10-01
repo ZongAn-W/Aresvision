@@ -220,6 +220,8 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
             "unit": checkpoint.metrics.get("unit"),
             "aggregation": checkpoint.metrics.get("aggregation"),
             "splits": splits,
+            "split_ratios": contract.get("split_ratios"),
+            "split_ranges": contract.get("split_ranges"),
         },
         run={
             "best_epoch": run.get("best_epoch"),

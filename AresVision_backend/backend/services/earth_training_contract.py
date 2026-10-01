@@ -31,6 +31,7 @@ from services.dataset_identity import (
     SERVER_IDENTITY_FIELDS,
     DatasetRequestError,
 )
+from services.training_split import normalize_split_ratios, TrainingSplitError
 
 EARTH_DATASET_IDS = (EARTH_DATASET_ID, EARTH_DATASET_V2_ID)
 
@@ -64,6 +65,11 @@ EARTH_METRICS_SCHEMA = "earth_training_metrics_v1"
 EARTH_ARTIFACT_SCHEMA = "aresvision_earth_forecast_checkpoint_v1"
 EARTH_TRAINING_SPEC_SCHEMA = "earth_training_spec_v1"
 EARTH_PROFILE_ID = "earth_daily_dlinear_v1"
+EARTH_DEFAULT_SPLIT_RATIOS = {
+    "train_ratio": 0.7,
+    "validation_ratio": 0.2,
+    "test_ratio": 0.1,
+}
 
 #: Bounds mirrored by the frontend form. Values outside these ranges are
 #: rejected, never clamped.
@@ -98,6 +104,9 @@ EARTH_ALLOWED_PARAMETER_KEYS = frozenset({
     # against the package's own schema before the task is written; the pinned
     # reference in the training spec stays authoritative.
     "custom_model_params",
+    "train_ratio",
+    "validation_ratio",
+    "test_ratio",
 })
 
 
@@ -311,6 +320,14 @@ def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[s
             )
 
     normalized: dict[str, Any] = {}
+    try:
+        normalized.update(normalize_split_ratios(hypers))
+    except TrainingSplitError as error:
+        raise DatasetRequestError(
+            "invalid_earth_training_parameters",
+            str(error),
+            status_code=422,
+        ) from error
     for key, (minimum, maximum, default) in EARTH_INTEGER_PARAMS.items():
         normalized[key] = _strict_int(key, hypers.get(key), minimum, maximum, default)
     normalized["learning_rate"] = _strict_float(

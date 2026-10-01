@@ -27,6 +27,11 @@ export const EARTH_MODEL_SOURCES = [EARTH_MODEL_SOURCE_OFFICIAL, EARTH_MODEL_SOU
 export const EARTH_MODEL_SOURCE = EARTH_MODEL_SOURCE_OFFICIAL;
 export const EARTH_WINDOW = 7;
 export const EARTH_HORIZON = 3;
+export const EARTH_DEFAULT_SPLIT_RATIOS = {
+  train_ratio: 0.7,
+  validation_ratio: 0.2,
+  test_ratio: 0.1,
+};
 export const EARTH_TARGET_CHANNEL = 'TO3';
 export const EARTH_TARGET_UNIT = 'DU';
 
@@ -49,6 +54,22 @@ export const EARTH_PARAM_BOUNDS = {
   early_stopping_patience: { min: 0, max: 200, fallback: 0 },
   linear_hidden_layers: { min: 1, max: 4, fallback: 2 },
 };
+
+export function normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio) {
+  const values = [trainRatio, validationRatio, testRatio].map((value, index) => {
+    const fallback = Object.values(EARTH_DEFAULT_SPLIT_RATIOS)[index];
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  });
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return {
+    train_ratio: values[0],
+    validation_ratio: values[1],
+    test_ratio: values[2],
+    valid: values[0] > 0 && values[1] >= 0 && values[2] > 0 && values.every((value) => value < 1) && Math.abs(total - 1) <= 1e-6,
+    total,
+  };
+}
 
 export function isEarthTrainingDataset(datasetId) {
   return String(datasetId || '').toLowerCase() === EARTH_DATASET_ID;
@@ -89,6 +110,9 @@ export function buildEarthTrainingHyperparameters({
   linearHiddenLayers,
   modelSource = EARTH_MODEL_SOURCE_OFFICIAL,
   customModelParams = null,
+  trainRatio = EARTH_DEFAULT_SPLIT_RATIOS.train_ratio,
+  validationRatio = EARTH_DEFAULT_SPLIT_RATIOS.validation_ratio,
+  testRatio = EARTH_DEFAULT_SPLIT_RATIOS.test_ratio,
 } = {}) {
   const uploaded = modelSource === EARTH_MODEL_SOURCE_UPLOADED;
   const hyperparameters = {
@@ -99,6 +123,9 @@ export function buildEarthTrainingHyperparameters({
     horizon: EARTH_HORIZON,
     use_sphere: false,
     transfer_learning: false,
+    train_ratio: Number(trainRatio),
+    validation_ratio: Number(validationRatio),
+    test_ratio: Number(testRatio),
     selected_channels: normalizeEarthSelectedChannels(selectedChannels),
     // 上限必须与服务端契约一致：超界值在此夹到文档范围，而不是留给服务端 422。
     epochs: sanitizePositiveInteger(epochs, EARTH_PARAM_BOUNDS.epochs.fallback, EARTH_PARAM_BOUNDS.epochs.min, EARTH_PARAM_BOUNDS.epochs.max),

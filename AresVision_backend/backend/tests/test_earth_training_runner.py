@@ -47,7 +47,7 @@ def test_one_epoch_run_publishes_a_strictly_loadable_checkpoint(earth_global_rel
     assert output.is_file()
     assert result["best_epoch"] == 1
     assert result["epochs_completed"] == 1
-    assert result["split_window_counts"] == {"train": 357, "validation": 172, "test": 175}
+    assert result["split_window_counts"] == {"train": 506, "validation": 144, "test": 72}
 
     checkpoint = load_earth_training_artifact(
         output, expected_binding=binding, expected_task_id=901,
@@ -67,8 +67,8 @@ def test_metrics_are_finite_du_with_overall_and_per_lead_values(earth_global_rel
     splits = result["metrics"]["splits"]
     assert result["metrics"]["unit"] == "DU"
     assert result["metrics"]["target"] == "TO3"
-    assert splits["test"]["window_count"] == 175
-    assert splits["validation"]["window_count"] == 172
+    assert splits["test"]["window_count"] == 72
+    assert splits["validation"]["window_count"] == 144
     for name in ("validation", "test"):
         overall = splits[name]["overall"]
         assert np.isfinite(overall["rmse"]) and np.isfinite(overall["mae"])

@@ -24,6 +24,7 @@ from services.netcdf_read_lock import netcdf_read_lock
 from services.model_artifacts import is_valid_model_weight_file
 from services.dataset_identity import DatasetRequestError, is_earth_training_task
 from services.prediction_analysis_cache import PredictionAnalysisCacheService
+from services.training_split import split_sample_ranges, split_time_boundary
 from training_backbones.model_zoo import (
     build_forecaster,
     normalize_model_architecture,
@@ -655,6 +656,7 @@ class InferenceService:
             window,
             task_horizon,
             data_dirs=data_dirs,
+            split_ratios={key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
         )
         sample_idx = self._nearest_sequence_index(
             torch.as_tensor(volume.ls, dtype=torch.float32).unsqueeze(1),
@@ -749,20 +751,21 @@ class InferenceService:
             return stacked.reshape(stacked.shape[0], stacked.shape[1])
         return stacked
 
-    def _uploaded_task_test_windows(self, volume, window: int, horizon: int):
-        """按与训练一致的 80/20 划分取测试分区滑窗。
+    def _uploaded_task_test_windows(self, volume, window: int, horizon: int, split_ratios=None):
+        """按任务保存的时间顺序划分取测试分区滑窗。
 
         样本数口径与 ``prepare_tensors`` 的逐样本展开相同：
         ``sample_count = total_time - window - horizon + 1``，
-        测试分区起点为 ``int(0.8 * sample_count)``。
+        新任务默认使用 70/20/10；没有比例元数据的旧任务继续使用 80/20。
         """
         sample_count = int(volume.values.shape[0]) - int(window) - int(horizon) + 1
         if sample_count <= 0:
             raise ValueError("Not enough time steps to build the requested windows")
-        test_count = sample_count - int(0.8 * sample_count)
+        ratios = split_ratios or {"train_ratio": 0.8, "validation_ratio": 0.0, "test_ratio": 0.2}
+        test_start, test_end = split_sample_ranges(sample_count, ratios)["test"] if split_ratios else (int(0.8 * sample_count), sample_count)
+        test_count = test_end - test_start
         if test_count <= 0:
             return torch.empty(0), torch.empty(0), None
-        test_start = sample_count - test_count
         x_test = self._window_stack(volume.values, test_start, test_count, window)
         y_test = self._window_stack(volume.y_scaled, test_start + window, test_count, horizon)
         ls_test = (
@@ -973,6 +976,7 @@ class InferenceService:
             window,
             task_horizon,
             data_dirs=data_dirs,
+            split_ratios={key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
         )
 
         model, uses_legacy_loader = self._load_official_task_model(
@@ -989,7 +993,9 @@ class InferenceService:
             architecture_params=architecture_params,
         )
 
-        split = int(0.8 * len(x_torch))
+        ratios = {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers}
+        split = (split_sample_ranges(len(x_torch), ratios)["test"][0]
+                 if len(ratios) == 3 else int(0.8 * len(x_torch)))
         x_test = x_torch[split:]
         y_test = y_torch[split:]
         ls_test = ls_torch[split:]
@@ -1026,6 +1032,7 @@ class InferenceService:
             hypers,
             horizon,
             data_dirs=data_dirs,
+            split_ratios={key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
         )
         return compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon)
 
@@ -1067,7 +1074,10 @@ class InferenceService:
             volume.longitude,
         )
 
-        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(
+            volume, window, task_horizon,
+            {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+        )
         if len(x_test) == 0:
             raise ValueError("No uploaded model test samples are available")
 
@@ -1162,7 +1172,9 @@ class InferenceService:
             architecture_params=architecture_params,
         )
 
-        split = int(0.8 * len(x_torch))
+        ratios = {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers}
+        split = (split_sample_ranges(len(x_torch), ratios)["test"][0]
+                 if len(ratios) == 3 else int(0.8 * len(x_torch)))
         x_test = x_torch[split:].clone()
         y_test = y_torch[split:]
         ls_test = ls_torch[split:]
@@ -1260,7 +1272,10 @@ class InferenceService:
             volume.longitude,
         )
 
-        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(
+            volume, window, task_horizon,
+            {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+        )
         x_test = x_test.clone()
         if len(x_test) == 0:
             return {"items": [], "baseline_metric": "r2", "baseline_value": 0.0}
@@ -1474,6 +1489,7 @@ class InferenceService:
                 window,
                 horizon,
                 data_dirs=data_dirs,
+                split_ratios={key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
             )
             
             # 4. 加载模型
@@ -1492,7 +1508,9 @@ class InferenceService:
             )
 
             # 5. 执行推理 (仅针对测试集)
-            split = int(0.8 * len(X_torch))
+            ratios = {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers}
+            split = (split_sample_ranges(len(X_torch), ratios)["test"][0]
+                     if len(ratios) == 3 else int(0.8 * len(X_torch)))
             X_test = X_torch[split:]
             y_test_true = y_torch[split:]
             
@@ -1573,7 +1591,10 @@ class InferenceService:
             volume.longitude,
         )
 
-        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(
+            volume, window, task_horizon,
+            {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+        )
         y_test_true = y_test
         if len(x_test) == 0:
             raise ValueError("No uploaded model test samples are available")
@@ -1615,9 +1636,9 @@ class InferenceService:
             "metrics": json.loads(task.metrics) if task.metrics else {},
         }
 
-    def _prepare_data(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None):
+    def _prepare_data(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None, split_ratios=None):
         """复用训练脚本中的数据加载逻辑"""
-        volume = self._load_official_task_volume(used_mcd_vars, window, horizon, data_dirs)
+        volume = self._load_official_task_volume(used_mcd_vars, window, horizon, data_dirs, split_ratios)
         X_scaled = volume.values
         T = int(X_scaled.shape[0])
 
@@ -1634,7 +1655,7 @@ class InferenceService:
 
         return X_torch, y_torch, ls_torch, volume.y_mean, volume.y_std
 
-    def _load_official_task_volume(self, used_mcd_vars, window, horizon, data_dirs=None):
+    def _load_official_task_volume(self, used_mcd_vars, window, horizon, data_dirs=None, split_ratios=None):
         """取官方模型的标准化体积：先查进程内缓存，未命中再加载并写入。"""
         from services.prediction_volume_cache import (
             ScaledVolume,
@@ -1645,24 +1666,24 @@ class InferenceService:
 
         if data_dirs:
             # 个人/临时数据源目录随时可能被清理，不进入进程内缓存。
-            return self._load_scaled_volume(used_mcd_vars, window, horizon, data_dirs)
+            return self._load_scaled_volume(used_mcd_vars, window, horizon, data_dirs, split_ratios)
 
         signature = volume_signature(
             openmars_dir=self.openmars_dir,
             mcd_dir=self.mcd_dir,
             selected_channels=[var_name for var_name, _ in used_mcd_vars],
             training_dataset="official_mcd_vars",
-            cache_prefix="official",
+            cache_prefix="official:" + repr(tuple(sorted((split_ratios or {}).items()))),
         )
         cached = get_scaled_volume(signature)
         if isinstance(cached, ScaledVolume):
             return cached
 
-        volume = self._load_scaled_volume(used_mcd_vars, window, horizon, data_dirs)
+        volume = self._load_scaled_volume(used_mcd_vars, window, horizon, data_dirs, split_ratios)
         put_scaled_volume(signature, volume)
         return volume
 
-    def _load_scaled_volume(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None):
+    def _load_scaled_volume(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None, split_ratios=None):
         """加载 OpenMARS/MCD、插值并标准化，返回连续体积（与 window/horizon 无关的产物）。
 
         与 ``_prepare_data`` 的数值结果一致：同一批输入文件、同一 ``split_idx`` 与
@@ -1735,7 +1756,9 @@ class InferenceService:
         T = X_raw.shape[0]
         height, width = int(X_raw.shape[1]), int(X_raw.shape[2])
 
-        split_idx = int(0.8 * (T - window - horizon + 1)) + window
+        ratios = split_ratios or {"train_ratio": 0.8, "validation_ratio": 0.0, "test_ratio": 0.2}
+        boundaries = split_time_boundary(T - window - horizon + 1, window, ratios)
+        split_idx = boundaries["train_end"]
         X_scaled = np.zeros_like(X_raw)
         for c in range(X_raw.shape[-1]):
             scaler = StandardScaler()
