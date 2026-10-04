@@ -5,6 +5,7 @@ import { fmtNum } from '../../utils/fmt';
 import { ozoneLabel } from '../../utils/units';
 import { METRIC_META } from './PredictComponents';
 import { useSettings } from '../../contexts/SettingsContext';
+import { getMetricAggregationLabel, getSplitLabel } from './predictionMetricMeta';
 
 export default function PredictMetrics({
   loading,
@@ -17,13 +18,15 @@ export default function PredictMetrics({
   const { settings } = useSettings();
   const isZh = settings?.language !== 'en';
   const isTrainedMode = modelMode === 'trained';
-  const subtitle = isTrainedMode
-    ? (isZh
-      ? '汇总所选训练模型在整个测试集上的整体指标。'
-      : 'Summarizes the selected trained model across the full test set.')
-    : (isZh
-      ? '汇总当前预测结果的整体质量，帮助快速判断模型在这一轮推演中的稳定性。'
-      : 'Summarizes overall model quality for the current prediction run.');
+  const aggregationLabel = getMetricAggregationLabel(metrics, isZh);
+  const splitLabel = getSplitLabel(metrics, isZh);
+  const isPooledTestSet = metrics?.aggregation?.overall === 'pooled_test_set_pixels';
+  const evaluationScope = isPooledTestSet
+    ? (isZh ? '完整测试集' : 'the full test set')
+    : (isZh ? '当前预测窗口' : 'the current prediction window');
+  const subtitle = isZh
+    ? `${aggregationLabel}，用于评价${isTrainedMode ? '所选训练模型的' : ''}${evaluationScope}。`
+    : `${aggregationLabel} for ${isTrainedMode ? 'the selected trained model on ' : ''}${evaluationScope}.`;
 
   return (
     <GlowCard style={{ padding: 20 }}>
@@ -32,6 +35,11 @@ export default function PredictMetrics({
       </div>
       <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50, marginBottom: 16 }}>
         {subtitle}
+        {splitLabel && (
+          <div style={{ color: C.ice40, marginTop: 4 }}>
+            {splitLabel}
+          </div>
+        )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 16 }}>
         {METRIC_META.map((m) => {

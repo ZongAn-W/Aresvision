@@ -240,7 +240,7 @@ const readiness = useMemo(() => {
 | [ModelArchitectureSelector.jsx](../frontend/src/pages/ModelTrainingPage/ModelArchitectureSelector.jsx) | 官方架构紧凑选择器（当前值 + 搜索 + 家族筛选） |
 | [UploadedModelPanel.jsx](../frontend/src/pages/ModelTrainingPage/UploadedModelPanel.jsx) | 上传模型紧凑卡片与可展开的管理区 |
 | [ExperimentRunMonitor.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentRunMonitor.jsx) | 进度、Loss、实时日志与停止训练 |
-| [ExperimentResultPanel.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentResultPanel.jsx) | 结果指标、失败原因、折叠日志与后续动作 |
+| [ExperimentResultPanel.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentResultPanel.jsx) | 结果指标、失败原因、上传模型名称/版本/文件身份、折叠日志与后续动作 |
 | [ExperimentLogPanel.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentLogPanel.jsx) | 只读终端式日志面板，不请求日志 |
 | [experimentCenterModel.js](../frontend/src/pages/ModelTrainingPage/experimentCenterModel.js) | 阶段推导、摘要、指标解析、目录筛选、复制配置、失败原因与官方架构注册表 |
 | [experimentCenter.css](../frontend/src/pages/ModelTrainingPage/experimentCenter.css) | 控制台网格、sticky 侧栏、fixed 运行条、画布分区与响应式规则 |

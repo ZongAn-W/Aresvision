@@ -23,7 +23,9 @@ def import_training_router():
 class FakePackage:
     id = "4d24f680-5029-47d9-9890-a56a6247b20e"
     user_id = 3
+    display_name = "MarsCustomModel"
     version = 2
+    original_filename = "mars_custom_model.py"
     validation_status = "valid"
     storage_path = "D:/tmp/model.py"
     param_schema = '{"hidden_dim": {"type": "integer", "default": 32}}'
@@ -280,6 +282,8 @@ async def test_uploaded_training_contract():
     assert uploaded_hypers["model_source"] == "uploaded"
     assert uploaded_hypers["_uploaded_model_id"] == FakePackage.id
     assert uploaded_hypers["_uploaded_model_version"] == FakePackage.version
+    assert uploaded_hypers["_uploaded_model_name"] == FakePackage.display_name
+    assert uploaded_hypers["_uploaded_model_filename"] == FakePackage.original_filename
     assert uploaded_hypers["_uploaded_model_path"] == FakePackage.storage_path
     assert uploaded_hypers["_uploaded_model_param_schema"]["hidden_dim"]["default"] == 32
     assert uploaded_hypers["custom_model_params"]["hidden_dim"] == 16

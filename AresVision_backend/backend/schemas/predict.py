@@ -47,9 +47,26 @@ class StepMetrics(BaseModel):
     r2: float
 
 
+class MetricAggregation(BaseModel):
+    """Describes how the overall and per-step metric values were aggregated."""
+
+    overall: str
+    per_step: str
+
+
+class SplitMetadata(BaseModel):
+    """Identifies the ratios used for the evaluation test partition."""
+
+    ratios: dict[str, float]
+    source: str
+    legacy_compatibility: bool = False
+
+
 class EvalMetricsResponse(BaseModel):
     overall: StepMetrics
     per_step: list[StepMetrics]
+    aggregation: MetricAggregation | None = None
+    split_meta: SplitMetadata | None = None
     source_meta: SourceMeta | None = None
 
 
@@ -61,6 +78,8 @@ class TrainingModelCompareRequest(BaseModel):
 class TrainingModelMetrics(BaseModel):
     overall: StepMetrics
     per_step: list[StepMetrics]
+    aggregation: MetricAggregation | None = None
+    split_meta: SplitMetadata | None = None
 
 
 class TrainingModelCompareItem(BaseModel):

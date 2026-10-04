@@ -7,6 +7,7 @@ import {
   fetchScripts,
   startTrainingTask,
   stopTrainingTask,
+  cancelTrainingTask,
   deleteTrainingTask,
   uploadUserModel,
   fetchUserModels,
@@ -541,6 +542,8 @@ export default function ModelTrainingPage() {
       loginToStart: isZh ? '登录后开始实验' : 'Sign in to start',
       starting: isZh ? '正在启动...' : 'Starting...',
       stopTraining: isZh ? '停止训练' : 'Stop training',
+      cancelQueued: isZh ? '取消排队' : 'Cancel queue',
+      queuePosition: (position) => position ? (isZh ? `队列第 ${position} 位` : `Queue position ${position}`) : (isZh ? '等待调度' : 'Waiting for scheduler'),
       testModel: isZh ? '模型测试' : 'Test model',
       deleteRecord: isZh ? '删除记录' : 'Delete record',
       renameModel: isZh ? '重命名' : 'Rename',
@@ -567,6 +570,9 @@ export default function ModelTrainingPage() {
       datasetStatusLabel: isZh ? '身份校验' : 'Identity status',
       datasetFingerprintLabel: isZh ? '发布指纹' : 'Release fingerprint',
       modelSourceLabel: isZh ? '模型来源' : 'Model source',
+      customModelLabel: isZh ? '自定义模型' : 'Custom model',
+      customModelVersionLabel: isZh ? '模型版本' : 'Model version',
+      customModelFileLabel: isZh ? '模型文件' : 'Model file',
       inputChannelsLabel: isZh ? '输入通道' : 'Input channels',
       windowLabel: isZh ? '输入窗口' : 'Input window',
       horizonLabel: isZh ? '预测步长' : 'Horizon',
@@ -1807,6 +1813,19 @@ export default function ModelTrainingPage() {
     }
   };
 
+  const handleCancelTask = async (taskId) => {
+    if (isProcessing) return;
+    try {
+      setIsProcessing(true);
+      await cancelTrainingTask(taskId);
+      await loadTasks();
+    } catch (error) {
+      alert((isZh ? '取消排队出错: ' : 'Cancel queue error: ') + error.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleDeleteTask = async (taskId) => {
     const targetId = taskId ?? confirmDeleteId;
     if (!targetId || isProcessing) return;
@@ -2178,6 +2197,7 @@ export default function ModelTrainingPage() {
       logContainerRef={logContainerRef}
       onScroll={handleScroll}
       onStop={handleStopTask}
+      onCancel={handleCancelTask}
       copy={copy}
     />
   );

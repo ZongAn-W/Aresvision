@@ -116,6 +116,123 @@ class TrainingService:
         # The uploaded-model EARTH compatibility dry-run is the same one the upload
         # page runs, so it is shared rather than reimplemented. Injected in tests.
         self._earth_model_validator = earth_model_validator
+        self._scheduler_started = False
+        self._scheduler_task: asyncio.Task | None = None
+        self._queue_event: asyncio.Event | None = None
+        self._queue_specs: dict[int, dict[str, Any]] = {}
+
+    async def start(self) -> None:
+        if self._scheduler_started:
+            return
+        self._scheduler_started = True
+        self._queue_event = asyncio.Event()
+        async with async_session_maker() as session:
+            await session.execute(
+                update(ModelTrainingTask)
+                .where(ModelTrainingTask.status == "running")
+                .values(
+                    status="failed",
+                    end_time=datetime.now(timezone.utc),
+                    metrics=json.dumps({"note": "Training interrupted by server restart"}),
+                    pid=None,
+                )
+            )
+            await session.commit()
+        self._scheduler_task = asyncio.create_task(self._scheduler_loop())
+        self._wake_scheduler()
+
+    async def stop(self) -> None:
+        self._scheduler_started = False
+        task = self._scheduler_task
+        self._scheduler_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    def _wake_scheduler(self) -> None:
+        if self._queue_event is not None:
+            self._queue_event.set()
+
+    async def _recalculate_queue_positions(self, session) -> None:
+        result = await session.execute(
+            select(ModelTrainingTask)
+            .where(ModelTrainingTask.status == "queued")
+            .order_by(ModelTrainingTask.queued_at.asc(), ModelTrainingTask.id.asc())
+        )
+        for position, task in enumerate(result.scalars().all(), start=1):
+            task.queue_position = position
+
+    async def _scheduler_loop(self) -> None:
+        while self._scheduler_started:
+            task_id = None
+            spec = None
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    select(ModelTrainingTask)
+                    .where(ModelTrainingTask.status == "queued")
+                    .order_by(ModelTrainingTask.queued_at.asc(), ModelTrainingTask.id.asc())
+                    .limit(1)
+                )
+                task = result.scalars().first()
+                if task is not None:
+                    task.status = "running"
+                    task.start_time = datetime.now(timezone.utc)
+                    task.queue_position = None
+                    task_id = task.id
+                    spec = self._queue_specs.pop(task_id, None)
+                    await session.commit()
+                    await self._recalculate_queue_positions(session)
+                    await session.commit()
+            if task_id is None:
+                self._queue_event.clear()
+                try:
+                    await asyncio.wait_for(self._queue_event.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            if spec is None:
+                async with async_session_maker() as session:
+                    row = await session.get(ModelTrainingTask, task_id)
+                    spec = {
+                        "model_script": row.model_script,
+                        "payload_hypers": json.loads(row.hyperparameters or "{}"),
+                        "log_file": Path(row.log_file_path),
+                        "output_path": Path(row.output_model_path),
+                        "env_overrides": {},
+                        "temp_data_root": None,
+                        "earth_training_spec": None,
+                    }
+            try:
+                await self._run_training_subprocess(task_id, **spec)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Queued training task %s failed", task_id)
+                async with async_session_maker() as session:
+                    row = await session.get(ModelTrainingTask, task_id)
+                    if row is not None and row.status == "running":
+                        row.status = "failed"
+                        row.end_time = datetime.now(timezone.utc)
+                        row.metrics = json.dumps({"error": str(exc)})
+                        await session.commit()
+
+    async def cancel_training(self, task_id: int) -> bool:
+        async with async_session_maker() as session:
+            task = await session.get(ModelTrainingTask, task_id)
+            if task is None or task.status != "queued":
+                return False
+            task.status = "cancelled"
+            task.end_time = datetime.now(timezone.utc)
+            task.queue_position = None
+            task.metrics = json.dumps({"note": "Cancelled while queued"})
+            self._queue_specs.pop(task_id, None)
+            await self._recalculate_queue_positions(session)
+            await session.commit()
+        self._wake_scheduler()
+        return True
 
     def _earth_validator(self) -> Any:
         if self._earth_model_validator is None:
@@ -228,6 +345,8 @@ class TrainingService:
             preserved_keys.extend([
                 "_uploaded_model_id",
                 "_uploaded_model_version",
+                "_uploaded_model_name",
+                "_uploaded_model_filename",
                 "_uploaded_model_path",
                 "_uploaded_model_param_schema",
                 "custom_model_params",
@@ -261,6 +380,7 @@ class TrainingService:
             payload_hypers["_uploaded_model_version"] = earth_reference.version
             payload_hypers["_uploaded_model_content_hash"] = earth_reference.content_hash
             payload_hypers["_uploaded_model_name"] = earth_reference.display_name
+            payload_hypers["_uploaded_model_filename"] = Path(earth_reference.source_path).name
             payload_hypers["_uploaded_model_param_schema"] = dict(earth_reference.param_schema)
             payload_hypers["custom_model_params"] = dict(earth_reference.custom_model_params)
         if earth_training:
@@ -289,7 +409,8 @@ class TrainingService:
                 uploaded_model_version=payload_hypers.get("_uploaded_model_version"),
                 hyperparameters=json.dumps(payload_hypers),
                 custom_model_name=custom_model_name,
-                status="pending",
+                status="queued",
+                queued_at=datetime.now(timezone.utc),
                 **dataset_binding,
             )
             session.add(task)
@@ -351,18 +472,25 @@ class TrainingService:
                 payload_hypers.get("_effective_data_source", source),
             )
 
-            asyncio.create_task(
-                self._run_training_subprocess(
-                    task_id,
-                    model_script,
-                    payload_hypers,
-                    log_file,
-                    output_path,
-                    env_overrides=env_overrides,
-                    temp_data_root=temp_data_root,
-                    earth_training_spec=earth_training_spec,
-                )
-            )
+            if not hasattr(self, "_queue_specs"):
+                self._queue_specs = {}
+            self._queue_specs[task_id] = {
+                "model_script": model_script,
+                "payload_hypers": payload_hypers,
+                "log_file": log_file,
+                "output_path": output_path,
+                "env_overrides": env_overrides,
+                "temp_data_root": temp_data_root,
+                "earth_training_spec": earth_training_spec,
+            }
+            if getattr(self, "_scheduler_started", False):
+                await self._recalculate_queue_positions(session)
+                await session.commit()
+                self._wake_scheduler()
+            else:
+                task.status = "running"
+                await session.commit()
+                asyncio.create_task(self._run_training_subprocess(task_id, **self._queue_specs.pop(task_id)))
 
             return task
 
@@ -377,6 +505,8 @@ class TrainingService:
         uploaded_only_keys = {
             "_uploaded_model_id",
             "_uploaded_model_version",
+            "_uploaded_model_name",
+            "_uploaded_model_filename",
             "_uploaded_model_path",
             "_uploaded_model_param_schema",
             "custom_model_params",
@@ -509,6 +639,8 @@ class TrainingService:
         payload["model_source"] = "uploaded"
         payload["_uploaded_model_id"] = getattr(package, "id", uploaded_model_id)
         payload["_uploaded_model_version"] = getattr(package, "version", None)
+        payload["_uploaded_model_name"] = getattr(package, "display_name", None)
+        payload["_uploaded_model_filename"] = getattr(package, "original_filename", None)
         payload["_uploaded_model_path"] = getattr(package, "storage_path", None)
         payload["_uploaded_model_param_schema"] = param_schema
         payload.setdefault("custom_model_params", {})
@@ -1110,6 +1242,9 @@ class TrainingService:
             if not task:
                 return False
 
+            queued = task.status == "queued"
+            getattr(self, "_queue_specs", {}).pop(task_id, None)
+
             if task.status == "running":
                 await self.stop_training(task_id)
                 await session.refresh(task)
@@ -1136,6 +1271,11 @@ class TrainingService:
             )
             await session.delete(task)
             await session.commit()
+            if queued:
+                async with async_session_maker() as position_session:
+                    await self._recalculate_queue_positions(position_session)
+                    await position_session.commit()
+                self._wake_scheduler()
             return True
 
     def _extract_metrics_from_log(self, log_file: Path) -> dict | None:

@@ -1,0 +1,5 @@
+[aresvision] root   : D:\_Aresvision\Aresvision\frontend\dist
+[aresvision] listen : http://0.0.0.0:5173
+[aresvision] /api   -> http://127.0.0.1:8000
+[aresvision] gzip/br: enabled (cached in memory)
+[compress] index.html 0.00MB -> br 0.00MB (省 50%)

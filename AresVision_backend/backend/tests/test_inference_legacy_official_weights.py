@@ -140,6 +140,8 @@ def test_predict_task_supports_legacy_official_weights(tmp_path):
     assert result["model_info"]["training_model_source"] == "official"
     assert result["selected_variables"] == ["U_Wind"]
     assert len(result["prediction"]) == 2
+    assert result["metrics"]["aggregation"]["overall"] == "mean_over_forecast_steps"
+    assert result["metrics"]["split_meta"]["source"] == "legacy_compatibility"
 
 
 def test_task_test_set_metrics_supports_legacy_official_weights(tmp_path):
@@ -171,3 +173,5 @@ def test_task_test_set_metrics_supports_legacy_official_weights(tmp_path):
 
     assert result["overall"]["step"] == 0
     assert len(result["per_step"]) == 2
+    assert result["aggregation"]["overall"] == "pooled_test_set_pixels"
+    assert result["split_meta"]["source"] == "legacy_compatibility"

@@ -128,6 +128,7 @@ async def lifespan(app: FastAPI):
     logger.info("[0/4] 初始化数据库...")
     await init_database()
     app.state.db_session = async_session_maker
+    await training_router_module.training_service.start()
 
     # 确保上传目录存在
     USER_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -354,6 +355,7 @@ async def lifespan(app: FastAPI):
 
     # 关闭时清理
     logger.info("正在关闭服务...")
+    await training_router_module.training_service.stop()
     mcd_worker_task = getattr(app.state, "mcd_cache_worker_task", None)
     if mcd_worker_task is not None:
         mcd_worker_task.cancel()

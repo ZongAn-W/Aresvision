@@ -22,6 +22,20 @@ def _metric(value):
     }
 
 
+def test_metric_contract_replaces_stale_cached_aggregation():
+    service = InferenceService()
+    metrics = _metric(1.0)
+    metrics["aggregation"] = {
+        "overall": "mean_over_forecast_steps",
+        "per_step": "per_forecast_step",
+    }
+
+    normalized = service._with_test_set_contract(metrics, {})
+
+    assert normalized["aggregation"]["overall"] == "pooled_test_set_pixels"
+    assert normalized["split_meta"]["source"] == "legacy_compatibility"
+
+
 class RecordingCache:
     def __init__(self):
         self.calls = []
@@ -53,7 +67,7 @@ def test_single_trained_analyses_use_effective_cache_parameters(monkeypatch):
         async def prepare(**kwargs):
             return task, hypers, {}, None
 
-        async def prediction(**kwargs):
+        def prediction(**kwargs):
             return {
                 "ground_truth": [],
                 "prediction": [],
@@ -95,8 +109,10 @@ def test_single_trained_analyses_use_effective_cache_parameters(monkeypatch):
             },
         )
         user = SimpleNamespace(id=7, role="user")
-        await service.predict_task(12, 27, 90.0, 3, current_user=user)
-        await service.task_test_set_metrics(
+        prediction_result = await service.predict_task(
+            12, 27, 90.0, 3, current_user=user
+        )
+        test_metrics = await service.task_test_set_metrics(
             12, 27, 90.0, 3, current_user=user
         )
         await service.task_error_distribution(
@@ -110,15 +126,18 @@ def test_single_trained_analyses_use_effective_cache_parameters(monkeypatch):
             3,
             current_user=user,
         )
-        return cache.calls
+        return cache.calls, prediction_result, test_metrics
 
-    calls = asyncio.run(run())
+    calls, prediction_result, test_metrics = asyncio.run(run())
     assert [call["analysis_type"] for call in calls] == [
         "prediction",
         "metrics",
         "error_distribution",
         "pfi",
     ]
+    assert prediction_result["metrics"]["aggregation"]["overall"] == "mean_over_forecast_steps"
+    assert test_metrics["aggregation"]["overall"] == "pooled_test_set_pixels"
+    assert test_metrics["split_meta"]["source"] == "legacy_compatibility"
 
 
 def test_comparisons_reuse_per_task_cached_primitives(monkeypatch):

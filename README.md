@@ -108,11 +108,12 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 ### 训练数据划分比例
 
-训练配置支持独立编辑训练集、验证集和测试集比例，三者必须合计 100%。设置中的初始比例为 70% / 20% / 10%，可按需自定义；训练、验证和最终测试分别使用对应分区，验证集用于早停，测试集只用于最终评估。任务会把比例和实际窗口范围写入训练超参数与 checkpoint，历史任务缺少这些字段时继续按兼容的 80% / 20% 训练/测试规则读取。
+训练配置支持独立编辑训练集、验证集和测试集比例，三者必须合计 100%。设置中的初始比例为 70% / 20% / 10%，可按需自定义；训练、验证和最终测试分别使用对应分区，验证集用于早停，测试集只用于最终评估。任务会把比例和实际窗口范围写入训练超参数与 checkpoint；推理服务优先读取任务保存的完整三项比例，历史任务缺少完整比例时明确返回 `split_meta.source=legacy_compatibility`，固定按旧训练逻辑的 80% / 0% / 20% 训练/验证/测试规则读取，不套用当前 70% / 20% / 10% 默认值。
 
 ### 预测与模型对比
 
 - 提供参考值、预测场和残差展示，以及误差分布、置换重要性、逐步指标等分析。
+- 单次预测的 `overall` 指标标记为 `mean_over_forecast_steps`（各预测步指标平均）；训练模型测试集指标与多模型比较标记为 `pooled_test_set_pixels`（完整测试集汇总，其中 RMSE/MAE/R² 按像素合并，SSIM 按样本平均）。预测页会同时显示聚合口径和 `split_meta` 的测试集划分来源，避免直接比较不同口径的数值。
 - **地球历史预测与火星预测分开。** 预测页新增独立的「地球历史预测」模式：从已完成的地球训练任务与其 checkpoint 恢复模型，按用户选择的历史预测起点读取此前 7 天输入，返回随后 3 天的预测场、参考场与残差场（DU）及总体/逐日 RMSE、MAE；服务端同时返回可选起点范围（2020-01-08…2021-12-28，共 721 个）、三天真实日期与真实 36×72 经纬网格。起点越界返回 422 `earth_prediction_origin_out_of_range`，数据集指纹变化返回 409 `dataset_version_changed`。Earth 任务在火星推理、`metrics`、比较、PFI、`action=test` 与迁移来源路径上一律 409 `dataset_prediction_not_supported`，不回退到火星数据。首期不开放无参考真值的未来外推、Earth/Mars 混合比较、持久性基线与 Earth 预测持久化缓存。接口与错误码见 [地球训练与历史预测](docs/earth-training.md)。
 - 支持选择已训练模型进行预测，也可比较多个训练结果。
 - 单模型选择与多模型对比支持按标签筛选，筛选保留已有选择；对比的“全选当前结果”追加当前可见模型，并显示筛选外的已选数量。
@@ -212,7 +213,9 @@ AresVision/
 
 页面地址为 `#/`、`#/overview`、`#/explore`、`#/predict`、`#/training`、`#/ai` 和 `#/about`。全局设置与翻译分别位于 `frontend/src/contexts/SettingsContext.jsx` 和 `frontend/src/i18n/`；训练默认值的字段校验见 `frontend/src/utils/trainingDefaults.js`。
 
-实验目录按最近、运行、完成与失败任务分组，支持搜索、按需展开的标签筛选及排序；配置检查器按四个配置分区呈现现有就绪阻塞原因。目录的“字段”完整度仅反映历史元数据可读取程度，不能替代训练校验；页面没有持久化草稿任务。展示交互和边界详见 [实验中心说明](docs/experiment-center.md)。
+实验目录按最近、排队、运行、完成、失败与已取消任务分组，支持搜索、按需展开的标签筛选及排序；配置检查器按四个配置分区呈现现有就绪阻塞原因。目录的“字段”完整度仅反映历史元数据可读取程度，不能替代训练校验；页面没有持久化草稿任务。展示交互和边界详见 [实验中心说明](docs/experiment-center.md)。
+
+训练结果的“训练参数”摘要会在上传模型任务中展示训练时固定的自定义模型名称、版本和原始文件名（历史任务缺少某项元数据时按可用字段降级展示）。
 
 ## 关键业务链路
 
@@ -247,7 +250,7 @@ flowchart LR
 
 1. 实验中心底部运行条的「开始实验」（页面控制器 `handleStartTraining`）提交实验名称、`model_source`、上传模型 ID、超参数与服务器数据源；`training_channels.py` 规范化参数。运行条只负责提交与摘要，校验仍在页面控制器里完成。
 2. 官方模型使用统一训练入口 `models/training_scripts/demo3.py`；上传模型使用 `training_backbones/user_model_runner.py`。
-3. `TrainingService` 创建 `ModelTrainingTask` 并启动训练子进程；解释器由 `TRAINING_PYTHON_PATH` 决定。
+3. `TrainingService` 创建 `ModelTrainingTask`，写入 `queued_at` / `queue_position`，由单一 FIFO 调度器依次启动训练子进程；服务重启会把遗留 `running` 任务标记为失败并继续排队任务，解释器由 `TRAINING_PYTHON_PATH` 决定。
 4. 任务进度、Loss、日志及产物路径写入任务记录；前端 `TrainingContext` 通过轮询与 WebSocket 接收更新，页面按任务状态把展示切换到监控或结果工作区。
 5. 训练完成后还需存在有效权重文件才会标记模型可用；结果工作区的「用于预测」写入 `TRAINING_TASK_HANDOFF_KEY` 后跳转预测页，「去模型比较」带 `mode=trained_compare` 进入比较模式，「复制配置」把完整训练配置回填到新建实验表单。
 
@@ -282,7 +285,7 @@ flowchart LR
 
 1. 用户选择任务及预测条件；前端从任务元数据读取输出步长，并协调并发请求。
 2. `/api/predict/run` 要求请求携带 `training_task_id`（缺失返回 400）与有效认证，随后交给 `InferenceService.predict_task`。
-3. 推理服务读取任务配置与权重、准备数据、执行推理并返回预测场、参考场、残差及指标。
+3. 推理服务读取任务配置与权重、准备数据、执行推理并返回预测场、参考场、残差及指标。指标响应包含 `aggregation`；测试集评估响应还包含 `split_meta.ratios`、`split_meta.source` 与 `split_meta.legacy_compatibility`，用于解释整体指标的计算口径和历史任务兼容规则。训练页“模型测试”弹窗对应的 `action=test` 响应通过 `metric_meta` 返回同一套口径与划分信息。
 4. 多模型比较通过 `/api/predict/training-models/compare` 等专用接口执行；各面板是否显示由 `predictAnalysisVisibility.js` 决定。
 
 前端内存缓存与后端持久化缓存是两层机制。前者通过用户会话作用域隔离，退出登录或 API 返回 401 时清理；后者结合任务、分析类型、请求参数及产物指纹定位结果。产物指纹包含模型文件、超参数与数据文件信息，缓存实现支持 `prediction`、`metrics`、`error_distribution`、`pfi`。
@@ -291,7 +294,7 @@ NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，
 
 预测路由的兜底分支会通过 `logger.exception` 记录完整堆栈，接口只向客户端返回简要 `detail`；排查 500 时以服务端日志为准，不要只依据响应体。
 
-**单次预测的数据准备已按需求切窗，不再为整条时间轴物化全部滑窗。** 训练用的数据准备函数仍会加载全部 OpenMARS/MCD 文件并拟合标准化参数，这部分产物（连续体积与统计量）与 `window`/`horizon` 无关，因此由 [prediction_volume_cache.py](AresVision_backend/backend/services/prediction_volume_cache.py) 在进程内按「目录身份 + 文件清单 + 文件大小与修改时间 + 通道 + 数据集」缓存；预测路径拿到体积后只切出自己需要的滑窗：
+**单次预测的数据准备已按需求切窗，不再为整条时间轴物化全部滑窗。** 训练用的数据准备函数仍会加载全部 OpenMARS/MCD 文件并拟合标准化参数，预测分析（包括上传模型）复用任务保存的切分比例；标准化体积缓存按「目录身份 + 文件清单 + 文件大小与修改时间 + 通道 + 数据集 + 切分比例 + `window` + `horizon`」隔离，预测路径拿到体积后只切出自己需要的滑窗：
 
 - 上传模型：`InferenceService._prepare_uploaded_task_volume` + `_window_slice` / `_window_stack`
 - 官方模型：`InferenceService._load_official_task_volume` + 同一组切窗方法

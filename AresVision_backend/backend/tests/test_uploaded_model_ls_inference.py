@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 
@@ -13,11 +14,18 @@ if str(BACKEND_DIR) not in sys.path:
 
 from services import inference_service as inference_module  # noqa: E402
 from services.inference_service import InferenceService  # noqa: E402
-from services.prediction_volume_cache import ScaledVolume  # noqa: E402
+from services.prediction_volume_cache import ScaledVolume, clear_scaled_volumes  # noqa: E402
 from training_backbones import user_model_runner  # noqa: E402
 from training_backbones.uploaded_model_contract import (  # noqa: E402
     attach_uploaded_model_contract,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_volume_cache():
+    clear_scaled_volumes()
+    yield
+    clear_scaled_volumes()
 
 
 LS_MODEL_SPEC = {
@@ -68,10 +76,9 @@ class RecordingLsTopographyModel(RecordingLsModel):
         return x[:, -1:, :1].repeat(1, self.horizon, 1, 1, 1)
 
 
-def _setup_uploaded_inference(monkeypatch, *, with_topography=False):
+def _setup_uploaded_inference(monkeypatch, *, with_topography=False, sample_count=10):
     window = 4
     horizon = 2
-    sample_count = 10
     total_time = sample_count + window + horizon - 1
     # 预测路径现在接收连续体积并自行切窗；夹具从同一份连续数组派生
     # x / ls，使断言中的 ls[i:j] 切片语义与旧的逐样本展开完全一致。
@@ -120,7 +127,7 @@ def _setup_uploaded_inference(monkeypatch, *, with_topography=False):
             width=2,
             latitude=latitude,
             longitude=longitude,
-            split_idx=8,
+            split_idx=int(0.8 * sample_count),
         )
 
     def fake_prepare_topography(target_latitude, target_longitude, **kwargs):
@@ -164,6 +171,56 @@ def _setup_uploaded_inference(monkeypatch, *, with_topography=False):
     )
 
 
+def test_uploaded_volume_preparation_passes_task_split_ratios(monkeypatch):
+    service, _task, hypers, _model, _ls, prepare_calls, *_rest = _setup_uploaded_inference(monkeypatch)
+    hypers.update({"train_ratio": 0.5, "validation_ratio": 0.1, "test_ratio": 0.4})
+
+    service._prepare_uploaded_task_volume(hypers, hypers["window"], hypers["horizon"])
+
+    kwargs = prepare_calls[-1][1]
+    assert kwargs["train_ratio"] == 0.5
+    assert kwargs["validation_ratio"] == 0.1
+    assert kwargs["test_ratio"] == 0.4
+
+
+def test_uploaded_volume_preparation_uses_legacy_split_for_old_tasks(monkeypatch):
+    service, _task, hypers, _model, _ls, prepare_calls, *_rest = _setup_uploaded_inference(monkeypatch)
+
+    service._prepare_uploaded_task_volume(hypers, hypers["window"], hypers["horizon"])
+
+    kwargs = prepare_calls[-1][1]
+    assert kwargs["train_ratio"] == 0.8
+    assert kwargs["validation_ratio"] == 0.0
+    assert kwargs["test_ratio"] == 0.2
+
+
+def test_uploaded_volume_preparation_marks_invalid_split_metadata_as_legacy(monkeypatch):
+    service, _task, hypers, _model, _ls, prepare_calls, *_rest = _setup_uploaded_inference(monkeypatch)
+    hypers.update({"train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": "invalid"})
+
+    service._prepare_uploaded_task_volume(hypers, hypers["window"], hypers["horizon"])
+
+    kwargs = prepare_calls[-1][1]
+    assert kwargs["train_ratio"] == 0.8
+    assert kwargs["validation_ratio"] == 0.0
+    assert kwargs["test_ratio"] == 0.2
+
+
+def test_uploaded_old_task_test_window_matches_legacy_split_boundary(monkeypatch):
+    service, _task, hypers, _model, ls, *_rest = _setup_uploaded_inference(
+        monkeypatch, sample_count=6
+    )
+    _channels, volume = service._prepare_uploaded_task_volume(
+        hypers, hypers["window"], hypers["horizon"]
+    )
+
+    _x_test, _y_test, ls_test = service._uploaded_task_test_windows(
+        volume, hypers["window"], hypers["horizon"]
+    )
+
+    assert torch.equal(ls_test, ls[5:9])
+
+
 def test_uploaded_formal_prediction_receives_selected_history_ls(monkeypatch):
     service, task, hypers, model, ls, *_rest = _setup_uploaded_inference(monkeypatch)
 
@@ -178,6 +235,44 @@ def test_uploaded_test_set_metrics_receives_matching_ls_batches(monkeypatch):
     service._uploaded_task_test_set_arrays(task, hypers, horizon=2)
 
     assert torch.equal(model.ls_calls[-1], ls[8:10])
+
+
+@pytest.mark.parametrize(
+    ("ratios", "test_start"),
+    [
+        pytest.param({}, 40, id="legacy-80-20"),
+        pytest.param(
+            {"train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": 0.1},
+            45,
+            id="default-70-20-10",
+        ),
+        pytest.param(
+            {"train_ratio": 0.5, "validation_ratio": 0.1, "test_ratio": 0.4},
+            30,
+            id="custom-50-10-40",
+        ),
+    ],
+)
+@pytest.mark.parametrize("horizon", [1, 2])
+def test_uploaded_metrics_entry_uses_task_test_partition(monkeypatch, ratios, test_start, horizon):
+    service, task, hypers, model, ls, *_rest = _setup_uploaded_inference(
+        monkeypatch, sample_count=50
+    )
+    hypers.update(ratios)
+
+    metrics = service._uploaded_task_test_set_metrics(task, hypers, horizon=horizon)
+
+    assert torch.equal(torch.cat(model.ls_calls), ls[test_start:])
+    assert len(metrics["per_step"]) == horizon
+    # The model repeats the last input; each subsequent truth frame increases by 4.
+    expected_errors = 4 * np.arange(1, horizon + 1)
+    assert metrics["overall"]["rmse"] == pytest.approx(
+        np.sqrt(np.mean(expected_errors ** 2)), rel=1e-5
+    )
+    assert metrics["overall"]["mae"] == pytest.approx(np.mean(expected_errors), rel=1e-5)
+    expected_source = "task_metadata" if ratios else "legacy_compatibility"
+    assert metrics["split_meta"]["source"] == expected_source
+    assert metrics["split_meta"]["legacy_compatibility"] is (not bool(ratios))
 
 
 def test_uploaded_permutation_importance_keeps_history_ls_fixed(monkeypatch):

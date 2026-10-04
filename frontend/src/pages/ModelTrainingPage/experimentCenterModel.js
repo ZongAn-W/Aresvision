@@ -19,7 +19,7 @@ import {
 import { EARTH_DEFAULT_SPLIT_RATIOS } from './earthTrainingConfig.js';
 
 export const EXPERIMENT_STAGES = ['configure', 'monitor', 'result'];
-export const EXPERIMENT_STATUS_FILTERS = ['all', 'running', 'completed', 'failed'];
+export const EXPERIMENT_STATUS_FILTERS = ['all', 'queued', 'running', 'completed', 'failed', 'cancelled'];
 
 /** 「复制配置」警告：界面按 code 取本地化文案。 */
 export const EXPERIMENT_CONFIG_WARNING_CODES = [
@@ -49,14 +49,16 @@ const SUPPORTED_ARCHITECTURES = new Set([
 const THREE_VALUE_LIST_FIELDS = new Set(['patch_size', 'cuboid_size']);
 const OPEN_INTERVAL_FIELDS = new Set(['initial_history_weight', 'initial_translation_weight']);
 
-const MONITOR_STATUSES = new Set(['pending', 'running']);
-const KNOWN_STATUSES = new Set(['pending', 'running', 'completed', 'failed']);
+const MONITOR_STATUSES = new Set(['pending', 'queued', 'running']);
+const KNOWN_STATUSES = new Set(['pending', 'queued', 'running', 'completed', 'failed', 'cancelled']);
 
 /** 目录里“运行中”分组同时覆盖排队任务。 */
 const STATUS_FILTER_MEMBERS = {
+  queued: new Set(['queued']),
   running: new Set(['pending', 'running']),
   completed: new Set(['completed']),
   failed: new Set(['failed']),
+  cancelled: new Set(['cancelled']),
 };
 
 const ARCHITECTURE_LABELS = {
@@ -288,7 +290,7 @@ export function matchesExperimentStatusFilter(taskStatus, statusFilter) {
 }
 
 export function countExperimentStatuses(tasks = []) {
-  const counts = { all: 0, running: 0, completed: 0, failed: 0 };
+  const counts = Object.fromEntries(EXPERIMENT_STATUS_FILTERS.map((filter) => [filter, 0]));
   (Array.isArray(tasks) ? tasks : []).forEach((task) => {
     if (!task) return;
     counts.all += 1;

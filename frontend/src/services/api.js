@@ -868,6 +868,15 @@ export async function stopTrainingTask(taskId) {
   return res.json();
 }
 
+export async function cancelTrainingTask(taskId) {
+  const res = await authedFetch(`${BASE}/training/tasks/${taskId}/cancel`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteTrainingTask(taskId) {
   const res = await authedFetch(`${BASE}/training/tasks/${taskId}`, {
     method: 'DELETE',

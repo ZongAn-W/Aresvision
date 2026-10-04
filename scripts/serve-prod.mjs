@@ -18,7 +18,7 @@ const ROOT = resolve(process.env.ROOT || 'D:/_Aresvision/Aresvision/frontend/dis
 const PORT = Number(process.env.PORT || 5173);
 const HOST = process.env.HOST || '0.0.0.0';
 const API_HOST = process.env.API_HOST || '127.0.0.1';
-const API_PORT = Number(process.env.API_PORT || 8001);
+const API_PORT = Number(process.env.API_PORT || 8000);
 const COMPRESS_MIN = 1024; // 小于 1KB 不压缩
 
 const MIME = {

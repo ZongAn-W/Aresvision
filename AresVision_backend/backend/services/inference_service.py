@@ -24,7 +24,12 @@ from services.netcdf_read_lock import netcdf_read_lock
 from services.model_artifacts import is_valid_model_weight_file
 from services.dataset_identity import DatasetRequestError, is_earth_training_task
 from services.prediction_analysis_cache import PredictionAnalysisCacheService
-from services.training_split import split_sample_ranges, split_time_boundary
+from services.training_split import (
+    LEGACY_SPLIT_RATIOS,
+    normalize_split_ratios,
+    split_sample_ranges,
+    split_time_boundary,
+)
 from training_backbones.model_zoo import (
     build_forecaster,
     normalize_model_architecture,
@@ -62,6 +67,77 @@ class InferenceService:
         self.openmars_dir = self.base_dir / "data" / "openmars"
         self.mcd_dir = Path(MCD_DIR)
         self.analysis_cache = analysis_cache or PredictionAnalysisCacheService()
+
+    @staticmethod
+    def _task_split_metadata(hypers: dict) -> dict:
+        """Resolve persisted split metadata without applying today's defaults to old tasks."""
+        configured = {
+            key: hypers[key]
+            for key in ("train_ratio", "validation_ratio", "test_ratio")
+            if key in hypers
+        }
+        if len(configured) == 3:
+            try:
+                ratios = normalize_split_ratios(configured)
+            except ValueError:
+                # Corrupt or non-numeric metadata is equivalent to missing
+                # metadata for inference; keep the historical boundary explicit.
+                pass
+            else:
+                return {
+                    "ratios": ratios,
+                    "source": "task_metadata",
+                    "legacy_compatibility": False,
+                }
+        return {
+            "ratios": dict(LEGACY_SPLIT_RATIOS),
+            "source": "legacy_compatibility",
+            "legacy_compatibility": True,
+        }
+
+    @staticmethod
+    def _task_split_ratios_for_loading(hypers: dict) -> dict:
+        """Return validated task ratios while preserving the loader's old default."""
+        configured = {
+            key: hypers[key]
+            for key in ("train_ratio", "validation_ratio", "test_ratio")
+            if key in hypers
+        }
+        if not configured:
+            return {}
+        return InferenceService._task_split_metadata(hypers)["ratios"]
+
+    @staticmethod
+    def _task_test_split_start(sample_count: int, split_meta: dict) -> int:
+        """Return the test boundary under task metadata or legacy 80/20 ratios."""
+        count = int(sample_count)
+        if count <= 1:
+            return 0
+        try:
+            return split_sample_ranges(count, split_meta["ratios"])["test"][0]
+        except ValueError:
+            return min(max(1, int(count * split_meta["ratios"]["train_ratio"])), count - 1)
+
+    @classmethod
+    def _with_test_set_contract(
+        cls,
+        metrics: dict,
+        hypers: dict,
+        *,
+        overall_aggregation: str = "pooled_test_set_pixels",
+    ) -> dict:
+        result = dict(metrics)
+        split_meta = cls._task_split_metadata(hypers)
+        result["split_meta"] = split_meta
+        result["aggregation"] = {
+            "overall": overall_aggregation,
+            "per_step": (
+                "per_forecast_step"
+                if overall_aggregation == "mean_over_forecast_steps"
+                else "pooled_test_set_pixels_per_forecast_step"
+            ),
+        }
+        return result
 
     def _load_task_state_dict(self, task):
         model_path = getattr(task, "output_model_path", None)
@@ -380,7 +456,7 @@ class InferenceService:
                 data_dirs=data_dirs,
             )
 
-        return await self.analysis_cache.get_or_compute(
+        result = await self.analysis_cache.get_or_compute(
             user_id=user_id,
             task=task,
             analysis_type="prediction",
@@ -392,6 +468,14 @@ class InferenceService:
             data_dirs=data_dirs,
             compute=compute,
         )
+        if isinstance(result, dict) and isinstance(result.get("metrics"), dict):
+            result = dict(result)
+            result["metrics"] = self._with_test_set_contract(
+                result["metrics"],
+                hypers,
+                overall_aggregation="mean_over_forecast_steps",
+            )
+        return result
 
     async def _cached_test_set_metrics(
         self, task, hypers, data_dirs, user_id, horizon
@@ -411,7 +495,7 @@ class InferenceService:
                 data_dirs,
             )
 
-        return await self.analysis_cache.get_or_compute(
+        result = await self.analysis_cache.get_or_compute(
             user_id=user_id,
             task=task,
             analysis_type="metrics",
@@ -419,6 +503,7 @@ class InferenceService:
             data_dirs=data_dirs,
             compute=compute,
         )
+        return self._with_test_set_contract(result, hypers)
 
     async def _cached_error_distribution(
         self, task, hypers, data_dirs, user_id, horizon
@@ -607,7 +692,11 @@ class InferenceService:
         pred_raw = pred_scaled[:actual_horizon] * (y_std + 1e-6) + y_mean
         truth_raw = truth_scaled[:actual_horizon] * (y_std + 1e-6) + y_mean
         residual_raw = pred_raw - truth_raw
-        metrics = compute_metrics(truth_raw, pred_raw)
+        metrics = self._with_test_set_contract(
+            compute_metrics(truth_raw, pred_raw),
+            hypers,
+            overall_aggregation="mean_over_forecast_steps",
+        )
 
         lat_arr = np.linspace(-87.5, 87.5, pred_raw.shape[-2], dtype=np.float32)
         lon_arr = np.linspace(-180.0, 175.0, pred_raw.shape[-1], dtype=np.float32)
@@ -656,7 +745,7 @@ class InferenceService:
             window,
             task_horizon,
             data_dirs=data_dirs,
-            split_ratios={key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+            split_ratios=self._task_split_ratios_for_loading(hypers),
         )
         sample_idx = self._nearest_sequence_index(
             torch.as_tensor(volume.ls, dtype=torch.float32).unsqueeze(1),
@@ -756,13 +845,16 @@ class InferenceService:
 
         样本数口径与 ``prepare_tensors`` 的逐样本展开相同：
         ``sample_count = total_time - window - horizon + 1``，
-        新任务默认使用 70/20/10；没有比例元数据的旧任务继续使用 80/20。
+        使用任务保存的完整三项比例；没有完整比例元数据的旧任务继续使用 80/0/20。
         """
         sample_count = int(volume.values.shape[0]) - int(window) - int(horizon) + 1
         if sample_count <= 0:
             raise ValueError("Not enough time steps to build the requested windows")
-        ratios = split_ratios or {"train_ratio": 0.8, "validation_ratio": 0.0, "test_ratio": 0.2}
-        test_start, test_end = split_sample_ranges(sample_count, ratios)["test"] if split_ratios else (int(0.8 * sample_count), sample_count)
+        split_meta = self._task_split_metadata(
+            split_ratios or {}
+        )
+        test_start = self._task_test_split_start(sample_count, split_meta)
+        test_end = sample_count
         test_count = test_end - test_start
         if test_count <= 0:
             return torch.empty(0), torch.empty(0), None
@@ -779,6 +871,11 @@ class InferenceService:
             )
         )
         return x_test, y_test, ls_test
+
+    @staticmethod
+    def _uploaded_task_split_ratios(hypers: dict) -> dict[str, float]:
+        """Return the ratios used to fit an uploaded task's standardization."""
+        return InferenceService._task_split_metadata(hypers)["ratios"]
 
     def _prepare_uploaded_task_volume(
         self,
@@ -809,6 +906,7 @@ class InferenceService:
             or directories.get("ARESVISION_MCD_RAW_3H_DIR")
             or MCD_RAW_3H_DIR
         )
+        split_ratios = self._uploaded_task_split_ratios(hypers)
 
         def load():
             return prepare_tensors(
@@ -823,6 +921,9 @@ class InferenceService:
                 return_coordinates=True,
                 require_coordinates=False,
                 return_scaled_volume=True,
+                train_ratio=split_ratios["train_ratio"],
+                validation_ratio=split_ratios["validation_ratio"],
+                test_ratio=split_ratios["test_ratio"],
             )
 
         if data_dirs:
@@ -836,6 +937,9 @@ class InferenceService:
             training_dataset=str(training_dataset),
             mcd_overview_dir=mcd_overview_dir,
             cache_prefix="uploaded",
+            split_ratios=split_ratios,
+            window=window,
+            horizon=horizon,
         )
         cached = get_scaled_volume(signature)
         if not isinstance(cached, ScaledVolume):
@@ -953,7 +1057,10 @@ class InferenceService:
             horizon,
             data_dirs=data_dirs,
         )
-        return compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon)
+        return self._with_test_set_contract(
+            compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon),
+            hypers,
+        )
 
     def _official_task_test_set_arrays(self, task, hypers: dict, horizon: int, data_dirs=None):
         window = int(hypers.get("window", 3))
@@ -971,12 +1078,15 @@ class InferenceService:
             'T': ('Temperature', 'temp')
         }
         used_mcd_vars = [mcd_vars_map[channel] for channel in active_vars if channel in mcd_vars_map]
+        split_ratios = self._task_split_ratios_for_loading(hypers)
+        prepare_kwargs = {"data_dirs": data_dirs}
+        if split_ratios:
+            prepare_kwargs["split_ratios"] = split_ratios
         x_torch, y_torch, ls_torch, y_mean, y_std = self._prepare_data(
             used_mcd_vars,
             window,
             task_horizon,
-            data_dirs=data_dirs,
-            split_ratios={key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+            **prepare_kwargs,
         )
 
         model, uses_legacy_loader = self._load_official_task_model(
@@ -993,9 +1103,8 @@ class InferenceService:
             architecture_params=architecture_params,
         )
 
-        ratios = {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers}
-        split = (split_sample_ranges(len(x_torch), ratios)["test"][0]
-                 if len(ratios) == 3 else int(0.8 * len(x_torch)))
+        split_meta = self._task_split_metadata(hypers)
+        split = self._task_test_split_start(len(x_torch), split_meta)
         x_test = x_torch[split:]
         y_test = y_torch[split:]
         ls_test = ls_torch[split:]
@@ -1032,9 +1141,11 @@ class InferenceService:
             hypers,
             horizon,
             data_dirs=data_dirs,
-            split_ratios={key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
         )
-        return compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon)
+        return self._with_test_set_contract(
+            compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon),
+            hypers,
+        )
 
     def _uploaded_task_test_set_arrays(self, task, hypers: dict, horizon: int, data_dirs=None):
         from training_backbones.user_model_runner import (
@@ -1152,11 +1263,15 @@ class InferenceService:
             'T': ('Temperature', 'temp')
         }
         used_mcd_vars = [mcd_vars_map[channel] for channel in active_channels if channel in mcd_vars_map]
+        split_ratios = self._task_split_ratios_for_loading(hypers)
+        prepare_kwargs = {"data_dirs": data_dirs}
+        if split_ratios:
+            prepare_kwargs["split_ratios"] = split_ratios
         x_torch, y_torch, ls_torch, y_mean, y_std = self._prepare_data(
             used_mcd_vars,
             window,
             task_horizon,
-            data_dirs=data_dirs,
+            **prepare_kwargs,
         )
         model, uses_legacy_loader = self._load_official_task_model(
             task=task,
@@ -1172,9 +1287,8 @@ class InferenceService:
             architecture_params=architecture_params,
         )
 
-        ratios = {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers}
-        split = (split_sample_ranges(len(x_torch), ratios)["test"][0]
-                 if len(ratios) == 3 else int(0.8 * len(x_torch)))
+        split_meta = self._task_split_metadata(hypers)
+        split = self._task_test_split_start(len(x_torch), split_meta)
         x_test = x_torch[split:].clone()
         y_test = y_torch[split:]
         ls_test = ls_torch[split:]
@@ -1484,12 +1598,15 @@ class InferenceService:
             base_input_dim = 1 + len(used_mcd_vars)
 
             # 3. 加载并预处理数据 (简化版，复用脚本逻辑)
+            split_ratios = self._task_split_ratios_for_loading(hypers)
+            prepare_kwargs = {"data_dirs": data_dirs}
+            if split_ratios:
+                prepare_kwargs["split_ratios"] = split_ratios
             X_torch, y_torch, ls_torch, y_mean, y_std = self._prepare_data(
                 used_mcd_vars,
                 window,
                 horizon,
-                data_dirs=data_dirs,
-                split_ratios={key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+                **prepare_kwargs,
             )
             
             # 4. 加载模型
@@ -1508,9 +1625,8 @@ class InferenceService:
             )
 
             # 5. 执行推理 (仅针对测试集)
-            ratios = {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers}
-            split = (split_sample_ranges(len(X_torch), ratios)["test"][0]
-                     if len(ratios) == 3 else int(0.8 * len(X_torch)))
+            split_meta = self._task_split_metadata(hypers)
+            split = self._task_test_split_start(len(X_torch), split_meta)
             X_test = X_torch[split:]
             y_test_true = y_torch[split:]
             
@@ -1544,10 +1660,15 @@ class InferenceService:
                 y_true_flat = y_true_flat[::step]
                 y_pred_flat = y_pred_flat[::step]
             
+            metric_meta = self._with_test_set_contract({}, hypers)
             return {
                 "y_true": y_true_flat.tolist(),
                 "y_pred": y_pred_flat.tolist(),
-                "metrics": json.loads(task.metrics) if task.metrics else {}
+                "metrics": json.loads(task.metrics) if task.metrics else {},
+                "metric_meta": {
+                    "aggregation": metric_meta["aggregation"],
+                    "split_meta": metric_meta["split_meta"],
+                },
             }
 
     async def _get_uploaded_model_test_results(self, task, hypers, data_dirs=None):
@@ -1630,10 +1751,15 @@ class InferenceService:
             y_true_flat = y_true_flat[::step]
             y_pred_flat = y_pred_flat[::step]
 
+        metric_meta = self._with_test_set_contract({}, hypers)
         return {
             "y_true": y_true_flat.tolist(),
             "y_pred": y_pred_flat.tolist(),
             "metrics": json.loads(task.metrics) if task.metrics else {},
+            "metric_meta": {
+                "aggregation": metric_meta["aggregation"],
+                "split_meta": metric_meta["split_meta"],
+            },
         }
 
     def _prepare_data(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None, split_ratios=None):
@@ -1674,6 +1800,9 @@ class InferenceService:
             selected_channels=[var_name for var_name, _ in used_mcd_vars],
             training_dataset="official_mcd_vars",
             cache_prefix="official:" + repr(tuple(sorted((split_ratios or {}).items()))),
+            split_ratios=split_ratios,
+            window=window,
+            horizon=horizon,
         )
         cached = get_scaled_volume(signature)
         if isinstance(cached, ScaledVolume):
@@ -1684,7 +1813,7 @@ class InferenceService:
         return volume
 
     def _load_scaled_volume(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None, split_ratios=None):
-        """加载 OpenMARS/MCD、插值并标准化，返回连续体积（与 window/horizon 无关的产物）。
+        """加载 OpenMARS/MCD、插值并标准化，返回连续体积。
 
         与 ``_prepare_data`` 的数值结果一致：同一批输入文件、同一 ``split_idx`` 与
         同一 ``StandardScaler`` 拟合区间，只是不再展开成逐样本滑窗张量。

@@ -37,6 +37,22 @@ export function getTrainingStatusMeta(status, t) {
       border: 'rgba(200, 148, 72, 0.22)',
     };
   }
+  if (status === 'queued') {
+    return {
+      label: t('modelTraining.statusQueued'),
+      color: '#e0b15a',
+      tint: 'rgba(224, 177, 90, 0.12)',
+      border: 'rgba(224, 177, 90, 0.24)',
+    };
+  }
+  if (status === 'cancelled') {
+    return {
+      label: t('modelTraining.statusCancelled'),
+      color: '#a9a9b8',
+      tint: 'rgba(169, 169, 184, 0.12)',
+      border: 'rgba(169, 169, 184, 0.22)',
+    };
+  }
   return {
     label: t('modelTraining.idle'),
     color: C.ice60,
@@ -46,5 +62,5 @@ export function getTrainingStatusMeta(status, t) {
 }
 
 export function isActiveTrainingStatus(status) {
-  return status === 'running' || status === 'pending';
+  return status === 'running' || status === 'pending' || status === 'queued';
 }

@@ -7,6 +7,10 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from skimage.metrics import structural_similarity as ssim
 
 
+MEAN_OVER_FORECAST_STEPS = "mean_over_forecast_steps"
+POOLED_TEST_SET_PIXELS = "pooled_test_set_pixels"
+
+
 def compute_metrics(truth: np.ndarray, pred: np.ndarray) -> dict:
     """
     计算逐步和总体评估指标。
@@ -54,7 +58,14 @@ def compute_metrics(truth: np.ndarray, pred: np.ndarray) -> dict:
         "r2": round(float(np.mean([s["r2"] for s in per_step])), 4),
     }
 
-    return {"overall": overall, "per_step": per_step}
+    return {
+        "overall": overall,
+        "per_step": per_step,
+        "aggregation": {
+            "overall": MEAN_OVER_FORECAST_STEPS,
+            "per_step": "per_forecast_step",
+        },
+    }
 
 
 def compute_test_set_metrics(truth: np.ndarray, pred: np.ndarray, horizon: int | None = None) -> dict:
@@ -131,7 +142,14 @@ def compute_test_set_metrics(truth: np.ndarray, pred: np.ndarray, horizon: int |
             "r2": round(overall_r2, 4),
         }
 
-    return {"overall": overall, "per_step": per_step}
+    return {
+        "overall": overall,
+        "per_step": per_step,
+        "aggregation": {
+            "overall": POOLED_TEST_SET_PIXELS,
+            "per_step": "pooled_test_set_pixels_per_forecast_step",
+        },
+    }
 
 
 def compute_error_distribution(
@@ -224,4 +242,8 @@ def empty_metrics(horizon: int) -> dict:
     return {
         "overall": {"step": 0, "rmse": 0.0, "mae": 0.0, "ssim": 0.0, "r2": 0.0},
         "per_step": per_step,
+        "aggregation": {
+            "overall": POOLED_TEST_SET_PIXELS,
+            "per_step": "pooled_test_set_pixels_per_forecast_step",
+        },
     }

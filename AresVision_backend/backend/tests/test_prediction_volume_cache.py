@@ -19,6 +19,7 @@ import torch
 
 from services.inference_service import InferenceService
 from services.prediction_volume_cache import clear_scaled_volumes
+from services.training_split import split_sample_ranges
 from training_backbones import user_model_runner
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -111,13 +112,22 @@ def test_scaled_volume_windows_match_expanded_samples(overview_dir: Path):
 
 
 def test_test_partition_windows_match_expanded_slice(overview_dir: Path):
-    x_torch, y_torch, ls_torch, _y_mean, _y_std, _height, _width = _prepare(overview_dir)
-    volume = _prepare(overview_dir, return_scaled_volume=True)
+    legacy_ratios = {
+        "train_ratio": 0.8,
+        "validation_ratio": 0.0,
+        "test_ratio": 0.2,
+    }
+    x_torch, y_torch, ls_torch, _y_mean, _y_std, _height, _width = _prepare(
+        overview_dir, **legacy_ratios
+    )
+    volume = _prepare(overview_dir, return_scaled_volume=True, **legacy_ratios)
 
     service = InferenceService()
     x_test, y_test, ls_test = service._uploaded_task_test_windows(volume, WINDOW, HORIZON)
 
-    split = int(0.8 * int(x_torch.shape[0]))
+    split = split_sample_ranges(
+        int(x_torch.shape[0]), legacy_ratios
+    )["test"][0]
     assert torch.equal(x_test, x_torch[split:])
     assert torch.equal(y_test, y_torch[split:])
     assert ls_test is not None
@@ -138,6 +148,40 @@ def test_uploaded_task_volume_hits_cache_on_second_call(overview_dir: Path):
 
     # 命中缓存时返回同一对象，说明没有重新读取与重新标准化。
     assert second is first
+
+
+def test_volume_signature_separates_split_and_window_parameters(overview_dir: Path):
+    common = {
+        "openmars_dir": overview_dir,
+        "mcd_dir": overview_dir,
+        "selected_channels": CHANNELS,
+        "training_dataset": "mcd_overview",
+        "mcd_overview_dir": overview_dir,
+        "cache_prefix": "uploaded",
+    }
+    from services.prediction_volume_cache import volume_signature
+
+    first = volume_signature(
+        **common,
+        split_ratios={"train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": 0.1},
+        window=2,
+        horizon=2,
+    )
+    different_split = volume_signature(
+        **common,
+        split_ratios={"train_ratio": 0.5, "validation_ratio": 0.1, "test_ratio": 0.4},
+        window=2,
+        horizon=2,
+    )
+    different_window = volume_signature(
+        **common,
+        split_ratios={"train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": 0.1},
+        window=3,
+        horizon=2,
+    )
+
+    assert first != different_split
+    assert first != different_window
 
 
 def test_volume_cache_invalidates_when_files_change(overview_dir: Path, tmp_path: Path):
@@ -175,3 +219,23 @@ def test_volume_cache_invalidates_when_files_change(overview_dir: Path, tmp_path
 
     assert changed != signature
     assert get_scaled_volume(changed) is None
+
+
+def test_volume_signature_tracks_separate_overview_files(overview_dir: Path, tmp_path: Path):
+    from services.prediction_volume_cache import volume_signature
+
+    openmars_dir = tmp_path / "openmars"
+    mcd_dir = tmp_path / "mcd"
+    common = {
+        "openmars_dir": openmars_dir,
+        "mcd_dir": mcd_dir,
+        "selected_channels": CHANNELS,
+        "training_dataset": "mcd_overview",
+        "mcd_overview_dir": overview_dir,
+        "cache_prefix": "uploaded",
+    }
+    first = volume_signature(**common)
+    _write_overview_file(overview_dir / "MCD_MY25_overview.nc", 24.0)
+    changed = volume_signature(**common)
+
+    assert changed != first

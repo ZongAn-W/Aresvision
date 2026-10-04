@@ -36,6 +36,30 @@ function DetailField({ label, value }) {
   );
 }
 
+function getUploadedModelIdentity(task, hyperparameters) {
+  const modelSource = String(task?.model_source || hyperparameters?.model_source || '').trim().toLowerCase();
+  if (modelSource !== 'uploaded') return null;
+
+  const modelName = String(
+    task?.uploaded_model_name
+      || hyperparameters?._uploaded_model_name
+      || task?.uploaded_model_id
+      || hyperparameters?._uploaded_model_id
+      || '',
+  ).trim();
+  const versionValue = task?.uploaded_model_version ?? hyperparameters?._uploaded_model_version;
+  const modelVersion = versionValue == null ? '' : String(versionValue).trim();
+  const storedFilename = String(hyperparameters?._uploaded_model_filename || '').trim();
+  const storedPath = String(hyperparameters?._uploaded_model_path || '').trim();
+  const pathFilename = storedPath.split(/[\\/]/).pop() || '';
+
+  return {
+    name: modelName,
+    version: modelVersion,
+    filename: storedFilename || pathFilename,
+  };
+}
+
 /**
  * 实验结果工作区：状态摘要、失败原因、指标、Loss、完整参数、数据集身份、
  * 运行日志与后续动作。
@@ -68,6 +92,10 @@ export default function ExperimentResultPanel({
   const hyperparameters = useMemo(
     () => parseTaskHyperparameters(activeTask?.hyperparameters),
     [activeTask?.hyperparameters]
+  );
+  const uploadedModel = useMemo(
+    () => getUploadedModelIdentity(activeTask, hyperparameters),
+    [activeTask, hyperparameters]
   );
   const failure = useMemo(() => getExperimentFailureMessage(activeTask), [activeTask]);
 
@@ -196,6 +224,9 @@ export default function ExperimentResultPanel({
         <h5 className="experiment-result-group-title">{copy.trainingSettingsTitle}</h5>
         <dl className="experiment-result-detail-grid">
           <DetailField label={copy.modelSourceLabel} value={summary.modelSource === 'uploaded' ? copy.uploadedModelsLabel : copy.officialLabel} />
+          {uploadedModel ? <DetailField label={copy.customModelLabel} value={uploadedModel.name} /> : null}
+          {uploadedModel?.version ? <DetailField label={copy.customModelVersionLabel} value={uploadedModel.version} /> : null}
+          {uploadedModel?.filename ? <DetailField label={copy.customModelFileLabel} value={uploadedModel.filename} /> : null}
           <DetailField label={copy.inputChannelsLabel} value={channelLabel} />
           <DetailField label={copy.windowLabel} value={hyperparameters.window != null ? String(hyperparameters.window) : ''} />
           <DetailField label={copy.horizonLabel} value={hyperparameters.horizon != null ? String(hyperparameters.horizon) : ''} />
