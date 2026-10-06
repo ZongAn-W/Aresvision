@@ -28,6 +28,12 @@ def _isolate_volume_cache():
     clear_scaled_volumes()
 
 
+def test_nearest_sequence_index_uses_complete_merged_ls_axis():
+    # The prediction selector sees all server files on one timeline. A repeated
+    # Ls value therefore resolves deterministically to the first nearest sample.
+    ls_axis = torch.tensor([[5.0], [90.0], [90.0], [180.0]])
+    assert InferenceService._nearest_sequence_index(ls_axis, 90.0) == 1
+    assert InferenceService._nearest_sequence_index(ls_axis, 92.0) == 1
 LS_MODEL_SPEC = {
     "name": "InferenceLsModel",
     "auxiliary_inputs": {
@@ -107,7 +113,7 @@ def _setup_uploaded_inference(monkeypatch, *, with_topography=False, sample_coun
     prepare_calls = []
     topography_calls = []
     latitude = torch.tensor([45.0, -45.0]).numpy()
-    longitude = torch.tensor([-180.0, -90.0, 0.0, 90.0]).numpy()
+    longitude = torch.tensor([-90.0, 90.0]).numpy()
     static_topography = torch.arange(4, dtype=torch.float32).reshape(1, 2, 2)
 
     def fake_prepare_tensors(*args, **kwargs):
@@ -227,6 +233,20 @@ def test_uploaded_formal_prediction_receives_selected_history_ls(monkeypatch):
     service._predict_uploaded_task_window(task, hypers, ls_start=0.0, horizon=2)
 
     assert torch.equal(model.ls_calls[-1], ls[0:1])
+
+
+def test_uploaded_window_returns_actual_input_and_target_ls(monkeypatch):
+    service, task, hypers, _model, _ls, *_rest = _setup_uploaded_inference(monkeypatch)
+
+    result = service._predict_uploaded_task_window(
+        task,
+        hypers,
+        ls_start=1.5,
+        horizon=2,
+    )
+
+    assert result[5] == [1.0, 2.0, 3.0, 4.0]
+    assert result[6] == [5.0, 6.0]
 
 
 def test_uploaded_test_set_metrics_receives_matching_ls_batches(monkeypatch):

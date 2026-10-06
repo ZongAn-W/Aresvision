@@ -110,10 +110,10 @@ def test_single_trained_analyses_use_effective_cache_parameters(monkeypatch):
         )
         user = SimpleNamespace(id=7, role="user")
         prediction_result = await service.predict_task(
-            12, 27, 90.0, 3, current_user=user
+            12, 90.0, 3, current_user=user
         )
         test_metrics = await service.task_test_set_metrics(
-            12, 27, 90.0, 3, current_user=user
+            12, 90.0, 3, current_user=user
         )
         await service.task_error_distribution(
             12, ["Temperature"], 3, current_user=user
@@ -121,7 +121,6 @@ def test_single_trained_analyses_use_effective_cache_parameters(monkeypatch):
         await service.task_permutation_importance(
             12,
             ["U_Wind", "Temperature"],
-            27,
             90.0,
             3,
             current_user=user,

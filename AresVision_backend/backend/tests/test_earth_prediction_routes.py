@@ -172,9 +172,9 @@ def test_context_route_returns_origins_grid_and_units(earth_app):
     assert (body["window"], body["horizon"]) == (7, 3)
     assert body["grid"]["shape"] == [36, 72]
     assert len(body["grid"]["latitude"]) == 36
-    assert body["origins"]["start"] == "2020-01-08"
+    assert body["origins"]["start"] == "2020-01-07"
     assert body["origins"]["end"] == "2021-12-28"
-    assert body["origins"]["count"] == 721
+    assert body["origins"]["count"] == 722
     assert body["metrics"]["splits"]["test"]["window_count"] == 175
 
 
@@ -190,6 +190,7 @@ def test_run_route_returns_three_du_days_and_metrics(earth_app):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["forecast_origin"] == "2021-07-08"
+    assert body["origin_split"] == "test"
     assert body["target_dates"] == ["2021-07-09", "2021-07-10", "2021-07-11"]
     assert body["target_unit"] == "DU"
     for kind in ("prediction", "reference", "residual"):
@@ -278,7 +279,7 @@ def test_mars_predict_route_rejects_an_earth_task_with_409(earth_app):
     _update_artifact_path(earth_app, task_id, artifact)
     response = earth_app["client"].post(
         "/api/predict/run",
-        json={"training_task_id": task_id, "horizon": 3, "mars_year": 27, "ls_start": 90},
+        json={"training_task_id": task_id, "horizon": 3, "ls_start": 90},
     )
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "dataset_prediction_not_supported"
@@ -290,7 +291,7 @@ def test_mars_metrics_route_rejects_an_earth_task_with_409(earth_app):
     _update_artifact_path(earth_app, task_id, artifact)
     response = earth_app["client"].post(
         "/api/predict/metrics",
-        json={"training_task_id": task_id, "horizon": 3, "mars_year": 27, "ls_start": 90},
+        json={"training_task_id": task_id, "horizon": 3, "ls_start": 90},
     )
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "dataset_prediction_not_supported"

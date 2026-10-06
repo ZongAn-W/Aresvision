@@ -19,7 +19,6 @@ import {
   fetchPredictMetrics,
   fetchErrorDistribution,
   fetchPermutationImportance,
-  fetchDataInfo,
   fetchTasks,
   compareTrainingModelErrorDistributions,
   compareTrainingModelPfi,
@@ -116,7 +115,6 @@ export default function PredictPage() {
   const [selectedVars, setSelectedVars] = useState(() => VARIABLE_DEFS.map((v) => v.id));
   const [predStep, setPredStep] = useState(3);
   const [lsStart, setLsStart] = useState(90);
-  const [marsYear, setMarsYear] = useState(27);
   const dataSourceMode = 'default';
   // 训练页可以通过 hash query 显式请求模式（如 mode=trained_compare）。
   const [hashRequestedMode, setHashRequestedMode] = useState(() => readPredictModeFromHash(window.location.hash));
@@ -129,12 +127,10 @@ export default function PredictPage() {
   const [trainingTasksLoaded, setTrainingTasksLoaded] = useState(false);
   const [selectedTrainingTaskId, setSelectedTrainingTaskId] = useState(null);
   const [selectedCompareTrainingTaskIds, setSelectedCompareTrainingTaskIds] = useState([]);
-  const [availableMarsYears, setAvailableMarsYears] = useState([27, 28]);
   const [activeHorizon, setActiveHorizon] = useState(0);
   const [viewMode, setViewMode] = useState(emptyCache.viewMode);
 
   const [loading, setLoading] = useState(false);
-  const [isSwitchingSource, setIsSwitchingSource] = useState(false);
   const [resultContextKey, setResultContextKey] = useState(null);
   const [results, setResults] = useState(null);
   const [metrics, setMetrics] = useState(null);
@@ -218,9 +214,8 @@ export default function PredictPage() {
       : null,
     horizon: predStep,
     selectedVars,
-    marsYear,
     lsStart,
-  }), [lsStart, marsYear, modelMode, predStep, selectedTrainingTaskId, selectedVars]);
+  }), [lsStart, modelMode, predStep, selectedTrainingTaskId, selectedVars]);
   const currentPredictionContextKey = useMemo(
     () => buildPredictionContextKey(currentPredictionContext),
     [currentPredictionContext]
@@ -330,7 +325,6 @@ export default function PredictPage() {
     setSelectedVars(VARIABLE_DEFS.map((variable) => variable.id));
     setPredStep(3);
     setLsStart(90);
-    setMarsYear(27);
     setModelMode(normalizePredictModelMode());
     setSelectedTrainingTaskId(null);
     setSelectedCompareTrainingTaskIds([]);
@@ -338,7 +332,6 @@ export default function PredictPage() {
     setTrainingTasksScope(null);
     setTrainingTasksLoading(false);
     setTrainingTasksLoaded(false);
-    setIsSwitchingSource(false);
     setCompareConfigs([]);
     setSelectedCompareIds([]);
 
@@ -435,7 +428,6 @@ export default function PredictPage() {
       : VARIABLE_DEFS.map((variable) => variable.id);
     const restoredPredStep = cachedParams.predStep ?? 3;
     const restoredLsStart = cachedParams.lsStart ?? 90;
-    const restoredMarsYear = cachedParams.marsYear ?? 27;
     const restoredModelMode = normalizePredictModelMode(cachedParams.modelMode);
     let restoredTrainingTaskId = cachedParams.trainingTaskId ?? null;
 
@@ -460,7 +452,6 @@ export default function PredictPage() {
         : null,
       horizon: restoredPredStep,
       selectedVars: restoredSelectedVars,
-      marsYear: restoredMarsYear,
       lsStart: restoredLsStart,
     };
     const restoredContextKey = buildPredictionContextKey(restoredContext);
@@ -522,7 +513,6 @@ export default function PredictPage() {
     setSelectedVars(restoredSelectedVars);
     setPredStep(restoredPredStep);
     setLsStart(restoredLsStart);
-    setMarsYear(restoredMarsYear);
     setModelMode(effectiveRestoredModelMode);
     setSelectedTrainingTaskId(restoredTrainingTaskId);
     setSelectedCompareTrainingTaskIds(restoredCache.selectedCompareTrainingTaskIds || []);
@@ -652,7 +642,6 @@ export default function PredictPage() {
         selectedVars,
         predStep,
         lsStart,
-        marsYear,
         dataSource: dataSourceMode,
         modelMode,
         trainingTaskId: currentPredictionContext.trainingTaskId,
@@ -665,7 +654,6 @@ export default function PredictPage() {
     currentPredictionContext.trainingTaskId,
     dataSourceMode,
     lsStart,
-    marsYear,
     modelMode,
     predStep,
     requestCoordinator,
@@ -678,35 +666,7 @@ export default function PredictPage() {
     requestCoordinator.invalidateAll();
   }, [requestCoordinator]);
 
-  useEffect(() => {
-    let active = true;
-    setIsSwitchingSource(true);
-
-    fetchDataInfo({ dataSource: 'default' })
-      .then((info) => {
-        if (!active) return;
-        const years = Array.isArray(info?.available_years) && info.available_years.length > 0
-          ? info.available_years
-          : [27, 28];
-        setAvailableMarsYears(years);
-        setMarsYear((prev) => (years.includes(prev) ? prev : years[0]));
-      })
-      .catch(() => {
-        if (!active) return;
-        setAvailableMarsYears([27, 28]);
-      })
-      .finally(() => {
-        if (!active) return;
-        setIsSwitchingSource(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [user?.id]);
-
   const handlePredict = useCallback(async () => {
-    if (isSwitchingSource) return;
     if (predictionHorizonLimit == null || predStep < 1 || predStep > predictionHorizonLimit) {
       setError(settings?.language !== 'en'
         ? '当前模型没有有效的输出窗口配置。'
@@ -753,7 +713,6 @@ export default function PredictPage() {
             selectedVars,
             predStep,
             lsStart,
-            marsYear,
             dataSource: dataSourceMode,
             modelMode,
             compareTrainingTaskIds: compareTaskIds,
@@ -781,7 +740,6 @@ export default function PredictPage() {
       selected_variables: selectedVars,
       horizon: predStep,
       ls_start: lsStart,
-      mars_year: marsYear,
       ...(trainingTaskId ? { training_task_id: trainingTaskId } : {}),
     };
     const analysisContext = {
@@ -790,7 +748,6 @@ export default function PredictPage() {
       horizon: predStep,
       selectedVars,
       dataSourceMode,
-      marsYear,
       lsStart,
     };
     const requestContextKey = buildPredictionContextKey(analysisContext);
@@ -866,7 +823,6 @@ export default function PredictPage() {
           ? Promise.resolve(pfiData)
           : fetchPermutationImportance(pfiVariables, {
               trainingTaskId,
-              marsYear,
               lsStart,
               horizon: predStep,
               signal: requestToken.signal,
@@ -910,7 +866,6 @@ export default function PredictPage() {
           selectedVars,
           predStep,
           lsStart,
-          marsYear,
           dataSource: dataSourceMode,
           modelMode,
           trainingTaskId,
@@ -939,9 +894,7 @@ export default function PredictPage() {
     dataSourceMode,
     errorDistData,
     errorDistKey,
-    isSwitchingSource,
     lsStart,
-    marsYear,
     metrics,
     metricsKey,
     modelMode,
@@ -1202,6 +1155,7 @@ export default function PredictPage() {
     fieldEmpty: t('predict.earthFieldEmpty'),
     dayTabsLabel: t('predict.earthDayTabsLabel'),
     originLine: (origin, first, last) => t('predict.earthOriginLine')(origin, first, last),
+    originSplit: (split) => t('predict.earthOriginSplit')(split),
     rangeLabel: t('predict.earthRangeLabel'),
     validCellsLabel: t('predict.earthValidCells'),
     leadHeader: t('predict.earthLeadHeader'),
@@ -1253,7 +1207,6 @@ export default function PredictPage() {
           isLight={isLight}
           loading={modelMode === PREDICT_MODEL_MODE_COMPARE ? compareTrainingLoading : loading}
           requestContextLocked={requestContextLocked}
-          isSwitchingSource={isSwitchingSource}
           error={activeError}
           modelMode={modelMode}
           setModelMode={setModelMode}
@@ -1265,9 +1218,6 @@ export default function PredictPage() {
           trainingTasksLoading={trainingTasksLoading}
           selectedTrainingOption={selectedTrainingOption}
           analysisVisibility={analysisVisibility}
-          marsYear={marsYear}
-          setMarsYear={setMarsYear}
-          availableMarsYears={availableMarsYears}
           lsStart={lsStart}
           setLsStart={setLsStart}
           predStep={predStep}

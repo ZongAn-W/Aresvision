@@ -15,12 +15,18 @@ function normalizeFiniteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function normalizeMarsLsStart(value) {
+  const number = normalizeFiniteNumber(value);
+  if (number === null) return null;
+  const normalized = number % 360;
+  return Object.is(normalized, -0) ? 0 : normalized;
+}
+
 export function normalizePredictionContext({
   modelMode,
   trainingTaskId,
   horizon,
   selectedVars,
-  marsYear,
   lsStart,
   forecastOrigin,
   datasetId,
@@ -30,8 +36,7 @@ export function normalizePredictionContext({
     modelMode: String(modelMode || '').trim(),
     trainingTaskId: normalizePositiveNumber(trainingTaskId),
     horizon: normalizePositiveNumber(horizon),
-    marsYear: normalizeFiniteNumber(marsYear),
-    lsStart: normalizeFiniteNumber(lsStart),
+    lsStart: normalizeMarsLsStart(lsStart),
     selectedVars: normalizeVars(selectedVars),
     // 地球历史预测按日期起点区分；火星模式不传这些字段，键保持原样。
     forecastOrigin: String(forecastOrigin || '').trim(),
@@ -46,7 +51,6 @@ export function buildPredictionContextKey(context) {
     `mode:${normalized.modelMode}`,
     `task:${normalized.trainingTaskId ?? 'none'}`,
     `h:${normalized.horizon ?? 'none'}`,
-    `my:${normalized.marsYear ?? 'none'}`,
     `ls:${normalized.lsStart ?? 'none'}`,
     `vars:${normalized.selectedVars.join(',')}`,
   ];

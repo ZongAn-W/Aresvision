@@ -320,6 +320,26 @@ def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[s
             )
 
     normalized: dict[str, Any] = {}
+    supplied_ratios = {
+        key: hypers[key]
+        for key in ("train_ratio", "validation_ratio", "test_ratio")
+        if key in hypers
+    }
+    if supplied_ratios:
+        try:
+            supplied = normalize_split_ratios(hypers)
+        except TrainingSplitError as error:
+            raise DatasetRequestError(
+                "invalid_earth_training_parameters",
+                str(error),
+                status_code=422,
+            ) from error
+        if supplied != EARTH_DEFAULT_SPLIT_RATIOS:
+            raise DatasetRequestError(
+                "invalid_earth_training_parameters",
+                "Earth training uses published manifest splits; custom train/validation/test ratios are not supported",
+                status_code=422,
+            )
     try:
         normalized.update(normalize_split_ratios(hypers))
     except TrainingSplitError as error:

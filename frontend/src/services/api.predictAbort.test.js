@@ -34,7 +34,6 @@ test('all protected prediction analysis APIs pass AbortSignal to fetch', async (
     selected_variables: ['Temperature'],
     horizon: 3,
     ls_start: 90,
-    mars_year: 27,
     training_task_id: 42,
   };
 
@@ -47,7 +46,6 @@ test('all protected prediction analysis APIs pass AbortSignal to fetch', async (
   });
   await fetchPermutationImportance(['Temperature'], {
     trainingTaskId: 42,
-    marsYear: 27,
     lsStart: 90,
     horizon: 3,
     signal: controller.signal,

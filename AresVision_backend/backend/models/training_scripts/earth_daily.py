@@ -57,7 +57,6 @@ from services.earth_training_contract import (  # noqa: E402
     normalize_earth_training_hyperparameters,
     split_window_counts,
 )
-from services.training_split import split_sample_ranges
 from services.earth_model_source import (  # noqa: E402
     MODEL_SOURCE_OFFICIAL,
     MODEL_SOURCE_UPLOADED,
@@ -104,29 +103,29 @@ def _build_loaders(
     assert_release_matches_binding(release, binding)
 
     selected = hyperparameters["selected_channels"]
-    full_dates = np.asarray(release.dates, dtype="datetime64[D]")
-    # Fit statistics only on the published training period; task-level windows
-    # are then allocated chronologically across the full release timeline.
+    # Fit statistics on the published training period, then build each split
+    # independently so no input or target window can cross a manifest boundary.
     normalization = normalization_from_release(release, ["TO3", *selected])
-    full = EarthOzoneWindows.from_release(
-        release,
-        split="train",
-        window=EARTH_WINDOW,
-        horizon=EARTH_HORIZON,
-        selected_channels=selected,
-        normalization=normalization,
-        require_split_coverage=False,
-    )
-    ranges = split_sample_ranges(len(full), {
-        "train_ratio": hyperparameters["train_ratio"],
-        "validation_ratio": hyperparameters["validation_ratio"],
-        "test_ratio": hyperparameters["test_ratio"],
-    })
     splits = {
-        name: _WindowSlice(full, start, end)
-        for name, (start, end) in ranges.items()
+        name: EarthOzoneWindows.from_release(
+            release,
+            split=name,
+            window=EARTH_WINDOW,
+            horizon=EARTH_HORIZON,
+            selected_channels=selected,
+            normalization=None if name == "train" else normalization,
+        )
+        for name in ("train", "validation", "test")
     }
     counts = {name: len(dataset) for name, dataset in splits.items()}
+    split_ranges = {
+        name: {
+            "date_start": str(dataset.dates[0]),
+            "date_end": str(dataset.dates[-1]),
+            "window_count": int(len(dataset)),
+        }
+        for name, dataset in splits.items()
+    }
     generator = torch.Generator()
     generator.manual_seed(seed)
     train_loader = torch.utils.data.DataLoader(
@@ -154,7 +153,7 @@ def _build_loaders(
         "input_channel_order": ["TO3", *selected],
         "splits": splits,
         "counts": counts,
-        "split_ranges": ranges,
+        "split_ranges": split_ranges,
         "train_loader": train_loader,
         "validation_loader": validation_loader,
         "test_loader": test_loader,
@@ -180,26 +179,6 @@ class _ArrayDataset(torch.utils.data.Dataset):
         return self.inputs[index], self.targets[index]
 
 
-class _WindowSlice:
-    """View of a chronological window range with shared normalization."""
-
-    def __init__(self, source, start: int, end: int):
-        self.source = source
-        self.start = int(start)
-        self.end = int(end)
-        self.dates = source.dates[self.start:self.end]
-        self.normalization = source.normalization
-
-    def __len__(self):
-        return self.end - self.start
-
-    def __getitem__(self, index):
-        return self.source[self.start + index]
-
-    def denormalize_ozone(self, values):
-        return self.source.denormalize_ozone(values)
-
-
 def _evaluate_split(
     model: nn.Module,
     loader,
@@ -213,7 +192,7 @@ def _evaluate_split(
     model.eval()
     accumulator = ErrorAccumulator()
     total_loss = 0.0
-    total_batches = 0
+    total_loss_elements = 0
     with torch.no_grad():
         for inputs, targets in loader:
             inputs = inputs.to(device)
@@ -224,14 +203,15 @@ def _evaluate_split(
             loss = loss_function(output, targets)
             if not torch.isfinite(loss):
                 raise EarthTrainingError("Non-finite evaluation loss")
-            total_loss += float(loss.item())
-            total_batches += 1
+            elements = int(output.numel())
+            total_loss += float(loss.item()) * elements
+            total_loss_elements += elements
             prediction_du = dataset.denormalize_ozone(output[:, :, 0]).detach().cpu().numpy()
             target_du = dataset.denormalize_ozone(targets[:, :, 0]).detach().cpu().numpy()
             accumulator.update(prediction_du[:, :, None], target_du[:, :, None])
-    if total_batches == 0:
+    if total_loss_elements == 0:
         raise EarthTrainingError("Evaluation loader produced no batches")
-    return accumulator.result(), total_loss / total_batches
+    return accumulator.result(), total_loss / total_loss_elements
 
 
 def run_training(
@@ -348,7 +328,7 @@ def run_training(
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
-        batch_count = 0
+        loss_elements = 0
         total_batches = len(prepared["train_loader"])
         for batch_index, (inputs, targets) in enumerate(prepared["train_loader"], start=1):
             inputs = inputs.to(resolved_device)
@@ -365,8 +345,9 @@ def run_training(
                 if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
                     raise EarthTrainingError(f"Non-finite gradient for {name}")
             optimizer.step()
-            running_loss += float(loss.item())
-            batch_count += 1
+            elements = int(output.numel())
+            running_loss += float(loss.item()) * elements
+            loss_elements += elements
             if batch_index % PROGRESS_EVERY_BATCHES == 0 or batch_index == total_batches:
                 print(
                     f"Epoch {epoch}/{epochs} Batch {batch_index}/{total_batches} "
@@ -374,7 +355,7 @@ def run_training(
                     flush=True,
                 )
 
-        training_loss = running_loss / max(batch_count, 1)
+        training_loss = running_loss / max(loss_elements, 1)
         validation_metrics, validation_loss = _evaluate_split(
             model,
             prepared["validation_loader"],

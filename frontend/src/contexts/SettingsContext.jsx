@@ -49,7 +49,8 @@ function deepMerge(defaults, saved) {
     for (const key of ['trainRatio', 'validationRatio', 'testRatio']) {
       const rawRatio = result.trainingDefaults[key];
       const ratio = Number(rawRatio);
-      if (rawRatio === '' || (Number.isFinite(ratio) && ratio >= 0.01 && ratio <= 0.98)) {
+      const minimum = key === 'validationRatio' ? 0 : 0.01;
+      if (rawRatio === '' || (Number.isFinite(ratio) && ratio >= minimum && ratio <= 0.98)) {
         normalizedTrainingDefaults[key] = rawRatio === '' ? '' : ratio;
       }
     }

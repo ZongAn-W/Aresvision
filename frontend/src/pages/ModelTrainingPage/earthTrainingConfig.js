@@ -123,9 +123,6 @@ export function buildEarthTrainingHyperparameters({
     horizon: EARTH_HORIZON,
     use_sphere: false,
     transfer_learning: false,
-    train_ratio: Number(trainRatio),
-    validation_ratio: Number(validationRatio),
-    test_ratio: Number(testRatio),
     selected_channels: normalizeEarthSelectedChannels(selectedChannels),
     // 上限必须与服务端契约一致：超界值在此夹到文档范围，而不是留给服务端 422。
     epochs: sanitizePositiveInteger(epochs, EARTH_PARAM_BOUNDS.epochs.fallback, EARTH_PARAM_BOUNDS.epochs.min, EARTH_PARAM_BOUNDS.epochs.max),

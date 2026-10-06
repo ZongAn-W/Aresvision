@@ -8,6 +8,7 @@ import torch
 
 from models.training_scripts.earth_daily import (
     EarthTrainingError,
+    _evaluate_split,
     resolve_device,
     run_training,
     seed_everything,
@@ -47,7 +48,7 @@ def test_one_epoch_run_publishes_a_strictly_loadable_checkpoint(earth_global_rel
     assert output.is_file()
     assert result["best_epoch"] == 1
     assert result["epochs_completed"] == 1
-    assert result["split_window_counts"] == {"train": 506, "validation": 144, "test": 72}
+    assert result["split_window_counts"] == {"train": 357, "validation": 172, "test": 175}
 
     checkpoint = load_earth_training_artifact(
         output, expected_binding=binding, expected_task_id=901,
@@ -58,6 +59,12 @@ def test_one_epoch_run_publishes_a_strictly_loadable_checkpoint(earth_global_rel
     assert checkpoint.run["loss"] == "normalized_mse_grid_uniform"
     assert checkpoint.run["device"] == "cpu"
     assert checkpoint.training_contract["input_channel_order"] == ["TO3", "T2M"]
+    assert checkpoint.training_contract["split_policy"] == "published_manifest_splits"
+    assert checkpoint.training_contract["split_ranges"] == {
+        "train": {"date_start": "2020-01-01", "date_end": "2020-12-31", "window_count": 357},
+        "validation": {"date_start": "2021-01-01", "date_end": "2021-06-30", "window_count": 172},
+        "test": {"date_start": "2021-07-01", "date_end": "2021-12-31", "window_count": 175},
+    }
     assert checkpoint.normalization["fit_split"] == "train"
     assert checkpoint.normalization["fit_date_end"] == "2020-12-31"
 
@@ -67,8 +74,8 @@ def test_metrics_are_finite_du_with_overall_and_per_lead_values(earth_global_rel
     splits = result["metrics"]["splits"]
     assert result["metrics"]["unit"] == "DU"
     assert result["metrics"]["target"] == "TO3"
-    assert splits["test"]["window_count"] == 72
-    assert splits["validation"]["window_count"] == 144
+    assert splits["test"]["window_count"] == 175
+    assert splits["validation"]["window_count"] == 172
     for name in ("validation", "test"):
         overall = splits[name]["overall"]
         assert np.isfinite(overall["rmse"]) and np.isfinite(overall["mae"])
@@ -87,6 +94,35 @@ def test_training_smoke_actually_learns_on_the_tiny_fixture(earth_global_release
     assert result["epochs_completed"] == 3
     # Validation must be scored (not filled from the test split) and be finite.
     assert np.isfinite(result["metrics"]["splits"]["validation"]["overall"]["rmse"])
+
+
+def test_validation_loss_weights_uneven_batches_by_element_count(monkeypatch):
+    import models.training_scripts.earth_daily as runner
+
+    class IdentityDataset:
+        def denormalize_ozone(self, values):
+            return values
+
+    first_inputs = torch.zeros(2, 7, 1, 1, 1)
+    first_targets = torch.zeros(2, 3, 1, 1, 1)
+    second_inputs = torch.ones(1, 7, 1, 1, 1)
+    second_targets = torch.zeros(1, 3, 1, 1, 1)
+
+    def forward(_model, inputs, **_kwargs):
+        if inputs.shape[0] == 2:
+            return torch.zeros(2, 3, 1, 1, 1)
+        return torch.full((1, 3, 1, 1, 1), 2.0)
+
+    monkeypatch.setattr(runner, "earth_forward_for_model", forward)
+    _metrics, loss = _evaluate_split(
+        torch.nn.Identity(),
+        [(first_inputs, first_targets), (second_inputs, second_targets)],
+        IdentityDataset(),
+        torch.device("cpu"),
+        loss_function=torch.nn.MSELoss(),
+    )
+    # Batch means are 0 and 4; element-weighted mean is (0*6 + 4*3) / 9.
+    assert loss == pytest.approx(4.0 / 3.0)
 
 
 def test_ozone_only_run_works_end_to_end(earth_global_release, tmp_path):

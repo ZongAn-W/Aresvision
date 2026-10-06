@@ -15,9 +15,13 @@ from services.prediction_analysis_cache import (
 
 def test_request_hash_normalizes_effective_inputs():
     assert build_request_hash(
+        "prediction", {"ls_start": 0, "horizon": 3}
+    ) == build_request_hash(
+        "prediction", {"ls_start": 360, "horizon": 3}
+    )
+    assert build_request_hash(
         "prediction",
         {
-            "mars_year": 27,
             "ls_start": 90,
             "horizon": 3,
             "selected_variables": ["Temperature"],
@@ -25,7 +29,6 @@ def test_request_hash_normalizes_effective_inputs():
     ) == build_request_hash(
         "prediction",
         {
-            "mars_year": 27,
             "ls_start": 90.0,
             "horizon": 3,
             "selected_variables": ["U_Wind"],
@@ -36,7 +39,6 @@ def test_request_hash_normalizes_effective_inputs():
         {
             "horizon": 3,
             "selected_variables": [" U_Wind ", "Temperature", "U_Wind"],
-            "mars_year": 27,
             "ls_start": 90,
         },
     ) == build_request_hash(
@@ -48,6 +50,11 @@ def test_request_hash_normalizes_effective_inputs():
     )
     assert build_request_hash("metrics", {"horizon": 2}) != build_request_hash(
         "metrics", {"horizon": 3}
+    )
+    assert build_request_hash(
+        "prediction", {"ls_start": 90, "horizon": 3, "mars_year": 27}
+    ) == build_request_hash(
+        "prediction", {"ls_start": 90, "horizon": 3, "mars_year": 28}
     )
 
 

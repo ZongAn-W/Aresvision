@@ -429,14 +429,14 @@ export default function SettingsPanel({ open, onClose }) {
           <Divider />
           <SectionHeader label={t('settings.training.strategyLabel')} />
           {[
-            ['trainRatio', t('settings.training.trainRatio')],
-            ['validationRatio', t('settings.training.validationRatio')],
-            ['testRatio', t('settings.training.testRatio')],
-          ].map(([key, label]) => (
+            ['trainRatio', t('settings.training.trainRatio'), 1],
+            ['validationRatio', t('settings.training.validationRatio'), 0],
+            ['testRatio', t('settings.training.testRatio'), 1],
+          ].map(([key, label, min]) => (
             <NumberSetting
               key={key}
               label={label}
-              min={1}
+              min={min}
               max={98}
               step={1}
               value={trainingDefaults[key] === '' ? '' : Math.round(Number(trainingDefaults[key]) * 100)}

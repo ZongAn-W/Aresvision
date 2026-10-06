@@ -12,7 +12,7 @@ Prediction cache scopes are stable strings derived only from authentication iden
 - `anonymous` after authentication has definitively resolved to signed out.
 - No scope while authentication is loading.
 
-Tokens are neither cache keys nor cached values. Prediction data remains in module memory and is never written to `localStorage`.
+Tokens are neither cache keys nor cached values. Prediction data remains in module memory and is never written to `localStorage`. Mars prediction identity is based on the training task, horizon, `ls_start`, selected variables and model/data fingerprint; it has no Mars-year component because inference uses the complete server dataset.
 
 The cache module owns two distinct state categories:
 

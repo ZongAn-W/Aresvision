@@ -39,6 +39,46 @@ The platform passes these core config keys to `build_model(config)`:
 
 Any custom fields declared in `MODEL_SPEC["parameters"]` are also included in `config`.
 
+## Mars Input Channels and Checkpoints
+
+For Mars, `selected_channels` contains only user-selected auxiliary inputs, such as
+`["U", "D"]`. O3 is the fixed prediction target and the first input channel. The
+complete model input order is `["O3", *selected_channels]`: selecting no auxiliaries
+still supplies one O3 channel, and selecting U supplies `["O3", "U"]`.
+
+Both the official `demo3.py` runner and uploaded `user_model_runner.py` runner save
+the shared `aresvision_mars_forecast_checkpoint_v1` contract. The checkpoint retains
+auxiliary-only `training_contract.selected_channels`, while
+`normalization.input_channel_order` records the complete order. `input_mean`,
+`input_scale`, and `constant_channel_mask` each have one entry per input channel;
+each mean/scale entry has the training grid shape. Loading rejects reordered or
+missing channel names, incorrect counts or shapes, non-finite statistics, and
+non-positive input scales. Providing invalid saved normalization never silently
+refits it.
+
+Inference applies input statistics in that exact order, and independently uses
+`target_mean` and `target_scale` to restore predicted O3 values (with the existing
+`1e-6` scale epsilon). A constant target can retain `target_scale=0`; input scales
+must remain positive. Scaled-volume caches include checkpoint statistics so two
+tasks with the same data and channels cannot reuse each other's normalization.
+
+Older versioned checkpoints that recorded only auxiliary channel names are
+rejected. Retrain them, or migrate them separately only after verifying the
+original tensor order and all statistics; there is no automatic metadata repair.
+Legacy bare `state_dict` weights retain the existing normalization-refit path.
+These conventions apply to Mars; the Earth contract remains independent.
+
+Mars checkpoints also bind the initial training data identity. `mcd_overview`
+records the original full MCD directory; `openmars_mcd` records both OpenMARS and
+MCD directories, with source-tagged manifests. The runner retains the initial
+statistics and file identity instead of reloading them after training. Both
+prediction paths verify the saved directories, file names, sizes and modification
+times before cache/window/model access. A changed source returns HTTP 409
+`dataset_version_changed` and requires retraining. Complete identities are marked
+`verified`; historical weights without file identity stay explicitly `legacy`.
+Incomplete versioned checkpoints are rejected. See the
+[Mars dataset identity contract](dataset-registry.md#mars-数据绑定与预测校验).
+
 ## Declaring Which Dataset Feeds a Model
 
 By default an uploaded model is **Mars-only**. To train it on Earth MERRA-2 data it must

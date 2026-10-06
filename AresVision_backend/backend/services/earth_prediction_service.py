@@ -40,6 +40,7 @@ from services.earth_training_artifact import (
     build_earth_model_from_checkpoint,
     forecast_dates,
     load_earth_training_artifact,
+    origin_split,
     validate_checkpoint_payload,
 )
 from services.earth_training_contract import (
@@ -180,11 +181,44 @@ def _sync_release(registry: DatasetRegistry, binding: Mapping[str, Any]):
     return release
 
 
+def _validate_checkpoint_split_ranges(checkpoint: Any, release: Any) -> None:
+    """Reject a checkpoint whose published split contract no longer matches."""
+    contract = checkpoint.training_contract
+    if contract.get("split_policy") != "published_manifest_splits":
+        # Historical Earth artifacts predate persisted manifest ranges. They
+        # remain readable; newly trained artifacts always use the strict policy.
+        return None
+    expected = contract.get("split_ranges") or {}
+    published = release.metadata.get("splits") or {}
+    for name in ("train", "validation", "test"):
+        actual = expected.get(name) or {}
+        current = published.get(name) or {}
+        if (
+            str(actual.get("date_start")) != str(current.get("start"))
+            or str(actual.get("date_end")) != str(current.get("end"))
+        ):
+            raise DatasetRequestError(
+                "dataset_version_changed",
+                "The Earth release split dates changed since this task was trained",
+                status_code=409,
+            )
+        days = int(current.get("days", 0))
+        expected_count = days - int(contract.get("window", EARTH_WINDOW)) - int(contract.get("horizon", EARTH_HORIZON)) + 1
+        if int(actual.get("window_count", -1)) != expected_count:
+            raise DatasetRequestError(
+                "dataset_version_changed",
+                "The Earth release split window counts changed since this task was trained",
+                status_code=409,
+            )
+    return None
+
+
 def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredictionContext:
     """Return the selectable origins, grid, units, model identity and metrics."""
     _require_completed_earth_task(task)
     checkpoint = _load_checkpoint(task)
     release = _sync_release(registry, checkpoint.dataset_binding)
+    _validate_checkpoint_split_ranges(checkpoint, release)
     contract = checkpoint.training_contract
     origins = available_origin_range(
         release,
@@ -277,7 +311,7 @@ def _origin_index(release, origin: Any, window: int, horizon: int) -> int:
             status_code=422,
         ) from exc
     dates = np.asarray(release.dates, dtype="datetime64[D]")
-    if index < window or index + horizon >= len(dates):
+    if index < window - 1 or index + horizon >= len(dates):
         raise DatasetRequestError(
             ORIGIN_OUT_OF_RANGE,
             "The forecast origin needs a complete input window before it and "
@@ -305,6 +339,7 @@ def run_earth_prediction(
             status_code=409,
         ) from exc
     release = _sync_release(registry, checkpoint.dataset_binding)
+    _validate_checkpoint_split_ranges(checkpoint, release)
 
     contract = checkpoint.training_contract
     window = int(contract.get("window", EARTH_WINDOW))
@@ -389,6 +424,7 @@ def run_earth_prediction(
         "input_channel_order": order,
         "input_units": list(contract.get("input_units") or []),
         "forecast_origin": origin_date,
+        "origin_split": origin_split(release, origin_date),
         "input_dates": [
             str(value) for value in dates[index - window + 1:index + 1]
         ],

@@ -54,6 +54,9 @@ test('Earth 提交走独立路径并携带顶层 dataset_id', () => {
   const earthBranch = code.slice(code.indexOf('if (earthMode) {'), code.indexOf('if (modelSource === \'official\' && !selectedScriptAvailable)'));
   assert.doesNotMatch(earthBranch, /buildTrainingHyperparameters\(/);
   assert.doesNotMatch(earthBranch, /transferLearning/);
+  assert.doesNotMatch(earthBranch, /trainRatio:/);
+  assert.doesNotMatch(earthBranch, /validationRatio:/);
+  assert.doesNotMatch(earthBranch, /testRatio:/);
 });
 
 test('api.startTrainingTask 发送 dataset_id 并保留结构化错误', () => {
@@ -77,6 +80,8 @@ test('Earth 模式隐藏火星专属控件（模型来源切换、SPHERE、迁�
   assert.match(workspaceSource, /data-earth-model-block="true"/);
   // Earth 的专家页签不含迁移学习；模型结构页签也不出现（DLinear 只有线性隐藏层数）。
   assert.match(workspaceSource, /\? \['payload', 'training', 'strategy', 'tags'\]/);
+  assert.match(workspaceSource, /data-earth-fixed-split="true"/);
+  assert.match(workspaceSource, /disabled readOnly/);
 });
 
 test('predict 页面接入 Earth 模式而不是扩展火星模式', () => {

@@ -13,14 +13,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from config import MCD_DIR, OPENMARS_DIR
+from config import MCD_DIR, MCD_RAW_3H_DIR, OPENMARS_DIR
 from database.engine import async_session_maker
 from database.models import PredictionAnalysisCache
+from services.mars_checkpoint import MCD_WINDOW_POLICY, OPENMARS_WINDOW_POLICY
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 
 CACHE_SCHEMA_VERSION = 1
+MARS_OUTPUT_COORDINATE_POLICY = "loader_coordinates_v1"
 SUPPORTED_ANALYSIS_TYPES = {
     "prediction",
     "metrics",
@@ -81,10 +83,12 @@ def normalize_request(
 
     horizon = int(params["horizon"])
     if analysis_type == "prediction":
+        ls_start = float(params["ls_start"]) % 360.0
+        if ls_start == 0.0:
+            ls_start = 0.0
         return {
             "horizon": horizon,
-            "ls_start": float(params["ls_start"]),
-            "mars_year": int(params["mars_year"]),
+            "ls_start": ls_start,
         }
     if analysis_type in {"metrics", "error_distribution"}:
         return {"horizon": horizon}
@@ -129,6 +133,11 @@ def build_artifact_fingerprint(
     mcd_dir = Path(
         data_dirs.get("ARESVISION_MCD_DIR") or MCD_DIR
     ).expanduser().resolve()
+    raw_dir = Path(
+        data_dirs.get("MCD_RAW_3H_DIR")
+        or data_dirs.get("ARESVISION_MCD_RAW_3H_DIR")
+        or MCD_RAW_3H_DIR
+    ).expanduser().resolve()
 
     try:
         hyperparameters = json.loads(task.hyperparameters or "{}")
@@ -146,10 +155,18 @@ def build_artifact_fingerprint(
             task, "uploaded_model_version", None
         ),
         "hyperparameters": hyperparameters,
+        "dataset_id": getattr(task, "dataset_id", None) or hyperparameters.get("training_dataset"),
+        "dataset_snapshot": getattr(task, "dataset_snapshot", None),
         "model": _file_signature(model_path),
         "openmars": _dataset_manifest(openmars_dir),
         "mcd": _dataset_manifest(mcd_dir),
+        "mcd_raw_3h": _dataset_manifest(raw_dir),
     }
+    dataset_id = identity["dataset_id"] or "openmars_mcd"
+    if dataset_id in ("openmars_mcd", "mcd_overview"):
+        identity["window_policy"] = OPENMARS_WINDOW_POLICY if dataset_id == "openmars_mcd" else MCD_WINDOW_POLICY
+    if (identity["dataset_id"] or "openmars_mcd") in ("openmars_mcd", "mcd_overview"):
+        identity["output_coordinate_policy"] = MARS_OUTPUT_COORDINATE_POLICY
     return hashlib.sha256(_canonical_json(identity)).hexdigest()
 
 

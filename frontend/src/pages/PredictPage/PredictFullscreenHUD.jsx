@@ -9,6 +9,7 @@ import { fmtNum } from '../../utils/fmt';
 import { convertOzone, ozoneDeltaLabel, ozoneLabel } from '../../utils/units';
 import { useSettings } from '../../contexts/SettingsContext';
 import { PLOTLY_SCALE } from '../../utils/colormaps';
+import { marsPredictionGrid } from './marsPredictionGrid';
 
 function InfoCard({ label, value, hint, accent }) {
   return (
@@ -50,6 +51,8 @@ export default function PredictFullscreenHUD({
   const isZh = settings?.language !== 'en';
 
   if (!fullscreen3D) return null;
+  const grid = marsPredictionGrid(fullscreen3D.fieldData);
+  if (!grid) return null;
 
   const titleText = fullscreen3D.colorMode === 'rdbu'
     ? t('predict.fullscreen3D.residual')
@@ -65,8 +68,8 @@ export default function PredictFullscreenHUD({
   const field = fullscreen3D.fieldData.field;
   const nLat = field.length;
   const nLon = field[0].length;
-  const latitudes = Array.from({ length: nLat }, (_, i) => 90 - (i / (nLat - 1)) * 180);
-  const longitudes = Array.from({ length: nLon }, (_, i) => (i / Math.max(1, nLon)) * 360);
+  const latitudes = grid.latitude;
+  const longitudes = grid.longitude;
   const latProfile = field.map((row) => convertOzone(row.reduce((sum, value) => sum + value, 0) / nLon, ozoneUnit));
   const heatmapZ = field.map((row) => row.map((value) => convertOzone(value, ozoneUnit)));
 
@@ -177,7 +180,8 @@ export default function PredictFullscreenHUD({
               {titleText}
             </div>
             <SphericalFieldCanvas
-              fieldData={fullscreen3D.fieldData}
+              fieldData={grid.sphericalFieldData}
+              geometry={{ latCenters: grid.latitude, lonCenters: grid.longitude }}
               colorMode={fullscreen3D.colorMode}
               h="100%"
               zoom={3.25}
@@ -260,7 +264,7 @@ export default function PredictFullscreenHUD({
                   ...chartTheme,
                   autosize: true,
                   xaxis: { gridcolor: isLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.06)', zeroline: false, nticks: 4 },
-                  yaxis: { gridcolor: isLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.06)', zeroline: false, range: [-90, 90], tickvals: [-90, -45, 0, 45, 90] },
+                  yaxis: { gridcolor: isLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.06)', zeroline: false, ticksuffix: '°', nticks: 5 },
                 }}
                 config={{ displayModeBar: false, responsive: true }}
                 useResizeHandler

@@ -191,8 +191,57 @@ dataset_snapshot         TEXT   -- JSON 对象
 | --- | --- |
 | `legacy_inferred` | 从旧超参数或已知默认规则推断出的 Mars 来源，版本与指纹未知 |
 | `legacy_unknown` | 旧 JSON 非对象、损坏或来源不认识；快照保留 `planet=mars` 与原因，`dataset_id=null` |
-| `unversioned` | 新创建的现有 Mars 任务，来源明确，数据源尚无发布版本 |
-| `verified` | 为将来使用固定发布版本预留；本阶段不创建 Earth 训练任务 |
+| `unversioned` | 新创建的旧 Mars 任务，来源明确但尚未保存文件快照 |
+| `verified` | 新 Mars checkpoint 保存完整目录绑定、文件清单/指纹与训练契约；父进程验证后保存兼容任务快照，两种 Mars 数据集均在预测前复核 |
+| `legacy` | 旧裸权重或历史任务没有文件身份元数据；保持兼容但不声称已验证来源；部分身份元数据不等同于无身份 |
+
+`mcd_overview` 是逻辑数据集身份；其训练和预测实际使用 `MCD_RAW_3H_DIR` 指向的原始全量 MCD MY24–MY35（默认 `data/MCD_Output_global_10m_ls_lst/`）。`data/mcd_overview/*.nc` 是生成的 overview 产物，不是当前训练预测的默认数据源。`openmars_mcd` 仍绑定 OpenMARS + `MCD_DIR`，两个身份不会交叉读取。
+
+### Mars 年份分段与窗口
+
+两种 Mars 数据集使用不同的年份分段来源，由 `services/mars_data_service.py` 统一形成全局时间轴与 block：
+
+| 数据集 | 年份分段来源 | 文件内分段 |
+| --- | --- | --- |
+| `openmars_mcd` | OpenMARS 的实际 Ls 时间序列，以文件名起始 MY 锚定绝对年份；额外的 MY 标记用于校验 | Ls 年末回绕（相邻值下降超过 180°）产生新 MY，例如 `openmars_ozo_my27_ls358_my28_ls13.nc` 拆为 MY27 与 MY28 |
+| `mcd_overview` | 原始 MCD MY24–MY35 年度文件名 | 每个文件仍对应一个 MY；三小时维度按既有方式展开，数据仍来自 `MCD_RAW_3H_DIR` |
+
+一个 OpenMARS 文件可以产生多个 `MarsYearSegment`。每段记录 `mars_year`、全局 `start/end`、原始 `source_file` 与文件内 `file_start/file_end`，索引均为左闭右开。每段形成独立 block；同一年不同文件也保留原有的文件分块边界，不自动合并。检查点与任务快照的 `year_blocks[].segments` 保存来源与索引，快照的 `window_count` 按实际 block 统计。
+
+窗口在完整合并时间轴上满足 `0 <= sample_start` 且 `sample_start + window + horizon <= time_count`，输入或目标可以跨 MY/file segment。全局数据与 Ls 不删除、不改写；数据不足以容纳窗口时不产生样本。`sample_starts` 和 `sample_mars_years` 描述实际合法起点，以及起点所属年份。预测用周期最近邻选择这些起点，并用起点对应的实际 block 返回 `block_index`、`mars_year`、输入 Ls 与目标 Ls；同一年多个文件的索引不会被去重年份压缩。请求仍只使用 `ls_start`，不增加火星年选择接口。
+
+OpenMARS 的声明结束 MY 与实际回绕数量矛盾、缺失 MY 标记、非有限/越界 Ls、异常的小幅倒退或单文件 Ls 与臭氧时间长度不同，均明确报错，不自动排序或裁掉边界数据。仅一个 MY 标记的文件可以依据实际回绕推导后续年份；但 Ls 与文件名不足以恢复缺失整年的数据或证明文件之间没有时间缺口。
+
+OpenMARS 窗口策略 `openmars_ls_year_segments_v2`、MCD 窗口策略 `mcd_merged_timeline_v2` 都纳入连续体积与预测分析缓存身份，使旧分段规则生成的缓存失效。新任务记录当前窗口策略。历史模型的权重和归一化参数不会被改写；重新训练后才会按当前严格 split 元数据和完整合并时间轴重新生成训练窗口。
+
+### Mars 数据绑定与预测校验
+
+Mars 模型测试入口 `action=test` / `get_test_results()` 也复用相同身份校验，防止通过测试入口绕过预测的数据源约束。
+
+`services/mars_dataset_identity.py` 的 `canonical_dataset_identity()` 是 Mars 文件身份的唯一计算入口，供数据加载、训练快照、检查点和 `assert_identity_current()` 共用。它返回 `dataset_id`、`planet=mars`、`source_type`、`data_directories`、`file_manifest` 和 `dataset_fingerprint`；可读取当前文件元数据，也可用已捕获的目录/清单重现训练时身份，保存检查点时不会重绑后来变化的文件。
+
+| 数据集 | `data_directories` 顺序 | 清单与既有指纹规则 |
+| --- | --- | --- |
+| `mcd_overview` | `[原始 MCD 目录]`，来自 `MCD_RAW_3H_DIR` | 每项为 `name/size/mtime_ns`；对既有 `{path, files}` 规范 JSON 取 SHA-256 |
+| `openmars_mcd` | `[OpenMARS 目录, MCD 目录]` | 两个目录的每项都保存 `name/size/mtime_ns`，并带 `root=openmars/mcd`；对既有 `{openmars_dir, mcd_dir, files}` 规范 JSON 取 SHA-256 |
+
+文件按既有自然顺序列出，JSON 使用 `sort_keys=True` 和紧凑分隔符，路径为解析后的绝对目录；不引入文件内容哈希。兼容字段 `data_dir` 只表示主目录（原始 MCD 或辅助 MCD），不能替代 `data_directories`。任务快照的 `manifest` 是 `file_manifest` 的兼容别名；检查点 `data_binding.file_fingerprint` 等于规范字段 `dataset_fingerprint`。父进程通过 `mars_checkpoint_identity_snapshot()` 将 `data_binding` 与训练契约还原为 `identity_snapshot()` 兼容字段，不再只复制部分别名。
+
+官方与上传 Mars runner 都保存首次加载时的身份和统计量。父进程验证完整新 schema 检查点后，任务才保存 `dataset_snapshot`、相同 `dataset_fingerprint` 并标记 `verified`。预测无论使用 `mcd_overview` 还是 `openmars_mcd`，都会校验任务快照及可用的检查点身份；没有数据库快照时可从完整检查点恢复身份。完整 `data_directories` 绑定不要求存在兼容 `data_dir` 字段。数据目录或任一绑定目录中的文件修改、增加、删除后，返回 409 `dataset_version_changed`，在访问预测缓存、构造窗口或执行模型前终止；需要重新训练。
+
+旧裸 `state_dict` 或只有注册表逻辑身份、没有文件目录/清单/指纹的历史任务，继续兼容并明确标记 `legacy`；旧裸权重若已有完整文件快照，也会复核该快照。身份部分缺失、任务指纹冲突或新 schema 缺少完整 `data_binding` 时，直接拒绝，不因字段名称不同而降级。以前生成的、遗漏 OpenMARS 目录或使用错误指纹的版本化检查点需要重训或经核实后单独迁移，不会自动补齐并标为 verified。
+
+本契约保留文件名、大小与 `mtime_ns` 语义：如果内容被替换但大小与时间戳都被保持，当前指纹无法发现；同目录移动/恢复改变路径或时间戳也会影响身份。校验是文件元数据的时点检查，数据加载还会前后比较清单，但不提供文件系统级原子快照或写锁。生产数据应在训练与预测期间保持稳定。
+
+### Mars 预测输出网格
+
+`/api/predict/run` 的 `prediction`、`ground_truth` 和 `residual` 每个时间步返回同一套 `lat` / `lon`：`field[row][column]` 对应 `lat[row]`、`lon[column]`，坐标顺序和空间场同步保留。官方与上传 Mars 模型都从窗口加载器返回 latitude/longitude，经 `_predict_task_with_context()` 的共同校验后交给 `_fields_to_dicts()`，不按输出尺寸重新生成等间隔坐标。
+
+`mcd_overview` 的原始 MCD 纬度由既有 loader 转成 36 行目标中心 `87.5, 82.5, …, -87.5`；37 个边界纬度形成相邻行均值，南到北源字段会同步翻转空间行；已经是 36 行中心的字段同样按实际坐标对齐。输出使用 loader 的目标纬度，并保留经度文件坐标及既有最多 72 列截取规则。`openmars_mcd` 直接采用 OpenMARS 文件的纬度/经度，不交换行列或反转标签；当前真实文件纬度北到南，存在浮点近似（如 `87.499992`），原值保留。不同文件的坐标不一致会明确拒绝拼接。
+
+新 checkpoint 使用 `ScaledVolume.latitude/longitude`；官方 legacy 权重由 `_prepare_data()` 的 loader 元数据取得相同坐标。两条路径均不允许坐标缺失、空数组、NaN/Infinity、多维轴或坐标长度与空间场不匹配；也不以零替换坏坐标。合法输出不会只反转 latitude 而保留字段不动。
+
+Mars 前端二维热力图按真实轴计算单元位置和刻度，保证北纬对应北侧；全屏热图、纬向平均和三维图均使用响应坐标。通用观测台的默认球面标注仍属于显示网格，不覆盖 Mars 预测数据轴。预测分析缓存包含 `loader_coordinates_v1` 输出策略，使以前保存的错误标签结果失效。Earth 的坐标、数据和显示流程独立，未改变。
 
 ### 旧任务回填规则
 

@@ -97,3 +97,4 @@ conda run -n AresVision python -m pytest `
 生产发布的固定 SHA-256 在 `services/dataset_registry.py` 中锁定；修改 v2 数据必须创建新目录、ID/版本和新的固定哈希，不能覆盖 v1 或复用旧身份。
 
 2026-09-24 的实际验证范围、发布 SHA、质量统计和回归命令见 [预处理与替换记录](plans/2026-09-23-earth-reprocessing.md)。
+训练窗口严格限制在 manifest 发布 split 内：2020 年 train、2021-01-01 至 2021-06-30 validation、2021-07-01 至 2021-12-31 test。每个 split 独立生成完整窗口；历史预测可以使用 origin 前的完整 7 天历史输入，但不会改变训练 split 或归一化拟合范围。

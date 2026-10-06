@@ -35,6 +35,7 @@ from services.earth_dataset import (
     canonical_input_channels,
     fit_normalization,
     input_units,
+    release_split_codes,
     validate_normalization,
 )
 from services.earth_training_contract import (
@@ -335,7 +336,7 @@ def build_checkpoint_payload(
     metrics: Mapping[str, Any],
     split_window_counts: Mapping[str, int],
     split_ratios: Mapping[str, float] | None = None,
-    split_ranges: Mapping[str, Sequence[int]] | None = None,
+    split_ranges: Mapping[str, Any] | None = None,
     task_id: Optional[int] = None,
     model_source: str = MODEL_SOURCE_OFFICIAL,
     uploaded_model: Optional[Mapping[str, Any]] = None,
@@ -347,6 +348,7 @@ def build_checkpoint_payload(
         normalized_split_ratios = normalize_split_ratios(split_ratios)
     except TrainingSplitError as exc:
         raise EarthArtifactError(str(exc)) from exc
+    has_manifest_ranges = bool(split_ranges)
     contract = {
         "target": EARTH_TARGET_CHANNEL,
         "target_unit": EARTH_TARGET_UNIT,
@@ -357,9 +359,10 @@ def build_checkpoint_payload(
         "window": EARTH_WINDOW,
         "horizon": EARTH_HORIZON,
         "strict_split_windows": True,
+        "split_policy": "published_manifest_splits" if has_manifest_ranges else "legacy_compatibility",
         "split_window_counts": {str(key): int(value) for key, value in dict(split_window_counts).items()},
         "split_ratios": _plain(normalized_split_ratios),
-        "split_ranges": _plain({str(key): list(value) for key, value in dict(split_ranges or {}).items()}),
+        "split_ranges": _plain(dict(split_ranges or {})),
     }
     run_block = {str(key): _plain(value) for key, value in dict(run).items()}
     resolved_task_id = int(task_id if task_id is not None else run_block.get("task_id", 0))
@@ -543,12 +546,28 @@ def validate_checkpoint_payload(
         raise EarthArtifactError("Training contract must fix window=7 and horizon=3")
     if contract.get("strict_split_windows") is not True:
         raise EarthArtifactError("Training contract must declare strict split windows")
+    split_policy = contract.get("split_policy")
+    if split_policy not in ("published_manifest_splits", "legacy_compatibility"):
+        raise EarthArtifactError("Training contract split policy is unsupported")
     counts = contract.get("split_window_counts")
     if not isinstance(counts, Mapping) or not counts:
         raise EarthArtifactError("Training contract has no split window counts")
     for name, value in counts.items():
         if int(value) < 1:
             raise EarthArtifactError(f"Split window count for {name} is invalid")
+    split_ranges = contract.get("split_ranges")
+    if split_policy == "published_manifest_splits":
+        if not isinstance(split_ranges, Mapping):
+            raise EarthArtifactError("Training contract has no manifest split ranges")
+        for name in ("train", "validation", "test"):
+            entry = split_ranges.get(name)
+            if not isinstance(entry, Mapping):
+                raise EarthArtifactError(f"Training contract has no {name} manifest range")
+            for key in ("date_start", "date_end", "window_count"):
+                if key not in entry:
+                    raise EarthArtifactError(f"Training contract {name} range is missing {key}")
+            if int(entry["window_count"]) != int(counts.get(name, -1)):
+                raise EarthArtifactError(f"Training contract {name} range count disagrees with split count")
 
     normalization = payload.get("normalization")
     if not isinstance(normalization, Mapping):
@@ -867,11 +886,11 @@ def available_origin_range(
     why future dates without published truth are not offered at all.
     """
     dates = np.asarray(release.dates, dtype="datetime64[D]")
-    # A sample owns input indices [i, i + window - 1] and target indices
-    # [i + window, i + window + horizon - 1], so the forecast origin of the first
-    # legal sample sits at index ``window`` and the last one at
+    # A sample owns input indices [origin - window + 1, origin] and target
+    # indices [origin + 1, origin + horizon], so the first legal origin sits at
+    # index ``window - 1`` and the last one at
     # ``len(dates) - horizon - 1``.
-    first = int(window)
+    first = int(window - 1)
     last = int(len(dates) - horizon - 1)
     if last < first:
         raise EarthArtifactError("The release is too short for the Earth forecast contract")
@@ -911,6 +930,20 @@ def forecast_dates(release, origin: str, horizon: int = EARTH_HORIZON) -> list[s
     return [str(value) for value in dates[index + 1:index + 1 + int(horizon)]]
 
 
+def origin_split(release, origin: str) -> str:
+    """Return the published train/validation/test split containing an origin."""
+    dates = np.asarray(release.dates, dtype="datetime64[D]")
+    matches = np.flatnonzero(dates == np.datetime64(origin, "D"))
+    if matches.size == 0:
+        raise EarthArtifactError(
+            "The forecast origin is not a date in the published dataset",
+            code="invalid_earth_prediction_origin",
+        )
+    codes = release_split_codes(dates, release.metadata)
+    labels = {0: "train", 1: "validation", 2: "test"}
+    return labels[int(codes[int(matches[0])])]
+
+
 __all__ = [
     "EarthArtifactError",
     "EarthCheckpoint",
@@ -926,6 +959,7 @@ __all__ = [
     "forecast_dates",
     "load_earth_training_artifact",
     "normalization_from_release",
+    "origin_split",
     "save_earth_artifact_atomic",
     "validate_checkpoint_payload",
 ]

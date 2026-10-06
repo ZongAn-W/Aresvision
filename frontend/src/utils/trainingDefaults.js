@@ -28,7 +28,9 @@ function positiveNumber(value, fallback, max = 1) {
 }
 
 function isValidSplit(ratios) {
-  return ratios.every((ratio) => Number.isFinite(ratio) && ratio > 0 && ratio < 1)
+  return Number.isFinite(ratios[0]) && ratios[0] > 0 && ratios[0] < 1
+    && Number.isFinite(ratios[1]) && ratios[1] >= 0 && ratios[1] < 1
+    && Number.isFinite(ratios[2]) && ratios[2] > 0 && ratios[2] < 1
     && Math.abs(ratios.reduce((sum, ratio) => sum + ratio, 0) - 1) < 0.000001;
 }
 

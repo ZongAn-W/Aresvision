@@ -1674,9 +1674,6 @@ export default function ModelTrainingPage() {
           customModelParams: uploadedEarth
             ? buildCustomModelParams(selectedUploadedParamSchema, customModelParams)
             : null,
-          trainRatio: splitRatios.train_ratio,
-          validationRatio: splitRatios.validation_ratio,
-          testRatio: splitRatios.test_ratio,
         });
         const task = await startTrainingTask(
           UNIFIED_TRAINING_SCRIPT,

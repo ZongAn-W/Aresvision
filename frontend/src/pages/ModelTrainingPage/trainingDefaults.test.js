@@ -55,6 +55,14 @@ test('normalizes valid saved training parameter and strategy defaults', () => {
   });
 });
 
+test('preserves an explicitly disabled validation split', () => {
+  assert.deepEqual(normalizeTrainingDefaults({
+    trainRatio: 0.8,
+    validationRatio: 0,
+    testRatio: 0.2,
+  }).validationRatio, 0);
+});
+
 test('falls back to supported parameter defaults when saved values exceed form/API bounds', () => {
   assert.deepEqual(normalizeTrainingDefaults({
     epochs: 1001,

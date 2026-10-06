@@ -154,6 +154,7 @@ class EarthPredictResponse(BaseModel):
     input_channel_order: list[str] = Field(default_factory=list)
     input_units: list[str] = Field(default_factory=list)
     forecast_origin: str
+    origin_split: str
     input_dates: list[str] = Field(default_factory=list)
     target_dates: list[str] = Field(default_factory=list)
     window: int

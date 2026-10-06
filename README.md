@@ -22,7 +22,7 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 ## 快速接手：先读这一节
 
-文档最近核对日期：**2026-10-01**。本轮核对范围包括**地球 MERRA-2 v2 的官方 DLinear 网页训练与历史日期预测**：训练页新增 `earth_merra2_daily_v2` 数据集选项（固定过去 7 天 → 未来 3 天、TO3 必选加四个可选辅助输入、只用训练期拟合归一化、完成前 CPU 严格重载校验单文件 checkpoint、保存 DU 指标），预测页新增独立的「地球历史预测」模式（按历史起点回测随后 3 天的预测/参考/残差场与指标）；Earth 使用独立的数据准备、训练与推理路径，并在火星推理、比较、PFI、`action=test` 与迁移来源路径上明确 409，不回退到火星。已用真实 v2 小包完成任务 27 的网页训练与 2021-07-08 起点的预测验收（测试集 RMSE 46.791 DU / MAE 32.232 DU，预测窗口 RMSE 29.139 DU / MAE 23.881 DU）。本次还核对了设置页的训练默认值：支持自定义新实验参数、训练策略及数据切分，浏览器本地保存；复制配置保留历史任务值，Earth 仍固定 7→3。相关实现见[实验中心](docs/experiment-center.md)，不新增后端设置接口。验证范围：设置、训练参数、Earth 配置相关前端测试与生产构建；完整前端测试仍有一项既有训练日志图表高度结构断言失败，未将其记为通过。Earth 契约与错误码见[地球训练与历史预测](docs/earth-training.md)；不沿用旧轮次的验收数量。
+文档最近核对日期：**2026-10-06**。本轮核对范围包括**地球 MERRA-2 v2 的官方 DLinear 网页训练与历史日期预测**：训练页新增 `earth_merra2_daily_v2` 数据集选项（固定过去 7 天 → 未来 3 天、TO3 必选加四个可选辅助输入、只用训练期拟合归一化、完成前 CPU 严格重载校验单文件 checkpoint、保存 DU 指标），预测页新增独立的「地球历史预测」模式（按历史起点回测随后 3 天的预测/参考/残差场与指标）；Earth 使用独立的数据准备、训练与推理路径，并在火星推理、比较、PFI、`action=test` 与迁移来源路径上明确 409，不回退到火星。Earth 起点范围为 `2020-01-07` 至 `2021-12-28`，共 722 个起点；响应返回 `origin_split` 标记起点属于 train、validation 或 test。Earth 只接受发布 manifest 固定的 train / validation / test 日期块，前端比例为只读兼容值，不发送自定义比例。Mars 新训练按完整合并时间轴生成可跨 MY 的窗口，严格按配置比例分配保留窗口并保存 split 元数据；归一化只使用训练分区，Mars 缺测、NaN、Inf 会在数据准备阶段明确拒绝。相关实现见[实验中心](docs/experiment-center.md)和[地球训练与历史预测](docs/earth-training.md)。
 
 2026-09-27 的既有接手记录核对了**实验中心布局与配置交互**：顶部固定视图栏在「配置实验」（画布 + 检查器）与「训练监控」（目录 + 画布）之间切换；目录与检查器在桌面端吸附于导航下方，底部操作条固定于视口。上传模型为默认主入口，官方模型及全部超参数继续保留。此次精修移除双重页边距、标题额外留白、重复的上传空态报错和检查器阻塞提示，修正未登录时的参数绿色勾选，编辑自定义参数会滚动到对应页签；设置浮钮避让底部操作条。后续八处小改：上传卡片不再重复放「编辑自定义参数」（入口只在右侧检查器），训练数据集改为把选项直接列出（不再用原生下拉，选项行只给名称、没有小字说明；本轮加入地球数据集后为三项），画布第 04 分区「专家参数」更名为「超参数」（英文 `Hyperparameters`），输入与预测、训练参数并入超参数模块成为它的头两个页签（默认打开输入与预测），六个页签统一为同一套三列字段块（载荷胶囊、参数矩阵、专家字段、自定义参数表单与标签选择器同度量），上传卡片的「替换文件」「管理上传模型」更名为「上传模型」「管理模型」，训练页三个阶段的实验目录都默认展开（手动收起后本次会话保持），画布拆成 01 模型名称 / 02 数据集 / 03 模型 / 04 超参数四个部分（每段一张同款卡片：左侧 38px 编号轨道 + 13px 圆角 + 细描边，段间留 14px 画布底色；卡内不再重复「训练数据集」「模型来源」小标签，训练参数格只剩标签与数值、不再有量纲小字）。生产站点使用 `frontend/dist`，源码修改后必须在 `frontend/` 执行 `npm run build`，已打开的页面需要完整刷新才能加载新资源。实现边界与验证范围见[实验中心](docs/experiment-center.md)；本文不将旧轮次的验收数量作为本轮验证结论。
 
@@ -100,7 +100,7 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 - 训练页 `#/training` 现为**实验中心 · 大气实验控制台**（版式对齐 `output/training-console-preview.html` 的设计参照）：顶部是**固定视图栏，只有两个按钮**——「配置实验」与「训练监控 / 实验结果」。**配置实验**视图只保留配置画布 + 配置检查器两列（目录收起），底部运行条承载提交；**训练监控**视图只保留实验目录 + 画布两列（检查器收起），画布里**监控常驻、结果接在下面**（任务完成后不再用结果顶替监控）。**进入页面默认展示最新一条记录的结果**：已选任务时（运行中的任务优先，否则取列表最新一条）直接进入监控视图，一条记录都没有才停在配置视图；点「新建实验」清空选择后自动回到配置视图。阶段（配置 / 监控 / 结果）仍由任务状态推导，视图只决定哪几列可见，两者互不耦合；配置画布在监控视图里保持挂载，因此切视图不会清空正在编辑的表单。运行条只在配置视图显示；监控工作区和目录中保留「停止训练」入口。左侧目录只负责"找到实验"（全部 / 运行中 / 已完成 / 失败、名称搜索、标签与未分组筛选、批量标签、当前任务高亮、运行中进度；外框用 `position: sticky` 固定在导航下方 86px，实验列表在列内自行滚动；1440px 下外边距 28px、列间距 14px、目录 235px、检查器 284px，1920px 下侧栏不再按视口比例放大）。配置检查器同样 sticky，只给出当前模型、输入变量、就绪检查、Window → Horizon 与 Epochs，详细信息折叠，不复制整张表单。配置画布头部是可编辑实验名称，正文按 01–04 四个部分排布：模型名称（可编辑实验名称）、数据集（选项直接列出、横排）、模型（来源胶囊 + 上传卡片或官方架构选择器）、超参数（侧边页签，依次为输入与预测的载荷胶囊条、训练参数矩阵、以及按模型来源决定的专家字段页签：自定义参数 / 模型结构 / 训练策略 / 迁移学习 / 实验标签，不出现空页签；六个页签共用同一套三列字段块，切换时形态一致）。**上传模型是一等主入口**：模型来源默认 `uploaded`，已选择时显示紧凑卡片（文件名、版本、校验状态、自定义参数数量）与「上传模型 / 管理模型」（自定义参数的编辑入口只保留在右侧检查器），整套模型管理与文件格式说明收进可展开区；没有上传文件时同一区域给出上传、模板与说明下载、格式要求与区内 inline error，没有有效上传模型时「开始实验」保持不可用。官方模型是次级兼容入口，只有切到官方模型才渲染带搜索、模型家族筛选与全部官方架构的架构选择器。底部运行条是**横跨浏览器的深色细条（`position: fixed`，约 63px，上方一条细边线）**：左侧状态与单行摘要（数据集 · 模型 · 输入 · 轮数），右侧唯一主操作「开始实验」（仍然调用 `startTrainingTask` 与既有校验，运行条自己不做校验）。刷新页面后已选任务进入监控视图，已完成任务在监控下方展示结果；这是现有训练能力的前端重组，未新增后端接口、数据库表或训练实体，详见[实验中心](docs/experiment-center.md)。
 - 内置 PredRNNv2、PredRNN++、ConvLSTM、SimVP、DLinear、PatchTST、TimeMixer、Earthformer 等模型及实验变体，完整注册表见 [model_zoo.py](AresVision_backend/backend/training_backbones/model_zoo.py)。
 - 按模型配置输入窗口、输出步长、气象通道和超参数，查看训练进度、Loss 曲线、日志与测试指标。
-- 偏好设置可自定义新建实验的训练轮次、批大小、学习率、窗口 / 步长，以及数据切分、随机种子、早停和迁移冻结 / 微调默认值；设置保存在当前浏览器，新实验应用设置值，复制配置仍以历史任务为准。Earth 的 7→3 固定窗口契约不受通用默认值覆盖。
+- 偏好设置可自定义新建火星实验的训练轮次、批大小、学习率、窗口 / 步长、数据切分、随机种子、早停和迁移冻结 / 微调默认值；设置保存在当前浏览器，新实验应用设置值，复制配置仍以历史任务为准。Earth 只读显示发布 manifest 的固定切分，7→3 窗口契约不受通用默认值覆盖。
 - 支持迁移学习、权重加载、冻结策略和训练结果重命名；训练失败时提供通知，包括 CUDA 显存不足提示。
 - 支持上传单文件 PyTorch 模型，由平台统一负责数据加载、训练循环、评估和权重保存；训练页把上传模型作为默认模型来源与一等主入口（上传、模板 / 说明下载、区内校验错误、重新校验与删除都在同一区域），官方模型作为兼容入口保留。
 - 支持账号私有的多标签分组：启动训练时选择标签，历史记录中搜索、按标签交集筛选，单条或批量添加、移除标签；标签可新建、重命名与删除。操作说明与接口见 [训练模型标签](docs/training-model-tags.md)。
@@ -108,18 +108,25 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 ### 训练数据划分比例
 
-训练配置支持独立编辑训练集、验证集和测试集比例，三者必须合计 100%。设置中的初始比例为 70% / 20% / 10%，可按需自定义；训练、验证和最终测试分别使用对应分区，验证集用于早停，测试集只用于最终评估。任务会把比例和实际窗口范围写入训练超参数与 checkpoint；推理服务优先读取任务保存的完整三项比例，历史任务缺少完整比例时明确返回 `split_meta.source=legacy_compatibility`，固定按旧训练逻辑的 80% / 0% / 20% 训练/验证/测试规则读取，不套用当前 70% / 20% / 10% 默认值。
+火星训练配置支持独立编辑训练集、验证集和测试集比例，三者必须合计 100%。设置中的初始比例为 70% / 20% / 10%，可按需自定义；比例严格作用于完整时间轴上保留的窗口数量，分区之间为避免输入和目标时间索引重叠会丢弃必要的边界窗口，窗口本身可以跨 MY。验证集比例可以为 0，此时不生成验证窗口。任务会把比例、原始边界、窗口数量和窗口范围写入 checkpoint；推理服务、测试指标和 PFI 复用同一份分区定义。历史 Mars checkpoint 缺少严格元数据时明确返回 `split_meta.source=legacy_compatibility`，按旧训练逻辑读取。
 
 ### 预测与模型对比
 
 - 提供参考值、预测场和残差展示，以及误差分布、置换重要性、逐步指标等分析。
 - 单次预测的 `overall` 指标标记为 `mean_over_forecast_steps`（各预测步指标平均）；训练模型测试集指标与多模型比较标记为 `pooled_test_set_pixels`（完整测试集汇总，其中 RMSE/MAE/R² 按像素合并，SSIM 按样本平均）。预测页会同时显示聚合口径和 `split_meta` 的测试集划分来源，避免直接比较不同口径的数值。
-- **地球历史预测与火星预测分开。** 预测页新增独立的「地球历史预测」模式：从已完成的地球训练任务与其 checkpoint 恢复模型，按用户选择的历史预测起点读取此前 7 天输入，返回随后 3 天的预测场、参考场与残差场（DU）及总体/逐日 RMSE、MAE；服务端同时返回可选起点范围（2020-01-08…2021-12-28，共 721 个）、三天真实日期与真实 36×72 经纬网格。起点越界返回 422 `earth_prediction_origin_out_of_range`，数据集指纹变化返回 409 `dataset_version_changed`。Earth 任务在火星推理、`metrics`、比较、PFI、`action=test` 与迁移来源路径上一律 409 `dataset_prediction_not_supported`，不回退到火星数据。首期不开放无参考真值的未来外推、Earth/Mars 混合比较、持久性基线与 Earth 预测持久化缓存。接口与错误码见 [地球训练与历史预测](docs/earth-training.md)。
+- **地球历史预测与火星预测分开。** 预测页新增独立的「地球历史预测」模式：从已完成的地球训练任务与其 checkpoint 恢复模型，按用户选择的历史预测起点读取 `origin-6 … origin` 七天输入，返回随后 3 天的预测场、参考场与残差场（DU）及总体/逐日 RMSE、MAE，并返回 `origin_split` 标记回测属于 train、validation 还是 test；服务端同时返回可选起点范围（2020-01-07…2021-12-28，共 722 个）、三天真实日期与真实 36×72 经纬网格。起点越界返回 422 `earth_prediction_origin_out_of_range`，数据集指纹变化返回 409 `dataset_version_changed`。Earth 任务在火星推理、`metrics`、比较、PFI、`action=test` 与迁移来源路径上一律 409 `dataset_prediction_not_supported`，不回退到火星数据。首期不开放无参考真值的未来外推、Earth/Mars 混合比较、持久性基线与 Earth 预测持久化缓存。接口与错误码见 [地球训练与历史预测](docs/earth-training.md)。
 - 支持选择已训练模型进行预测，也可比较多个训练结果。
+- 火星逻辑数据集 `mcd_overview` 的训练和预测均绑定 `MCD_RAW_3H_DIR` 指向的原始全量 MCD（默认 `data/MCD_Output_global_10m_ls_lst/`，覆盖 MY24–MY35）；`data/mcd_overview/*.nc` 是生成的 overview 产物，不是当前训练预测的默认数据源。`openmars_mcd` 始终使用 OpenMARS + `MCD_DIR`。
+- 新火星 checkpoint 使用 `aresvision_mars_forecast_checkpoint_v1`，保存每个输入通道的完整空间均值/尺度、目标 `target_mean/target_scale`、训练契约和数据文件指纹；预测直接复用这些参数，不重新拟合。旧纯 `state_dict` 任务保留 legacy compatibility，响应标记 `normalization_source=legacy_refit`。
+- Earth 训练窗口严格按发布 manifest 的 train / validation / test 日期块独立生成；不再把完整时间轴窗口按请求比例重新切分，也不接受非默认 Earth split ratio。Earth checkpoint 保存 `split_policy=published_manifest_splits`、每个发布日期范围和实际窗口数；历史预测仍可读取 origin 之前的完整历史输入，不改变训练 split。
 - 单模型选择与多模型对比支持按标签筛选，筛选保留已有选择；对比的“全选当前结果”追加当前可见模型，并显示筛选外的已选数量。
 - 已训练模型的请求步长范围为 `1–30`，且不能超过该模型训练时的输出步长。多模型对比采用所选模型输出步长的最小值作为上限。
 - 预测输入完整基础为 **6 通道**：臭氧、纬向风、经向风、温度、沙尘光学厚度和太阳下行辐射通量；具体通道组合由所选模型的训练配置决定。
 - 提供预测请求协调、用户会话缓存隔离和预测分析持久化缓存。
+
+火星预测不再接受或使用 `mars_year`，服务器在完整合并后的实际 Ls 时间轴上按周期最近邻选择合法滑动窗口；官方模型和上传模型共用同一套定位规则，不按均匀 0–360° 比例估算样本位置。响应中的 `input_ls_values` 和 `ls_values` 都来自实际输入/目标窗口；完整数据的 Ls 回绕顺序原样保留，单个输入加目标窗口可以跨越 MY 边界，不根据请求值或固定 5° 步长推算标签。训练任务按完整时间轴生成窗口，配置的 train / validation / test 比例严格作用于保留窗口数量；为保证不同分区的输入和目标原始时间索引不重叠，分区交界处会丢弃必要的边界窗口。归一化只拟合训练窗口。checkpoint 保存 `split_policy`、各分区原始边界、窗口数量与范围，测试指标和 PFI 复用这些边界。训练或预测数据遇到 masked、NaN、Inf 或填充值会抛出 `MarsDataError`，不会静默替换为 0。预测会校验快照，原始文件变化返回 `dataset_version_changed`（409）。旧任务若缺少严格分区元数据会标记为 legacy 兼容来源。
+
+火星训练和预测使用完整 MY 数据集合，并在合并后的实际时间轴上生成窗口。`openmars_mcd` 的 OpenMARS 文件可能跨年，例如 `openmars_ozo_my27_ls358_my28_ls13.nc`；共享 [mars_data_service.py](AresVision_backend/backend/services/mars_data_service.py) 读取实际 Ls，在年末回绕处拆成 MY27/MY28 两个 segment，以文件名起始 MY 定位年份并校验声明的结束 MY，每段保留全局索引、来源文件和文件内索引。`mcd_overview` 继续使用 `MCD_RAW_3H_DIR` 下原始全量 MCD MY24–MY35，按年度文件名分段，每个文件对应一个 MY。所有边界数据与 Ls 保留，短数据集合可以没有合法窗口；预测允许窗口跨越 segment，并返回窗口起点对应的真实 `mars_year` 与 `block_index`。重复 Ls 仍按文件顺序确定性选择，缺少 `MY##`、OpenMARS 文件名年份与实际回绕矛盾、Ls 长度不匹配或异常倒退时明确拒绝。分段与兼容边界见[数据流程约定](docs/dataset-registry.md#mars-年份分段与窗口)。
 
 ### AI 助手与用户功能
 
@@ -204,6 +211,7 @@ AresVision/
 | 实验中心浏览器验收夹具 | [scripts/audit/experiment-console/](scripts/audit/experiment-console/README.md)（`seed-probe-profile.mjs`、`verify-console.mjs`、`verify-stages.mjs`、`verify-font-hierarchy.mjs`、`verify-interaction-states.mjs`、`verify-inspector-states.mjs`、`verify-directory-empty.mjs`） | 只用既有接口与数据库模型，不是运行时依赖 |
 | 预测模式与训练页跳转 | [predictModelModes.js](frontend/src/pages/PredictPage/predictModelModes.js)、[ModelTrainingPage.jsx](frontend/src/pages/ModelTrainingPage.jsx) | — |
 | 模型架构、训练参数 | [DynamicModelParamsForm.jsx](frontend/src/pages/ModelTrainingPage/DynamicModelParamsForm.jsx) | [model_zoo.py](AresVision_backend/backend/training_backbones/model_zoo.py)、[training_channels.py](AresVision_backend/backend/services/training_channels.py) |
+| Mars 数据身份与检查点 | — | [mars_dataset_identity.py](AresVision_backend/backend/services/mars_dataset_identity.py)（目录、文件清单和指纹的唯一入口）、[mars_data_service.py](AresVision_backend/backend/services/mars_data_service.py)（读取与预测前复核）、[mars_checkpoint.py](AresVision_backend/backend/services/mars_checkpoint.py)（检查点及任务快照契约） |
 | 自定义模型接入 | [UploadedModelPanel.jsx](frontend/src/pages/ModelTrainingPage/UploadedModelPanel.jsx) | [user_models.py](AresVision_backend/backend/routers/user_models.py)、[uploaded_model_contract.py](AresVision_backend/backend/training_backbones/uploaded_model_contract.py)、[uploaded_model_dataset_spec.py](AresVision_backend/backend/training_backbones/uploaded_model_dataset_spec.py)（数据源声明与兼容性原因）、[uploaded_model_earth_gate.py](AresVision_backend/backend/training_backbones/uploaded_model_earth_gate.py)（Earth 兼容性判定）、[uploaded_model_source_check.py](AresVision_backend/backend/training_backbones/uploaded_model_source_check.py)（共享 AST 安全门）、[user_model_validator.py](AresVision_backend/backend/services/user_model_validator.py)、[user_model_runner.py](AresVision_backend/backend/training_backbones/user_model_runner.py) |
 | 预测与模型比较 | [PredictPage.jsx](frontend/src/pages/PredictPage.jsx)、[CompareTrainingModelsPanel.jsx](frontend/src/pages/PredictPage/CompareTrainingModels/CompareTrainingModelsPanel.jsx) | [predict.py](AresVision_backend/backend/routers/predict.py)、[inference_service.py](AresVision_backend/backend/services/inference_service.py) |
 | 预测请求与缓存 | [predictRequestCoordinator.js](frontend/src/pages/PredictPage/predictRequestCoordinator.js)、[predictCache.js](frontend/src/stores/predictCache.js) | [prediction_analysis_cache.py](AresVision_backend/backend/services/prediction_analysis_cache.py)、[prediction_volume_cache.py](AresVision_backend/backend/services/prediction_volume_cache.py)（标准化体积缓存与按需切窗）、[netcdf_read_lock.py](AresVision_backend/backend/services/netcdf_read_lock.py)（NetCDF 读取串行化） |
@@ -244,9 +252,13 @@ flowchart LR
 
 上传 MCD 可驱动总览整页；上传 OpenMARS 与 NOMAD 主要作为三维臭氧图层。NOMAD 网格数据还包含观测计数。详细校验入口为 [overview_upload_contract.py](AresVision_backend/backend/services/overview_upload_contract.py)，不要只凭文件扩展名判断用途。
 
-时间与单位是跨模块约定：MY 表示火星年，Ls 表示太阳黄经，跨年会从接近 360° 回到 0°；处理时要保留年份与样本关系。臭氧换算集中在 [ozone_units.py](AresVision_backend/backend/services/ozone_units.py)，其目标单位为 `um-atm`。修改排序、坐标或单位时，应同时核对球面、时间轴、图表和预测输入。
+时间与单位是跨模块约定：MY 表示火星年，Ls 表示太阳黄经，跨年会从接近 360° 回到 0°；总览与其他分析接口保留年份与样本关系。火星预测使用服务器配置目录下合并后的完整 OpenMARS/MCD 数据集，不按 MY 年份隔离文件，只由 `ls_start` 在完整时间轴中选择最近窗口；多个相同 Ls 时保留当前确定性的最近样本选择。臭氧换算集中在 [ozone_units.py](AresVision_backend/backend/services/ozone_units.py)，其目标单位为 `um-atm`。修改排序、坐标或单位时，应同时核对球面、时间轴、图表和预测输入。
 
 ### 训练与模型产物
+
+Mars 训练任务绑定**首次加载训练数据时**的目录、NetCDF 文件名/大小/`mtime_ns` 清单和指纹。`mcd_overview` 的 `data_directories` 包含原始全量 MCD 目录；`openmars_mcd` 按顺序同时包含 OpenMARS 与 MCD 两个目录，文件清单的 `root` 区分两者。数据加载、检查点、任务快照和预测校验共用 `canonical_dataset_identity()`，`data_dir` 仅为兼容保留的主目录，不能替代完整绑定。训练完成前验证检查点并重建兼容快照；两种数据集都在预测缓存、窗口加载和模型推理前复核，文件修改、增加、删除或目录变化返回 409 `dataset_version_changed`，必须重新训练。完整身份任务标记 `verified`；真正缺少文件身份的旧裸权重/历史任务标记 `legacy`，不声称已经验证数据；有身份但不完整的新 schema 检查点会被拒绝。详见[数据绑定与兼容边界](docs/dataset-registry.md#mars-数据绑定与预测校验)。
+
+Mars 的 `selected_channels`（包括检查点的 `training_contract.selected_channels`）只表示用户选择的辅助输入，例如 `["U", "D"]`；O3 是固定的目标与首个输入通道。官方 `demo3.py` 与上传模型 `user_model_runner.py` 共用 [mars_checkpoint.py](AresVision_backend/backend/services/mars_checkpoint.py)：`normalization.input_channel_order` 为完整顺序 `["O3", *selected_channels]`，与连续体积最后一维及模型输入的通道维一致；`input_mean`、`input_scale`、`constant_channel_mask` 均按该顺序保存且数量相同。加载时严格校验顺序、统计量数量、网格形状、有限值与正的输入 scale；预测复用这些统计量，并用独立的 `target_mean` / `target_scale` 反归一化 O3 输出。预测体积缓存也区分检查点统计量，避免不同任务复用错位结果。旧版带 schema 但缺少 O3 通道名的检查点会被拒绝，需要重新训练或经核实后单独迁移；旧裸 `state_dict` 保留原有归一化重新拟合兼容路径。详见[自定义模型训练协议](docs/uploaded-model-training.md#mars-input-channels-and-checkpoints)。
 
 1. 实验中心底部运行条的「开始实验」（页面控制器 `handleStartTraining`）提交实验名称、`model_source`、上传模型 ID、超参数与服务器数据源；`training_channels.py` 规范化参数。运行条只负责提交与摘要，校验仍在页面控制器里完成。
 2. 官方模型使用统一训练入口 `models/training_scripts/demo3.py`；上传模型使用 `training_backbones/user_model_runner.py`。
@@ -283,9 +295,11 @@ flowchart LR
 
 ### 已训练模型预测与缓存
 
-1. 用户选择任务及预测条件；前端从任务元数据读取输出步长，并协调并发请求。
+Mars 输出的 `lat` / `lon` 使用数据 loader 提供的真实网格坐标，与 `field` 的行/列逐项对应。`mcd_overview` 使用 raw MCD loader 转换后的北到南纬度 `87.5 → -87.5`，经度保留源文件顺序；`openmars_mcd` 保留 OpenMARS 文件坐标及数组顺序（当前文件纬度约 `87.5 → -87.5`）。官方、上传模型与旧权重预测共用坐标校验和输出流程，预测/真值/残差采用相同坐标，不重新猜测轴、不只反转标签。坐标缺失、为空、非有限或长度与空间场不一致时明确报错。前端二维图按这些坐标绘制，放大图表和三维粒子也使用相同网格；后端预测缓存纳入输出坐标策略，旧猜测标签的载荷不再复用。详见[Mars 输出网格契约](docs/dataset-registry.md#mars-预测输出网格)。
+
+1. 用户选择任务及预测条件；前端从任务元数据读取输出步长，并协调并发请求。火星预测请求只携带任务、Ls 起点、步长和变量，不公开 MY 年份选择。
 2. `/api/predict/run` 要求请求携带 `training_task_id`（缺失返回 400）与有效认证，随后交给 `InferenceService.predict_task`。
-3. 推理服务读取任务配置与权重、准备数据、执行推理并返回预测场、参考场、残差及指标。指标响应包含 `aggregation`；测试集评估响应还包含 `split_meta.ratios`、`split_meta.source` 与 `split_meta.legacy_compatibility`，用于解释整体指标的计算口径和历史任务兼容规则。训练页“模型测试”弹窗对应的 `action=test` 响应通过 `metric_meta` 返回同一套口径与划分信息。
+3. 推理服务读取任务配置与权重、准备服务器完整 OpenMARS/MCD 数据、在合并 Ls 轴上按 `ls_start` 取最近窗口、执行推理并返回预测场、参考场、残差及指标。指标响应包含 `aggregation`；测试集评估响应还包含 `split_meta.ratios`、`split_meta.source` 与 `split_meta.legacy_compatibility`，用于解释整体指标的计算口径和历史任务兼容规则。训练页“模型测试”弹窗对应的 `action=test` 响应通过 `metric_meta` 返回同一套口径与划分信息。
 4. 多模型比较通过 `/api/predict/training-models/compare` 等专用接口执行；各面板是否显示由 `predictAnalysisVisibility.js` 决定。
 
 前端内存缓存与后端持久化缓存是两层机制。前者通过用户会话作用域隔离，退出登录或 API 返回 401 时清理；后者结合任务、分析类型、请求参数及产物指纹定位结果。产物指纹包含模型文件、超参数与数据文件信息，缓存实现支持 `prediction`、`metrics`、`error_distribution`、`pfi`。
@@ -294,7 +308,7 @@ NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，
 
 预测路由的兜底分支会通过 `logger.exception` 记录完整堆栈，接口只向客户端返回简要 `detail`；排查 500 时以服务端日志为准，不要只依据响应体。
 
-**单次预测的数据准备已按需求切窗，不再为整条时间轴物化全部滑窗。** 训练用的数据准备函数仍会加载全部 OpenMARS/MCD 文件并拟合标准化参数，预测分析（包括上传模型）复用任务保存的切分比例；标准化体积缓存按「目录身份 + 文件清单 + 文件大小与修改时间 + 通道 + 数据集 + 切分比例 + `window` + `horizon`」隔离，预测路径拿到体积后只切出自己需要的滑窗：
+**单次预测的数据准备已按需求切窗，不再为整条时间轴物化全部滑窗。** 训练用的数据准备函数仍会加载服务器配置目录中的全部 OpenMARS/MCD 文件并拟合标准化参数，预测分析（包括上传模型）复用任务保存的切分比例；标准化体积缓存按「目录身份 + 文件清单 + 文件大小与修改时间 + 完整输入通道顺序 + 数据集 + 切分比例 + `window` + `horizon` + 检查点归一化参数摘要」隔离，旧权重的重新拟合体积单独标记，预测路径拿到完整体积后只切出自己需要的滑窗：
 
 - 上传模型：`InferenceService._prepare_uploaded_task_volume` + `_window_slice` / `_window_stack`
 - 官方模型：`InferenceService._load_official_task_volume` + 同一组切窗方法
@@ -508,6 +522,14 @@ python -m pytest tests
 NetCDF 并发读锁由 `tests/test_netcdf_read_lock_contract.py` 覆盖：断言官方模型、上传模型与 MOLA 地形三处共用同一把进程级锁、两个加载器并发执行时 `Dataset` 打开区间不重叠、锁被占用时上传模型读取会等待，并静态检查每个 `Dataset` 构造点都包在 `netcdf_read_lock()` 内。`tests/test_inference_netcdf_thread_safety.py` 覆盖官方模型数据准备路径的串行化。
 
 预测体积缓存由 `tests/test_prediction_volume_cache.py` 覆盖：断言 `return_scaled_volume` 切窗与逐样本展开路径逐元素一致（bitwise）、测试集分区滑窗与展开切片一致、第二次调用命中缓存返回同一对象、文件变化后缓存签名失效。`tests/test_uploaded_model_ls_inference.py` 的夹具已改为按 `ScaledVolume` 提供数据，继续断言各上传推理路径收到的 Ls 与历史窗口一致。
+
+Mars 检查点通道契约回归见 `tests/test_mars_checkpoint.py`：覆盖无辅助输入、U、U/V 与 U/V/T，实际运行官方及上传模型 runner，校验完整通道顺序、统计量数量与数值，并验证两条预测数据路径应用检查点统计量及缓存隔离。需从 `AresVision_backend/backend/` 用项目规定的 AresVision conda 解释器执行 `-m pytest tests/test_mars_checkpoint.py`，临时目录使用新的纯英文路径。
+
+OpenMARS 年份边界回归见 `tests/test_openmars_year_boundaries.py`，覆盖单文件 Ls 回绕、多文件的全局/文件内 segment 索引、完整输入与目标窗口归属、真实 block 定位、三条预测路径以及 OpenMARS 缓存策略隔离；本地存在跨年原始文件时还会只读取 Ls 与字段形状作轻量检查。需同时运行 `tests/test_mars_ls_window.py` 和 `tests/test_training_dataset_loader.py`，核对周期定位与原始 MCD 加载行为。
+
+Mars 数据身份回归见 `tests/test_mars_dataset_identity.py`：直接断言每种数据集在数据加载、任务快照、检查点与预测复核四个阶段的指纹完全相同，验证双目录绑定、两类 runner 的预测入口在文件变化后返回 409 且不访问缓存/窗口/推理，并区分新格式与 legacy。`tests/test_training_model_artifacts.py` 验证父进程从检查点重建相同快照，并拒绝身份不完整的训练产物。
+
+Mars 坐标回归见 `tests/test_mars_prediction_coordinates.py`：以北高南低的纬度梯度验证两种数据集、官方/上传模型与新/旧权重，逐项检查三类空间场的坐标和值，另覆盖缺失/非法坐标及缓存策略。前端 `frontend/src/pages/PredictPage/marsPredictionGrid.test.js` 验证真实轴的绘图位置、非均匀经度、三维坐标传递和无坐标时不生成替代标签。
 
 数据集注册相关测试为 `tests/test_dataset_identity.py`、`tests/test_dataset_registry.py`、`tests/test_dataset_routes.py`、`tests/test_training_dataset_identity_migration.py` 和 `tests/test_training_dataset_identity.py`；地球总览与分析为 `tests/test_earth_overview_service.py`、`tests/test_earth_overview_routes.py`、`tests/test_earth_research_service.py` 与 `tests/test_earth_research_routes.py`。共用工作台前端测试位于 `frontend/src/pages/DataOverviewPage/workbench/` 与 `frontend/src/pages/DataOverviewPage/EarthOverview/`。`tests/conftest.py` 提供显式引用的临时 Earth 发布 fixture（`earth_release`、`earth_spatial_release`、`earth_global_release`），不读取生产数据；该文件在 Windows 上把 `tempfile` 临时目录的 POSIX 权限位从 `0o700` 放宽到 `0o777`（POSIX 行为不变），否则受限文件策略会拒绝写入 `tmp_path`。这些测试需要新的纯英文临时目录（`--basetemp`），并应避免在同一 pytest 会话中一次性收集全部测试文件：`tests/test_trained_model_predict_contract.py` 通过 `sys.path` 注入模块桩后，同一会话内再收集 `tests/test_uploaded_training_contract.py` 会报 `ImportError: cannot import name ... from 'database.models' (unknown location)`，两者分开运行均通过。
 

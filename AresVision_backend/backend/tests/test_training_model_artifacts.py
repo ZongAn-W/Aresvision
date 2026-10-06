@@ -94,6 +94,8 @@ def _run_successful_training(
     *,
     output_is_directory=False,
     simulate_delayed_progress=False,
+    hyperparameters=None,
+    dataset_id=None,
 ):
     output_path = tmp_path / "weights.pth"
     if output_is_directory:
@@ -111,6 +113,11 @@ def _run_successful_training(
         progress=100.0,
         end_time=None,
         metrics=None,
+        hyperparameters=json.dumps(hyperparameters or {"epochs": 2}),
+        dataset_id=dataset_id,
+        dataset_fingerprint=None,
+        dataset_identity_status="unversioned",
+        dataset_snapshot=None,
     )
     broadcaster = _BroadcastRecorder(delay=0.1 if simulate_delayed_progress else 0)
     process_lines = ["final epoch\n"] if simulate_delayed_progress else None
@@ -144,7 +151,7 @@ def _run_successful_training(
         service._run_training_subprocess(
             task_id=task.id,
             script_name="demo3.py",
-            hyperparameters={"epochs": 2},
+            hyperparameters=hyperparameters or {"epochs": 2},
             log_file=log_file,
             output_path=output_path,
         )
@@ -171,6 +178,92 @@ def test_successful_process_without_weight_fails_task(monkeypatch, tmp_path):
     assert ARTIFACT_ERROR in json.loads(task.metrics)["error"]
     assert ARTIFACT_ERROR in log_file.read_text(encoding="utf-8")
     assert broadcaster.messages[-1][1]["status"] == "failed"
+
+
+@pytest.mark.parametrize("fault", [None, "input_channel_order", "input_scale"])
+def test_mars_checkpoint_normalization_controls_task_completion(monkeypatch, tmp_path, fault):
+    import io
+    import numpy as np
+    import torch
+    from services.mars_checkpoint import build_mars_checkpoint
+
+    from services.mars_dataset_identity import canonical_dataset_identity
+    identity = canonical_dataset_identity(training_dataset="openmars_mcd", openmars_dir=tmp_path / "openmars", mcd_dir=tmp_path)
+
+    payload = build_mars_checkpoint(
+        model_state_dict={"bias": torch.zeros(1)},
+        volume=SimpleNamespace(
+            input_means=(np.zeros((2, 3)),), input_stds=(np.ones((2, 3)),),
+            y_mean=5.0, y_std=2.0, height=2, width=3,
+            dataset_id="openmars_mcd", source_type="openmars_mcd",
+            data_dir=tmp_path, data_directories=tuple(identity["data_directories"]),
+            manifest=tuple(identity["file_manifest"]), fingerprint=identity["dataset_fingerprint"],
+        ),
+        selected_channels=[], window=3, horizon=3,
+        split_ratios={"train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": 0.1}, seed=11,
+    )
+    if fault is not None:
+        payload["normalization"][fault] = []
+    buffer = io.BytesIO()
+    torch.save(payload, buffer)
+    task, log_file, broadcaster = _run_successful_training(monkeypatch, tmp_path, buffer.getvalue())
+    if fault is None:
+        assert task.status == "completed"
+        assert task.progress == 100.0
+    else:
+        assert task.status == "failed"
+        assert "Mars checkpoint" in json.loads(task.metrics)["error"]
+        assert "Mars checkpoint" in log_file.read_text(encoding="utf-8")
+    assert broadcaster.messages[-1][1]["status"] == task.status
+
+
+@pytest.mark.parametrize("dataset_id", ["mcd_overview", "openmars_mcd"])
+@pytest.mark.parametrize("fault", [None, "data_directories", "file_manifest", "file_fingerprint", "schema"])
+def test_mars_artifact_rebuilds_a_verified_compatible_task_snapshot(monkeypatch, tmp_path, dataset_id, fault):
+    import io
+    import numpy as np
+    import torch
+    from services.mars_checkpoint import build_mars_checkpoint
+    from services.mars_data_service import identity_snapshot, assert_identity_current
+    from services.mars_dataset_identity import canonical_dataset_identity
+
+    directories = {name: tmp_path / name for name in ("raw", "openmars", "mcd")}
+    for directory in directories.values():
+        directory.mkdir()
+    kwargs = dict(training_dataset=dataset_id, openmars_dir=directories["openmars"],
+                  mcd_dir=directories["mcd"], raw_dir=directories["raw"])
+    identity = canonical_dataset_identity(**kwargs)
+    volume = SimpleNamespace(
+        input_means=(np.zeros((2, 3)),), input_stds=(np.ones((2, 3)),),
+        y_mean=5.0, y_std=2.0, height=2, width=3, split_idx=9,
+        dataset_id=dataset_id, source_type=identity["source_type"], data_dir=Path(identity["data_dir"]),
+        data_directories=tuple(identity["data_directories"]), manifest=tuple(identity["file_manifest"]),
+        fingerprint=identity["dataset_fingerprint"], blocks=(), sample_starts=np.array([], dtype=np.int64),
+    )
+    ratios = {"train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": 0.1}
+    payload = build_mars_checkpoint(model_state_dict={"bias": torch.zeros(1)}, volume=volume,
+                                    selected_channels=[], window=3, horizon=3, split_ratios=ratios, seed=11)
+    if fault == "schema":
+        payload.pop("schema")
+    elif fault is not None:
+        payload["data_binding"].pop(fault)
+    buffer = io.BytesIO()
+    torch.save(payload, buffer)
+    task, log_file, _ = _run_successful_training(
+        monkeypatch, tmp_path, buffer.getvalue(), dataset_id=dataset_id,
+        hyperparameters={"training_dataset": dataset_id, "window": 3, "horizon": 3, "selected_channels": []},
+    )
+    if fault is None:
+        assert task.status == "completed" and task.dataset_identity_status == "verified"
+        snapshot = json.loads(task.dataset_snapshot)
+        expected = identity_snapshot(**kwargs, selected_channels=[], window=3, horizon=3, split_ratios=ratios, normalization=volume)
+        assert snapshot == expected
+        current = assert_identity_current(snapshot, openmars_dir=directories["openmars"], mcd_dir=directories["mcd"], raw_dir=directories["raw"])
+        assert task.dataset_fingerprint == current["dataset_fingerprint"]
+    else:
+        assert task.status == "failed" and task.dataset_identity_status != "verified"
+        assert "Mars checkpoint" in log_file.read_text(encoding="utf-8")
+        assert task.dataset_snapshot is None
 
 
 def test_successful_process_with_empty_weight_fails_task(monkeypatch, tmp_path):
@@ -387,7 +480,6 @@ def test_inference_rechecks_weight_after_task_list_load(monkeypatch, tmp_path):
         asyncio.run(
             service.predict_task(
                 task_id=task.id,
-                mars_year=27,
                 ls_start=90.0,
                 current_user=SimpleNamespace(id=7, role="user"),
             )

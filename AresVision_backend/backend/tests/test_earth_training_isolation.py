@@ -168,7 +168,7 @@ def test_every_mars_prediction_entry_point_propagates_the_scene_rejection(
     method = getattr(service, method_name)
     with pytest.raises(DatasetRequestError) as error:
         if method_name == "predict_task":
-            asyncio.run(method(task_id=5, mars_year=27, ls_start=90, current_user=FakeUser()))
+            asyncio.run(method(task_id=5, ls_start=90, current_user=FakeUser()))
         else:
             # Comparison entry points require at least two distinct tasks; the
             # rejection must still happen before any of them is computed.

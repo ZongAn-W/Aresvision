@@ -47,8 +47,8 @@
 | 划分 | 日期范围（含首尾） | 天数 | 7→3 窗口数 |
 | --- | --- | --- | --- |
 | train | 2020-01-01…2020-12-31 | 366 | 357 |
-| validation | task-level chronological split | depends on configured ratio |
-| test | task-level chronological split | depends on configured ratio |
+| validation | 2021-01-01…2021-06-30 | 181 | 172 |
+| test | 2021-07-01…2021-12-31 | 184 | 175 |
 
 窗口严格留在所属划分内：样本 `i` 使用输入索引 `[i, i+6]`、目标索引 `[i+7, i+9]`，不向前一划分借 7 天。
 
@@ -89,7 +89,7 @@
 }
 ```
 
-`train_ratio`、`validation_ratio`、`test_ratio` 可在 `hyperparameters` 中独立设置，三者必须合计为 `1.0`；省略时默认为 `0.7 / 0.2 / 0.1`。Earth 使用完整发布窗口按时间顺序切分任务级训练、验证和测试集，checkpoint 会保存比例及实际窗口范围。
+Earth 只使用发布 manifest 固定的 `train` / `validation` / `test` 日期块；页面以只读方式显示 `70% / 20% / 10%` 兼容比例，新的 Earth 请求不发送自定义比例。checkpoint 保存每个日期块和实际窗口范围，比例字段仅保留给旧任务读取。
 
 `model_script` 仅为兼容现有客户端保留；服务端会按数据集选择 `earth_daily.py` 并写入任务，实际执行的脚本与客户端提交值无关。
 
@@ -183,8 +183,8 @@ checkpoint 是单个 `aresvision_earth_forecast_checkpoint_v1` 文件，包含 `
   "input_units": ["DU", "m s-1", "m s-1", "K", "W m-2"],
   "grid": {"shape": [36, 72], "latitude": ["…36 个中心纬度…"], "longitude": ["…72 个中心经度…"]},
   "origins": {
-    "start": "2020-01-08", "end": "2021-12-28", "count": 721,
-    "dates": ["…721 个可选日期…"], "window": 7, "horizon": 3,
+    "start": "2020-01-07", "end": "2021-12-28", "count": 722,
+    "dates": ["…722 个可选日期…"], "window": 7, "horizon": 3,
     "input_offset_days": -6, "target_offset_days": 1
   },
   "training_split_end": "2020-12-31",
@@ -203,7 +203,7 @@ checkpoint 是单个 `aresvision_earth_forecast_checkpoint_v1` 文件，包含 `
 }
 ```
 
-起点合法条件：该日期之前有完整 7 天输入、之后有 3 个已发布参考日。因此可选范围是 **2020-01-08 … 2021-12-28**（731 日轴上索引 7…727），首尾分别为 `2020-01-08` 与 `2021-12-28`。
+起点合法条件：起点当天计入输入窗口，输入索引为 `[origin-6 … origin]`，之后还要有 3 个已发布参考日。因此可选范围是 **2020-01-07 … 2021-12-28**（731 日轴上索引 6…727），共 722 个起点。首日起点 `2020-01-07` 的输入日期是 `2020-01-01 … 2020-01-07`，目标日期是 `2020-01-08 … 2020-01-10`。
 
 ### `POST /api/earth/predict/run`（需认证）
 
@@ -213,7 +213,7 @@ checkpoint 是单个 `aresvision_earth_forecast_checkpoint_v1` 文件，包含 `
 
 响应要点：
 
-- `forecast_origin`、`input_dates`（7 天，`origin-6 … origin`）、`target_dates`（`origin+1 … origin+3`）
+- `forecast_origin`、`origin_split`（`train` / `validation` / `test`）、`input_dates`（7 天，`origin-6 … origin`）、`target_dates`（`origin+1 … origin+3`）
 - `grid`：真实 36×72 中心经纬、范围、步长、`coverage`、`wrap_longitude`
 - `prediction` / `reference` / `residual`：各 3 天，每天 `{field: [36][72], minVal, maxVal, valid_cells}`，单位 DU；`residual = prediction − reference`
 - `metrics`：`unit=DU`、`target=TO3`、`aggregation=user_forecast_origin_lead_grid_uniform`、`reference_available=true`、`overall{rmse,mae}` 与 `by_lead[{lead_day,rmse,mae}]`
@@ -297,3 +297,8 @@ $earthTrainingTemp = Join-Path 'D:\_Aresvision' ('.earth-training-test-' + [guid
 ## 后续阶段
 
 第四步及以后可直接读取 `aresvision_earth_forecast_checkpoint_v1`，用保存的 `model_config` / `input_channel_order` / `normalization` / grid / splits 重建模型。未来比较身份至少包含 `planet`、`dataset_id`、`version`、`fingerprint`、`target`、`horizon`、测试起点集合与指标 aggregation；持久性基线与无参考真值外推须复用同样窗口、目标日期与单位。
+## 发布 split 与窗口边界
+
+Earth 训练以发布 manifest 的日期区间为唯一 split 边界。train、validation 和 test 分别在自己的日期块内独立生成 7 天输入、3 天目标窗口，窗口不会跨越发布边界。完整发布时间轴只用于历史预测读取 origin 之前的输入和 origin 之后的参考值，不用于重新按比例切分训练窗口。
+
+Earth 请求中的 `train_ratio`、`validation_ratio`、`test_ratio` 仅作为历史兼容字段；服务端仍拒绝非默认值并返回 `422 invalid_earth_training_parameters`。新 checkpoint 保存 `split_policy=published_manifest_splits`、每个 split 的 `date_start`、`date_end` 和 `window_count`，预测时会校验这些范围及数据集 fingerprint。旧 checkpoint 没有该元数据时保持兼容读取，但新训练不会产生此类 artifact。

@@ -59,6 +59,7 @@ from training_backbones.uploaded_model_earth_gate import (
 )
 from services.personal_data_source_service import PersonalDataSourceService
 from services.model_artifacts import is_valid_model_weight_file
+from services.mars_checkpoint import validate_mars_checkpoint, mars_checkpoint_identity_snapshot
 from services.training_failures import CUDA_OOM_ERROR_CODE, classify_training_log
 from services.training_channels import (
     ARCHITECTURE_PARAM_KEYS,
@@ -1030,6 +1031,7 @@ class TrainingService:
             # binding and carry the task's own metrics.
             earth_artifact: dict | None = None
             earth_artifact_error: Exception | None = None
+            mars_snapshot: dict | None = None
             if earth_training_spec is not None and model_artifact_valid:
                 try:
                     earth_artifact = await asyncio.to_thread(
@@ -1040,6 +1042,34 @@ class TrainingService:
                         earth_training_spec["task_id"],
                     )
                 except Exception as exc:  # noqa: BLE001 - reported as a task failure
+                    earth_artifact_error = exc
+                    model_artifact_valid = False
+            elif model_artifact_valid and not earth_training_spec:
+                try:
+                    import torch
+                    try:
+                        checkpoint = await asyncio.to_thread(
+                            torch.load, output_path, map_location="cpu", weights_only=True
+                        )
+                    except Exception:
+                        # Pre-versioned Mars artifacts remain readable as legacy
+                        # weights. New runner-produced envelopes are validated
+                        # strictly below; arbitrary legacy bytes keep the older
+                        # file-existence contract for compatibility.
+                        checkpoint = None
+                    task_hypers = self._parse_task_hyperparameters(task)
+                    if isinstance(checkpoint, dict) and ("schema" in checkpoint or isinstance(checkpoint.get("model_state_dict"), dict) or "data_binding" in checkpoint):
+                        validate_mars_checkpoint(
+                            checkpoint,
+                            selected_channels=list(task_hypers.get("selected_channels") or []),
+                            window=int(task_hypers.get("window", 3)),
+                            horizon=int(task_hypers.get("horizon", 3)),
+                        )
+                        mars_snapshot = mars_checkpoint_identity_snapshot(checkpoint)
+                        expected_dataset = getattr(task, "dataset_id", None) or task_hypers.get("training_dataset")
+                        if expected_dataset and mars_snapshot["dataset_id"] != expected_dataset:
+                            raise ValueError("Mars checkpoint data identity does not match the training task")
+                except Exception as exc:  # noqa: BLE001 - artifact contract failure
                     earth_artifact_error = exc
                     model_artifact_valid = False
             status = "completed" if model_artifact_valid else "failed"
@@ -1078,6 +1108,17 @@ class TrainingService:
                             # parent just verified, never from log scraping.
                             task.metrics = json.dumps(earth_artifact.metrics)
                         else:
+                            # New Mars runners publish a checkpoint envelope
+                            # containing the exact source manifest and
+                            # normalization contract. Persist the same snapshot
+                            # on the task so prediction does not trust a new
+                            # request or a mutable environment.
+                            if mars_snapshot is not None:
+                                task.dataset_snapshot = json.dumps(mars_snapshot, sort_keys=True)
+                                task.dataset_fingerprint = mars_snapshot["dataset_fingerprint"]
+                                task.dataset_identity_status = "verified"
+                            else:
+                                task.dataset_identity_status = "legacy"
                             parsed_metrics = self._extract_metrics_from_log(log_file)
                             task.metrics = json.dumps(parsed_metrics) if parsed_metrics else json.dumps({"note": "completed"})
                     elif returncode == 0:

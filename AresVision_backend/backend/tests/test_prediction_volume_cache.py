@@ -92,21 +92,21 @@ def test_scaled_volume_windows_match_expanded_samples(overview_dir: Path):
     assert volume.y_mean == pytest.approx(y_mean, rel=1e-12)
     assert volume.y_std == pytest.approx(y_std, rel=1e-12)
 
-    assert int(x_torch.shape[0]) == total_time - WINDOW - HORIZON + 1
+    assert int(x_torch.shape[0]) == int(volume.sample_starts.size)
 
-    for index in range(int(x_torch.shape[0])):
+    for index, start in enumerate(volume.sample_starts.tolist()):
         x_window = torch.from_numpy(
-            np.ascontiguousarray(volume.values[index:index + WINDOW])
+            np.ascontiguousarray(volume.values[start:start + WINDOW])
         ).permute(0, 3, 1, 2).float()
         assert torch.equal(x_window, x_torch[index])
 
         y_window = torch.from_numpy(
-            np.ascontiguousarray(volume.y_scaled[index + WINDOW:index + WINDOW + HORIZON])
+            np.ascontiguousarray(volume.y_scaled[start + WINDOW:start + WINDOW + HORIZON])
         ).unsqueeze(1).float()
         assert torch.equal(y_window, y_torch[index])
 
         ls_window = torch.from_numpy(
-            np.ascontiguousarray(np.asarray(volume.ls)[index:index + WINDOW])
+            np.ascontiguousarray(np.asarray(volume.ls)[start:start + WINDOW])
         ).reshape(WINDOW, 1).float()
         assert torch.equal(ls_window, ls_torch[index].reshape(WINDOW, 1))
 

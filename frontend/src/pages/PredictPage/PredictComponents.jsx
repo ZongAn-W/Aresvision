@@ -5,6 +5,7 @@ import { useSettings } from '../../contexts/SettingsContext';
 import { buildCanvasFont, normalizeFontScale } from '../../utils/fontScale';
 import { getRgb, rdbuRgb } from '../../utils/colormaps';
 import { ozoneLabel, ozoneDeltaLabel, convertOzone } from '../../utils/units';
+import { marsPredictionGrid } from './marsPredictionGrid';
 
 // fmtVal 用于 Canvas 色阶标签（精度固定 3 位，与精度设置无关，因其在 useEffect 绘图中使用）
 export function fmtVal(v) {
@@ -26,9 +27,13 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240 }) {
   const isLight = theme === 'light';
 
   useEffect(() => {
-    if (!fieldData || !fieldData.field) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const grid = marsPredictionGrid(fieldData);
+    if (!grid) {
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
     
     // 动态计算内部绘图区，确保维持约 2:1 的物理宽高比，防止地图变形
     const CH = canvas.height;  // h (e.g. 220 or 400)
@@ -75,9 +80,6 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240 }) {
     }
     const range = dMax - dMin || 1;
 
-    const cellW = plotW / nLon;
-    const cellH = plotH / nLat;
-
     // 绘制热力图主体（ImageData）
     const imgData = ctx.createImageData(plotW, plotH);
     const pixels = imgData.data;
@@ -85,15 +87,15 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240 }) {
       pixels[k] = 10; pixels[k + 1] = 10; pixels[k + 2] = 15; pixels[k + 3] = 255;
     }
     for (let li = 0; li < nLat; li++) {
-      const pyStart = Math.round((nLat - 1 - li) * cellH);
-      const pyEnd = Math.round((nLat - li) * cellH);
+      const pyStart = Math.round(grid.latCells[li].start * plotH);
+      const pyEnd = Math.round(grid.latCells[li].end * plotH);
       for (let lj = 0; lj < nLon; lj++) {
         const val = field[li][lj];
         if (val == null || isNaN(val)) continue;
         const t = (val - dMin) / range;
         const rgb = colorMode === 'rdbu' ? rdbuRgb(t) : getRgb(colormapName, Math.max(0, Math.min(1, t)));
-        const pxStart = Math.round(lj * cellW);
-        const pxEnd = Math.round((lj + 1) * cellW);
+        const pxStart = Math.round(grid.lonCells[lj].start * plotW);
+        const pxEnd = Math.round(grid.lonCells[lj].end * plotW);
         for (let py = pyStart; py < pyEnd; py++) {
           for (let px = pxStart; px < pxEnd; px++) {
             if (px >= plotW || py >= plotH || px < 0 || py < 0) continue;
@@ -116,10 +118,10 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240 }) {
     ctx.fillStyle = axisTextColor;
     ctx.font = buildCanvasFont(11, { scale: fontScale });
     ctx.textAlign = 'center';
-    [0, 60, 120, 180, 240, 300, 360].forEach(lonV => {
-      const fx = ML + (lonV / 360) * plotW;
+    grid.lonTicks.forEach(({ value: lonV, position }) => {
+      const fx = ML + position * plotW;
       ctx.beginPath(); ctx.moveTo(fx, MT + plotH); ctx.lineTo(fx, MT + plotH + 4); ctx.stroke();
-      ctx.fillText(`${lonV}°`, fx, MT + plotH + 16);
+      ctx.fillText(`${Number(lonV.toFixed(2))}°`, fx, MT + plotH + 16);
     });
     ctx.fillStyle = axisTitleColor;
     ctx.font = buildCanvasFont(11, { weight: 'bold', scale: fontScale });
@@ -129,10 +131,10 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240 }) {
     ctx.textAlign = 'right';
     ctx.fillStyle = axisTextColor;
     ctx.font = buildCanvasFont(11, { scale: fontScale });
-    [-90, -60, -30, 0, 30, 60, 90].forEach(latV => {
-      const fy = MT + ((90 - latV) / 180) * plotH;
+    grid.latTicks.forEach(({ value: latV, position }) => {
+      const fy = MT + position * plotH;
       ctx.beginPath(); ctx.moveTo(ML, fy); ctx.lineTo(ML - 4, fy); ctx.stroke();
-      ctx.fillText(`${latV}°`, ML - 8, fy + 3);
+      ctx.fillText(`${Number(latV.toFixed(2))}°`, ML - 8, fy + 3);
     });
     // Y 轴旋转标签
     ctx.save();

@@ -399,7 +399,6 @@ export async function fetchPermutationImportance(vars = [], options = {}) {
   const varsStr = vars.length > 0 ? vars.join(',') : 'Temperature,Dust_Optical_Depth,Solar_Flux_DN,U_Wind,V_Wind';
   const params = new URLSearchParams({ vars: varsStr });
   if (options.trainingTaskId) params.set('training_task_id', String(options.trainingTaskId));
-  if (options.marsYear != null) params.set('mars_year', String(options.marsYear));
   if (options.lsStart != null) params.set('ls_start', String(options.lsStart));
   if (options.horizon != null) params.set('horizon', String(options.horizon));
   const res = await authedFetch(`${BASE}/predict/permutation-importance?${params.toString()}`, {

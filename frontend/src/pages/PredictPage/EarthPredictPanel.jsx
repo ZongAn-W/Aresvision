@@ -204,6 +204,7 @@ export default function EarthPredictPanel({
 
           <p className="earth-predict-origin-line" data-earth-origin-line="true">
             {copy.originLine(result.forecast_origin, (result.input_dates || [])[0], (result.input_dates || []).slice(-1)[0])}
+            {result.origin_split ? ` · ${copy.originSplit(result.origin_split)}` : ''}
           </p>
 
           <div className="earth-predict-fields" data-earth-fields="true">

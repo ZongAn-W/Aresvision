@@ -160,7 +160,7 @@ def _request(service=None):
 
 
 def test_predict_run_rejects_a_request_without_task_id():
-    body = PredictRequest(selected_variables=["U_Wind"], horizon=3, ls_start=90, mars_year=27)
+    body = PredictRequest(selected_variables=["U_Wind"], horizon=3, ls_start=90)
 
     with pytest.raises(predict.HTTPException) as exc:
         asyncio.run(
@@ -175,9 +175,15 @@ def test_predict_run_rejects_a_request_without_task_id():
     assert "training_task_id" in exc.value.detail
 
 
+def test_predict_request_has_no_public_mars_year_field():
+    body = PredictRequest.model_validate({"training_task_id": 42, "ls_start": 90, "mars_year": 27})
+    assert "mars_year" not in body.model_fields
+    assert "mars_year" not in body.model_dump()
+
+
 def test_predict_run_uses_training_task_inference_when_task_id_is_present():
     service = FakeTrainingInferenceService()
-    body = PredictRequest(training_task_id=42, selected_variables=["U_Wind"], horizon=3, ls_start=90, mars_year=27)
+    body = PredictRequest(training_task_id=42, selected_variables=["U_Wind"], horizon=3, ls_start=90)
 
     payload = asyncio.run(
         predict.run_prediction(
@@ -190,11 +196,14 @@ def test_predict_run_uses_training_task_inference_when_task_id_is_present():
     assert payload["metrics"]["overall"]["rmse"] == 1.0
     assert service.prediction_calls[0]["task_id"] == 42
     assert service.prediction_calls[0]["current_user"] is AUTHENTICATED_USER
+    assert "mars_year" not in service.prediction_calls[0]
+    assert "mars_year" not in payload["model_info"]
+    assert "mars_year" not in payload["source_meta"]
 
 
 async def test_predict_metrics_uses_training_task_test_set_metrics_when_task_id_is_present():
     service = FakeTrainingInferenceService()
-    body = PredictRequest(training_task_id=42, selected_variables=["U_Wind"], horizon=3, ls_start=90, mars_year=27)
+    body = PredictRequest(training_task_id=42, selected_variables=["U_Wind"], horizon=3, ls_start=90)
 
     payload = await predict.get_eval_metrics(
         _request(service), body, current_user=AUTHENTICATED_USER
@@ -203,10 +212,12 @@ async def test_predict_metrics_uses_training_task_test_set_metrics_when_task_id_
     assert payload["overall"]["rmse"] == 3.47
     assert service.test_set_metric_calls[0]["task_id"] == 42
     assert service.metric_calls == []
+    assert "mars_year" not in service.test_set_metric_calls[0]
+    assert "mars_year" not in payload["source_meta"]
 
 
 async def test_trained_model_request_fails_when_training_inference_service_is_missing():
-    body = PredictRequest(training_task_id=42, ls_start=90, mars_year=27)
+    body = PredictRequest(training_task_id=42, ls_start=90)
     try:
         await predict.run_prediction(
             _request(), body, current_user=AUTHENTICATED_USER
@@ -223,7 +234,7 @@ def test_trained_model_request_returns_model_file_detail_when_weight_disappears(
         async def predict_task(self, **kwargs):
             raise ValueError("Model file not found")
 
-    body = PredictRequest(training_task_id=42, ls_start=90, mars_year=27)
+    body = PredictRequest(training_task_id=42, ls_start=90)
 
     try:
         asyncio.run(
@@ -250,7 +261,6 @@ def test_predict_metrics_wraps_unexpected_training_errors():
         selected_variables=["U_Wind"],
         horizon=1,
         ls_start=90,
-        mars_year=27,
     )
 
     try:
@@ -275,7 +285,6 @@ async def test_permutation_importance_uses_training_task_service_when_task_id_is
         _request(service),
         vars="Temperature",
         training_task_id=42,
-        mars_year=27,
         ls_start=90,
         horizon=3,
         current_user=AUTHENTICATED_USER,
@@ -284,6 +293,7 @@ async def test_permutation_importance_uses_training_task_service_when_task_id_is
     assert payload["items"][0]["name"] == "Ozone"
     assert service.pfi_calls[0]["task_id"] == 42
     assert service.pfi_calls[0]["selected_variables"] == ["Temperature"]
+    assert "mars_year" not in service.pfi_calls[0]
 
 
 async def test_error_distribution_uses_training_task_test_set_when_task_id_is_present():
@@ -320,7 +330,7 @@ async def test_training_model_compare_uses_batch_test_set_metrics_service():
 
 async def test_trained_model_analysis_requires_authenticated_user_before_service_call():
     service = FakeTrainingInferenceService()
-    body = PredictRequest(training_task_id=42, horizon=3, ls_start=90, mars_year=27)
+    body = PredictRequest(training_task_id=42, horizon=3, ls_start=90)
     compare_body = predict.TrainingModelCompareRequest(task_ids=[12, 18], horizon=3)
     requests = (
         lambda: predict.run_prediction(_request(service), body, current_user=None),

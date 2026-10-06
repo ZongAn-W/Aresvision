@@ -33,7 +33,6 @@ test('identity scope changes reset every sensitive result before restoring the n
   assert.match(pageSource, /setCompareTrainingPfiData\(null\)/);
   assert.match(pageSource, /setError\(null\)/);
   assert.match(pageSource, /setLoading\(false\)/);
-  assert.match(pageSource, /setIsSwitchingSource\(false\)/);
   assert.match(pageSource, /setFullscreen3D\(null\)/);
   assert.match(pageSource, /getPredictCache\(predictScope\)/);
 });

@@ -32,6 +32,7 @@ function buildEarthResponse(overrides = {}) {
     target: 'TO3',
     target_unit: 'DU',
     forecast_origin: '2021-07-08',
+    origin_split: 'test',
     input_dates: ['2021-07-02', '2021-07-03', '2021-07-04', '2021-07-05', '2021-07-06', '2021-07-07', '2021-07-08'],
     target_dates: ['2021-07-09', '2021-07-10', '2021-07-11'],
     window: 7,
@@ -153,20 +154,20 @@ test('metrics read only finite values', () => {
 
 test('origin selection follows the server provided range', () => {
   const origins = {
-    start: '2020-01-08',
+    start: '2020-01-07',
     end: '2021-12-28',
-    count: 721,
-    dates: ['2020-01-08', '2020-01-09', '2021-12-28'],
+    count: 722,
+    dates: ['2020-01-07', '2020-01-08', '2020-01-09', '2021-12-28'],
   };
   assert.equal(isOriginSelectable(origins, '2020-01-09'), true);
-  assert.equal(isOriginSelectable(origins, '2020-01-07'), false);
+  assert.equal(isOriginSelectable(origins, '2020-01-06'), false);
   assert.equal(isOriginSelectable(origins, ''), false);
   // 没有显式日期列表时退化为闭区间判断。
-  assert.equal(isOriginSelectable({ start: '2020-01-08', end: '2021-12-28' }, '2020-06-01'), true);
-  assert.equal(isOriginSelectable({ start: '2020-01-08', end: '2021-12-28' }, '2022-01-01'), false);
+  assert.equal(isOriginSelectable({ start: '2020-01-07', end: '2021-12-28' }, '2020-06-01'), true);
+  assert.equal(isOriginSelectable({ start: '2020-01-07', end: '2021-12-28' }, '2022-01-01'), false);
 
   assert.equal(pickDefaultOrigin(origins, '2020-06-01'), '2020-01-09');
-  assert.equal(pickDefaultOrigin(origins, '2019-01-01'), '2020-01-08');
+  assert.equal(pickDefaultOrigin(origins, '2019-01-01'), '2020-01-07');
   assert.equal(pickDefaultOrigin(origins), '2021-12-28');
   assert.equal(pickDefaultOrigin({ end: '2021-12-28' }), '2021-12-28');
 });

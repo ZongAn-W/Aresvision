@@ -377,12 +377,12 @@ def test_available_origin_range_needs_input_and_reference_days(earth_global_rele
     registry = _registry(earth_global_release)
     release = registry.get_earth_snapshot("earth_merra2_daily_v2")
     origins = available_origin_range(release)
-    # 731 days, 7 in and 3 out: the first legal origin is day 8 and the last is
-    # day 728 (offset by window and horizon).
-    assert origins["start"] == "2020-01-08"
+    # 731 days, origin included in the seven-day input and 3 days out: the
+    # first legal origin is day 7 and the last is day 728.
+    assert origins["start"] == "2020-01-07"
     assert origins["end"] == "2021-12-28"
-    assert origins["count"] == 721
-    assert origins["dates"][0] == "2020-01-08"
+    assert origins["count"] == 722
+    assert origins["dates"][0] == "2020-01-07"
     assert origins["dates"][-1] == "2021-12-28"
     assert origins["window"] == 7 and origins["horizon"] == 3
     assert origins["input_offset_days"] == -6
@@ -393,7 +393,7 @@ def test_forecast_dates_are_the_three_following_days(earth_global_release):
     registry = _registry(earth_global_release)
     release = registry.get_earth_snapshot("earth_merra2_daily_v2")
     assert forecast_dates(release, "2021-07-08") == ["2021-07-09", "2021-07-10", "2021-07-11"]
-    assert forecast_dates(release, "2020-01-08") == ["2020-01-09", "2020-01-10", "2020-01-11"]
+    assert forecast_dates(release, "2020-01-07") == ["2020-01-08", "2020-01-09", "2020-01-10"]
 
 
 @pytest.mark.parametrize("origin", ["2020-01-01", "2020-01-06", "2021-12-29", "2021-12-31", "2019-05-05"])
@@ -413,11 +413,11 @@ def test_the_first_and_last_legal_origins_are_accepted(earth_global_release):
     registry = _registry(earth_global_release)
     release = registry.get_earth_snapshot("earth_merra2_daily_v2")
     origins = available_origin_range(release)
-    assert forecast_dates(release, origins["start"]) == ["2020-01-09", "2020-01-10", "2020-01-11"]
+    assert forecast_dates(release, origins["start"]) == ["2020-01-08", "2020-01-09", "2020-01-10"]
     assert forecast_dates(release, origins["end"]) == ["2021-12-29", "2021-12-30", "2021-12-31"]
     # One day earlier there are only 5 input days before the origin, so the very
     # first selectable date is exactly the published start of the range.
-    assert origins["dates"][0] == "2020-01-08"
+    assert origins["dates"][0] == "2020-01-07"
     with pytest.raises(EarthArtifactError):
         forecast_dates(release, "2020-01-05")
 

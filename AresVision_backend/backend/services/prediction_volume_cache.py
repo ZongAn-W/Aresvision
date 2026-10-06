@@ -12,7 +12,7 @@ OpenMARS 时刻并拟合标准化参数。原始插值体积与 ``window`` / ``h
 - 调用方拿到体积后只切出自己需要的滑窗，因此不需要为缓存付出大内存代价；
 - 键包含目录身份、文件清单、通道、切分比例、``window`` / ``horizon`` 与
   ``(路径, 大小, 修改时间)``，文件被替换即自动失效，
-  不会返回过期数值。
+不会返回过期数值。体积同时携带每个 MY 块的合法样本起点，切窗不会跨年度边界。
 
 LRU 上限按条目数控制；单条体积规模取决于数据集，条目数上限取小值以避免内存堆积。
 """
@@ -24,6 +24,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from services.mars_checkpoint import MCD_WINDOW_POLICY, OPENMARS_WINDOW_POLICY
 
 # 体积规模为数百 MB 级时，少量条目即可覆盖多任务复用；超出按 LRU 淘汰。
 MAX_CACHED_VOLUMES = 4
@@ -45,6 +46,21 @@ class ScaledVolume:
     latitude: Any  # np.ndarray 或 None
     longitude: Any  # np.ndarray 或 None
     split_idx: int
+    input_means: tuple[float, ...] = ()
+    input_stds: tuple[float, ...] = ()
+    dataset_id: str = "openmars_mcd"
+    source_type: str = "openmars_mcd"
+    data_dir: Path | None = None
+    manifest: tuple[dict[str, Any], ...] = ()
+    dataset_fingerprint: str | None = None
+    sample_starts: Any = None
+    sample_mars_years: tuple[int, ...] = ()
+    blocks: tuple[Any, ...] = ()
+    train_sample_end: int = 0
+    data_directories: tuple[Path, ...] = ()
+    split_ranges: dict[str, dict[str, Any]] | None = None
+    split_window_starts: dict[str, tuple[int, ...]] | None = None
+    split_policy: str = "legacy_compatibility"
 
 
 _cache: "OrderedDict[tuple, ScaledVolume]" = OrderedDict()
@@ -78,7 +94,7 @@ def volume_signature(
     horizon: int | None = None,
 ) -> tuple:
     """构造缓存签名；任何影响体积数值的输入都必须进入签名。"""
-    return (
+    signature = (
         cache_prefix,
         str(Path(openmars_dir).resolve()),
         str(Path(mcd_dir).resolve()),
@@ -92,6 +108,11 @@ def volume_signature(
         tuple(_list_directory_files(Path(mcd_dir))),
         tuple(_list_directory_files(Path(mcd_overview_dir))) if mcd_overview_dir else (),
     )
+    if training_dataset == "openmars_mcd":
+        return signature + (OPENMARS_WINDOW_POLICY,)
+    if training_dataset == "mcd_overview":
+        return signature + (MCD_WINDOW_POLICY,)
+    return signature
 
 
 def get_scaled_volume(signature: tuple) -> ScaledVolume | None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.machinery
 import importlib.machinery
 import importlib.util
 import json
@@ -29,6 +31,15 @@ from services.ozone_units import normalize_ozone_column_units
 from services.netcdf_read_lock import netcdf_read_lock
 from services.transfer_learning_strategy import apply_freeze_strategy
 from services.training_split import split_sample_ranges, split_time_boundary
+from services.mars_checkpoint import build_mars_checkpoint
+from services.mars_data_service import (
+    CHANNEL_ORDER as SHARED_CHANNEL_ORDER,
+    MCD_VARS_MAP as SHARED_MCD_VARS_MAP,
+    MarsDataError,
+    parse_channels as shared_parse_channels,
+    prepare_scaled_volume,
+    identity_snapshot,
+)
 from training_backbones.uploaded_model_contract import (
     attach_uploaded_model_contract,
     expand_topography_batch,
@@ -79,6 +90,22 @@ def parse_json_arg(value: Any) -> dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _ensure_optional_module_specs() -> None:
+    """Keep torch optimizer imports compatible with lightweight test stubs."""
+    scipy_module = sys.modules.get("scipy")
+    if scipy_module is not None and not hasattr(scipy_module, "sparse"):
+        sys.modules.pop("scipy.interpolate", None)
+        sys.modules.pop("scipy", None)
+        importlib.import_module("scipy")
+    for name in ("sklearn", "sklearn.metrics", "sklearn.preprocessing", "scipy", "scipy.interpolate"):
+        module = sys.modules.get(name)
+        if module is not None and getattr(module, "__spec__", None) is None:
+            module.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+
+
+_ensure_optional_module_specs()
 
 
 def parse_bool(value: Any) -> bool:
@@ -193,6 +220,8 @@ def apply_transfer_learning(model: nn.Module, args: Any, device: torch.device) -
     if not weight_path:
         raise ValueError("Transfer learning is enabled but ARESVISION_TRANSFER_WEIGHT_PATH is missing")
     state_dict = torch.load(weight_path, map_location=device, weights_only=True)
+    if isinstance(state_dict, dict) and isinstance(state_dict.get("model_state_dict"), dict):
+        state_dict = state_dict["model_state_dict"]
     model.load_state_dict(state_dict, strict=True)
     freeze_report = apply_freeze_strategy(model, getattr(args, "freeze_mode", "none"))
     print(
@@ -227,16 +256,19 @@ def unwrap_ls(ls_in: Any) -> np.ndarray:
 
 def _clean_array(value: Any) -> np.ndarray:
     array = np.asanyarray(value)
-    if np.ma.isMaskedArray(array):
-        array = array.filled(np.nan)
-    return np.nan_to_num(np.asarray(array, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    if np.ma.isMaskedArray(array) and np.any(np.ma.getmaskarray(array)):
+        raise MarsDataError("Mars data contains masked or missing values; training and prediction require complete finite fields")
+    try:
+        result = np.asarray(array, dtype=np.float32)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise MarsDataError("Mars data contains non-numeric values") from exc
+    if not np.all(np.isfinite(result)):
+        raise MarsDataError("Mars data contains NaN or Inf values; training and prediction require finite fields")
+    return result
 
 
 def _ls_array(value: Any) -> np.ndarray:
-    array = np.asanyarray(value)
-    if np.ma.isMaskedArray(array):
-        array = array.filled(np.nan)
-    return np.asarray(array, dtype=np.float32).reshape(-1)
+    return _clean_array(value).reshape(-1)
 
 
 def _read_ls_variable(
@@ -821,6 +853,8 @@ def prepare_tensors(
     train_ratio: float = 0.7,
     validation_ratio: float = 0.2,
     test_ratio: float = 0.1,
+    normalization: dict[str, Any] | None = None,
+    return_volume_metadata: bool = False,
 ):
     """加载并标准化数据。
 
@@ -828,6 +862,8 @@ def prepare_tensors(
     时改为返回 :class:`~services.prediction_volume_cache.ScaledVolume`：包含标准化后的
     连续体积与统计量，由调用方按需切出单个窗口。数值内容与默认模式一致，只是不再
     物化 ``sample_count`` 份滑窗。
+    训练入口在同时返回 Ls 与坐标时，可用 ``return_volume_metadata=True`` 追加
+    首次加载的 volume 元数据；默认的历史元组长度保持不变。
     """
     selected = parse_selected_channels(selected_channels)
     dataset = normalize_training_dataset(training_dataset)
@@ -841,105 +877,43 @@ def prepare_tensors(
         else bool(require_coordinates)
     )
 
-    if dataset == TRAINING_DATASET_MCD_OVERVIEW:
-        overview_dir = Path(mcd_overview_dir or (BACKEND_DIR / "data" / "mcd_overview"))
-        (
-            y_raw,
-            ls_raw,
-            vars_dict,
-            target_latitude,
-            target_longitude,
-        ) = _load_mcd_full_training_dataset(
-            overview_dir,
-            selected,
+    try:
+        volume = prepare_scaled_volume(
+            training_dataset=dataset,
+            openmars_dir=openmars_dir,
+            mcd_dir=mcd_dir,
+            raw_dir=mcd_overview_dir or MCD_RAW_3H_DIR,
+            selected_channels=selected,
+            window=window,
+            horizon=horizon,
+            split_ratios={
+                "train_ratio": float(train_ratio),
+                "validation_ratio": float(validation_ratio),
+                "test_ratio": float(test_ratio),
+            },
             require_ls=False,
-            require_coordinates=coordinates_required,
+            normalization=normalization,
         )
-    else:
-        (
-            y_raw,
-            om_ls_raw,
-            target_latitude,
-            target_longitude,
-        ) = _load_openmars(
-            Path(openmars_dir),
-            require_ls=bool(selected),
-            require_coordinates=coordinates_required,
-        )
-        ls_raw = om_ls_raw
-        target_shape = (int(y_raw.shape[1]), int(y_raw.shape[2]))
-        vars_dict = _load_mcd_features(
-            Path(mcd_dir),
-            selected,
-            om_ls_raw,
-            target_latitude,
-            target_longitude,
-            target_shape,
-            require_coordinates=coordinates_required,
-        )
-    feature_names = [MCD_VARS_MAP[channel][1] for channel in selected]
-    features = [y_raw] + [vars_dict[name] for name in feature_names]
-
-    min_time = min(int(feature.shape[0]) for feature in features)
-    if ls_raw is not None:
-        min_time = min(min_time, int(ls_raw.shape[0]))
-    target_shape = (int(y_raw.shape[1]), int(y_raw.shape[2]))
-    if target_latitude is not None and target_longitude is not None:
-        coordinate_shape = (len(target_latitude), len(target_longitude))
-        if coordinate_shape != target_shape:
-            raise ValueError(
-                "Loaded target spatial shape does not match target coordinates: "
-                f"field {target_shape}, coordinates {coordinate_shape}"
-            )
-    mismatched_shapes = [
-        tuple(feature.shape[1:])
-        for feature in features
-        if tuple(feature.shape[1:]) != target_shape
-    ]
-    if mismatched_shapes:
+    except MarsDataError:
+        raise
+    x_scaled = volume.values
+    y_scaled = volume.y_scaled
+    ls_raw = volume.ls
+    y_mean, y_std = volume.y_mean, volume.y_std
+    height, width = volume.height, volume.width
+    sample_starts = np.asarray(volume.sample_starts, dtype=np.int64)
+    sample_count = int(sample_starts.size)
+    target_latitude, target_longitude = volume.latitude, volume.longitude
+    target_shape = (height, width)
+    if coordinates_required and (target_latitude is None or target_longitude is None):
+        source = Path(mcd_overview_dir or openmars_dir)
+        first_file = next(iter(sorted(source.glob("*.nc"))), source)
+        raise ValueError(f"Dataset spatial coordinates latitude/longitude are required in {first_file.name}")
+    if target_latitude is not None and target_longitude is not None and (len(target_latitude), len(target_longitude)) != target_shape:
         raise ValueError(
-            "Loaded feature spatial shape does not match target coordinates: "
-            f"target {target_shape}, feature shapes {mismatched_shapes}"
+            "Loaded target spatial shape does not match target coordinates: "
+            f"field {target_shape}, coordinates ({len(target_latitude)}, {len(target_longitude)})"
         )
-    if min_time <= 0 or target_shape[0] <= 0 or target_shape[1] <= 0:
-        raise ValueError("Loaded data has invalid dimensions")
-
-    features = [
-        _clean_array(feature[:min_time])
-        for feature in features
-    ]
-    y_raw = features[0]
-    x_raw = np.stack(features, axis=-1)
-    total_time, height, width, channel_count = x_raw.shape
-    sample_count = total_time - window - horizon + 1
-    if sample_count <= 0:
-        raise ValueError(
-            "Not enough time steps for requested window and horizon: "
-            f"time={total_time}, window={window}, horizon={horizon}"
-        )
-
-    split_boundaries = split_time_boundary(
-        sample_count,
-        window,
-        {
-            "train_ratio": float(train_ratio),
-            "validation_ratio": float(validation_ratio),
-            "test_ratio": float(test_ratio),
-        },
-    )
-    split_idx = max(1, min(total_time, split_boundaries["train_end"]))
-    x_scaled = np.zeros_like(x_raw, dtype=np.float32)
-    for channel_idx in range(channel_count):
-        scaler = StandardScaler()
-        scaler.fit(x_raw[:split_idx, ..., channel_idx].reshape(split_idx, -1))
-        x_scaled[..., channel_idx] = scaler.transform(
-            x_raw[..., channel_idx].reshape(total_time, -1)
-        ).reshape(total_time, height, width)
-
-    y_train_part = y_raw[:split_idx]
-    y_mean = float(y_train_part.mean())
-    y_std = float(y_train_part.std())
-    y_scaled = (y_raw - y_mean) / (y_std + 1e-6)
 
     if return_scaled_volume:
         # 预测路径只需要一个滑窗：返回连续体积，由调用方切出所需窗口，
@@ -956,13 +930,28 @@ def prepare_tensors(
             width=width,
             latitude=None if target_latitude is None else target_latitude.astype(np.float32),
             longitude=None if target_longitude is None else target_longitude.astype(np.float32),
-            split_idx=split_idx,
+            split_idx=volume.split_idx,
+            input_means=volume.input_means,
+            input_stds=volume.input_stds,
+            dataset_id=volume.dataset_id,
+            source_type=volume.source_type,
+            data_dir=volume.data_dir,
+            manifest=volume.manifest,
+            dataset_fingerprint=volume.fingerprint,
+            sample_starts=volume.sample_starts,
+            sample_mars_years=volume.sample_mars_years,
+            blocks=volume.blocks,
+            train_sample_end=volume.train_sample_end,
+            data_directories=volume.data_directories,
+            split_ranges=volume.split_ranges,
+            split_window_starts=volume.split_window_starts,
+            split_policy=volume.split_policy,
         )
 
     x_seq: list[np.ndarray] = []
     y_seq: list[np.ndarray] = []
     ls_seq: list[np.ndarray] = []
-    for idx in range(sample_count):
+    for idx in sample_starts.tolist():
         x_seq.append(x_scaled[idx : idx + window])
         y_seq.append(y_scaled[idx + window : idx + window + horizon])
         if ls_raw is not None:
@@ -973,7 +962,7 @@ def prepare_tensors(
     if return_ls:
         ls_torch = torch.tensor(np.array(ls_seq), dtype=torch.float32) if ls_raw is not None else None
         if return_coordinates:
-            return (
+            result = (
                 x_torch,
                 y_torch,
                 ls_torch,
@@ -984,6 +973,7 @@ def prepare_tensors(
                 None if target_latitude is None else target_latitude.astype(np.float32),
                 None if target_longitude is None else target_longitude.astype(np.float32),
             )
+            return (*result, volume) if return_volume_metadata else result
         return x_torch, y_torch, ls_torch, y_mean, y_std, height, width
     if return_coordinates:
         return (
@@ -1133,17 +1123,7 @@ def main() -> None:
             ),
         )
     )
-    (
-        x_torch,
-        y_torch,
-        ls_torch,
-        y_mean,
-        y_std,
-        height,
-        width,
-        target_latitude,
-        target_longitude,
-    ) = prepare_tensors(
+    tensor_result = prepare_tensors(
         openmars_dir,
         mcd_dir,
         selected_channels,
@@ -1154,10 +1134,16 @@ def main() -> None:
         return_ls=True,
         return_coordinates=True,
         require_coordinates=False,
-        train_ratio=args.train_ratio,
-        validation_ratio=args.validation_ratio,
-        test_ratio=args.test_ratio,
+        return_volume_metadata=True,
+        train_ratio=getattr(args, "train_ratio", 0.7),
+        validation_ratio=getattr(args, "validation_ratio", 0.2),
+        test_ratio=getattr(args, "test_ratio", 0.1),
     )
+    (x_torch, y_torch, ls_torch, y_mean, y_std, height, width,
+     target_latitude, target_longitude) = tensor_result[:9]
+    # Retain initial training statistics and identity instead of loading data again.
+    # Historical adapters can still return the original nine-element tuple.
+    metadata_result = tensor_result[9] if len(tensor_result) > 9 else None
 
     param_schema = parse_json_arg(args.uploaded_model_param_schema)
     custom_params = parse_json_arg(args.custom_model_params)
@@ -1199,8 +1185,22 @@ def main() -> None:
         "validation_ratio": args.validation_ratio,
         "test_ratio": args.test_ratio,
     }
+    split_window_starts = getattr(metadata_result, "split_window_starts", None)
+    split_indices = None
+    if split_window_starts:
+        positions = {
+            int(start): index
+            for index, start in enumerate(np.asarray(metadata_result.sample_starts, dtype=np.int64).tolist())
+        }
+        split_indices = {
+            name: [positions[int(start)] for start in starts if int(start) in positions]
+            for name, starts in split_window_starts.items()
+        }
+    has_explicit_splits = split_indices is not None and all(
+        name in split_indices for name in ("train", "validation", "test")
+    )
     try:
-        ranges = split_sample_ranges(len(x_torch), split_ratios)
+        ranges = split_sample_ranges(len(x_torch), split_ratios) if not has_explicit_splits else None
     except ValueError:
         # Tiny legacy fixtures cannot provide three non-empty partitions; retain
         # the historical two-way behavior for those inputs only.
@@ -1212,18 +1212,33 @@ def main() -> None:
         if model_ls is None:
             return TensorDataset(x_torch[start:end], y_torch[start:end])
         return TensorDataset(x_torch[start:end], model_ls[start:end], y_torch[start:end])
-    if ranges is not None:
+    if has_explicit_splits:
+        def make_indexed_dataset(indices):
+            index_tensor = torch.tensor(indices, dtype=torch.long)
+            if model_ls is None:
+                return TensorDataset(x_torch.index_select(0, index_tensor), y_torch.index_select(0, index_tensor))
+            return TensorDataset(
+                x_torch.index_select(0, index_tensor),
+                model_ls.index_select(0, index_tensor),
+                y_torch.index_select(0, index_tensor),
+            )
+        train_dataset = make_indexed_dataset(split_indices["train"])
+        validation_dataset = make_indexed_dataset(split_indices["validation"])
+        test_dataset = make_indexed_dataset(split_indices["test"])
+    elif ranges is not None:
         train_dataset = make_dataset(ranges["train"])
         validation_dataset = make_dataset(ranges["validation"])
         test_dataset = make_dataset(ranges["test"])
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=False)
+    has_validation = len(validation_dataset) > 0
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     apply_transfer_learning(model, args, device)
     criterion = nn.SmoothL1Loss()
     trainable_params = [param for param in model.parameters() if param.requires_grad]
     optimizer_lr = args.finetune_learning_rate if args.finetune_learning_rate and args.finetune_learning_rate > 0 else args.learning_rate
+    _ensure_optional_module_specs()
     optimizer = torch.optim.Adam(trainable_params, lr=float(optimizer_lr)) if trainable_params else None
 
     print(f"Training Device: {device}", flush=True)
@@ -1239,6 +1254,7 @@ def main() -> None:
     for epoch in range(1, epochs + 1):
         model.train()
         loss_sum = 0.0
+        loss_count = 0
         for batch_idx, batch in enumerate(train_loader, start=1):
             if optimizer is not None:
                 optimizer.zero_grad()
@@ -1253,7 +1269,8 @@ def main() -> None:
             if optimizer is not None:
                 loss.backward()
                 optimizer.step()
-            loss_sum += float(loss.item())
+            loss_sum += float(loss.item()) * int(pred.numel())
+            loss_count += int(pred.numel())
             if batch_idx % 20 == 0 or batch_idx == len(train_loader):
                 print(
                     f"Epoch {epoch}/{epochs} Batch {batch_idx}/{len(train_loader)} "
@@ -1263,6 +1280,7 @@ def main() -> None:
 
         model.eval()
         val_loss_sum = 0.0
+        val_loss_count = 0
         with torch.no_grad():
             for batch_idx, batch in enumerate(validation_loader, start=1):
                 pred, target = _forward_uploaded_batch(
@@ -1272,12 +1290,14 @@ def main() -> None:
                     f"validation epoch {epoch} batch {batch_idx}",
                     topography_grid=model_topography,
                 )
-                val_loss_sum += float(criterion(pred, target).item())
-        train_loss = loss_sum / max(1, len(train_loader))
-        val_loss = val_loss_sum / max(1, len(validation_loader))
+                val_loss = criterion(pred, target)
+                val_loss_sum += float(val_loss.item()) * int(pred.numel())
+                val_loss_count += int(pred.numel())
+        train_loss = loss_sum / max(1, loss_count)
+        val_loss = val_loss_sum / max(1, val_loss_count)
         print(f"Epoch {epoch}/{epochs} Loss={train_loss:.4f} Val Loss={val_loss:.4f}", flush=True)
 
-        if patience > 0:
+        if patience > 0 and has_validation:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
@@ -1327,7 +1347,21 @@ def main() -> None:
 
     output_path = Path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), output_path)
+    artifact = (
+        # The shared builder persists O3 + auxiliary inputs; task channels stay auxiliary-only.
+        build_mars_checkpoint(
+            model_state_dict=model.state_dict(),
+            volume=metadata_result,
+            selected_channels=selected_channels,
+            window=args.window,
+            horizon=args.horizon,
+            split_ratios=split_ratios,
+            seed=seed,
+        )
+        if hasattr(metadata_result, "input_means")
+        else model.state_dict()
+    )
+    torch.save(artifact, output_path)
     print(f"Model saved: {output_path}", flush=True)
 
 

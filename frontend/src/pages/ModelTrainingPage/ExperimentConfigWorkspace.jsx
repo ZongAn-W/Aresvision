@@ -686,18 +686,35 @@ export default function ExperimentConfigWorkspace({
                 <h4 className="experiment-expert-heading">{copy.expertTabStrategy}</h4>
                 <p className="experiment-expert-note">{copy.expertStrategyHint}</p>
                 <div className="experiment-expert-fields">
-                  <label className="experiment-expert-field">
-                    <span>{isZh ? '训练集比例 (%)' : 'Train ratio (%)'}</span>
-                    <input type="number" min="1" max="98" step="1" value={Number(trainRatio) * 100} onChange={(event) => onSplitRatioChange?.('trainRatio', Number(event.target.value) / 100)} />
-                  </label>
-                  <label className="experiment-expert-field">
-                    <span>{isZh ? '验证集比例 (%)' : 'Validation ratio (%)'}</span>
-                    <input type="number" min="0" max="98" step="1" value={Number(validationRatio) * 100} onChange={(event) => onSplitRatioChange?.('validationRatio', Number(event.target.value) / 100)} />
-                  </label>
-                  <label className="experiment-expert-field">
-                    <span>{isZh ? '测试集比例 (%)' : 'Test ratio (%)'}</span>
-                    <input type="number" min="1" max="98" step="1" value={Number(testRatio) * 100} onChange={(event) => onSplitRatioChange?.('testRatio', Number(event.target.value) / 100)} />
-                  </label>
+                  {isEarth ? (
+                    <>
+                      {[
+                        [isZh ? '训练集比例 (%)' : 'Train ratio (%)', 70],
+                        [isZh ? '验证集比例 (%)' : 'Validation ratio (%)', 20],
+                        [isZh ? '测试集比例 (%)' : 'Test ratio (%)', 10],
+                      ].map(([label, value]) => (
+                        <label className="experiment-expert-field" key={label} data-earth-fixed-split="true">
+                          <span>{label}</span>
+                          <input type="number" value={value} disabled readOnly aria-readonly="true" />
+                        </label>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      <label className="experiment-expert-field">
+                        <span>{isZh ? '训练集比例 (%)' : 'Train ratio (%)'}</span>
+                        <input type="number" min="1" max="98" step="1" value={Number(trainRatio) * 100} onChange={(event) => onSplitRatioChange?.('trainRatio', Number(event.target.value) / 100)} />
+                      </label>
+                      <label className="experiment-expert-field">
+                        <span>{isZh ? '验证集比例 (%)' : 'Validation ratio (%)'}</span>
+                        <input type="number" min="0" max="98" step="1" value={Number(validationRatio) * 100} onChange={(event) => onSplitRatioChange?.('validationRatio', Number(event.target.value) / 100)} />
+                      </label>
+                      <label className="experiment-expert-field">
+                        <span>{isZh ? '测试集比例 (%)' : 'Test ratio (%)'}</span>
+                        <input type="number" min="1" max="98" step="1" value={Number(testRatio) * 100} onChange={(event) => onSplitRatioChange?.('testRatio', Number(event.target.value) / 100)} />
+                      </label>
+                    </>
+                  )}
                   <label className="experiment-expert-field">
                     <span>{copy.randomSeed}</span>
                     <input

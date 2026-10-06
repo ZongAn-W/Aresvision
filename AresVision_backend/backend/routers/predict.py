@@ -105,28 +105,31 @@ async def run_prediction(
         service = _get_training_inference_service(request)
         result = await service.predict_task(
             task_id=training_task_id,
-            mars_year=body.mars_year,
             ls_start=body.ls_start,
             horizon=body.horizon,
             current_user=current_user,
             data_service=getattr(request.app.state, "data_service", None),
             personal_source_service=getattr(request.app.state, "personal_data_source_service", None),
         )
-        source_meta = result.get("source_meta") or {
+        source_meta = dict(result.get("source_meta") or {
             "requested_source": "training_task",
             "effective_source": "training_task",
             "fallback": False,
             "message": None,
-            "mars_year": body.mars_year,
-        }
+        })
+        source_meta.pop("mars_year", None)
+        model_info = dict(result.get("model_info") or {})
+        model_info.pop("requested_mars_year", None)
+        model_info.pop("mars_year", None)
         return {
             "ground_truth": result["ground_truth"],
             "prediction": result["prediction"],
             "residual": result["residual"],
             "selected_variables": result["selected_variables"],
             "horizon": result["horizon"],
+            "input_ls_values": result.get("input_ls_values", []),
             "ls_values": result["ls_values"],
-            "model_info": result["model_info"],
+            "model_info": model_info,
             "metrics": result.get("metrics"),
             "source_meta": source_meta,
         }
@@ -161,7 +164,6 @@ async def get_eval_metrics(
         service = _get_training_inference_service(request)
         metrics = await service.task_test_set_metrics(
             task_id=training_task_id,
-            mars_year=body.mars_year,
             ls_start=body.ls_start,
             horizon=body.horizon,
             current_user=current_user,
@@ -169,13 +171,13 @@ async def get_eval_metrics(
             personal_source_service=getattr(request.app.state, "personal_data_source_service", None),
         )
         metrics = dict(metrics)
-        metrics["source_meta"] = metrics.get("source_meta") or {
+        metrics["source_meta"] = dict(metrics.get("source_meta") or {
             "requested_source": "training_task",
             "effective_source": "training_task",
             "fallback": False,
             "message": None,
-            "mars_year": body.mars_year,
-        }
+        })
+        metrics["source_meta"].pop("mars_year", None)
         return metrics
     except DatasetRequestError as e:
         detail = {"code": e.code, "message": str(e)}
@@ -357,7 +359,6 @@ async def get_permutation_importance(
     request: Request,
     vars: str = Query("Temperature,Dust_Optical_Depth,Solar_Flux_DN,U_Wind,V_Wind"),
     training_task_id: int | None = Query(None, ge=1),
-    mars_year: int = Query(DEFAULT_MARS_YEAR),
     ls_start: float = Query(90.0, ge=0, le=360),
     horizon: int = Query(3, ge=1, le=30),
     current_user: User | None = Depends(get_optional_user),
@@ -371,7 +372,6 @@ async def get_permutation_importance(
         return await service.task_permutation_importance(
             task_id=training_task_id,
             selected_variables=selected_variables,
-            mars_year=mars_year,
             ls_start=ls_start,
             horizon=horizon,
             current_user=current_user,

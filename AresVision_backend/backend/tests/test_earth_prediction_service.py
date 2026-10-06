@@ -110,10 +110,10 @@ def test_context_returns_the_published_origin_range_and_identity(trained_task):
     assert len(context.latitude) == 36 and len(context.longitude) == 72
     assert context.input_channel_order == ["TO3", "U10M"]
     assert context.input_units == ["DU", "m s-1"]
-    assert context.origins["start"] == "2020-01-08"
+    assert context.origins["start"] == "2020-01-07"
     assert context.origins["end"] == "2021-12-28"
-    assert context.origins["count"] == 721
-    assert context.origins["dates"][0] == "2020-01-08"
+    assert context.origins["count"] == 722
+    assert context.origins["dates"][0] == "2020-01-07"
     assert context.training_split_end == "2020-12-31"
     assert context.metrics["splits"]["test"]["window_count"] == 175
     assert context.metrics["splits"]["test"]["overall"]["rmse"] == 4.0
@@ -130,6 +130,7 @@ def test_prediction_returns_three_days_of_du_fields_on_the_real_grid(trained_tas
     assert result["target"] == "TO3"
     assert result["target_unit"] == "DU"
     assert result["forecast_origin"] == "2021-07-08"
+    assert result["origin_split"] == "test"
     assert result["input_dates"] == [
         "2021-07-02", "2021-07-03", "2021-07-04", "2021-07-05",
         "2021-07-06", "2021-07-07", "2021-07-08",
@@ -216,15 +217,19 @@ def test_prediction_uses_the_saved_normalization_not_a_refit(trained_task):
 
 def test_boundary_origins_are_predictable(trained_task):
     registry, task, _, _ = trained_task
-    first = run_earth_prediction(task, "2020-01-08", registry, device="cpu")
-    assert first["target_dates"] == ["2020-01-09", "2020-01-10", "2020-01-11"]
+    first = run_earth_prediction(task, "2020-01-07", registry, device="cpu")
+    assert first["input_dates"] == [
+        "2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04",
+        "2020-01-05", "2020-01-06", "2020-01-07",
+    ]
+    assert first["target_dates"] == ["2020-01-08", "2020-01-09", "2020-01-10"]
     last = run_earth_prediction(task, "2021-12-28", registry, device="cpu")
     assert last["target_dates"] == ["2021-12-29", "2021-12-30", "2021-12-31"]
 
 
 @pytest.mark.parametrize(
     "origin",
-    ["", None, "not-a-date", "2020/01/08", "2020-01-01", "2020-01-05", "2021-12-29", "2021-12-31", "2030-01-01"],
+    ["", None, "not-a-date", "2020/01/08", "2020-01-01", "2020-01-05", "2020-01-06", "2021-12-29", "2021-12-31", "2030-01-01"],
 )
 def test_invalid_or_out_of_range_origins_are_rejected(trained_task, origin):
     registry, task, _, _ = trained_task
