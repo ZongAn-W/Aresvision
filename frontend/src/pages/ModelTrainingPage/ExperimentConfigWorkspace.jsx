@@ -118,6 +118,8 @@ export default function ExperimentConfigWorkspace({
     onUploadModel,
     onRevalidateModel,
     onDeleteUploadedModel,
+    onRenameUploadedModel,
+    onDownloadUploadedModel,
     onCustomModelParamChange,
     onChannelToggle,
     onArchitectureSelect,
@@ -145,6 +147,36 @@ export default function ExperimentConfigWorkspace({
   const structureSummary = values.structureSummary;
   const officialModelControls = controlVisibility.officialModelControls;
   const isUploaded = modelSource === 'uploaded';
+  const uploadedModelLabels = {
+    title: copy.groupUploadedModel,
+    upload: copy.uploadModel,
+    uploadAgain: copy.uploadedModelReplace,
+    downloadGuide: copy.downloadModelGuide,
+    downloadTemplate: copy.downloadModelTemplate,
+    uploading: copy.uploadingModel,
+    revalidate: copy.revalidateModel,
+    replace: copy.uploadedModelReplace,
+    manage: copy.uploadedModelManage,
+    delete: copy.deleteUploadedModel,
+    download: copy.downloadUploadedModel,
+    rename: copy.renameUploadedModel,
+    name: copy.uploadedModelName,
+    saveName: copy.saveUploadedModelName,
+    cancelRename: copy.cancelUploadedModelRename,
+    nameRequired: copy.uploadedModelNameRequired,
+    valid: copy.uploadedModelValid,
+    invalid: copy.uploadedModelInvalid,
+    pending: copy.uploadedModelPending,
+    ready: copy.uploadedModelReady,
+    unnamed: copy.uploadedModelUnnamed,
+    noFilename: copy.uploadedModelNoFilename,
+    missing: copy.uploadedModelEmptyTitle,
+    hint: copy.uploadedModelEmptyHint,
+    summaryLabel: copy.uploadedModelSummaryLabel,
+    summaryParamCount: copy.uploadedModelParamCount,
+    versionLabel: copy.inspectorModelVersion,
+    officialHint: copy.modelSourceOfficialHint,
+  };
   // Earth 首期只支持官方 DLinear：不显示模型来源切换、上传卡与架构选择器，
   // 也不显示迁移学习，避免出现选了也不会生效的控件。
   const isEarth = trainingDataset === TRAINING_DATASET_EARTH_MERRA2_V2;
@@ -358,6 +390,8 @@ export default function ExperimentConfigWorkspace({
                   onUpload={onUploadModel}
                   onRevalidate={onRevalidateModel}
                   onDelete={onDeleteUploadedModel}
+                  onRename={onRenameUploadedModel}
+                  onDownload={onDownloadUploadedModel}
                   uploading={resources.uploadingModel}
                   busy={isProcessing}
                   selectionDisabled={false}
@@ -366,7 +400,7 @@ export default function ExperimentConfigWorkspace({
                   inlineError={resources.earthUploadedInlineError || ''}
                   statusLabel={resources.earthUploadedStatusLabel || ''}
                   statusTone={resources.earthUploadedStatusTone || 'ok'}
-                  labels={copy}
+                  labels={uploadedModelLabels}
                 />
               ) : (
                 <>
@@ -419,6 +453,8 @@ export default function ExperimentConfigWorkspace({
                 onUpload={onUploadModel}
                 onRevalidate={onRevalidateModel}
                 onDelete={onDeleteUploadedModel}
+                onRename={onRenameUploadedModel}
+                onDownload={onDownloadUploadedModel}
                 uploading={resources.uploadingModel}
                 busy={isProcessing || transferStructureLocked}
                 selectionDisabled={transferStructureLocked}
@@ -427,30 +463,7 @@ export default function ExperimentConfigWorkspace({
                 inlineError={validation.uploadedModelInlineError}
                 statusLabel={uploadedStatusLabel}
                 statusTone={uploadedValidationStatus === 'valid' ? 'ok' : 'warn'}
-                labels={{
-                  title: copy.groupUploadedModel,
-                  upload: copy.uploadModel,
-                  uploadAgain: copy.uploadedModelReplace,
-                  downloadGuide: copy.downloadModelGuide,
-                  downloadTemplate: copy.downloadModelTemplate,
-                  uploading: copy.uploadingModel,
-                  revalidate: copy.revalidateModel,
-                  replace: copy.uploadedModelReplace,
-                  manage: copy.uploadedModelManage,
-                  delete: copy.deleteUploadedModel,
-                  valid: copy.uploadedModelValid,
-                  invalid: copy.uploadedModelInvalid,
-                  pending: copy.uploadedModelPending,
-                  ready: copy.uploadedModelReady,
-                  unnamed: copy.uploadedModelUnnamed,
-                  noFilename: copy.uploadedModelNoFilename,
-                  missing: copy.uploadedModelEmptyTitle,
-                  hint: copy.uploadedModelEmptyHint,
-                  summaryLabel: copy.uploadedModelSummaryLabel,
-                  summaryParamCount: copy.uploadedModelParamCount,
-                  versionLabel: copy.inspectorModelVersion,
-                  officialHint: copy.modelSourceOfficialHint,
-                }}
+                labels={uploadedModelLabels}
                 sectionTitleStyle={sectionTitleStyle}
                 fieldHintStyle={fieldHintStyle}
               />

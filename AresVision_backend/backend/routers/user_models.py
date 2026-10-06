@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 
 from auth.dependencies import get_current_user
 from database.models import User, UserModelPackage
-from schemas.user_models import UserModelListResponse, UserModelPackageResponse
+from schemas.user_models import UserModelListResponse, UserModelPackageResponse, UserModelRenameRequest
 from services.user_model_service import UserModelService
 
 router = APIRouter(prefix="/user-models", tags=["User Models"])
@@ -169,6 +169,44 @@ async def get_user_model(
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     return _serialize_package(package)
+
+
+@router.patch("/{model_id}", response_model=UserModelPackageResponse)
+async def rename_user_model(
+    model_id: str,
+    payload: UserModelRenameRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        package = await _service(request).rename_package(model_id, current_user.id, payload.display_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _serialize_package(package)
+
+
+@router.get("/{model_id}/download")
+async def download_user_model(
+    model_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        source_path, filename = await _service(request).get_source_for_download(model_id, current_user.id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return FileResponse(
+        path=source_path,
+        filename=filename,
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.get("/{model_id}/earth-compatibility")

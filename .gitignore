@@ -70,6 +70,10 @@ AresVision_backend/backend/data/user_uploads/
 
 # Backend runtime outputs
 AresVision_backend/backend/logs/
+# Local server stdout/stderr redirections (development only)
+/AresVision_backend/backend/uvicorn*.log
+/serve-prod*.log
+/frontend/serve-prod*.log
 
 # Model weights and generated training outputs
 AresVision_backend/backend/models/predrnnv2/

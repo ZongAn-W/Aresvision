@@ -4,6 +4,33 @@ Trusted lab users can upload a single Python file from the model training page a
 
 The platform owns data loading, normalization, batching, the training loop, metrics, checkpoints, logs, and model testing. The uploaded file only defines the PyTorch architecture and a small parameter schema.
 
+## Downloading and Renaming Uploaded Models
+
+On the training page, expand **Manage models**, select a model, and choose
+**Download source** or **Rename**. Renaming accepts a nonempty display name of
+up to 120 characters, trims surrounding whitespace, and updates that package's
+name in the list and current model summary. Save commits the change; Cancel or
+Escape closes the editor. Revalidation preserves the edited name.
+
+Both actions require authentication and are available only to the uploader:
+
+| Action | API | Result |
+| --- | --- | --- |
+| Download source | `GET /api/user-models/{model_id}/download` | Original uploaded bytes as a `.py` attachment, retaining the original basename |
+| Rename | `PATCH /api/user-models/{model_id}` with `{"display_name":"New name"}` | Updated model metadata |
+
+Other accounts receive 403; nonexistent or deleted packages receive 404.
+Downloads also return 404 when the stored source is missing. Invalid names are
+rejected with 400 or 422. Invalid or pending models may still be renamed or
+downloaded so their source can be repaired locally.
+
+Renaming changes metadata only: the package ID, version, source, content hash,
+validation result, and model identity already fixed in training tasks remain
+unchanged. The name inside `MODEL_SPEC` is not rewritten, and re-uploading the
+downloaded file follows the normal upload/version rules. Matching display names
+do not merge packages. Downloads contain architecture source; trained weights
+remain available from training task artifacts.
+
 ## Required Exports
 
 Every upload must export:

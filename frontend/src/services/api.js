@@ -772,6 +772,27 @@ export function getUserModelDownloadUrl(kind) {
   return `${BASE}/user-models/downloads/${encodeURIComponent(kind)}`;
 }
 
+export async function renameUserModel(modelId, displayName) {
+  const res = await authedFetch(`${BASE}/user-models/${encodeURIComponent(modelId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ display_name: displayName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.json();
+}
+
+export async function downloadUserModel(modelId) {
+  const res = await authedFetch(`${BASE}/user-models/${encodeURIComponent(modelId)}/download`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.blob();
+}
+
 /**
  * 上传模型的 Earth 兼容性结论。
  *

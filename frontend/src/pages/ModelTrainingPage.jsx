@@ -14,6 +14,8 @@ import {
   getUserModelDownloadUrl,
   revalidateUserModel,
   deleteUserModel,
+  renameUserModel,
+  downloadUserModel,
   uploadTrainingWeight,
   fetchTrainingWeights,
   deleteTrainingWeight,
@@ -435,6 +437,13 @@ export default function ModelTrainingPage() {
       uploadingModel: isZh ? '上传中...' : 'Uploading...',
       revalidateModel: isZh ? '重新校验' : 'Revalidate',
       deleteUploadedModel: isZh ? '删除' : 'Delete',
+      downloadUploadedModel: isZh ? '下载源码' : 'Download source',
+      renameUploadedModel: isZh ? '重命名' : 'Rename',
+      uploadedModelName: isZh ? '自定义模型名称' : 'Custom model name',
+      saveUploadedModelName: isZh ? '保存' : 'Save',
+      cancelUploadedModelRename: isZh ? '取消' : 'Cancel',
+      uploadedModelNameRequired: isZh ? '请输入模型名称（最多 120 个字符）。' : 'Enter a model name (up to 120 characters).',
+      renameUploadedModelSuccess: isZh ? '自定义模型名称已更新' : 'Custom model name updated',
       uploadedModelValid: isZh ? '可训练' : 'Valid',
       uploadedModelInvalid: isZh ? '需修正' : 'Invalid',
       uploadedModelPending: isZh ? '校验中' : 'Pending',
@@ -1489,6 +1498,50 @@ export default function ModelTrainingPage() {
     }
   };
 
+  const handleRenameUploadedModel = async (modelId, displayName) => {
+    if (!modelId || isProcessing) return false;
+    try {
+      setIsProcessing(true);
+      const updated = await renameUserModel(modelId, displayName);
+      // Preserve the schema reference so editing the name does not reset the
+      // custom parameter values already entered for this experiment.
+      setUploadedModels((items) => items.map((item) => item.id === modelId
+        ? { ...item, display_name: updated.display_name, updated_at: updated.updated_at }
+        : item));
+      setEarthUploadedStatus((current) => current?.package_id === modelId
+        ? { ...current, display_name: updated.display_name }
+        : current);
+      showToast(copy.renameUploadedModelSuccess, 'success');
+      return true;
+    } catch (error) {
+      showToast(error.message, 'error');
+      return false;
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDownloadUploadedModel = async (modelId) => {
+    if (!modelId || isProcessing) return;
+    try {
+      setIsProcessing(true);
+      const blob = await downloadUserModel(modelId);
+      const model = uploadedModels.find((item) => item.id === modelId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = model?.original_filename?.split(/[\\/]/).pop() || 'model.py';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      showToast(error.message, 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleDeleteUploadedModel = async (modelId) => {
     if (!modelId || isProcessing) return;
     try {
@@ -2088,6 +2141,8 @@ export default function ModelTrainingPage() {
         onUploadModel: handleUploadModel,
         onRevalidateModel: handleRevalidateModel,
         onDeleteUploadedModel: handleDeleteUploadedModel,
+        onRenameUploadedModel: handleRenameUploadedModel,
+        onDownloadUploadedModel: handleDownloadUploadedModel,
         onCustomModelParamChange: handleCustomModelParamChange,
         onChannelToggle: handleChannelToggle,
         onArchitectureSelect: (architectureId) => {

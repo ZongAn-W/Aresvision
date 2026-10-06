@@ -103,6 +103,37 @@ class UserModelService:
             )
             return package
 
+    async def rename_package(
+        self, package_id: str, user_id: int, display_name: str
+    ) -> UserModelPackage:
+        name = display_name.strip()
+        if not name or len(name) > 120:
+            raise ValueError("Model name must contain 1 to 120 characters")
+
+        async with self.sessionmaker() as session:
+            package = await self._get_package_for_user_in_session(session, package_id, user_id)
+            if package.display_name != name:
+                package.display_name = name
+                package.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+                await session.refresh(package)
+            return package
+
+    async def get_source_for_download(
+        self, package_id: str, user_id: int
+    ) -> tuple[Path, str]:
+        package = await self.get_package_for_user(package_id, user_id)
+        source_path = Path(package.storage_path).resolve()
+        if not source_path.is_relative_to(self.storage_root.resolve()) or not source_path.is_file():
+            raise FileNotFoundError("Uploaded model source file not found")
+        # Keep Unicode names, but never put an uploaded path or control characters
+        # into the attachment filename. The stored .source suffix is private.
+        filename = Path(package.original_filename.replace("\\", "/")).name
+        filename = re.sub(r"[\x00-\x1f\x7f]", "", filename)
+        if Path(filename).suffix.lower() != ".py":
+            filename = "model.py"
+        return source_path, filename
+
     async def get_earth_compatibility(self, package_id: str, user_id: int) -> dict:
         """Report whether a stored package may be trained on Earth data.
 

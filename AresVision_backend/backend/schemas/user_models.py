@@ -43,3 +43,7 @@ class UserModelPackageResponse(BaseModel):
 
 class UserModelListResponse(BaseModel):
     items: List[UserModelPackageResponse]
+
+
+class UserModelRenameRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=120, strict=True)

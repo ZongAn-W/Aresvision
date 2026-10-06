@@ -804,6 +804,36 @@
   flex-wrap: wrap;
 }
 
+.experiment-uploaded-rename {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.experiment-uploaded-rename label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+}
+
+.experiment-uploaded-rename input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--experiment-surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.experiment-uploaded-rename input:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+}
+
 /* 官方模型块 */
 .experiment-official-block {
   display: grid;

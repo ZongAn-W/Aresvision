@@ -128,16 +128,36 @@ class TrainingService:
         self._scheduler_started = True
         self._queue_event = asyncio.Event()
         async with async_session_maker() as session:
-            await session.execute(
-                update(ModelTrainingTask)
-                .where(ModelTrainingTask.status == "running")
-                .values(
-                    status="failed",
-                    end_time=datetime.now(timezone.utc),
-                    metrics=json.dumps({"note": "Training interrupted by server restart"}),
-                    pid=None,
-                )
+            result = await session.execute(
+                select(ModelTrainingTask).where(ModelTrainingTask.status == "running")
             )
+            recovery_time = datetime.now(timezone.utc)
+            for task in result.scalars().all():
+                log_path = Path(task.log_file_path or "")
+                output_path = Path(task.output_model_path or "")
+                saved_marker = False
+                if log_path.is_file() and output_path.is_file() and is_valid_model_weight_file(output_path):
+                    try:
+                        saved_marker = "Model saved:" in log_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                    except OSError:
+                        saved_marker = False
+
+                task.end_time = recovery_time
+                task.pid = None
+                if saved_marker:
+                    task.status = "completed"
+                    task.progress = 100.0
+                    parsed_metrics = self._extract_metrics_from_log(log_path)
+                    task.metrics = json.dumps(
+                        parsed_metrics or {"note": "completed after server restart"}
+                    )
+                else:
+                    task.status = "failed"
+                    task.metrics = json.dumps(
+                        {"note": "Training interrupted by server restart"}
+                    )
             await session.commit()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
         self._wake_scheduler()
@@ -198,8 +218,8 @@ class TrainingService:
                 async with async_session_maker() as session:
                     row = await session.get(ModelTrainingTask, task_id)
                     spec = {
-                        "model_script": row.model_script,
-                        "payload_hypers": json.loads(row.hyperparameters or "{}"),
+                        "script_name": row.model_script,
+                        "hyperparameters": json.loads(row.hyperparameters or "{}"),
                         "log_file": Path(row.log_file_path),
                         "output_path": Path(row.output_model_path),
                         "env_overrides": {},
@@ -476,8 +496,8 @@ class TrainingService:
             if not hasattr(self, "_queue_specs"):
                 self._queue_specs = {}
             self._queue_specs[task_id] = {
-                "model_script": model_script,
-                "payload_hypers": payload_hypers,
+                "script_name": model_script,
+                "hyperparameters": payload_hypers,
                 "log_file": log_file,
                 "output_path": output_path,
                 "env_overrides": env_overrides,
