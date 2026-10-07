@@ -6,7 +6,11 @@ import {
   buildEarthFieldPayload,
   describeEarthModelIdentity,
   earthFieldLabel,
+  earthLeadLabel,
+  earthTimestampList,
+  getEarthCadence,
   isOriginSelectable,
+  readEarthHorizonMetric,
   readEarthLeadMetric,
   readEarthMetric,
   readEarthResponseModelIdentity,
@@ -44,9 +48,11 @@ export default function EarthPredictPanel({
 }) {
   const [kindViews] = useState({ prediction: 'physical', reference: 'physical', residual: 'residual' });
   const ranges = useMemo(() => resolveEarthColorRanges(result), [result]);
+  const cadence = useMemo(() => getEarthCadence(context || result), [context, result]);
+  const isThreeHourly = cadence.threeHourly;
 
   const dayIndex = Number.isInteger(selectedDay) ? selectedDay : 0;
-  const activeDates = result?.target_dates || [];
+  const activeDates = earthTimestampList(result);
 
   useEffect(() => {
     // 重新取数后回到第一天，避免停留在已不存在的第三天。
@@ -88,7 +94,7 @@ export default function EarthPredictPanel({
       <header className="earth-predict-head">
         <div>
           <h2>{copy.title}</h2>
-          <p className="earth-predict-note">{copy.note}</p>
+          <p className="earth-predict-note">{isThreeHourly ? (copy.threeHourlyNote || copy.note) : copy.note}</p>
         </div>
         <span className="earth-predict-unit" data-earth-unit={EARTH_TARGET_UNIT}>{EARTH_TARGET_UNIT}</span>
       </header>
@@ -111,12 +117,13 @@ export default function EarthPredictPanel({
         <label className="earth-predict-field">
           <span>{copy.originLabel}</span>
           <input
-            type="date"
-            value={origin || ''}
-            min={origins?.start || undefined}
-            max={origins?.end || undefined}
+            type={isThreeHourly ? 'datetime-local' : 'date'}
+            value={isThreeHourly ? toDateTimeLocal(origin) : (origin || '')}
+            min={isThreeHourly ? toDateTimeLocal(origins?.start) : (origins?.start || undefined)}
+            max={isThreeHourly ? toDateTimeLocal(origins?.end) : (origins?.end || undefined)}
+            step={isThreeHourly ? 10800 : undefined}
             disabled={!context}
-            onChange={(event) => onOriginChange(event.target.value)}
+            onChange={(event) => onOriginChange(isThreeHourly ? fromDateTimeLocal(event.target.value) : event.target.value)}
             data-earth-origin-input="true"
           />
         </label>
@@ -169,7 +176,8 @@ export default function EarthPredictPanel({
             </dd>
           </div>
           <div><dt>{copy.factGrid}</dt><dd>{`${context.grid.shape[0]} × ${context.grid.shape[1]}`}</dd></div>
-          <div><dt>{copy.factWindow}</dt><dd>{`${context.window} → ${context.horizon} ${copy.dayUnit}`}</dd></div>
+          <div><dt>{copy.factWindow}</dt><dd>{`${context.window} → ${context.horizon} ${isThreeHourly ? copy.stepUnit : copy.dayUnit}`}</dd></div>
+          <div><dt>{copy.factFrequency}</dt><dd>{isThreeHourly ? `${cadence.frequencyHours}h UTC` : copy.dailyFrequency}</dd></div>
           <div><dt>{copy.factChannels}</dt><dd>{context.input_channel_order.join(', ')}</dd></div>
           <div><dt>{copy.factBestEpoch}</dt><dd>{context.run?.best_epoch ?? '—'}</dd></div>
           <div><dt>{copy.factTestRmse}</dt><dd>{formatValue(context.metrics?.splits?.test?.overall?.rmse)}</dd></div>
@@ -195,7 +203,7 @@ export default function EarthPredictPanel({
                 data-earth-day={date}
                 onClick={() => onSelectDay(index)}
               >
-                <b>{`+${index + 1}`}</b>
+                <b>{earthLeadLabel(index, context || result, { daySuffix: copy.daySuffix })}</b>
                 <span>{date}</span>
                 <small>{`RMSE ${formatValue(readEarthLeadMetric(metrics, index + 1, 'rmse'))}`}</small>
               </button>
@@ -203,7 +211,7 @@ export default function EarthPredictPanel({
           </div>
 
           <p className="earth-predict-origin-line" data-earth-origin-line="true">
-            {copy.originLine(result.forecast_origin, (result.input_dates || [])[0], (result.input_dates || []).slice(-1)[0])}
+            {copy.originLine(result.forecast_origin, (result.input_timestamps || result.input_dates || [])[0], (result.input_timestamps || result.input_dates || []).slice(-1)[0], isThreeHourly)}
             {result.origin_split ? ` · ${copy.originSplit(result.origin_split)}` : ''}
           </p>
 
@@ -250,7 +258,7 @@ export default function EarthPredictPanel({
             <thead>
               <tr>
                 <th>{copy.leadHeader}</th>
-                <th>{copy.dateHeader}</th>
+                <th>{isThreeHourly ? copy.timestampHeader : copy.dateHeader}</th>
                 <th>RMSE ({EARTH_TARGET_UNIT})</th>
                 <th>MAE ({EARTH_TARGET_UNIT})</th>
               </tr>
@@ -258,7 +266,7 @@ export default function EarthPredictPanel({
             <tbody>
               {activeDates.map((date, index) => (
                 <tr key={date}>
-                  <td>{`+${index + 1}`}</td>
+                  <td>{earthLeadLabel(index, context || result, { daySuffix: copy.daySuffix })}</td>
                   <td>{date}</td>
                   <td>{formatValue(readEarthLeadMetric(metrics, index + 1, 'rmse'))}</td>
                   <td>{formatValue(readEarthLeadMetric(metrics, index + 1, 'mae'))}</td>
@@ -266,6 +274,18 @@ export default function EarthPredictPanel({
               ))}
             </tbody>
           </table>
+          {isThreeHourly && metrics?.by_horizon?.length ? (
+            <div className="earth-predict-horizons" data-earth-horizon-metrics="true">
+              {[24, 48, 72].map((hours) => (
+                <div className="earth-predict-metric" key={hours} data-earth-horizon={hours}>
+                  <span>{`+${hours}h`}</span>
+                  <b>{`RMSE ${formatValue(readEarthHorizonMetric(metrics, hours, 'rmse'))}`}</b>
+                  <b>{`MAE ${formatValue(readEarthHorizonMetric(metrics, hours, 'mae'))}`}</b>
+                  <small>{EARTH_TARGET_UNIT}</small>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <p className="earth-predict-note" data-earth-reference-note="true">{copy.referenceNote}</p>
         </>
       ) : (
@@ -279,4 +299,16 @@ export default function EarthPredictPanel({
 
 function formatValue(value) {
   return Number.isFinite(value) ? Number(value).toFixed(2) : '—';
+}
+
+function toDateTimeLocal(value) {
+  if (!value) return '';
+  const text = String(value);
+  return text.endsWith('Z') ? text.slice(0, -1).slice(0, 16) : text.slice(0, 16);
+}
+
+function fromDateTimeLocal(value) {
+  if (!value) return '';
+  const local = value.length === 16 ? `${value}:00` : value;
+  return `${local}Z`;
 }

@@ -1,8 +1,9 @@
 """Numeric service behind the read-only 2D Earth overview APIs.
 
 Reads the verified release snapshot from :class:`DatasetRegistry` and answers
-three questions: the field for one date and variable, the coverage-wide daily
-mean (v2 spherical cell area; v1 cosine-latitude samples), and one point's series.
+three questions: one field, the coverage-wide mean, and one native point's
+series. Daily responses retain their original contract; three-hour responses
+use UTC timestamps and bounded reads with a separate display aggregation.
 
 All values are original physical units taken straight from the NetCDF variable;
 nothing here normalizes, interpolates, regrids or converts units.
@@ -147,13 +148,18 @@ class EarthOverviewService:
         # whenever the verified release identity changes.
         self._series_cache: dict[tuple, dict] = {}
         self._cached_fingerprint: Optional[str] = None
+        from services.earth_3hourly_overview import ThreehourOverview
+        self._threehour = ThreehourOverview(self)
 
     # ── public API ─────────────────────────────────────────────────────
     def get_field(
-        self, dataset_id: str, expected_fingerprint: str, date: str, variable: str
+        self, dataset_id: str, expected_fingerprint: str, date: Optional[str] = None,
+        variable: str = "TO3", *, timestamp: Optional[str] = None, render_stride: int = 4,
     ) -> dict:
         release = self._release(dataset_id, expected_fingerprint)
         variable_id, units = self._require_variable(release, variable)
+        if release.metadata["dataset_id"] == "earth_merra2_3hourly_v1":
+            return self._threehour.field(release, variable_id, units, timestamp, render_stride)
         dates = release.dates
         index = require_date_index(date, dates)
         field = np.asarray(release.fields[variable_id][index], dtype="float32")
@@ -186,6 +192,8 @@ class EarthOverviewService:
         release = self._release(dataset_id, expected_fingerprint)
         variable_id, units = self._require_variable(release, variable)
         first, last = self._date_range(release, start, end)
+        if release.metadata["dataset_id"] == "earth_merra2_3hourly_v1":
+            return self._threehour.regional(release, variable_id, units, first, last)
         series = self._regional_series(release, variable_id)
         return {
             **self._identity(release, variable_id, units),
@@ -210,6 +218,8 @@ class EarthOverviewService:
         release = self._release(dataset_id, expected_fingerprint)
         variable_id, units = self._require_variable(release, variable)
         first, last = self._date_range(release, start, end)
+        if release.metadata["dataset_id"] == "earth_merra2_3hourly_v1":
+            return self._threehour.point(release, variable_id, units, lat, lon, first, last)
         grid = release.metadata["grid"]
         lat_index = nearest_grid_index(release.latitude, lat, tuple(grid["cell_bounds"]["latitude"]))
         lon_index = nearest_grid_index(release.longitude, lon, tuple(grid["cell_bounds"]["longitude"]))
@@ -234,7 +244,11 @@ class EarthOverviewService:
 
     # ── internals ──────────────────────────────────────────────────────
     def _release(self, dataset_id: str, expected_fingerprint: str) -> VerifiedEarthRelease:
-        return self._registry.get_earth_overview_snapshot(dataset_id, expected_fingerprint)
+        release = self._registry.get_earth_overview_snapshot(dataset_id, expected_fingerprint)
+        if release.metadata["dataset_id"] == "earth_merra2_3hourly_v1":
+            from services.earth_3hourly_overview import _source_path
+            _source_path(release)
+        return release
     def _require_variable(self, release: VerifiedEarthRelease, variable: Any) -> tuple[str, str]:
         if not isinstance(variable, str) or variable not in VARIABLE_IDS:
             raise EarthOverviewError("unsupported_variable", "Unsupported variable")
@@ -247,8 +261,12 @@ class EarthOverviewService:
         self, release: VerifiedEarthRelease, start: Optional[str], end: Optional[str]
     ) -> tuple[int, int]:
         dates = release.dates
-        first = require_date_index(start, dates) if start is not None else 0
-        last = require_date_index(end, dates) if end is not None else len(dates) - 1
+        index_for = require_date_index
+        if release.metadata["dataset_id"] == "earth_merra2_3hourly_v1":
+            from services.earth_3hourly_overview import require_timestamp_index
+            index_for = require_timestamp_index
+        first = index_for(start, dates) if start is not None else 0
+        last = index_for(end, dates) if end is not None else len(dates) - 1
         if first > last:
             raise EarthOverviewError("invalid_date_range", "start must not be after end")
         return first, last

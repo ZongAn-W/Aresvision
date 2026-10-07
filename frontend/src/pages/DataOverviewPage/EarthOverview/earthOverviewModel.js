@@ -8,6 +8,55 @@ const DAY_MS = 86_400_000;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const EARTH_DATASET_ID = 'earth_merra2_daily_v2';
+export const EARTH_3HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1';
+export const EARTH_OVERVIEW_DATASETS = [EARTH_DATASET_ID, EARTH_3HOURLY_DATASET_ID];
+
+export function resolveEarthDatasetId(catalog, preferredId = null) {
+  const earthIds = new Set((catalog?.items || [])
+    .filter((item) => item?.planet === 'earth'
+      && EARTH_OVERVIEW_DATASETS.includes(item.dataset_id))
+    .map((item) => item.dataset_id));
+  if (preferredId && earthIds.has(preferredId)) return preferredId;
+  const configuredDefault = catalog?.default_earth_dataset_id;
+  return earthIds.has(configuredDefault) ? configuredDefault : null;
+}
+
+export function isThreeHourlyDataset(datasetId) {
+  return datasetId === EARTH_3HOURLY_DATASET_ID;
+}
+
+export function isValidUtcTimestamp(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().replace('.000Z', 'Z') === value;
+}
+
+export function isValidEarthTime(value) {
+  return isValidIsoDate(value) || isValidUtcTimestamp(value);
+}
+
+export function earthTimeAtIndex(start, index, frequencyHours = 24) {
+  if (isValidIsoDate(start) && frequencyHours === 24) return dateAtIndex(start, index);
+  if (!isValidUtcTimestamp(start) || !Number.isInteger(index) || frequencyHours !== 3) throw new Error('Invalid UTC step');
+  return new Date(Date.parse(start) + index * 3 * 3_600_000).toISOString().replace('.000Z', 'Z');
+}
+
+export function earthTimeIndex(start, end, value, frequencyHours = 24) {
+  if (frequencyHours === 24) return dateIndexWithin(start, end, value);
+  if (frequencyHours !== 3 || ![start, end, value].every(isValidUtcTimestamp)) return null;
+  const index = (Date.parse(value) - Date.parse(start)) / (3 * 3_600_000);
+  const total = (Date.parse(end) - Date.parse(start)) / (3 * 3_600_000);
+  return Number.isInteger(index) && Number.isInteger(total) && index >= 0 && index <= total ? index : null;
+}
+
+export function earthTimeValues(start, end, frequencyHours = 24) {
+  const last = earthTimeIndex(start, end, end, frequencyHours);
+  return last === null ? [] : Array.from({ length: last + 1 }, (_, index) => earthTimeAtIndex(start, index, frequencyHours));
+}
+
+export function formatEarthTime(value) {
+  return isValidUtcTimestamp(value) ? `${value.slice(0, 10)} ${value.slice(11, 16)} UTC` : value || '--';
+}
 
 export const EARTH_VARIABLES = ['TO3', 'U10M', 'V10M', 'T2M', 'SWGDN'];
 export const WIND_VARIABLES = ['U10M', 'V10M'];
@@ -77,9 +126,10 @@ export function shiftDate(value, days) {
   return dateAtIndex(value, days);
 }
 
-export function nextPlaybackDate({ start, end, displayedDate, requestedDate, ready, playing }) {
+export function nextPlaybackDate({ start, end, displayedDate, requestedDate, ready, playing, frequencyHours = 24 }) {
   if (!playing || !ready || displayedDate !== requestedDate || displayedDate >= end) return null;
-  return dateAtIndex(start, isoDayNumber(displayedDate) - isoDayNumber(start) + 1);
+  const index = earthTimeIndex(start, end, displayedDate, frequencyHours);
+  return index === null ? null : earthTimeAtIndex(start, index + 1, frequencyHours);
 }
 
 /**
@@ -124,13 +174,15 @@ export function isValidFieldPayload(payload, expected) {
   if (!identityMatches(payload, expected)) return false;
   if (payload.units !== EARTH_VARIABLE_UNITS[expected.variable]) return false;
   if (payload.date !== expected.date) return false;
+  const threeHourly = isThreeHourlyDataset(expected.datasetId);
+  if (threeHourly && (!validThreeHourlyMetadata(payload) || payload.timestamp !== expected.date)) return false;
   if (payload.dimension_order?.join(',') !== 'lat,lon') return false;
   if (!isAscendingUnique(payload.lat) || !isAscendingUnique(payload.lon)) return false;
   if (!Array.isArray(payload.field) || payload.field.length !== payload.lat.length) return false;
   const width = payload.lon.length;
   for (const row of payload.field) {
     if (!Array.isArray(row) || row.length !== width) return false;
-    for (const value of row) if (!isFiniteNumber(value)) return false;
+    for (const value of row) if (!isFiniteNumber(value) && !(threeHourly && value === null)) return false;
   }
   const coverage = payload.coverage;
   const expectedWrap = expected.datasetId === 'earth_merra2_daily_v1' ? false : true;
@@ -141,21 +193,34 @@ export function isValidFieldPayload(payload, expected) {
   if (!isFiniteNumber(coverage.longitude_range[0]) || !isFiniteNumber(coverage.longitude_range[1])) return false;
   if (expectedWrap) {
     if (coverage.latitude_range.join(',') !== '-90,90' || coverage.longitude_range.join(',') !== '-180,180') return false;
-    if (payload.lat.length !== 36 || payload.lon.length !== 72) return false;
-    if (payload.lat.some((v, i) => v !== -87.5 + i * 5) || payload.lon.some((v, i) => v !== -177.5 + i * 5)) return false;
+    const shape = threeHourly ? payload.render_grid_shape : [36, 72];
+    if (!Array.isArray(shape) || shape.length !== 2 || payload.lat.length !== shape[0] || payload.lon.length !== shape[1]) return false;
+    const step = threeHourly ? (shape.join(',') === '60,120' ? 3 : shape.join(',') === '30,60' ? 6 : 0.75) : 5;
+    if (threeHourly && (!['60,120', '30,60', '240,480'].includes(shape.join(',')) || payload.source_grid_shape?.join(',') !== '240,480')) return false;
+    if (threeHourly && shape.join(',') !== '240,480') {
+      const stride = shape[0] === 60 ? 4 : 8;
+      const namedMethod = payload.render_method === `spherical_cell_area_mean_${stride}x${stride}`;
+      const blockMethod = payload.render?.method === 'spherical_cell_area_block_mean' && payload.render.block_shape?.join(',') === `${stride},${stride}`;
+      if (!namedMethod && !blockMethod) return false;
+    }
+    if (payload.lat.some((v, i) => v !== -90 + step / 2 + i * step) || payload.lon.some((v, i) => v !== -180 + step / 2 + i * step)) return false;
   }
   if (!payload.color_range || !isFiniteNumber(payload.color_range.min)) return false;
   if (!isFiniteNumber(payload.color_range.max)) return false;
-  if (!payload.statistics || !isFiniteNumber(payload.statistics.regional_mean)) return false;
+  if (!payload.statistics || (!isFiniteNumber(payload.statistics.regional_mean) && !(threeHourly && payload.statistics.regional_mean === null))) return false;
   return true;
 }
 
-function isValidSeriesDates(dates, start, end) {
+function validThreeHourlyMetadata(payload) {
+  return payload.frequency_hours === 3 && payload.step_unit === 'hour' && payload.step === 3 && payload.time_zone === 'UTC';
+}
+
+function isValidSeriesDates(dates, start, end, threeHourly = false) {
   if (!Array.isArray(dates) || dates.length === 0) return false;
   let previous = null;
   for (const value of dates) {
-    if (!isValidIsoDate(value)) return false;
-    if (previous !== null && isoDayNumber(value) !== isoDayNumber(previous) + 1) return false;
+    if (!(threeHourly ? isValidUtcTimestamp(value) : isValidIsoDate(value))) return false;
+    if (previous !== null && (threeHourly ? Date.parse(value) - Date.parse(previous) !== 3 * 3_600_000 : isoDayNumber(value) !== isoDayNumber(previous) + 1)) return false;
     previous = value;
   }
   if (start !== undefined && dates[0] !== start) return false;
@@ -166,32 +231,39 @@ function isValidSeriesDates(dates, start, end) {
 export function isValidRegionalPayload(payload, expected) {
   if (!identityMatches(payload, expected)) return false;
   if (!['cos_lat_sample_mean', 'spherical_cell_area_mean'].includes(payload.aggregation)) return false;
-  if (!isValidSeriesDates(payload.dates, expected.start, expected.end)) return false;
+  const threeHourly = isThreeHourlyDataset(expected.datasetId);
+  if (threeHourly && (!validThreeHourlyMetadata(payload) || JSON.stringify(payload.timestamps) !== JSON.stringify(payload.dates))) return false;
+  if (!isValidSeriesDates(payload.dates, expected.start, expected.end, threeHourly)) return false;
   if (!Array.isArray(payload.values) || payload.values.length !== payload.dates.length) return false;
-  return payload.values.every(isFiniteNumber);
+  return payload.values.every((value) => isFiniteNumber(value) || (threeHourly && value === null));
 }
 
 export function isValidPointPayload(payload, expected) {
   if (!identityMatches(payload, expected)) return false;
   if (payload.selection !== 'nearest_grid_point') return false;
-  if (!isValidSeriesDates(payload.dates, expected.start, expected.end)) return false;
+  const threeHourly = isThreeHourlyDataset(expected.datasetId);
+  if (threeHourly && (!validThreeHourlyMetadata(payload) || JSON.stringify(payload.timestamps) !== JSON.stringify(payload.dates))) return false;
+  if (!isValidSeriesDates(payload.dates, expected.start, expected.end, threeHourly)) return false;
   if (!Array.isArray(payload.values) || payload.values.length !== payload.dates.length) return false;
-  if (!payload.values.every(isFiniteNumber)) return false;
+  if (!payload.values.every((value) => isFiniteNumber(value) || (threeHourly && value === null))) return false;
   const grid = payload.grid_point;
   if (!grid || !isFiniteNumber(grid.lat) || !isFiniteNumber(grid.lon)) return false;
   if (!Number.isInteger(grid.lat_index) || !Number.isInteger(grid.lon_index)) return false;
+  if (threeHourly && (grid.lat_index < 0 || grid.lat_index >= 240 || grid.lon_index < 0 || grid.lon_index >= 480
+    || grid.lat !== -89.625 + grid.lat_index * 0.75 || grid.lon !== -179.625 + grid.lon_index * 0.75)) return false;
   return true;
 }
 
 /** descriptor 缺动态字段时不发数据请求。 */
 export function canRequestEarthData(descriptor) {
-  if (!descriptor || descriptor.dataset_id !== EARTH_DATASET_ID) return false;
+  if (!descriptor || !EARTH_OVERVIEW_DATASETS.includes(descriptor.dataset_id)) return false;
   if (descriptor.availability !== 'available') return false;
   if (descriptor.capabilities?.web_overview !== true) return false;
   if (typeof descriptor.dataset_fingerprint !== 'string') return false;
   if (descriptor.dataset_fingerprint.length !== 64) return false;
   if (!descriptor.time?.start || !descriptor.time?.end) return false;
   if (!Array.isArray(descriptor.channel_order) || descriptor.channel_order.length === 0) return false;
+  if (isThreeHourlyDataset(descriptor.dataset_id) && (descriptor.frequency_hours !== 3 || earthTimeIndex(descriptor.time.start, descriptor.time.end, descriptor.time.end, 3) === null)) return false;
   return true;
 }
 
@@ -200,7 +272,7 @@ export function initialEarthSelection(descriptor, previous) {
   const start = descriptor?.time?.start ?? null;
   const end = descriptor?.time?.end ?? null;
   const variable = EARTH_VARIABLES.includes(previous?.variable) ? previous.variable : DEFAULT_VARIABLE;
-  const keepDate = previous?.date && dateIndexWithin(start, end, previous.date) !== null
+  const keepDate = previous?.date && earthTimeIndex(start, end, previous.date, descriptor?.frequency_hours || 24) !== null
     ? previous.date
     : null;
   const point = previous?.point

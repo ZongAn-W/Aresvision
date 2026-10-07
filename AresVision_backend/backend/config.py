@@ -52,6 +52,35 @@ EARTH_MERRA2_V1_DIR = Path(os.getenv(
     "ARESVISION_EARTH_MERRA2_V1_DIR",
     DATA_DIR / "earth" / "merra2_daily_v1",
 )).expanduser()
+# Independent three-hourly release; never reinterpret a daily package path.
+EARTH_MERRA2_3HOURLY_DIR = Path(os.getenv(
+    "ARESVISION_EARTH_MERRA2_3HOURLY_DIR",
+    DATA_DIR / "earth" / "merra2_3hourly_v1",
+)).expanduser()
+
+EARTH_DEFAULT_DATASET_IDS = frozenset({
+    "earth_merra2_daily_v2",
+    "earth_merra2_3hourly_v1",
+})
+
+
+def resolve_default_earth_dataset_id(value: Optional[str]) -> str:
+    dataset_id = (value or "earth_merra2_daily_v2").strip().lower()
+    if dataset_id not in EARTH_DEFAULT_DATASET_IDS:
+        raise ValueError(
+            "ARESVISION_DEFAULT_EARTH_DATASET_ID must name a supported Earth entry dataset"
+        )
+    return dataset_id
+
+
+DEFAULT_EARTH_DATASET_ID = resolve_default_earth_dataset_id(
+    os.getenv("ARESVISION_DEFAULT_EARTH_DATASET_ID")
+)
+# Scratch volumes stay outside the Git checkout; interrupted caches are kept.
+EARTH_TRAINING_CACHE_DIR = Path(os.getenv(
+    "ARESVISION_EARTH_TRAINING_CACHE_DIR",
+    BASE_DIR.parents[2] / "earth_training_cache",
+)).expanduser()
 TRAINING_SCRIPTS_DIR = BASE_DIR / "models" / "training_scripts"
 TRAINING_RESULTS_DIR = BASE_DIR / "models" / "training_results"
 TRAINING_LOGS_DIR = BASE_DIR / "models" / "training_logs"

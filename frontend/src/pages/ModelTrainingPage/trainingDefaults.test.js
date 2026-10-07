@@ -128,8 +128,9 @@ test('new experiments apply current defaults while copied configurations keep ta
     'setTransferEnabled(earthMode ? false : defaults.transferEnabled)',
     'setTransferFreezeMode(defaults.transferFreezeMode)',
     'setFinetuneLearningRate(defaults.finetuneLearningRate)',
-    'setWindow(earthMode ? EARTH_WINDOW : defaults.window)',
-    'setHorizon(earthMode ? EARTH_HORIZON : defaults.horizon)',
+    'const activeEarthProfile = earthMode ? getEarthTrainingProfile(trainingDataset) : null',
+    'setWindow(activeEarthProfile ? activeEarthProfile.window : defaults.window)',
+    'setHorizon(activeEarthProfile ? activeEarthProfile.horizon : defaults.horizon)',
   ].forEach((statement) => assert.ok(createHandler.includes(statement), `missing ${statement}`));
 
   const copyStart = pageSource.indexOf('const handleCopyConfig = (task) => {');

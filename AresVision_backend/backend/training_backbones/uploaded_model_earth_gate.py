@@ -33,6 +33,7 @@ from training_backbones.uploaded_model_dataset_spec import (
     declares_earth_feed,
     earth_incompatibility_reasons,
     normalize_dataset_declarations,
+    EARTH_3HOURLY_FEED_KEY,
 )
 from training_backbones.uploaded_model_source_check import validate_uploaded_model_source
 
@@ -57,6 +58,9 @@ class EarthCompatibility:
     display_name: str | None = None
     version: int | None = None
     param_schema: dict[str, Any] = field(default_factory=dict)
+    dataset_id: str = "earth_merra2"
+    status: str = "unavailable"
+    code: str | None = None
 
     def report(self) -> dict[str, Any]:
         return {
@@ -68,10 +72,15 @@ class EarthCompatibility:
             "output_shape": self.output_shape,
             "display_name": self.display_name,
             "version": self.version,
+            "dataset_id": self.dataset_id,
+            "status": "available" if self.compatible else self.status,
+            "code": self.code,
         }
 
 
-def _static_declaration_check(source_text: str, filename: str) -> EarthCompatibility:
+def _static_declaration_check(
+    source_text: str, filename: str, *, dataset_id: str = "earth_merra2"
+) -> EarthCompatibility:
     """Cheap check with no runtime: syntax, safety and the dataset declaration.
 
     This is what explains *why* a model cannot serve Earth before paying for a
@@ -111,6 +120,26 @@ def _static_declaration_check(source_text: str, filename: str) -> EarthCompatibi
         return EarthCompatibility(compatible=False, reasons=[str(exc)], datasets=datasets)
 
     declares = declares_earth_feed(model_spec)
+    if dataset_id == EARTH_3HOURLY_FEED_KEY:
+        try:
+            feed = normalize_dataset_declarations(model_spec).get(dataset_id)
+        except DatasetCapabilityError as exc:
+            return EarthCompatibility(compatible=False, reasons=[str(exc)], datasets=datasets, dataset_id=dataset_id)
+        if feed is None:
+            return EarthCompatibility(
+                compatible=False,
+                reasons=[f"MODEL_SPEC must declare the {dataset_id} dataset feed"],
+                declares_earth=False,
+                datasets=datasets,
+                dataset_id=dataset_id,
+            )
+        return EarthCompatibility(
+            compatible=False,
+            reasons=[],
+            declares_earth=True,
+            datasets=datasets,
+            dataset_id=dataset_id,
+        )
     # The channel count the platform would feed is 1..5; declaring the maximum makes
     # this a necessary condition rather than a guess.
     reasons = earth_incompatibility_reasons(
@@ -153,7 +182,9 @@ def evaluate_earth_compatibility(
     return static
 
 
-def evaluate_package_earth_compatibility(package: Any, validator: Any = None) -> EarthCompatibility:
+def evaluate_package_earth_compatibility(
+    package: Any, validator: Any = None, *, dataset_id: str = "earth_merra2", earth_probe=None
+) -> EarthCompatibility:
     """Run the Earth check for a stored ``UserModelPackage`` row.
 
     The file is read and hashed first, so a drifted upload is reported as such
@@ -168,6 +199,8 @@ def evaluate_package_earth_compatibility(package: Any, validator: Any = None) ->
             reasons=["the uploaded model file is missing; re-upload or revalidate the model"],
             display_name=display_name,
             version=version,
+            dataset_id=dataset_id,
+            code="uploaded_model_missing",
         )
 
     raw = Path(storage_path).read_bytes()
@@ -181,11 +214,16 @@ def evaluate_package_earth_compatibility(package: Any, validator: Any = None) ->
             ],
             display_name=display_name,
             version=version,
+            dataset_id=dataset_id,
+            code="uploaded_model_tampered",
         )
+
+    if dataset_id == EARTH_3HOURLY_FEED_KEY:
+        return _evaluate_three_hour_package(package, raw, validator, earth_probe=earth_probe)
 
     source_text = raw.decode("utf-8")
     filename = f"{display_name or 'uploaded_model'}.py"
-    static = _static_declaration_check(source_text, filename)
+    static = _static_declaration_check(source_text, filename, dataset_id=dataset_id)
     if static.reasons:
         static.display_name = display_name
         static.version = version
@@ -199,22 +237,74 @@ def evaluate_package_earth_compatibility(package: Any, validator: Any = None) ->
         probe_path = Path(temp_dir) / filename
         probe_path.write_bytes(raw)
         result = active_validator.validate_file(probe_path)
+    if dataset_id == EARTH_3HOURLY_FEED_KEY:
+        block = result.earth_compatibilities.get(dataset_id) if result.earth_compatibilities else None
+        if not isinstance(block, dict):
+            block = {"compatible": False, "errors": [
+                "this model has no verified Earth three-hourly compatibility result"
+            ], "output_shape": None}
+        compatible = bool(block.get("compatible"))
+        reasons = list(block.get("errors") or [])
+        output_shape = block.get("output_shape")
+    else:
+        compatible = bool(result.earth_ok)
+        reasons = list(result.earth_errors)
+        output_shape = result.earth_output_shape
     verdict = EarthCompatibility(
-        compatible=bool(result.earth_ok),
-        reasons=list(result.earth_errors),
+        compatible=compatible,
+        reasons=reasons,
         warnings=list(result.warnings),
-        declares_earth=bool(result.datasets),
+        declares_earth=dataset_id in (result.datasets or {}),
         datasets=result.datasets,
-        output_shape=result.earth_output_shape,
+        output_shape=output_shape,
         display_name=display_name,
         version=version,
         param_schema=dict(result.param_schema),
+        dataset_id=dataset_id,
     )
     if not verdict.compatible and not verdict.reasons:
         verdict.reasons = [
             "the model did not pass the Earth dry-run and reported no specific reason"
         ]
     return verdict
+
+
+def _evaluate_three_hour_package(package, raw, validator, *, earth_probe=None):
+    from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA
+
+    identity = dict(dataset_id=EARTH_3HOURLY_FEED_KEY,
+                    display_name=getattr(package, "display_name", None), version=getattr(package, "version", None))
+    if hash_source_bytes(raw) != getattr(package, "content_hash", None):
+        return EarthCompatibility(False, ["The source has no verified matching digest"],
+                                  code="uploaded_model_tampered", **identity)
+    # Execute only inside the validator's bounded child process.
+    with tempfile.TemporaryDirectory(prefix="aresvision_earth_3hour_gate_") as temp_dir:
+        path = Path(temp_dir) / "earth_model.py"
+        path.write_bytes(raw)
+        result = (validator or build_validator()).validate_file(path, earth_probe=earth_probe)
+    block = result.earth_compatibilities.get(EARTH_3HOURLY_FEED_KEY)
+    if not block:
+        declared = EARTH_3HOURLY_FEED_KEY in result.datasets
+        unknown = not result.datasets and not result.errors
+        timed_out = any("timed out" in e or "without a result" in e for e in result.errors)
+        return EarthCompatibility(
+            False, list(result.errors) or ["No verified three-hour declaration and dry-run result"],
+            status="unknown" if unknown or timed_out else "unavailable",
+            code="uploaded_model_compatibility_unknown" if unknown or timed_out else (
+                "uploaded_model_contract_invalid" if declared or result.errors else "uploaded_model_not_earth_3hourly_compatible"),
+            declares_earth=declared, datasets=result.datasets, **identity,
+        )
+    proven = (result.ok is True and block.get("compatible") is True and block.get("status") == "available"
+              and block.get("dataset_id") == EARTH_3HOURLY_FEED_KEY
+              and block.get("contract_schema") == CONTRACT_SCHEMA
+              and block.get("output_shape") == [2, 24, 1, 24, 48])
+    return EarthCompatibility(
+        proven, list(block.get("errors") or []), warnings=list(result.warnings),
+        declares_earth=EARTH_3HOURLY_FEED_KEY in result.datasets, datasets=result.datasets,
+        output_shape=block.get("output_shape"), param_schema=dict(result.param_schema),
+        status="available" if proven else ("unknown" if block.get("status") == "unknown" else "unavailable"),
+        code=None if proven else block.get("code") or "uploaded_model_compatibility_unknown", **identity,
+    )
 
 
 __all__ = [

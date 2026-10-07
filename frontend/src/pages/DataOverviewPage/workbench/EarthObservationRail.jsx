@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
 import { useSettings } from '../../../contexts/SettingsContext';
-import { datesInYear, dayOfYear, daysInYear, monthTicks, seriesValueAt, yearProgress } from './observatoryTimelineRail.js';
-import { earthRailPath, earthRailSeries, nearestEarthRailDate, TRACK_HEIGHT } from './earthObservationRail.js';
+import { datesInYear, daysInYear, monthTicks, seriesValueAt } from './observatoryTimelineRail.js';
+import { earthRailDay, earthRailProgress, earthRailPath, earthRailSeries, nearestEarthRailDate, TRACK_HEIGHT } from './earthObservationRail.js';
+import { formatEarthTime, isValidUtcTimestamp } from '../EarthOverview/earthOverviewModel.js';
 import { buildCurveFillBands } from './railCurveFill.js';
 import './observatoryTimelineRail.css';
 import './marsObservationRail.css';
@@ -18,7 +19,7 @@ function formatValue(value, unit = '') {
 
 function formatDate(date, isZh) {
   if (typeof date !== 'string') return '--';
-  return isZh ? date.replaceAll('-', '.') : date;
+  return isValidUtcTimestamp(date) ? formatEarthTime(date) : isZh ? date.replaceAll('-', '.') : date;
 }
 
 function formatCoord(value) {
@@ -54,12 +55,14 @@ export default function EarthObservationRail({
   actions = null,
   domain = null,
   colorMode = 'inferno',
+  frequencyHours = 24,
 }) {
   const { settings } = useSettings();
   const isZh = settings?.language !== 'en';
   const source = pointSide ? pointSeries : series;
   const rows = useMemo(() => earthRailSeries(source, year), [source, year]);
-  const axis = useMemo(() => datesInYear(timeValues, year), [timeValues, year]);
+  const threeHourly = frequencyHours === 3;
+  const axis = useMemo(() => threeHourly ? timeValues.filter((value) => isValidUtcTimestamp(value) && Number(value.slice(0, 4)) === year) : datesInYear(timeValues, year), [timeValues, year, threeHourly]);
   const ticks = useMemo(() => monthTicks(year, isZh ? MONTH_LABELS_ZH : MONTH_LABELS_EN), [isZh, year]);
   const path = useMemo(() => earthRailPath(rows, domain), [rows, domain]);
   // 曲线下方的填充：按数值分档的实色色块，颜色由本轨数值范围铺满该变量的色带。
@@ -72,8 +75,8 @@ export default function EarthObservationRail({
   const maxIndex = Math.max(0, axis.length - 1);
   const currentDate = displayedDate || requestedDate;
   const currentValue = seriesValueAt({ points: rows }, currentDate);
-  const dateProgress = yearProgress(requestedDate, year) ?? 0;
-  const doy = dayOfYear(requestedDate, year);
+  const dateProgress = earthRailProgress(requestedDate, year) ?? 0;
+  const doy = earthRailDay(requestedDate, year);
   const total = daysInYear(year);
   const coordinate = point?.lat !== undefined ? `${formatCoord(point.lat)}°, ${formatCoord(point.lon ?? point.lng)}°` : (isZh ? '尚未选择点位' : 'No point selected');
   const title = pointSide ? (isZh ? '单点年变化' : 'Point trend') : (isZh ? '全球均值' : 'Global mean');
@@ -106,6 +109,15 @@ export default function EarthObservationRail({
       </div>
       <div className="observatory-rail__readout mars-observation-rail__readout">
         <div className="mars-observation-rail__time">{formatDate(requestedDate, isZh)}</div>
+        {threeHourly && !pointSide ? <div style={{ display: 'grid', gap: 4 }}>
+          <label><span>{isZh ? 'UTC 日期' : 'UTC date'}</span><input type="date" value={requestedDate?.slice(0, 10) || ''}
+            min={axis[0]?.slice(0, 10)} max={axis.at(-1)?.slice(0, 10)} disabled={railDisabled}
+            onChange={(event) => { const next = `${event.target.value}T${requestedDate?.slice(11, 19) || '01:30:00'}Z`; if (axis.includes(next)) onDateChange?.(next); }} /></label>
+          <label><span>{isZh ? 'UTC 时间 · 3 小时' : 'UTC time · 3 hours'}</span><select value={requestedDate?.slice(11, 16) || '01:30'} disabled={railDisabled}
+            onChange={(event) => { const next = `${requestedDate.slice(0, 10)}T${event.target.value}:00Z`; if (axis.includes(next)) onDateChange?.(next); }}>
+            {Array.from({ length: 8 }, (_, i) => `${String(1 + 3 * i).padStart(2, '0')}:30`).map((value) => <option key={value} value={value}>{value}</option>)}
+          </select></label>
+        </div> : null}
         <span className="mars-observation-rail__label" title={variableLabel || ''}>{variableLabel || (isZh ? '全球均值' : 'Global mean')}</span>
         <strong data-rail-value={Number.isFinite(currentValue) ? currentValue : ''}>{formatValue(currentValue)} <small>{units}</small></strong>
         <span className="mars-observation-rail__label" title={pointSide ? coordinate : (isZh ? 'MERRA-2 · 面积加权全球均值' : 'MERRA-2 · area-weighted global mean')}>
@@ -114,7 +126,7 @@ export default function EarthObservationRail({
         <span className="mars-observation-rail__sample">{currentDate && currentDate !== requestedDate
           ? `${isZh ? '读数' : 'Value at'} ${currentDate}`
           : loading ? (isZh ? '正在加载数据场…' : 'Loading field…')
-            : (isZh ? `第 ${doy ?? '--'} 天 / ${total}` : `Day ${doy ?? '--'} / ${total}`)}</span>
+            : (isZh ? `第 ${doy === null ? '--' : Math.floor(doy)} 天 / ${total}${threeHourly ? ' · 每 3 小时' : ''}` : `Day ${doy === null ? '--' : Math.floor(doy)} / ${total}${threeHourly ? ' · 3 hours' : ''}`)}</span>
       </div>
       <div className="mars-observation-rail__plot">
         <svg viewBox="0 0 100 460" preserveAspectRatio="none" aria-hidden="true">
@@ -129,7 +141,7 @@ export default function EarthObservationRail({
           {path ? <path d={path} className={pointSide ? 'observatory-rail__point-curve' : 'observatory-rail__band'} /> : null}
           <line x1="0" x2="80" y1={dateProgress * TRACK_HEIGHT} y2={dateProgress * TRACK_HEIGHT} className="observatory-rail__point-marker" />
         </svg>
-        {!pointSide ? <input className="mars-observation-rail__slider" type="range" min="1" max={total} step="1" value={doy ?? 1} disabled={railDisabled} aria-orientation="vertical" aria-label={isZh ? '数据日期' : 'Data date'} aria-valuetext={requestedDate || (isZh ? '未选择日期' : 'No date selected')} onChange={(event) => {
+        {!pointSide ? <input className="mars-observation-rail__slider" type="range" min="1" max={threeHourly ? total + 1 : total} step={threeHourly ? 0.125 : 1} value={doy ?? 1} disabled={railDisabled} aria-orientation="vertical" aria-label={isZh ? '数据日期' : 'Data date'} aria-valuetext={requestedDate || (isZh ? '未选择日期' : 'No date selected')} onChange={(event) => {
           const date = nearestEarthRailDate(axis, Number(event.target.value), year);
           if (date) onDateChange?.(date);
         }} onKeyDown={(event) => {
@@ -157,9 +169,9 @@ export default function EarthObservationRail({
         </div>
         {pointSide ? <p>{isZh ? '垂直轴共用日期；数值刻度为本轨独立' : 'Shared date axis; own value scale'}</p> : <>
           <div className="mars-observation-rail__controls">
-            <button type="button" className="observatory-rail__btn" disabled={railDisabled || sliderValue <= 0} onClick={() => step(-1)} aria-label={isZh ? '前一天' : 'Previous day'}>▲</button>
+            <button type="button" className="observatory-rail__btn" disabled={railDisabled || sliderValue <= 0} onClick={() => step(-1)} aria-label={threeHourly ? (isZh ? '前 3 小时' : 'Previous 3 hours') : (isZh ? '前一天' : 'Previous day')}>▲</button>
             <button type="button" className="observatory-rail__btn observatory-rail__btn--play" disabled={railDisabled} onClick={() => onPlayChange?.(!playing)} aria-pressed={playing} aria-label={playing ? (isZh ? '暂停' : 'Pause') : (isZh ? '播放' : 'Play')}>{playing ? 'Ⅱ' : '▶'}</button>
-            <button type="button" className="observatory-rail__btn" disabled={railDisabled || sliderValue >= maxIndex} onClick={() => step(1)} aria-label={isZh ? '后一天' : 'Next day'}>▼</button>
+            <button type="button" className="observatory-rail__btn" disabled={railDisabled || sliderValue >= maxIndex} onClick={() => step(1)} aria-label={threeHourly ? (isZh ? '后 3 小时' : 'Next 3 hours') : (isZh ? '后一天' : 'Next day')}>▼</button>
             <button type="button" className="observatory-rail__btn" disabled={railDisabled || playing} onClick={onRestart} aria-label={isZh ? '从首日重播' : 'Replay from first day'}>↺</button>
           </div>
           <div className="observatory-rail__actions">{actions}</div>

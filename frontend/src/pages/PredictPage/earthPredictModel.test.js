@@ -4,12 +4,15 @@ import assert from 'node:assert/strict';
 import {
   buildEarthFieldPayload,
   buildEarthPredictKey,
+  earthLeadLabel,
+  getEarthCadence,
   getEarthTrainingModelOptions,
   isEarthTask,
   isOriginSelectable,
   pickDefaultOrigin,
   readEarthLeadMetric,
   readEarthMetric,
+  readEarthHorizonMetric,
   readEarthPredictRequestFromHash,
   resolveEarthColorRanges,
   resolveEarthPredictErrorMessage,
@@ -106,6 +109,26 @@ test('Earth cache key separates planet, dataset identity, task and origin', () =
 
   assert.equal(buildEarthPredictKey({ taskId: 0, forecastOrigin: '2021-07-08' }), null);
   assert.equal(buildEarthPredictKey({ taskId: 12 }), null);
+
+  const threeHourly = buildEarthPredictKey({
+    taskId: 12,
+    datasetId: 'earth_merra2_3hourly_v1',
+    datasetVersion: 'v1',
+    datasetFingerprint: 'b'.repeat(64),
+    forecastOrigin: '2021-07-08T01:30:00Z',
+    targetTimestamps: ['2021-07-08T04:30:00Z', '2021-07-08T07:30:00Z'],
+  });
+  assert.match(threeHourly, /origin:2021-07-08T01:30:00Z/);
+  assert.match(threeHourly, /targets:2021-07-08T04:30:00Z,2021-07-08T07:30:00Z/);
+});
+
+test('Earth cadence and leads distinguish 3-hour tasks from daily tasks', () => {
+  const cadence = getEarthCadence({ dataset_id: 'earth_merra2_3hourly_v1', frequency_hours: 3, step: 3 });
+  assert.equal(cadence.threeHourly, true);
+  assert.equal(earthLeadLabel(0, { dataset_id: 'earth_merra2_3hourly_v1' }), '+3h');
+  assert.equal(earthLeadLabel(23, { dataset_id: 'earth_merra2_3hourly_v1' }), '+72h');
+  assert.equal(earthLeadLabel(2, { dataset_id: 'earth_merra2_daily_v2' }), '+3');
+  assert.equal(getEarthCadence({ dataset_id: 'earth_merra2_daily_v2' }).threeHourly, false);
 });
 
 test('changing the Earth result identity clears the previous result', () => {
@@ -150,6 +173,8 @@ test('metrics read only finite values', () => {
   assert.equal(readEarthMetric({ overall: { rmse: Number.NaN } }, 'rmse'), null);
   assert.equal(readEarthLeadMetric(response.metrics, 3, 'rmse'), 3);
   assert.equal(readEarthLeadMetric(response.metrics, 9, 'rmse'), null);
+  assert.equal(readEarthLeadMetric({ by_lead: [{ lead_step: 8, rmse: 4 }] }, 8, 'rmse'), 4);
+  assert.equal(readEarthHorizonMetric({ by_horizon: [{ horizon_hours: 24, rmse: 5 }] }, 24, 'rmse'), 5);
 });
 
 test('origin selection follows the server provided range', () => {

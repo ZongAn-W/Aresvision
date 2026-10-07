@@ -23,6 +23,16 @@ UPLOADED_MODEL_DOWNLOAD_ASSETS = {
         "download_name": "aresvision_uploaded_model_template.py",
         "media_type": "text/x-python; charset=utf-8",
     },
+    "earth-3hourly-template": {
+        "path": REPO_ROOT / "docs" / "earth-3hourly-uploaded-model-template.py",
+        "download_name": "aresvision_earth_3hourly_model_v1.py",
+        "media_type": "text/x-python; charset=utf-8",
+    },
+    "earth-3hourly-guide": {
+        "path": REPO_ROOT / "docs" / "earth-3hourly-uploaded-model.md",
+        "download_name": "aresvision_earth_3hourly_model_v1.md",
+        "media_type": "text/markdown; charset=utf-8",
+    },
 }
 
 
@@ -93,6 +103,22 @@ def _normalize_validation_report(value: str | None) -> dict[str, Any]:
             "errors": _normalize_string_list(earth.get("errors")),
             "output_shape": _normalize_output_shape(earth.get("output_shape")),
         }
+    earth_datasets = parsed.get("earth_datasets")
+    if isinstance(earth_datasets, dict):
+        report["earth_datasets"] = {
+            str(dataset_id): {
+                "dataset_id": str(dataset_id),
+                "status": value.get("status", "unknown") if isinstance(value, dict) else "unknown",
+                "code": value.get("code") if isinstance(value, dict) else None,
+                "contract_schema": value.get("contract_schema") if isinstance(value, dict) else None,
+                "compatible": bool(value.get("compatible")) if isinstance(value, dict) else False,
+                "errors": _normalize_string_list(value.get("errors")) if isinstance(value, dict) else [],
+                "output_shape": _normalize_output_shape(value.get("output_shape")) if isinstance(value, dict) else None,
+            }
+            for dataset_id, value in earth_datasets.items()
+        }
+    if isinstance(parsed.get("mars"), dict):
+        report["mars"] = {"compatible": parsed["mars"].get("compatible") is True}
     return report
 
 
@@ -214,6 +240,7 @@ async def get_user_model_earth_compatibility(
     model_id: str,
     request: Request,
     current_user: User = Depends(get_current_user),
+    dataset_id: str = "earth_merra2",
 ):
     """Whether this uploaded model may be trained on Earth MERRA-2 data.
 
@@ -221,7 +248,11 @@ async def get_user_model_earth_compatibility(
     training page asks this before offering the model for an Earth experiment.
     """
     try:
-        return await _service(request).get_earth_compatibility(model_id, current_user.id)
+        return await _service(request).get_earth_compatibility(
+            model_id, current_user.id, dataset_id=dataset_id.strip().lower()
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "unknown_dataset_id", "message": str(exc)})
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except PermissionError as exc:

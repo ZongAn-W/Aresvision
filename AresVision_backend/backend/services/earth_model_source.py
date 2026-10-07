@@ -29,7 +29,10 @@ import torch
 from services.uploaded_model_source import (
     UploadedModelSourceError,
     resolve_source_text,
+    hash_source_bytes,
 )
+from services.dataset_identity import EARTH_DATASET_3HOURLY_ID
+from services.earth_training_contract import earth_training_profile
 from training_backbones.earth_daily_model import (
     earth_model_config,
     create_earth_forecaster,
@@ -67,6 +70,7 @@ class ModelSourcePlan:
     linear_hidden_layers: int
     uploaded_model: dict[str, Any] | None = None
     warnings: tuple[str, ...] = ()
+    dataset_id: str | None = None
 
 
 def _load_uploaded_module(source_text: str, filename: str):
@@ -158,6 +162,7 @@ def build_uploaded_earth_model(
     horizon: int,
     height: int,
     width: int,
+    dataset_id: str | None = None,
 ) -> tuple[torch.nn.Module, dict[str, Any], tuple[str, ...]]:
     """Build the uploaded model for the Earth feed.
 
@@ -165,7 +170,19 @@ def build_uploaded_earth_model(
     missing source without an embedded copy, or a Mars-only auxiliary input.
     """
     order = require_earth_channel_order(input_channel_order)
-    source_text, source_report = resolve_source_text(reference)
+    if dataset_id == EARTH_DATASET_3HOURLY_ID and (window, horizon, height, width) != (56, 24, 240, 480):
+        raise EarthModelBuildError("Three-hour uploaded model requires the server 56/24 and 240x480 profile",
+                                   code="uploaded_model_contract_invalid")
+    try:
+        source_text, source_report = resolve_source_text(reference)
+    except UploadedModelSourceError as exc:
+        raise EarthModelBuildError(str(exc), code=exc.code) from exc
+    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        embedded = reference.get("source_text")
+        if (not reference.get("content_hash")
+                or hash_source_bytes(source_text.encode("utf-8")) != reference["content_hash"]
+                or (isinstance(embedded, str) and hash_source_bytes(embedded.encode("utf-8")) != reference["content_hash"])):
+            raise EarthModelBuildError("Three-hour uploaded source digest is invalid", code="uploaded_model_tampered")
     filename = str(reference.get("display_name") or "uploaded_model") + ".py"
 
     module = _load_uploaded_module(source_text, filename)
@@ -181,6 +198,48 @@ def build_uploaded_earth_model(
             "The uploaded model no longer exports build_model(config)",
             code="uploaded_model_source_invalid",
         )
+
+    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        from training_backbones.uploaded_model_dataset_spec import (
+            EARTH_3HOURLY_FEED_KEY,
+            earth_3hourly_feed_from_spec,
+        )
+        try:
+            feed = earth_3hourly_feed_from_spec(model_spec)
+        except Exception as exc:
+            raise EarthModelBuildError(
+                f"The uploaded model has an invalid Earth three-hourly spec: {exc}",
+                code="uploaded_model_contract_invalid",
+            ) from exc
+        if feed is None:
+            raise EarthModelBuildError(
+                f"The uploaded model must declare MODEL_SPEC.datasets.{EARTH_3HOURLY_FEED_KEY}",
+                code="uploaded_model_not_earth_3hourly_compatible",
+            )
+        from services.user_model_validator import UserModelValidator
+        from training_backbones.earth_3hourly_uploaded_contract import (
+            CONTRACT_SCHEMA, build_config, RESERVED_PARAMETERS,
+        )
+        schema, errors = UserModelValidator._normalize_parameters(model_spec.get("parameters", {}))
+        if errors or model_spec.get("auxiliary_inputs") or any(
+                k in RESERVED_PARAMETERS or k.startswith("_") for k in schema):
+            raise EarthModelBuildError("Invalid three-hour uploaded parameters or auxiliary inputs",
+                                       code="uploaded_model_contract_invalid")
+        if reference.get("param_schema") != schema:
+            raise EarthModelBuildError("Stored parameter schema disagrees with verified source",
+                                       code="uploaded_model_contract_invalid")
+        params, errors = UserModelValidator.normalize_custom_params(schema, reference.get("custom_model_params"))
+        if errors:
+            raise EarthModelBuildError("; ".join(errors), code="invalid_earth_training_parameters")
+        config = build_config(order, params)
+        if reference.get("build_config") and reference["build_config"] != config:
+            raise EarthModelBuildError("Stored three-hour build config disagrees with verified source",
+                                       code="uploaded_model_contract_invalid")
+        model = build_model(config)
+        if not isinstance(model, torch.nn.Module):
+            raise EarthModelBuildError("build_model(config) must return torch.nn.Module")
+        model._aresvision_earth_3hourly_contract = CONTRACT_SCHEMA
+        return model, config, ()
 
     try:
         auxiliary_inputs = normalize_auxiliary_inputs(model_spec)
@@ -236,13 +295,21 @@ def build_uploaded_earth_model(
 
 def build_earth_model_for_plan(plan: ModelSourcePlan) -> tuple[torch.nn.Module, dict[str, Any], tuple[str, ...]]:
     """Build the Earth model described by a plan (official or uploaded)."""
+    profile = earth_training_profile(plan.dataset_id)
+    height, width = profile["grid_shape"]
     if plan.model_source == MODEL_SOURCE_OFFICIAL:
         model = create_earth_forecaster(
-            plan.input_channel_order, plan.linear_hidden_layers
+            plan.input_channel_order, plan.linear_hidden_layers,
+            window=profile["window"], horizon=profile["horizon"],
+            height=height, width=width,
         )
         config = earth_model_config(
-            plan.input_channel_order, plan.linear_hidden_layers
+            plan.input_channel_order, plan.linear_hidden_layers,
+            window=profile["window"], horizon=profile["horizon"],
+            height=height, width=width,
         )
+        if plan.dataset_id == EARTH_DATASET_3HOURLY_ID:
+            config["implementation_id"] = profile["implementation_id"]
         return model, config, ()
     if plan.model_source == MODEL_SOURCE_UPLOADED:
         if not isinstance(plan.uploaded_model, dict):
@@ -253,10 +320,11 @@ def build_earth_model_for_plan(plan: ModelSourcePlan) -> tuple[torch.nn.Module, 
         return build_uploaded_earth_model(
             reference=plan.uploaded_model,
             input_channel_order=plan.input_channel_order,
-            window=7,
-            horizon=3,
-            height=36,
-            width=72,
+            window=profile["window"],
+            horizon=profile["horizon"],
+            height=height,
+            width=width,
+            dataset_id=plan.dataset_id,
         )
     raise EarthModelBuildError(f"Unsupported Earth model source: {plan.model_source}")
 
@@ -282,6 +350,12 @@ def earth_forward_for_model(
         return earth_forward(model, inputs, horizon=horizon, height=height, width=width)
     if model_source != MODEL_SOURCE_UPLOADED:
         raise EarthModelBuildError(f"Unsupported Earth model source: {model_source}")
+    if getattr(model, "_aresvision_earth_3hourly_contract", None):
+        from training_backbones.earth_3hourly_uploaded_contract import forward
+        try:
+            return forward(model, inputs)
+        except ValueError as exc:
+            raise EarthModelBuildError(str(exc), code="uploaded_model_contract_invalid") from exc
     if inputs.dim() != 5:
         raise EarthModelBuildError("Earth model input must be [B, window, C, H, W]")
     batch, _, _, input_height, input_width = inputs.shape

@@ -13,6 +13,35 @@ export const EARTH_TARGET_UNIT = 'DU';
 
 export const EARTH_METRIC_KEYS = ['rmse', 'mae'];
 export const EARTH_FIELD_KINDS = ['prediction', 'reference', 'residual'];
+export const EARTH_3HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1';
+
+/** Return the cadence advertised by the server, retaining daily defaults. */
+export function getEarthCadence(value) {
+  const frequencyHours = Number(value?.frequency_hours ?? value?.temporal?.frequency_hours);
+  const step = Number(value?.step ?? value?.temporal?.step);
+  const threeHourly = String(value?.dataset_id || '') === EARTH_3HOURLY_DATASET_ID
+    || frequencyHours === 3;
+  return {
+    threeHourly,
+    frequencyHours: threeHourly ? 3 : (Number.isFinite(frequencyHours) ? frequencyHours : 24),
+    step: threeHourly ? 3 : (Number.isFinite(step) ? step : 1),
+    unit: threeHourly ? 'hour' : 'day',
+  };
+}
+
+export function earthTimestampList(value, fallback = []) {
+  const list = (Array.isArray(value?.target_timestamps) && value.target_timestamps.length
+    ? value.target_timestamps
+    : (Array.isArray(value?.timestamps) && value.timestamps.length
+      ? value.timestamps : (value?.target_dates || fallback)));
+  return Array.isArray(list) ? list : [];
+}
+
+export function earthLeadLabel(index, value, labels = {}) {
+  const cadence = getEarthCadence(value);
+  const n = Number(index) + 1;
+  return cadence.threeHourly ? `+${n * 3}h` : `+${n}`;
+}
 
 /**
  * 从 hash 读取 Earth 预测请求。
@@ -50,6 +79,7 @@ export function buildEarthPredictKey({
   datasetFingerprint,
   forecastOrigin,
   targetDates = [],
+  targetTimestamps = null,
 } = {}) {
   const normalizedTask = normalizePositiveInteger(taskId);
   if (!normalizedTask || !forecastOrigin) return null;
@@ -60,7 +90,7 @@ export function buildEarthPredictKey({
     `v:${datasetVersion || 'none'}`,
     `fp:${datasetFingerprint || 'none'}`,
     `origin:${forecastOrigin}`,
-    `targets:${(Array.isArray(targetDates) ? targetDates : []).join(',')}`,
+    `targets:${(Array.isArray(targetTimestamps || targetDates) ? (targetTimestamps || targetDates) : []).join(',')}`,
   ].join('|');
 }
 
@@ -146,7 +176,16 @@ export function readEarthMetric(metrics, key) {
 }
 
 export function readEarthLeadMetric(metrics, leadDay, key) {
-  const row = (metrics?.by_lead || []).find((item) => Number(item?.lead_day) === Number(leadDay));
+  const row = (metrics?.by_lead || []).find((item) => (
+    Number(item?.lead_day) === Number(leadDay)
+    || Number(item?.lead_step) === Number(leadDay)
+  ));
+  const value = row?.[key];
+  return Number.isFinite(value) ? value : null;
+}
+
+export function readEarthHorizonMetric(metrics, horizonHours, key) {
+  const row = (metrics?.by_horizon || []).find((item) => Number(item?.horizon_hours) === Number(horizonHours));
   const value = row?.[key];
   return Number.isFinite(value) ? value : null;
 }
@@ -154,7 +193,8 @@ export function readEarthLeadMetric(metrics, leadDay, key) {
 /** 起点是否落在服务端给出的可选范围内。 */
 export function isOriginSelectable(origins, origin) {
   if (!origin) return false;
-  const dates = origins?.dates;
+  const dates = Array.isArray(origins?.timestamps) && origins.timestamps.length
+    ? origins.timestamps : origins?.dates;
   if (Array.isArray(dates) && dates.length > 0) return dates.includes(origin);
   if (origins?.start && origins?.end) return origin >= origins.start && origin <= origins.end;
   return false;
@@ -162,7 +202,9 @@ export function isOriginSelectable(origins, origin) {
 
 /** 默认起点：优先今天之前的最近可用日期，否则用可选范围末端的最后一个。 */
 export function pickDefaultOrigin(origins, today = null) {
-  const dates = Array.isArray(origins?.dates) ? origins.dates : [];
+  const candidateDates = Array.isArray(origins?.timestamps) && origins.timestamps.length
+    ? origins.timestamps : origins?.dates;
+  const dates = Array.isArray(candidateDates) ? candidateDates : [];
   if (dates.length === 0) return origins?.end || '';
   if (!today) return dates[dates.length - 1];
   for (let index = dates.length - 1; index >= 0; index -= 1) {
@@ -177,6 +219,8 @@ const EARTH_ERROR_MESSAGES = {
   dataset_version_changed: 'earthDatasetChanged',
   invalid_earth_training_artifact: 'earthArtifactInvalid',
   earth_prediction_task_not_completed: 'earthTaskNotCompleted',
+  earth_prediction_data_unavailable: 'earthPredictionDataUnavailable',
+  earth_training_profile_unsupported: 'earthTrainingProfileUnsupported',
   dataset_prediction_not_supported: 'earthNotAnEarthTask',
   dataset_unavailable: 'earthDatasetUnavailable',
 };
@@ -194,7 +238,8 @@ export function isEarthTask(task) {
   if (!task) return false;
   if (typeof task.is_earth_task === 'boolean') return task.is_earth_task;
   return String(task.dataset_id || '') === 'earth_merra2_daily_v2'
-    || String(task.dataset_id || '') === 'earth_merra2_daily_v1';
+    || String(task.dataset_id || '') === 'earth_merra2_daily_v1'
+    || String(task.dataset_id || '') === EARTH_3HOURLY_DATASET_ID;
 }
 
 /**

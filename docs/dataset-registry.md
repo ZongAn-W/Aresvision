@@ -2,7 +2,7 @@
 
 本文记录“数据集注册与训练任务身份兼容”第一阶段的已实现行为：只读数据集目录 API、Earth 小包发布校验、训练任务身份列与旧任务迁移、新训练请求的严格校验，以及当前仍未开放的能力边界。
 
-实施方案见 [数据集注册与训练任务身份实施方案](plans/2026-09-23-dataset-registry-and-task-identity.md)。文档最近核对日期：**2026-09-24**；核对范围见文末“验证记录”。
+实施方案见 [数据集注册与训练任务身份实施方案](plans/2026-09-23-dataset-registry-and-task-identity.md)。文档最近核对日期：**2026-10-07**；三小时注册、分块校验、官方 DLinear / 独立契约上传模型 56→24 训练与 UTC datetime 历史回测已实现，总览及训练/预测前端已接入，旧日频与上传契约保留。开发默认仍为日频 v2；当前配置目录只读检查日频与三小时 descriptor 均 `available`。完整包可用不等同于真实数据训练/预测验收，分阶段记录见文末及[三小时专题](earth-merra2-3hourly.md)。
 
 [二维地球数据总览实施方案](plans/2026-09-23-earth-overview-2d.md) 对应阶段已实现；当前总览行为见 [二维地球数据总览](earth-overview.md)，默认 v2 全球数据契约见 [地球小数据包](earth-compact-dataset.md)。
 
@@ -13,22 +13,22 @@
 | 能力 | 状态 |
 | --- | --- |
 | `GET /api/datasets` 与 `GET /api/datasets/{dataset_id}` | 已实现，公开只读 |
-| 固定注册 `openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v1`、`earth_merra2_daily_v2` | 已实现 |
+| 固定注册 `openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v1`、`earth_merra2_daily_v2`、`earth_merra2_3hourly_v1` | 已实现，原四项顺序不变 |
 | Earth 小包（manifest + NetCDF）发布指纹与内容一致性校验 | 已实现 |
 | `GET /api/datasets/{dataset_id}/overview/*` 三个地球总览接口 | 已实现，见 [二维地球数据总览](earth-overview.md) |
 | 训练任务五个身份列、旧任务幂等回填 | 已实现 |
-| 新训练请求严格校验数据集；未知 ID 与 Earth 训练在创建任务前拒绝 | 已实现 |
+| 新训练请求严格校验数据集与 profile；未知 ID 和不支持的模型配置在创建任务前拒绝 | 已实现；日频 7→3，三小时官方/独立契约上传模型 56→24 |
 | 地球总览页面（三维全球球体、逐日播放、点位与区域曲线） | 已实现，见 [共用分析工作台](earth-analysis-workbench.md) |
 | `GET /api/analysis/earth/overview/*` 四个地球分析接口（`context`、`research-suite`、`spatial-diagnostics`、`polar-dynamics`）与 `POST .../insight` | 已实现，见 [共用分析工作台](earth-analysis-workbench.md) |
 | 地球年度分析、极区统计（`\|latitude\| >= 60°`）与图表 AI 解读 | 已实现 |
 | 地球昼夜变化 | 未实现且当前数据不可支持：日平均没有日内采样 |
 | 风场粒子、派生风速 | 未实现 |
-| Earth 训练（官方 DLinear、可选 Earth 通道、单文件 checkpoint 与完成前严格重载） | 已实现，见 [地球训练与历史预测](earth-training.md) |
-| 地球历史日期预测 API（可选起点、三天日期、预测/参考/残差与指标） | 已实现，见 [地球训练与历史预测](earth-training.md) |
+| Earth 训练（官方 DLinear、可选 Earth 通道、单文件 checkpoint 与完成前严格重载） | 日频网页与三小时后端已实现，见 [地球训练与历史预测](earth-training.md) |
+| 地球历史回测 API（日频日期 / 三小时 UTC datetime、可选起点、预测/参考/残差与指标） | 已实现，日频 7→3，三小时 56→24，见 [地球训练与历史预测](earth-training.md) |
 | 持久性基线、Earth/Mars 混合比较、无真值外推 | 未实现 |
 | 用户上传数据注册、在线下载、数据集管理后台 | 未实现 |
 
-**地球总览、训练与历史预测三条入口均已接入。** `capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=true` 表示官方 DLinear 训练入口已接通，`trained_prediction=true` 表示历史日期预测入口已接通；三者都是**入口接线**，数据是否可用仍由 `availability` 单独表达（缺包时目录仍返回 200，但训练与预测请求返回 503）。metadata 与训练能力必须分开理解。分析接口的 `capabilities.diurnal=false` 是**数据能力**声明：日平均数据没有日内采样，与接口是否实现无关。
+**日频地球总览、训练与历史预测入口保持既有接线。** `capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=true` 表示训练入口已接通，`trained_prediction=true` 表示历史回测入口已接通；三者都是**入口接线**，数据是否可用仍由 `availability` 单独表达。三小时为 `metadata/training/trained_prediction/web_overview=true`，official DLinear 与符合独立契约的 uploaded 模型使用 56→24 profile；旧日频/Mars 上传结论不能证明三小时兼容。日频日期工具仍拒绝三小时请求，总览按 dataset_id 进入 UTC timestamp 分支，历史回测 API 按任务身份选择 datetime 分支。缺包时目录仍返回 200，创建训练的数据请求返回 503；已绑定三小时任务回测时的缺失或损坏发布返回 409 `dataset_version_changed`，权限无法验证仍返回 503。日频分析接口的 `capabilities.diurnal=false` 表示日平均数据没有日内采样。
 
 ## 注册身份：ID、版本与指纹分开
 
@@ -37,12 +37,14 @@
 | `openmars_mcd` | `mars` | `null` | `null` | 现有服务器目录尚无不可变发布版本 |
 | `mcd_overview` | `mars` | `null` | `null` | 同上，与前一来源区分 |
 | `earth_merra2_daily_v1` | `earth` | `v1` | `aresvision_earth_daily_v1` | 保留原 31×49 区域抽样包，原始文件和哈希不变 |
-| `earth_merra2_daily_v2` | `earth` | `v2` | `aresvision_earth_daily_v1` | 默认全球 36×72、5° 单元，源小时场重新处理 |
+| `earth_merra2_daily_v2` | `earth` | `v2` | `aresvision_earth_daily_v1` | 开发默认全球 36×72、5° 单元，源小时场重新处理 |
+| `earth_merra2_3hourly_v1` | `earth` | `v1` | `aresvision_earth_3hourly_v1` | 独立全球 240×480、0.75° 单元，三小时 UTC 中心标签，分块校验 |
 
 - `schema` 是文件格式协议名，不是数据集 ID，也不是数据版本。
-- `manifest_sha256` 指 `manifest.json` **原始字节**的 SHA-256；发布后即使只是重新序列化 JSON 也算 manifest 变更。
+- `manifest_sha256` 指 `manifest.json` **原始字节**的 SHA-256；日频发布继续按其固定原始字节哈希验证。
 - `data_sha256` 指 NetCDF 文件原始字节的 SHA-256。
-- `dataset_fingerprint` 组合 `dataset_id`、`dataset_version`、`manifest_sha256`、`data_sha256`，算法固定为对四字段做 `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=True)` 后再取 SHA-256 十六进制。四个组成部分任一变化都会改变指纹。
+- 日频 `dataset_fingerprint` 组合 `dataset_id`、`dataset_version`、`manifest_sha256`、`data_sha256`，算法固定为对四字段做 `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=True)` 后再取 SHA-256 十六进制；旧哈希和组合算法不变。
+- 三小时 fingerprint 与离线构建器保持一致：使用排除 `dataset_fingerprint` 本身后的 canonical manifest 内容摘要（`manifest_content_sha256`）作为组合函数的 manifest 参数，另返回原文件字节 SHA。格式化 JSON 只改变字节 SHA，不改变三小时产品 fingerprint；ID 和版本始终参与组合，不能与日频共用身份。
 - Mars 无版本记录时如实返回 `null`，不给旧来源编造 `v1`，也不用文件修改时间冒充版本。
 
 保留的 Earth v1 发布指纹：
@@ -55,7 +57,7 @@ dataset_fingerprint     74ce14752cb83932b29b458d9c19a61804861c270e6fec33f5531677
 
 默认 v2 固定发布 SHA：manifest 为 `935ca37bd3064772a370db6873b605e12b85c031281c2b34d8fbc49ab11f0702`，NetCDF 为 `d280a17cb291e1568ccedd1638cb2fadcc5cb8d89bb8ed0d4d51987e8e181396`。v2 的覆盖判断同时核对两轴实际 cell bounds、中心、连续性和全球范围；归一化摘要与训练日重算值一致后才可用。
 
-把数据和 manifest 一起替换，也不构成原发布：注册表始终以各 ID 固定发布定义中的两个 expected SHA 为准，客户端无法从 API 或配置覆盖它。
+对两个旧日频 ID，把数据和 manifest 一起替换也不构成原发布：原固定 expected SHA 始终保持。三小时发布由服务器配置目录中的 manifest 定义，校验自报 NetCDF SHA、canonical fingerprint 与实际科学契约，不固定为开发 smoke 的哈希；服务器替换为另一个自洽包会产生另一个 fingerprint。客户端无法指定发布目录或覆盖身份。
 
 ## 对外查询协议
 
@@ -63,14 +65,16 @@ dataset_fingerprint     74ce14752cb83932b29b458d9c19a61804861c270e6fec33f5531677
 
 ```text
 GET /api/datasets
-200 {"items": [DatasetDescriptor, DatasetDescriptor, DatasetDescriptor, DatasetDescriptor]}
+200 {"items": [DatasetDescriptor, ...], "default_earth_dataset_id": "earth_merra2_daily_v2"}
 
 GET /api/datasets/{dataset_id}
 200 DatasetDescriptor
 404 {"detail": {"code": "unknown_dataset", "message": "Unknown dataset id"}}
 ```
 
-列表稳定按 `openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v1`、`earth_merra2_daily_v2` 顺序返回。已注册但文件缺失仍返回 200 和明确状态；缺失或损坏的 Earth 不会让整个列表失败，也不从列表消失。只有无效的查询 ID 才返回 404。
+列表稳定按 `openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v1`、`earth_merra2_daily_v2`、`earth_merra2_3hourly_v1` 顺序返回。已注册但文件缺失仍返回 200 和明确状态；缺失或损坏的新包不改变旧包状态，也不从列表消失。只有无效的查询 ID 才返回 404。
+
+`default_earth_dataset_id` 由 `ARESVISION_DEFAULT_EARTH_DATASET_ID` 配置，只接受 Earth 入口 ID `earth_merra2_daily_v2` 或 `earth_merra2_3hourly_v1`；未设置时为 `earth_merra2_daily_v2`。开发 `.env.example` 保持日频值，生产部署示例 `.env.production.example` 将默认值设为三小时 ID。Earth 首页/入口通过该 catalog 字段选择默认数据集；显式选择仍以所选 ID 为准。这个配置只控制新入口，不会改写旧任务、checkpoint、时间轴或窗口，也不会把日频任务迁移到三小时。将变量改回 `earth_merra2_daily_v2` 并重启可回滚入口默认值。三小时包缺失时列表照常返回；当前完整包 descriptor 为 `available`，应用启动本身不依赖该包。
 
 `DatasetDescriptor` 字段：
 
@@ -84,14 +88,16 @@ GET /api/datasets/{dataset_id}
 | `availability_reason` | 稳定错误码或 null，不返回底层异常文本 |
 | `manifest_sha256`、`data_sha256`、`dataset_fingerprint` | 验证通过的 64 位小写十六进制 SHA 或 null |
 | `capabilities` | `{metadata, training, web_overview, trained_prediction}`，表示入口是否适配，与文件是否齐备分别说明 |
-| `time` | Earth 为真实日期；Mars 为 `{kind: "mars_ls", calendar/start/end/count/step/step_unit: null}` |
+| `time` | 日频 `kind=date`；三小时 `kind=datetime`，ISO UTC Z 标签、间隔、时间边界和样本数；Mars 仍为 `mars_ls` |
+| `frequency_hours`、`step_unit`、`step`、`grid_shape` | Earth 顶层便捷字段；日频为 24 / day / 1 / 实际网格，三小时为 3 / hour / 3 / `[240,480]` |
+| `training_profile` | 日频保留 7→3 与兼容上传模型，三小时官方/独立契约上传模型 56→24、TO3 DU、三小时间隔和独立 implementation_id；可用性同时检查 availability |
 | `grid` | Earth 含 shape、维度顺序、范围、`cell_bounds`、步长、顺序、覆盖类型、是否循环及完整坐标数组；未验证的 Mars 为 null |
 | `variables` | Earth 变量列表（`id`/`label`/`units`/`role`）；未核实 Mars 文件变量时为空列表 |
 | `channel_order` | Earth 固定五通道；Mars 为空列表 |
 | `splits` | Earth manifest 划分；Mars 为 null |
 | `limitations` | string[]，数据边界说明 |
 
-保留的 v1 验证成功示例（v2 使用独立 ID/哈希、36×72、±90°/±180°、`coverage=global`、`wrap_longitude=true`）：
+保留的 v1 验证成功示例（v2 使用独立 ID/哈希、36×72、±90°/±180°、`coverage=global`、`wrap_longitude=true`；这是历史验证响应示例，availability 以当前 descriptor 为准）：
 
 ```json
 {
@@ -104,7 +110,7 @@ GET /api/datasets/{dataset_id}
   "availability_reason": null,
   "dataset_fingerprint": "74ce14752cb83932b29b458d9c19a61804861c270e6fec33f55316778ad64d31",
   "capabilities": {
-    "metadata": true, "web_overview": true, "training": false, "trained_prediction": false
+    "metadata": true, "web_overview": true, "training": true, "trained_prediction": true
   },
   "time": {
     "kind": "date", "calendar": "proleptic_gregorian",
@@ -145,10 +151,10 @@ Mars 两个注册项的 `availability=unverified`、`availability_reason=legacy_
 
 | availability | availability_reason | 含义 |
 | --- | --- | --- |
-| `available` | `null` | 两个发布 SHA、manifest 自报值与 NetCDF 内容全部一致 |
-| `missing` | `package_missing` | `manifest.json` 或 `earth_merra2_daily.nc` 不存在（目录不存在同此） |
-| `invalid` | `manifest_fingerprint_mismatch` | manifest 原始字节 SHA 与固定发布不符 |
-| `invalid` | `data_fingerprint_mismatch` | NetCDF 原始字节 SHA 与固定发布不符 |
+| `available` | `null` | 对应包的 manifest、SHA、fingerprint 与科学内容全部通过验证 |
+| `missing` | `package_missing` | manifest 或该 ID 固定名称的 NetCDF 不存在（目录不存在同此） |
+| `invalid` | `manifest_fingerprint_mismatch` | 日频 manifest 字节 SHA 与固定发布不符；或三小时 fingerprint 与 canonical manifest 内容不符 |
+| `invalid` | `data_fingerprint_mismatch` | NetCDF 字节 SHA 与相应发布声明不符 |
 | `invalid` | `invalid_manifest` | manifest 非 JSON 对象，或 `data_file` 不是固定文件名 |
 | `invalid` | `manifest_metadata_mismatch` | manifest 自报的数据 SHA/字节数或逐项元数据（日期、维度、通道、单位、值域、划分、来源 SHA）与文件不一致 |
 | `invalid` | `invalid_dataset` | 底层数据协议不通过：日期不连续、网格非均匀、单位不符、时间坐标非 Gregorian 日历等 |
@@ -161,17 +167,23 @@ Mars 两个注册项的 `availability=unverified`、`availability_reason=legacy_
 {"detail": {"code": "unknown_dataset", "message": "Unknown dataset id"}}
 ```
 
-`package_unreadable` 为保留错误码（登记为 `unverified`），当前实现不主动产生该状态。底层详细原因只写日志；对外不回传绝对路径或异常堆栈。
+三小时实际读取权限失败使用 `unverified/package_unreadable`；负数 NetCDF 内容格式错误按 `invalid/invalid_dataset` 处理。底层详细原因只写日志，对外不回传路径或异常堆栈。2026-10-07 本轮只读 descriptor 查询完整两年包为 `available`；早期缺包或 7 天 smoke 的状态记录不能作为当前训练/预测验收结论。
 
 ### 校验与缓存
 
-Earth 校验顺序：两个文件存在 → manifest SHA → manifest JSON 对象 → `data_file` 固定名 → NetCDF SHA → manifest 自报 `data_sha256`/`data_bytes` → `load_earth_dataset()` 数据协议 → manifest 与 NetCDF 逐项元数据一致 → 前后文件签名一致。
+日频校验顺序保持：两个文件存在 → 固定 manifest SHA → manifest 对象与固定文件名 → 固定 NetCDF SHA → 自报 SHA/字节数 → 数据协议 → 逐项元数据 → 前后签名。三小时先严格解析 JSON 和固定身份/文件名，再比对 canonical fingerprint、NetCDF SHA/大小，最后分块校验科学内容和 manifest 元数据，并核对前后签名。
 
-- `manifest.data_file` 必须等于 `earth_merra2_daily.nc`；不接受客户端路径或任意相对路径。
+- 日频文件名固定为 `earth_merra2_daily.nc`，三小时固定为 `earth_merra2_3hourly.nc`；不接受客户端路径或任意 manifest 路径。
 - 元数据由文件真实计算得出，不写死 731 天或 31 × 49 来伪造成功。
 - 时间 `calendar` 从解码时间编码读取，只接受 `standard`、`gregorian`、`proleptic_gregorian`；其他日历按 `invalid_dataset` 拒绝，不会标成火星时间。
-- 校验由锁保护，按发布 ID 分别缓存描述符和不可写的五场数组，每个发布最多一份快照，key 为两个文件的 `(路径, 大小, mtime_ns, ctime_ns)`；文件消失或任一签名变化立即重新校验。每次返回深拷贝，调用方修改返回值不会污染缓存。
+- 校验由锁保护，按 ID 缓存描述符及快照，key 为两个文件的 `(路径, 大小, mtime_ns, ctime_ns)`；变化后重新校验。日频保留不可写五场数组，三小时每变量最多扫描 8 步并只缓存元信息/只读坐标；完整体积留在磁盘。三小时未变化的缺失或无效结果也复用，校验中变化的结果不复用。API 返回深拷贝，不允许客户端污染缓存。
 - 注册表构造不读取文件，首次查询时才校验。
+
+三小时目录配置、训练与 descriptor 示例见 [三小时数据构建与训练](earth-merra2-3hourly.md)；当前完整包共 5848 步，`availability=available`。`ARESVISION_EARTH_MERRA2_3HOURLY_DIR` 不改变日频两个配置项；旧数据库身份迁移、任务 JSON 和 checkpoint 不重写。三小时 binding 保留完整 UTC datetime、网格、发布 split、canonical manifest SHA 与 dataset-selected profile，实际 NetCDF 路径只经过服务端内部 spec，不返回客户端。
+
+三小时按 split 独立生成 56→24 窗口，完整两年无缺失发布的 train/validation/test 时间窗口数为 2849/1369/1393；归一化仅扫描 train，每通道最多 8 步。runner 惰性读窗并以 24×48 空间块组批，一个时间窗口有 100 块，`batch_size` 是空间块数。所选通道缺失显式拒绝；checkpoint 使用独立 schema，绑定完整 240×480 网格、UTC 3 小时区间中心规则、通道、normalization 和 fingerprint，不能加载日频 checkpoint；DU 指标含总体、24 个 lead 与累计 24/48/72 小时。
+
+三小时回测沿用 Earth context/run 接口，使用精确 UTC datetime 起点及其后 24 个真实目标时间戳。当前发布与任务、checkpoint 的 ID/版本/fingerprint/snapshot、时间轴、窗口和网格必须一致，reference 从相同发布读取；发布变化在独立缓存命中前即返回 409 `dataset_version_changed`。进程内 LRU 键含 planet、dataset_id、dataset_version、fingerprint、task_id、origin、全部 target timestamps 和 checkpoint SHA，不进入 Mars 的持久化缓存；详见[三小时历史回测 API](earth-merra2-3hourly.md#三小时历史回测-api)。
 
 ## 训练任务身份
 
@@ -269,7 +281,8 @@ Mars 前端二维热力图按真实轴计算单元位置和刻度，保证北纬
 | 两处有效且相同 | 接受 |
 | 两处有效但不同 | 400 `dataset_id_conflict` |
 | 显式空字符串、非字符串、未知 ID | 400 `invalid_dataset_id` / `unknown_dataset` |
-| 已知 Earth ID | 409 `dataset_training_not_supported` |
+| 日频 Earth ID | 独立日频训练路径，固定 7→3；按包可用性及 official/uploaded 配置校验 |
+| 三小时 Earth ID | 独立 official/uploaded 56→24 路径；上传模型须通过具体 dataset_id 的独立 spec 和实际参数 dry-run，未知或失败返回稳定错误码 |
 | 两处均为 null/未提供 | 默认 `openmars_mcd` |
 
 Pydantic 对字段类型的基本校验错误仍使用 422；上表中 400/409 指服务层语义错误。未知 ID 不会被当作默认值。
@@ -297,8 +310,10 @@ Pydantic 对字段类型的基本校验错误仍使用 422；上表中 400/409 �
 | --- | --- |
 | `ARESVISION_EARTH_MERRA2_DIR` | 覆盖已注册 Earth 小包目录，默认 `data/earth/merra2_daily_v2` |
 | `ARESVISION_EARTH_MERRA2_V1_DIR` | 独立指定旧兼容包目录，默认 `data/earth/merra2_daily_v1` |
+| `ARESVISION_EARTH_MERRA2_3HOURLY_DIR` | 独立三小时发布目录，默认 `data/earth/merra2_3hourly_v1`，不替换日频配置 |
+| `ARESVISION_DEFAULT_EARTH_DATASET_ID` | 新 Earth 入口默认 ID；开发缺省 `earth_merra2_daily_v2`，生产示例为 `earth_merra2_3hourly_v1` |
 
-v1/v2 不按请求互相映射。
+日频 v1/v2 与三小时身份均不按请求互相映射。
 
 相对路径相对后端启动目录解析；路径本身不通过 API 返回。注册服务在 `main.py` 的 lifespan 中装配为 `app.state.dataset_registry`，构造阶段不读取文件。
 
@@ -307,27 +322,34 @@ v1/v2 不按请求互相映射。
 从后端目录（`AresVision_backend/backend/`）执行；真实小包只读校验不需要启动完整应用：
 
 ```powershell
-conda run -n AresVision python -c "from config import EARTH_MERRA2_DIR, EARTH_MERRA2_V1_DIR; from services.dataset_registry import DatasetRegistry; r = DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id='earth_merra2_daily_v2', legacy_earth_package_dir=EARTH_MERRA2_V1_DIR).get_dataset('earth_merra2_daily_v2'); print(r['availability'], r['time'], r['grid']['shape'], r['dataset_fingerprint'])"
+conda run -n AresVision python -B -c "from config import EARTH_MERRA2_DIR, EARTH_MERRA2_V1_DIR, EARTH_MERRA2_3HOURLY_DIR; from services.dataset_registry import DatasetRegistry; r = DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id='earth_merra2_daily_v2', legacy_earth_package_dir=EARTH_MERRA2_V1_DIR, earth_3hourly_package_dir=EARTH_MERRA2_3HOURLY_DIR).get_dataset('earth_merra2_3hourly_v1'); print(r['availability'], r['frequency_hours'], r['grid_shape'], r['dataset_fingerprint'])"
 ```
 
 回归测试（使用新的纯英文临时目录）：
 
 ```powershell
-$datasetTestTemp = Join-Path 'D:\_Aresvision' ('.dataset-registry-test-' + [guid]::NewGuid().ToString('N'))
-python -m pytest tests/test_dataset_identity.py tests/test_dataset_registry.py tests/test_dataset_routes.py tests/test_training_dataset_identity_migration.py tests/test_training_dataset_identity.py -q --basetemp "$datasetTestTemp"
+$datasetTests = @('tests/test_dataset_identity.py', 'tests/test_dataset_registry.py', 'tests/test_dataset_routes.py',
+  'tests/test_training_dataset_identity_migration.py', 'tests/test_training_dataset_identity.py',
+  'tests/test_earth_3hourly_registry.py', 'tests/test_earth_3hourly_data_contract.py')
+foreach ($datasetTest in $datasetTests) {
+  $datasetTestTemp = Join-Path 'D:\_Aresvision' ('.dataset-registry-test-' + [guid]::NewGuid().ToString('N'))
+  conda run -n AresVision python -B -m pytest $datasetTest `
+    -q --basetemp "$datasetTestTemp" -p no:cacheprovider
+  if ($LASTEXITCODE -ne 0) { throw "Dataset regression failed: $datasetTest" }
+}
 ```
 
 `tests/conftest.py` 提供显式引用的 `earth_release` fixture：它在临时目录用真实尺寸（731 天、31 × 49）重建一个临时小包并返回其实际 SHA，不读取生产文件，也不产生 autouse 全局副作用。
 
 ## 当前边界
 
-- 训练页数据集选项现为三项：两个 Mars 来源与 `earth_merra2_daily_v2`；二维 Earth 总览默认请求 v2。
+- 训练/总览入口含两个 Mars 身份及 `earth_merra2_daily_v2`、`earth_merra2_3hourly_v1`；Earth 默认入口由 catalog 的 `default_earth_dataset_id` 决定，开发配置默认日频 v2，生产示例默认三小时 v1。
 - 地球已开放**二维日数据总览**（见 [二维地球数据总览](earth-overview.md)）：区域热力图、逐日播放、点位曲线与覆盖区域加权均值；**没有**三维地球、风场粒子、派生风速、自选多边形区域、重网格、平滑/插值、臭氧单位换算、导出、PFI 或 Earth Copilot。
-- Earth **训练与历史预测已开放**（官方 DLinear、固定 7→3、TO3 为唯一目标）；首期不开放 SPHERE、迁移学习、上传模型、地球其他架构、无参考真值的未来外推、Earth/Mars 混合比较与 Earth 预测持久化缓存。Earth 任务在火星推理、`metrics`、比较、PFI、`action=test` 与迁移来源路径上一律 409 `dataset_prediction_not_supported` / `dataset_transfer_not_supported`，不回退到火星数据。契约与错误码见 [地球训练与历史预测](earth-training.md)。
+- `earth_merra2_daily_v2` 为日频旧任务/旧 checkpoint 兼容身份（7→3，原有兼容上传模型仍按旧契约读取预测）；`earth_merra2_3hourly_v1` 为 3 小时 UTC、0.75°×0.75°、240×480、TO3/U10M/V10M/T2M/SWGDN 的独立发布，官方 DLinear 与独立契约上传模型固定 56→24，训练、总览和有真值历史回测入口已接通。当前 descriptor 查询日频与三小时均 `available`；包状态独立于 capabilities。无参考真值外推和 Earth/Mars 混合比较未开放；高分辨率预测返回完整场，浏览器传输/JSON 解析存在性能限制。Earth 在火星推理、比较、PFI、`action=test` 与迁移来源路径一律 409，不回退到火星数据。契约与错误码见 [地球训练与历史预测](earth-training.md)。
 - `web_overview=true` 只表示入口已适配，与数据是否齐备分开：缺包时数据接口返回 503，前端同时要求 `availability=available`。
 - manifest 中“读取器尚未接注册表”一类构建期说明会被过滤；`limitations` 只保留物理数据限制与当前应用能力说明。
 - Mars 身份不伪造版本；`openmars_mcd` 与 `mcd_overview` 何时成为不可变发布版本属于另一个数据发布任务。
-- 本阶段的身份快照**不足以独立复现训练**。Earth 训练阶段还需要补充选定通道顺序、输入/输出窗口、归一化数组、坐标、日期划分、checkpoint 绑定与预测复现校验。
+- 注册身份快照不包含模型权重，不能独立复现训练；训练 checkpoint 已保存通道顺序、输入/输出窗口、归一化、网格、split 和绑定，复现仍需相同数据发布。三小时官方与上传链路使用合成 30 天完整网格训练/回测 smoke 验证；完整两年包已完成独立数据验证，本轮只读检查该包，未执行真实全两年模型训练或任务回测验收。
 
 ## v1 历史验证记录（不代表 v2 验收）
 

@@ -6,12 +6,14 @@ import ModelArchitectureSelector from './ModelArchitectureSelector';
 import { TagPicker } from '../../components/TrainingTags/TagControls';
 import {
   TRAINING_DATASET_EARTH_MERRA2_V2,
+  TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1,
   TRAINING_DATASET_MCD_OVERVIEW,
   TRAINING_DATASET_OPENMARS_MCD,
   getModelStructureParamLabel,
   isRecurrentArchitecture,
 } from './trainingParamSanitizers';
-import { EARTH_MODEL_ARCHITECTURE, EARTH_PARAM_BOUNDS } from './earthTrainingConfig';import { getExperimentArchitectureLabel } from './experimentCenterModel';
+import { EARTH_MODEL_ARCHITECTURE, EARTH_PARAM_BOUNDS, getEarthTrainingProfile, isEarthTrainingDataset } from './earthTrainingConfig';
+import { getExperimentArchitectureLabel } from './experimentCenterModel';
 import './experimentCenter.css';
 
 const OPEN_INTERVAL_FLOAT_FIELDS = new Set(['initial_history_weight', 'initial_translation_weight']);
@@ -101,6 +103,7 @@ export default function ExperimentConfigWorkspace({
     selectedTrainingWeightId,
     tagState,
     isProcessing,
+    earthDatasetAvailability,
   } = resources;
   const {
     modelNameError,
@@ -177,14 +180,15 @@ export default function ExperimentConfigWorkspace({
     versionLabel: copy.inspectorModelVersion,
     officialHint: copy.modelSourceOfficialHint,
   };
-  // Earth 首期只支持官方 DLinear：不显示模型来源切换、上传卡与架构选择器，
-  // 也不显示迁移学习，避免出现选了也不会生效的控件。
-  const isEarth = trainingDataset === TRAINING_DATASET_EARTH_MERRA2_V2;
+  // Earth uses dataset-specific upload verdicts and keeps transfer learning disabled.
+  const isEarth = isEarthTrainingDataset(trainingDataset);
+  const isEarthThreeHourly = trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1;
+  const earthProfile = getEarthTrainingProfile(trainingDataset);
   const architecturePickerOpen = resources.architecturePickerOpen;
   const isRecurrentModel = isRecurrentArchitecture(normalizedArchitecture);
 
   const expertTabs = isEarth
-    ? ['payload', 'training', 'strategy', 'tags']
+    ? ['payload', 'training', ...(isUploaded ? ['customParams'] : []), 'strategy', 'tags']
     : (isUploaded ? UPLOADED_EXPERT_TABS : OFFICIAL_EXPERT_TABS);
   // 载荷与训练参数是每次配置都要过一遍的，作为超参数模块的头两个页签并默认打开第一页。
   const defaultExpertTab = 'payload';
@@ -283,6 +287,7 @@ export default function ExperimentConfigWorkspace({
     { value: TRAINING_DATASET_OPENMARS_MCD, label: copy.datasetOpenMarsMcd },
     { value: TRAINING_DATASET_MCD_OVERVIEW, label: copy.datasetMcdOverview },
     { value: TRAINING_DATASET_EARTH_MERRA2_V2, label: copy.datasetEarthMerra2V2 },
+    { value: TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1, label: copy.datasetEarthMerra23HourlyV1 },
   ];
   return (
     <div className="experiment-center-stack" data-config-canvas="true">
@@ -346,9 +351,17 @@ export default function ExperimentConfigWorkspace({
               );
             })}
           </div>
-          {/* 地球数据集不在这里渲染任何说明面板：数据集身份（发布日期划分、网格、
-              通道单位、发布指纹）由服务端在创建任务时校验并绑定，页面侧不再重复
-              展示。数据不可用时仍由就绪检查给出阻塞原因。 */}
+          {isEarth ? (
+            <div className="experiment-earth-contract" data-earth-training-contract="true">
+              <span>{earthProfile.frequencyHours === 3 ? 'UTC · 3-hourly' : 'UTC · daily'}</span>
+              <span>{`${earthProfile.gridShape[0]}×${earthProfile.gridShape[1]}`}</span>
+              <span>{`${earthProfile.window} → ${earthProfile.horizon} steps`}</span>
+              <span>TO3 · DU</span>
+              {earthDatasetAvailability?.selectable === false ? (
+                <strong data-earth-unavailable="true">{earthDatasetAvailability.reason || copy.earthUnavailableFallback}</strong>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -362,7 +375,6 @@ export default function ExperimentConfigWorkspace({
         <div className="experiment-choice-block" data-active="true" data-model-block={isEarth ? 'earth' : modelBlockState}>
           {isEarth ? (
             <div className="experiment-earth-model" data-earth-model-block="true">
-              {/* Earth 允许官方 DLinear 与用户上传模型；SPHERE 与迁移仍然关闭。 */}
               <div className="experiment-source-toggle" role="group" aria-label={copy.modelSource} data-model-source-toggle="true">
                 {EARTH_MODEL_SOURCE_OPTIONS.map((option) => {
                   const active = modelSource === option.value;
@@ -408,7 +420,7 @@ export default function ExperimentConfigWorkspace({
                     <span>{copy.modelSourceOfficial}</span>
                     <b>{getExperimentArchitectureLabel(EARTH_MODEL_ARCHITECTURE)}</b>
                   </span>
-                  <p className="experiment-expert-note">{copy.earthModelFixedNote}</p>
+                  <p className="experiment-expert-note">{isEarthThreeHourly ? copy.earthThreeHourlyModelFixedNote : copy.earthModelFixedNote}</p>
                 </>
               )}
               {isUploaded && resources.earthUploadedNotice ? (

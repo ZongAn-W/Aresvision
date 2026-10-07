@@ -90,10 +90,11 @@ export function fetchDataset(datasetId, { signal } = {}) {
   return readJson(`${DATASETS_PATH}/${encodeURIComponent(datasetId)}`, { signal });
 }
 
-export function fetchEarthField(datasetId, { variable, date, fingerprint, signal } = {}) {
+export function fetchEarthField(datasetId, { variable, date, timestamp, fingerprint, signal } = {}) {
   return readJson(withQuery(overviewPath(datasetId, 'field'), {
     variable,
-    date,
+    date: timestamp === undefined ? date : undefined,
+    timestamp,
     expected_fingerprint: fingerprint,
   }), { signal });
 }

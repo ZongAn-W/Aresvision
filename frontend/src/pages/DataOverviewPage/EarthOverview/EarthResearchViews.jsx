@@ -248,8 +248,8 @@ export function SeasonalHeatmapView({
       {!compact ? (
         <NoteBlock>
           {isZh
-            ? '每行是该纬度上 72 个等面积经度单元的日均值（equal_longitude_mean），横轴为真实 UTC 日期；该图不表示昼夜变化。'
-            : 'Each row is the daily mean over the 72 equal-area longitude cells at that latitude (equal_longitude_mean) on real UTC dates. It does not represent a diurnal cycle.'}
+            ? '每行是该纬度经度单元的 UTC 日平均（equal_longitude_mean），横轴为真实 UTC 日期；该图不表示昼夜变化。'
+            : 'Each row is the UTC daily mean over longitude cells at that latitude (equal_longitude_mean), on real UTC dates. It does not represent a diurnal cycle.'}
         </NoteBlock>
       ) : null}
     </div>

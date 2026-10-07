@@ -48,7 +48,9 @@ def _error_response(exc: Exception) -> HTTPException:
 def get_field(
     request: Request,
     dataset_id: str,
-    date: str = Query(...),
+    date: str | None = Query(default=None),
+    timestamp: str | None = Query(default=None),
+    render_stride: int = Query(default=4),
     variable: str = Query(...),
     expected_fingerprint: str = FINGERPRINT_QUERY,
 ):
@@ -57,6 +59,8 @@ def get_field(
             dataset_id=dataset_id,
             expected_fingerprint=expected_fingerprint,
             date=date,
+            timestamp=timestamp,
+            render_stride=render_stride,
             variable=variable,
         )
     except (DatasetRequestError, EarthOverviewError, EarthPackageError) as exc:

@@ -681,7 +681,9 @@ export function readExperimentConfig(task, {
     ...base,
     sourceTaskId: task.id ?? null,
     customModelName: buildExperimentCopyName(name, existingNames, nameSuffix),
-    trainingDataset: sanitizeTrainingDataset(trainingDatasetRaw || base.trainingDataset),
+    // Earth daily and three-hourly tasks keep their registered dataset identity when
+    // copied; the page controller still isolates them from the Mars request builder.
+    trainingDataset: sanitizeTrainingDataset(trainingDatasetRaw || base.trainingDataset, { allowEarth: true }),
     modelSource,
     selectedUploadedModelId,
     selectedUploadedModelVersion,

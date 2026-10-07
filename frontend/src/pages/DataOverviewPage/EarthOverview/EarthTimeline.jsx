@@ -1,10 +1,8 @@
 import React, { useMemo } from 'react';
 import { useT } from '../../../i18n/index.js';
 import {
-  dateAtIndex,
-  dateIndexWithin,
-  isoDayNumber,
-  isValidIsoDate,
+  earthTimeAtIndex,
+  earthTimeIndex,
 } from './earthOverviewModel.js';
 
 /**
@@ -29,18 +27,18 @@ export default function EarthTimeline({
   onRestart,
   embedded = false,
   actions = null,
+  frequencyHours = 24,
 }) {
   const t = useT();
 
   const total = useMemo(() => {
-    if (!isValidIsoDate(start) || !isValidIsoDate(end)) return 0;
-    return isoDayNumber(end) - isoDayNumber(start);
-  }, [start, end]);
+    return earthTimeIndex(start, end, end, frequencyHours) ?? 0;
+  }, [start, end, frequencyHours]);
 
-  const currentIndex = dateIndexWithin(start, end, requestedDate);
-  const displayedIndex = dateIndexWithin(start, end, displayedDate);
-  const dateInputValid = isValidIsoDate(requestedDate)
-    && dateIndexWithin(start, end, requestedDate) !== null;
+  const currentIndex = earthTimeIndex(start, end, requestedDate, frequencyHours);
+  const displayedIndex = earthTimeIndex(start, end, displayedDate, frequencyHours);
+  const dateInputValid = currentIndex !== null;
+  const threeHourly = frequencyHours === 3;
   const atStart = currentIndex === 0;
   const atEnd = currentIndex !== null && currentIndex >= total;
   const pendingDifferentDate = Boolean(
@@ -50,7 +48,7 @@ export default function EarthTimeline({
   const handleIndex = (value) => {
     const index = Number(value);
     if (!Number.isInteger(index)) return;
-    onDateChange(dateAtIndex(start, index));
+    onDateChange(earthTimeAtIndex(start, index, frequencyHours));
   };
 
   return (
@@ -62,34 +60,35 @@ export default function EarthTimeline({
         <button
           type="button"
           className="earth-btn"
-          onClick={() => onDateChange(dateAtIndex(start, (currentIndex ?? 0) - 1))}
+          onClick={() => handleIndex((currentIndex ?? 0) - 1)}
           disabled={disabled || atStart}
-          aria-label={t('earthOverview.timeline.previousDay')}
+          aria-label={threeHourly ? '−3h UTC' : t('earthOverview.timeline.previousDay')}
         >
-          {t('earthOverview.timeline.previousDay')}
+          {threeHourly ? '−3h' : t('earthOverview.timeline.previousDay')}
         </button>
 
         <label className="earth-timeline__field">
-          <span>{t('earthOverview.timeline.dataDate')}</span>
+          <span>{t('earthOverview.timeline.dataDate')}{threeHourly ? ' · UTC · 3h' : ''}</span>
           <input
-            type="date"
-            min={start || undefined}
-            max={end || undefined}
-            value={requestedDate && isValidIsoDate(requestedDate) ? requestedDate : ''}
+            type={threeHourly ? 'datetime-local' : 'date'}
+            min={threeHourly ? start?.slice(0, 16) : start || undefined}
+            max={threeHourly ? end?.slice(0, 16) : end || undefined}
+            step={threeHourly ? 10800 : undefined}
+            value={dateInputValid ? (threeHourly ? requestedDate.slice(0, 16) : requestedDate) : ''}
             disabled={disabled}
             aria-invalid={!dateInputValid}
-            onChange={(event) => onDateChange(event.target.value)}
+            onChange={(event) => onDateChange(threeHourly ? `${event.target.value}:00Z` : event.target.value)}
           />
         </label>
 
         <button
           type="button"
           className="earth-btn"
-          onClick={() => onDateChange(dateAtIndex(start, (currentIndex ?? 0) + 1))}
+          onClick={() => handleIndex((currentIndex ?? 0) + 1)}
           disabled={disabled || atEnd}
-          aria-label={t('earthOverview.timeline.nextDay')}
+          aria-label={threeHourly ? '+3h UTC' : t('earthOverview.timeline.nextDay')}
         >
-          {t('earthOverview.timeline.nextDay')}
+          {threeHourly ? '+3h' : t('earthOverview.timeline.nextDay')}
         </button>
 
         <div className="earth-timeline__track">

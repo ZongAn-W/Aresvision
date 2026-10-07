@@ -1,4 +1,8 @@
-"""Standalone Earth daily data contract; independent of the Mars MY/Ls services.
+"""Earth daily and three-hour data contracts, independent of Mars MY/Ls services.
+
+Three-hour validation preserves UTC datetimes and explicit missing-value masks.
+Daily windows retain their existing in-memory contract. Three-hour windows keep
+the data on disk and read only one window or spatial tile at a time.
 
 Two entry points share one implementation:
 
@@ -16,6 +20,8 @@ are read-only and shared with the overview API.
 
 from pathlib import Path
 import operator
+import json
+import uuid
 
 import numpy as np
 import xarray as xr
@@ -24,6 +30,14 @@ CHANNELS = ('TO3', 'U10M', 'V10M', 'T2M', 'SWGDN')
 UNITS = ('DU', 'm s-1', 'm s-1', 'K', 'W m-2')
 SPLITS = {'train': 0, 'validation': 1, 'test': 2}
 SCHEMA = 'aresvision_earth_daily_v1'
+THREE_HOURLY_SCHEMA = 'aresvision_earth_3hourly_v1'
+THREE_HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1'
+THREE_HOURLY_DATASET_VERSION = 'v1'
+THREE_HOURLY_GRID_SHAPE = (240, 480)
+THREE_HOURLY_TRAINING_PROFILE = {
+    'target': 'TO3', 'target_unit': 'DU', 'window': 56, 'horizon': 24,
+    'step_unit': 'hour', 'step': 3, 'grid_shape': [240, 480],
+}
 
 TARGET_CHANNEL = 'TO3'
 TARGET_CHANNEL_INDEX = 0
@@ -49,6 +63,8 @@ def split_days(dates, train_end, validation_end):
 
 
 def validate_dataset(ds):
+    if ds.attrs.get('schema') == THREE_HOURLY_SCHEMA:
+        return validate_earth_3hourly_dataset(ds)
     if ds.attrs.get('planet') != 'Earth' or ds.attrs.get('schema') != SCHEMA:
         raise ValueError('Expected an AresVision Earth daily dataset')
     for name, limit in (('lat', 90), ('lon', 180)):
@@ -97,12 +113,152 @@ def validate_dataset(ds):
         raise ValueError('split does not match chronological boundaries')
 
 
+def validate_earth_3hourly_dataset(ds, *, chunk_steps=8):
+    """Verify the three-hour data and masks under the shared NetCDF lock."""
+    from services.netcdf_read_lock import netcdf_read_lock
+    with netcdf_read_lock():
+        return _validate_earth_3hourly_dataset(ds, chunk_steps=chunk_steps)
+
+
+def _validate_earth_3hourly_dataset(ds, *, chunk_steps=8):
+    """Validate the three-hour product in bounded chunks, returning field statistics.
+
+    Only coordinates and at most eight spatial frames per variable are read at
+    once. Missing observations must be NaN and agree with their explicit binary
+    validity masks; they are retained rather than filled or rejected outright.
+    """
+    if (ds.attrs.get('planet') != 'Earth' or ds.attrs.get('schema') != THREE_HOURLY_SCHEMA
+            or ds.attrs.get('dataset_id') != THREE_HOURLY_DATASET_ID
+            or ds.attrs.get('dataset_version') != THREE_HOURLY_DATASET_VERSION):
+        raise ValueError('Expected the Earth MERRA-2 three-hour v1 dataset')
+    if (ds.attrs.get('frequency_hours') != 3 or ds.attrs.get('step_unit') != 'hour'
+            or ds.attrs.get('step') != 3 or ds.attrs.get('time_zone') != 'UTC'):
+        raise ValueError('Three-hour data must declare a three-hour UTC cadence')
+    if (ds.attrs.get('temporal_method') != 'mean_of_three_complete_hourly_samples'
+            or ds.attrs.get('spatial_method') != 'spherical_area_weighted_overlap'):
+        raise ValueError('Unexpected temporal averaging or conservative regrid method')
+    if set(ds.sizes) != {'time', 'lat', 'lon', 'bounds'} or ds.sizes.get('bounds') != 2:
+        raise ValueError('Three-hour dimensions must be time, lat, lon and two interval bounds')
+    for axis, size, centre, edge in (('lat', 240, -89.625, -90.), ('lon', 480, -179.625, -180.)):
+        expected = centre + np.arange(size) * .75
+        if (axis not in ds.coords or ds[axis].dims != (axis,)
+                or not np.array_equal(ds[axis].values, expected)):
+            raise ValueError(f'{axis} must contain the exact global 0.75 degree cell centres')
+        unit = 'degrees_north' if axis == 'lat' else 'degrees_east'
+        if ds[axis].attrs.get('units') != unit:
+            raise ValueError(f'{axis} must use units {unit}')
+        bounds_name = f'{axis}_bounds'
+        bounds = np.column_stack((edge + np.arange(size) * .75, edge + (np.arange(size) + 1) * .75))
+        if (bounds_name not in ds or ds[bounds_name].dims != (axis, 'bounds')
+                or not np.array_equal(ds[bounds_name].values, bounds)
+                or ds[axis].attrs.get('bounds') != bounds_name
+                or ds[bounds_name].attrs.get('units') != unit):
+            raise ValueError(f'{bounds_name} must cover contiguous global cells')
+    if 'time' not in ds.coords or ds.time.dims != ('time',):
+        raise ValueError('time must be a one-dimensional UTC coordinate')
+    times = ds.time.values
+    if not np.issubdtype(times.dtype, np.datetime64):
+        raise ValueError('time must contain decoded Gregorian UTC datetimes')
+    if (len(times) < 8 or len(times) % 8 or np.isnat(times).any()
+            or np.any(np.diff(times) != np.timedelta64(3, 'h'))):
+        raise ValueError('time must be continuous, unique and complete with a fixed three-hour interval')
+    first_day = times[0].astype('datetime64[D]')
+    last_day = times[-1].astype('datetime64[D]')
+    if (times[0] != first_day + np.timedelta64(90, 'm')
+            or times[-1] != last_day + np.timedelta64(1350, 'm')
+            or first_day < np.datetime64('2020-01-01') or last_day > np.datetime64('2021-12-31')):
+        raise ValueError('time must use 01:30 through 22:30 UTC centres within 2020-2021')
+    if ds.time.attrs.get('time_zone') != 'UTC' or ds.time.attrs.get('bounds') != 'time_bounds':
+        raise ValueError('time must declare UTC and its interval bounds')
+    calendar = ds.time.encoding.get('calendar', ds.time.attrs.get('calendar'))
+    if calendar not in ('standard', 'gregorian', 'proleptic_gregorian'):
+        raise ValueError('time must use a Gregorian calendar')
+    if 'time_bounds' not in ds or ds.time_bounds.dims != ('time', 'bounds'):
+        raise ValueError('time_bounds must have dimensions (time, bounds)')
+    expected_bounds = np.column_stack((times - np.timedelta64(90, 'm'), times + np.timedelta64(90, 'm')))
+    if not np.array_equal(ds.time_bounds.values, expected_bounds):
+        raise ValueError('time_bounds must contain the complete three-hour interval about each centre')
+    if ds.attrs.get('train_end') != '2020-12-31' or ds.attrs.get('validation_end') != '2021-06-30':
+        raise ValueError('Unexpected published chronological split boundaries')
+    days = times.astype('datetime64[D]')
+    expected_split = np.where(days <= np.datetime64('2020-12-31'), 0,
+                              np.where(days <= np.datetime64('2021-06-30'), 1, 2)).astype('int8')
+    if ('split' not in ds or ds.split.dims != ('time',)
+            or not np.array_equal(ds.split.values, expected_split)):
+        raise ValueError('split does not match the published chronological boundaries')
+    chunk_steps = min(operator.index(chunk_steps), 8)
+    if chunk_steps < 1:
+        raise ValueError('chunk_steps must be positive')
+    statistics = {}
+    from services.netcdf_read_lock import netcdf_read_lock
+    total = len(times) * 240 * 480
+    for name, unit in zip(CHANNELS, UNITS):
+        if (name not in ds or ds[name].dims != ('time', 'lat', 'lon')
+                or ds[name].shape != (len(times), 240, 480)
+                or str(ds[name].dtype) != 'float32' or ds[name].attrs.get('units') != unit):
+            raise ValueError(f'{name} must be float32 (time, lat, lon) in {unit}')
+        for packing in ('scale_factor', 'add_offset'):
+            if packing in ds[name].attrs or packing in ds[name].encoding:
+                raise ValueError(f'{name} must contain unpacked float32 values')
+        fill = ds[name].encoding.get('_FillValue', ds[name].attrs.get('_FillValue'))
+        if fill is not None and (not np.isscalar(fill) or not np.isnan(fill)):
+            raise ValueError(f'{name} must preserve missing values as NaN')
+        mask_name = f'{name}_valid_mask'
+        if (mask_name not in ds or ds[mask_name].dims != ds[name].dims
+                or ds[mask_name].shape != ds[name].shape or str(ds[mask_name].dtype) != 'uint8'
+                or ds[name].attrs.get('ancillary_variables') != mask_name):
+            raise ValueError(f'{name} must include an explicit uint8 validity mask')
+        missing, minimum, maximum = 0, None, None
+        for start in range(0, len(times), chunk_steps):
+            with netcdf_read_lock():
+                values = np.asarray(ds[name].isel(time=slice(start, start + chunk_steps)).values)
+                valid = np.asarray(ds[mask_name].isel(time=slice(start, start + chunk_steps)).values)
+            if (not np.isin(valid, [0, 1]).all()
+                    or not np.array_equal(valid.astype(bool), np.isfinite(values))
+                    or not np.isnan(values[valid == 0]).all()):
+                raise ValueError(f'{name} NaN values and binary validity mask disagree')
+            good = values[valid == 1]
+            if np.any(np.abs(good) >= 1e14):
+                raise ValueError(f'{name} contains an unmasked invalid fill value')
+            missing += int(np.count_nonzero(valid == 0))
+            if good.size:
+                low, high = float(good.min()), float(good.max())
+                minimum = low if minimum is None else min(minimum, low)
+                maximum = high if maximum is None else max(maximum, high)
+        statistics[name] = {'units': unit, 'dtype': 'float32', 'valid_mask': mask_name,
+                            'target_values': total, 'target_missing': missing,
+                            'missing_count': missing, 'missing_rate': missing / total,
+                            'min': minimum, 'max': maximum}
+    return statistics
+
+
 def load_earth_dataset(path):
-    """Load the small package into memory and release the NetCDF file handle."""
-    with xr.open_dataset(Path(path), engine='netcdf4') as source:
+    """Keep daily eager loading; validate three-hour data without loading its volume.
+
+    A three-hour dataset retains its lazy file handle until the caller closes it
+    (or uses it as a context manager). Its training and overview paths are not
+    enabled by this reader.
+    """
+    from services.netcdf_read_lock import netcdf_read_lock
+    with netcdf_read_lock():
+        source = xr.open_dataset(Path(path), engine='netcdf4')
+    if source.attrs.get('schema') == THREE_HOURLY_SCHEMA:
+        try:
+            validate_earth_3hourly_dataset(source)
+        except Exception:
+            source.close()
+            raise
+        return source
+    with source:
         ds = source.load()
     validate_dataset(ds)
     return ds
+
+
+def _require_daily_metadata(metadata):
+    if (metadata.get('schema') == THREE_HOURLY_SCHEMA
+            or (metadata.get('time') or {}).get('kind') == 'datetime'):
+        raise ValueError('Three-hour data is catalog-only; daily windows and date indexing are unavailable')
 
 
 def canonical_input_channels(selected_channels=None):
@@ -139,6 +295,7 @@ def input_units(channel_order):
 
 def stack_release_cube(release):
     """Stack the five published fields into ``[time, channel, lat, lon]`` float32."""
+    _require_daily_metadata(release.metadata)
     return np.stack(
         [np.asarray(release.fields[name], dtype='float32') for name in CHANNELS], axis=1
     )
@@ -229,6 +386,8 @@ class EarthOzoneWindows:
         if self.window < 1 or self.horizon < 1:
             raise ValueError('window and horizon must be positive integers')
         with load_earth_dataset(path) as ds:
+            if ds.attrs.get('schema') != SCHEMA:
+                raise ValueError('EarthOzoneWindows requires a daily release')
             cube = np.stack([ds[name].values for name in CHANNELS], axis=1).astype('float32')
             split_ids = ds['split'].values
             all_dates = ds.time.values.astype('datetime64[D]')
@@ -267,6 +426,7 @@ class EarthOzoneWindows:
         """
         if split not in SPLITS:
             raise ValueError(f'Unknown split: {split}')
+        _require_daily_metadata(release.metadata)
         window = operator.index(window)
         horizon = operator.index(horizon)
         if window < 1 or horizon < 1:
@@ -336,6 +496,305 @@ class EarthOzoneWindows:
         return np.asarray(values) * scale + mean
 
 
+def threehour_release_split_codes(dates, metadata):
+    """Map full UTC timestamps to the release's contiguous published date blocks.
+
+    Date-only split bounds describe complete UTC days. No timestamp is rounded
+    for indexing, and an uncovered, overlapping or interleaved block is rejected.
+    Empty published splits are supported for inspection of a smoke package.
+    """
+    if metadata.get('schema') != THREE_HOURLY_SCHEMA:
+        raise ValueError('Earth three-hour windows require a three-hour release')
+    times = np.asarray(dates, dtype='datetime64[ns]')
+    if (times.ndim != 1 or not len(times) or np.isnat(times).any()
+            or np.any(np.diff(times) != np.timedelta64(3, 'h'))
+            or np.any((times - times.astype('datetime64[D]')) % np.timedelta64(3, 'h')
+                      != np.timedelta64(90, 'm'))):
+        raise ValueError('Three-hour timestamps must be continuous UTC interval centres')
+    if (metadata.get('frequency_hours') != 3 or metadata.get('step_unit') != 'hour'
+            or metadata.get('step') != 3 or (metadata.get('time') or {}).get('time_zone') != 'UTC'):
+        raise ValueError('Three-hour release must use the fixed three-hour UTC cadence')
+    codes = np.full(len(times), -1, dtype='int8')
+    splits = metadata.get('splits') or {}
+    for name, code in SPLITS.items():
+        entry = splits.get(name)
+        if not isinstance(entry, dict):
+            raise ValueError(f'Verified release has no published {name} split')
+        if entry.get('start') is None and entry.get('end') is None:
+            if entry.get('steps') != 0:
+                raise ValueError(f'Empty {name} split has nonzero step count')
+            continue
+        try:
+            start = np.datetime64(entry['start'], 'D')
+            stop = np.datetime64(entry['end'], 'D') + np.timedelta64(1, 'D')
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError(f'Invalid published {name} split bounds') from exc
+        if np.isnat(start) or np.isnat(stop) or start >= stop:
+            raise ValueError(f'Invalid published {name} split bounds')
+        selected = (times >= start) & (times < stop)
+        if np.any(codes[selected] >= 0):
+            raise ValueError('Published three-hour splits overlap')
+        if type(entry.get('steps')) is not int or int(selected.sum()) != entry['steps']:
+            raise ValueError(f'Published {name} split step count disagrees with the time axis')
+        codes[selected] = code
+    if np.any(codes < 0) or np.any(np.diff(codes.astype('int16')) < 0):
+        raise ValueError('Published three-hour splits must cover one chronological time axis')
+    return codes
+
+
+def _threehour_path(release):
+    """Check the server snapshot before each bounded read, without recomputing SHA."""
+    from services.earth_dataset_metadata import package_signature
+    path = getattr(release, 'data_path', None)
+    if path is None:
+        raise ValueError('Verified three-hour release has no server data path')
+    path = Path(path)
+    if release.signature and package_signature(path.parent, data_file_name=path.name) != release.signature:
+        raise ValueError('Earth three-hour release changed since verification')
+    return path
+
+
+def _threehour_values(ds, channel, start, stop, *, lat_slice=slice(None), lon_slice=slice(None)):
+    """Read one selected field and mask; never silently fill missing observations."""
+    selection = {'time': slice(start, stop), 'lat': lat_slice, 'lon': lon_slice}
+    values = np.asarray(ds[channel].isel(**selection).values, dtype='float32')
+    valid = np.asarray(ds[f'{channel}_valid_mask'].isel(**selection).values)
+    if (values.shape != valid.shape or not np.all(valid == 1)
+            or not np.isfinite(values).all() or np.any(np.abs(values) >= 1e14)):
+        raise ValueError(f'Earth three-hour training data contains missing or non-finite values in {channel}')
+    return values
+
+
+def _utc_timestamp(value):
+    return np.datetime_as_string(np.datetime64(value, 's'), unit='s') + 'Z'
+
+
+def fit_threehour_normalization(release, channels=None):
+    """Fit stable population statistics on training frames in chunks of at most 8.
+
+    This scans one channel at a time and merges float64 chunk moments. It never
+    materialises the five-channel volume or any sliding-window expansion.
+    Selected-channel missing observations are rejected; valid numeric zeros are
+    retained. Validation/test frames cannot affect the fit.
+    """
+    from services.netcdf_read_lock import netcdf_read_lock
+    selected_channels = canonical_input_channels(channels)
+    dates = np.asarray(release.dates, dtype='datetime64[ns]')
+    codes = threehour_release_split_codes(dates, release.metadata)
+    indices = np.flatnonzero(codes == SPLITS['train'])
+    if not len(indices):
+        raise ValueError('No training timestamps are available to fit normalization')
+    start, stop = int(indices[0]), int(indices[-1]) + 1
+    path = _threehour_path(release)
+    means, scales, constants = [], [], []
+    with netcdf_read_lock(), xr.open_dataset(path, engine='netcdf4', mask_and_scale=False) as ds:
+        if not np.array_equal(ds.time.values, dates):
+            raise ValueError('Earth three-hour timestamps changed since verification')
+        for channel in selected_channels:
+            count, mean, moment = 0, 0.0, 0.0
+            for offset in range(start, stop, 8):
+                values = _threehour_values(ds, channel, offset, min(offset + 8, stop)).astype('float64')
+                chunk_count = values.size
+                chunk_mean = float(values.mean())
+                chunk_moment = float(values.var(ddof=0)) * chunk_count
+                total_count = count + chunk_count
+                delta = chunk_mean - mean
+                moment += chunk_moment + delta * delta * count * chunk_count / total_count
+                mean += delta * chunk_count / total_count
+                count = total_count
+            std = float(np.sqrt(max(moment / count, 0.0)))
+            constant = std < MINIMUM_SCALE
+            means.append(float(np.float32(mean)))
+            scales.append(float(np.float32(1.0 if constant else std)))
+            constants.append(bool(constant))
+    _threehour_path(release)
+    return {
+        'method': NORMALIZATION_METHOD, 'fit_split': 'train',
+        'fit_date_start': _utc_timestamp(dates[start]), 'fit_date_end': _utc_timestamp(dates[stop - 1]),
+        'fit_time_start': _utc_timestamp(dates[start]), 'fit_time_end': _utc_timestamp(dates[stop - 1]),
+        'fit_step_count': stop - start,
+        'time_zone': 'UTC', 'frequency_hours': 3, 'step_unit': 'hour', 'step': 3,
+        'timestamp_rule': 'interval_center',
+        'ddof': NORMALIZATION_DDOF, 'epsilon': NORMALIZATION_EPSILON,
+        'channel_order': selected_channels, 'mean': means, 'scale': scales,
+        'constant_channel_mask': constants, 'target_channel_index': TARGET_CHANNEL_INDEX,
+    }
+
+
+def build_threehour_training_cache(release, channels, normalization, cache_root):
+    """Stream normalized fields to a unique disk map, without expanding windows.
+
+    Compressed global chunks are decoded once here, avoiding repeated full-field
+    decompression for every spatial tile. Only <=8 frames of one channel are read.
+    Interrupted caches are retained; source packages are always read-only.
+    """
+    from services.netcdf_read_lock import netcdf_read_lock
+    order = canonical_input_channels(channels)
+    mean, scale = validate_normalization(normalization, order)
+    source_path = _threehour_path(release)
+    root = Path(cache_root).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    folder = root / (str(release.metadata.get('dataset_fingerprint', 'earth'))[:16] + '-' + uuid.uuid4().hex)
+    folder.mkdir()
+    path = folder / 'normalized.npy'
+    shape = (len(release.dates), len(order), 240, 480)
+    mapped = np.lib.format.open_memmap(path, mode='w+', dtype='float32', shape=shape)
+    try:
+        with netcdf_read_lock(), xr.open_dataset(source_path, engine='netcdf4', mask_and_scale=False) as ds:
+            if not np.array_equal(ds.time.values, release.dates):
+                raise ValueError('Earth three-hour timestamps changed since verification')
+            for start in range(0, shape[0], 8):
+                stop = min(start + 8, shape[0])
+                for index, channel in enumerate(order):
+                    values = _threehour_values(ds, channel, start, stop)
+                    values = ((values.astype('float64') - mean[index]) / scale[index]).astype('float32')
+                    mapped[start:stop, index] = values
+        mapped.flush()
+    finally:
+        mapped._mmap.close()
+    _threehour_path(release)
+    (folder / 'metadata.json').write_text(json.dumps({
+        'dataset_id': THREE_HOURLY_DATASET_ID,
+        'dataset_fingerprint': release.metadata.get('dataset_fingerprint'),
+        'shape': list(shape), 'input_channel_order': order,
+        'normalization': normalization,
+    }, sort_keys=True, allow_nan=False), encoding='utf-8')
+    return path
+
+
+class EarthThreeHourlyWindows:
+    """Disk-backed map-style 56→24 dataset with optional spatial tile reads.
+
+    ``__getitem__`` returns float32 ``[56,C,240,480]`` inputs and
+    ``[24,1,240,480]`` targets. ``read_window`` accepts latitude/longitude slices
+    to bound spatial memory further. Only lightweight coordinates/indices and
+    normalization are retained between reads; there is no ``data`` cube and no
+    full-window expansion. Optional normalized disk maps serve tile reads
+    without repeated decompression; source reads use the shared NetCDF lock.
+    """
+
+    @classmethod
+    def from_release(cls, release, *, split='train', window=56, horizon=24,
+                     selected_channels=None, normalization=None):
+        if split not in SPLITS:
+            raise ValueError(f'Unknown split: {split}')
+        if operator.index(window) != 56 or operator.index(horizon) != 24:
+            raise ValueError('Earth three-hour training requires window=56 and horizon=24')
+        channels = canonical_input_channels(selected_channels)
+        dates = np.asarray(release.dates, dtype='datetime64[ns]')
+        codes = threehour_release_split_codes(dates, release.metadata)
+        lat = np.asarray(release.latitude, dtype='float64')
+        lon = np.asarray(release.longitude, dtype='float64')
+        if (lat.shape != (240,) or lon.shape != (480,)
+                or not np.array_equal(lat, -89.625 + np.arange(240) * .75)
+                or not np.array_equal(lon, -179.625 + np.arange(480) * .75)):
+            raise ValueError('Earth three-hour training requires the global 240x480 grid')
+        indices = np.flatnonzero(codes == SPLITS[split])
+        length = len(indices) - 56 - 24 + 1
+        if length < 1:
+            raise ValueError('Not enough three-hour steps in the selected split for window + horizon')
+        if normalization is None:
+            if split != 'train':
+                raise ValueError('Only the training split may fit normalization statistics')
+            normalization = fit_threehour_normalization(release, channels)
+        mean, scale = validate_normalization(normalization, channels)
+        train_dates = dates[codes == SPLITS['train']]
+        if (not len(train_dates) or normalization.get('frequency_hours') != 3
+                or normalization.get('step_unit') != 'hour' or normalization.get('step') != 3
+                or normalization.get('time_zone') != 'UTC'
+                or normalization.get('timestamp_rule') != 'interval_center'
+                or normalization.get('fit_step_count') != len(train_dates)
+                or normalization.get('fit_time_start') != _utc_timestamp(train_dates[0])
+                or normalization.get('fit_time_end') != _utc_timestamp(train_dates[-1])):
+            raise ValueError('Normalization must belong to the three-hour UTC training interval')
+        dataset = cls.__new__(cls)
+        dataset._release = release
+        dataset.data_path = _threehour_path(release)
+        dataset.window, dataset.horizon = 56, 24
+        dataset.length, dataset.split = length, split
+        dataset._offset = int(indices[0])
+        dataset.dates = dates[indices]
+        dataset.lat, dataset.lon = lat.copy(), lon.copy()
+        dataset.input_channels, dataset.input_units = channels, input_units(channels)
+        dataset.target_channel_index = TARGET_CHANNEL_INDEX
+        dataset.normalization = normalization
+        dataset._normalized_map = None
+        dataset.mean = mean.astype('float32')
+        dataset.std = scale.astype('float32')
+        return dataset
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        return self.read_window(index)
+
+    def use_training_cache(self, path):
+        """Attach a server-created map after checking identity and statistics."""
+        path = Path(path)
+        metadata = json.loads((path.parent / 'metadata.json').read_text(encoding='utf-8'))
+        shape = (len(self._release.dates), len(self.input_channels), 240, 480)
+        if (metadata.get('dataset_id') != THREE_HOURLY_DATASET_ID
+                or metadata.get('dataset_fingerprint') != self._release.metadata.get('dataset_fingerprint')
+                or metadata.get('input_channel_order') != self.input_channels
+                or metadata.get('normalization') != self.normalization
+                or metadata.get('shape') != list(shape)):
+            raise ValueError('Three-hour training cache identity or normalization mismatch')
+        mapped = np.load(path, mmap_mode='r', allow_pickle=False)
+        if mapped.shape != shape or mapped.dtype != np.dtype('float32'):
+            mapped._mmap.close()
+            raise ValueError('Three-hour training cache shape or dtype mismatch')
+        self._normalized_map = mapped
+
+    def read_window(self, index, *, lat_slice=slice(None), lon_slice=slice(None)):
+        """Read exactly one temporal window, optionally limited to a spatial tile."""
+        from services.netcdf_read_lock import netcdf_read_lock
+        index = operator.index(index)
+        if index < 0 or index >= self.length:
+            raise IndexError(index)
+        if not isinstance(lat_slice, slice) or not isinstance(lon_slice, slice):
+            raise ValueError('Spatial tiles must use latitude and longitude slices')
+        latitude = np.arange(len(self.lat))[lat_slice]
+        longitude = np.arange(len(self.lon))[lon_slice]
+        if not len(latitude) or not len(longitude):
+            raise ValueError('Spatial tiles must contain at least one grid cell')
+        start = self._offset + index
+        forecast, stop = start + self.window, start + self.window + self.horizon
+        if self._normalized_map is not None:
+            _threehour_path(self._release)
+            inputs = np.array(self._normalized_map[start:forecast, :, lat_slice, lon_slice], copy=True)
+            targets = np.array(self._normalized_map[forecast:stop, :1, lat_slice, lon_slice], copy=True)
+            if not np.isfinite(inputs).all() or not np.isfinite(targets).all():
+                raise ValueError('Three-hour training cache contains non-finite values')
+            return inputs, targets
+        inputs = np.empty((self.window, len(self.input_channels), len(latitude), len(longitude)), dtype='float32')
+        targets = np.empty((self.horizon, 1, len(latitude), len(longitude)), dtype='float32')
+        path = _threehour_path(self._release)
+        with netcdf_read_lock(), xr.open_dataset(path, engine='netcdf4', mask_and_scale=False) as ds:
+            if not np.array_equal(ds.time.isel(time=slice(start, stop)).values,
+                                  self.dates[index:index + self.window + self.horizon]):
+                raise ValueError('Earth three-hour timestamps changed since verification')
+            for channel_index, channel in enumerate(self.input_channels):
+                values = _threehour_values(ds, channel, start, forecast,
+                                          lat_slice=lat_slice, lon_slice=lon_slice)
+                np.subtract(values, self.mean[channel_index], out=inputs[:, channel_index])
+                np.divide(inputs[:, channel_index], self.std[channel_index], out=inputs[:, channel_index])
+                if channel == TARGET_CHANNEL:
+                    values = _threehour_values(ds, channel, forecast, stop,
+                                              lat_slice=lat_slice, lon_slice=lon_slice)
+                    np.subtract(values, self.mean[channel_index], out=targets[:, 0])
+                    np.divide(targets[:, 0], self.std[channel_index], out=targets[:, 0])
+        _threehour_path(self._release)
+        return inputs, targets
+
+    def denormalize_ozone(self, values):
+        mean = float(self.normalization['mean'][self.target_channel_index])
+        scale = float(self.normalization['scale'][self.target_channel_index])
+        if hasattr(values, 'dim') and hasattr(values, 'to'):
+            return values * scale + mean
+        return np.asarray(values) * scale + mean
+
+
 def release_split_codes(dates, metadata):
     """Derive the per-day split code from the verified manifest split ranges.
 
@@ -343,6 +802,7 @@ def release_split_codes(dates, metadata):
     package whose split flags disagree with its manifest fails verification
     before reaching this function.
     """
+    _require_daily_metadata(metadata)
     splits = metadata.get('splits') or {}
     codes = np.full(len(dates), -1, dtype='int8')
     for name, code in SPLITS.items():
@@ -359,6 +819,7 @@ def release_split_codes(dates, metadata):
 
 def release_date_index(release, date):
     """Return the position of ``date`` in the release, or raise ``KeyError``."""
+    _require_daily_metadata(release.metadata)
     dates = np.asarray(release.dates, dtype='datetime64[D]')
     target = np.datetime64(date, 'D')
     matches = np.flatnonzero(dates == target)
@@ -384,24 +845,34 @@ def reference_ozone(release, start_date, horizon):
 __all__ = [
     'CHANNELS',
     'EarthOzoneWindows',
+    'EarthThreeHourlyWindows',
     'MINIMUM_SCALE',
     'NORMALIZATION_METHOD',
     'OPTIONAL_CHANNELS',
     'SCHEMA',
+    'THREE_HOURLY_SCHEMA',
+    'THREE_HOURLY_DATASET_ID',
+    'THREE_HOURLY_DATASET_VERSION',
+    'THREE_HOURLY_GRID_SHAPE',
+    'THREE_HOURLY_TRAINING_PROFILE',
     'SPLITS',
     'TARGET_CHANNEL',
     'TARGET_CHANNEL_INDEX',
     'UNITS',
+    'build_threehour_training_cache',
     'canonical_input_channels',
     'fit_normalization',
+    'fit_threehour_normalization',
     'input_units',
     'load_earth_dataset',
     'normalize_cube',
     'reference_ozone',
     'release_date_index',
     'release_split_codes',
+    'threehour_release_split_codes',
     'split_days',
     'stack_release_cube',
     'validate_dataset',
+    'validate_earth_3hourly_dataset',
     'validate_normalization',
 ]

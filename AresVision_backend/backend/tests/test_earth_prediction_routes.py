@@ -214,6 +214,18 @@ def test_out_of_range_origin_returns_422_with_a_stable_code(earth_app):
     assert response.json()["detail"]["code"] == "earth_prediction_origin_out_of_range"
 
 
+def test_daily_task_still_rejects_a_datetime_origin(earth_app):
+    task_id = _seed_earth_task(earth_app)
+    artifact = _real_artifact(earth_app, task_id)
+    _update_artifact_path(earth_app, task_id, artifact)
+    response = earth_app["client"].post(
+        "/api/earth/predict/run",
+        json={"training_task_id": task_id, "forecast_origin": "2021-07-08T01:30:00Z"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_earth_prediction_origin"
+
+
 def test_changed_fingerprint_returns_409(earth_app):
     task_id = _seed_earth_task(earth_app)
     artifact = _real_artifact(earth_app, task_id)

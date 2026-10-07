@@ -8,10 +8,10 @@ different model than the user asked for.
 
 This module is the single authority for:
 
-* the published training profile of ``earth_merra2_daily_v2``;
+* dataset-selected profiles for the retained daily and new three-hour releases;
 * the canonical input channel order (``TO3`` first, then the four optional
   auxiliary variables in a fixed order);
-* the fixed ``7 -> 3`` window/horizon pair;
+* fixed daily ``7 -> 3`` and three-hour ``56 -> 24`` window/horizon pairs;
 * strict parameter validation with stable :class:`DatasetRequestError` codes.
 
 It must stay dependency-light: the HTTP layer, the training service and the
@@ -28,14 +28,16 @@ from typing import Any, Mapping, Optional
 from services.dataset_identity import (
     EARTH_DATASET_ID,
     EARTH_DATASET_V2_ID,
+    EARTH_DATASET_3HOURLY_ID,
     SERVER_IDENTITY_FIELDS,
     DatasetRequestError,
 )
 from services.training_split import normalize_split_ratios, TrainingSplitError
 
-EARTH_DATASET_IDS = (EARTH_DATASET_ID, EARTH_DATASET_V2_ID)
+EARTH_DATASET_IDS = (EARTH_DATASET_ID, EARTH_DATASET_V2_ID, EARTH_DATASET_3HOURLY_ID)
 
-#: Only official DLinear is opened for Earth in this stage.
+#: Both official DLinear and pinned uploaded sources are supported per dataset
+#: profile.  The uploaded source must pass the profile-specific dry run.
 EARTH_TRAINING_SCRIPT = "earth_daily.py"
 EARTH_SUPPORTED_ARCHITECTURE = "dlinear"
 #: Marker architecture for uploaded Earth models. The actual code comes from the
@@ -43,6 +45,7 @@ EARTH_SUPPORTED_ARCHITECTURE = "dlinear"
 EARTH_UPLOADED_ARCHITECTURE = "uploaded"
 EARTH_MODEL_SOURCES = ("official", "uploaded")
 EARTH_IMPLEMENTATION_ID = "aresvision_gridpoint_dlinear_v1"
+EARTH_3HOURLY_IMPLEMENTATION_ID = "aresvision_gridpoint_dlinear_3hourly_v1"
 
 #: The target is always total column ozone, always the first model input.
 EARTH_TARGET_CHANNEL = "TO3"
@@ -60,9 +63,14 @@ EARTH_CHANNEL_UNITS = {
 EARTH_WINDOW = 7
 EARTH_HORIZON = 3
 EARTH_GRID_SHAPE = (36, 72)
+EARTH_3HOURLY_WINDOW = 56
+EARTH_3HOURLY_HORIZON = 24
+EARTH_3HOURLY_GRID_SHAPE = (240, 480)
 
 EARTH_METRICS_SCHEMA = "earth_training_metrics_v1"
 EARTH_ARTIFACT_SCHEMA = "aresvision_earth_forecast_checkpoint_v1"
+EARTH_3HOURLY_ARTIFACT_SCHEMA = "aresvision_earth_forecast_checkpoint_3hourly_v1"
+EARTH_3HOURLY_METRICS_SCHEMA = "earth_training_metrics_3hourly_v1"
 EARTH_TRAINING_SPEC_SCHEMA = "earth_training_spec_v1"
 EARTH_PROFILE_ID = "earth_daily_dlinear_v1"
 EARTH_DEFAULT_SPLIT_RATIOS = {
@@ -110,9 +118,31 @@ EARTH_ALLOWED_PARAMETER_KEYS = frozenset({
 })
 
 
-def earth_training_profile() -> dict:
-    """Return a fresh copy of the published Earth training profile."""
-    return {
+def _profile_dataset_id(dataset_id: Any = None, hyperparameters: Optional[Mapping[str, Any]] = None) -> str:
+    """Resolve a profile without changing the legacy no-id daily default."""
+    legacy = (hyperparameters or {}).get("training_dataset")
+    values = []
+    for value in (dataset_id, legacy):
+        if value is None:
+            values.append(None)
+        elif is_earth_dataset_id(value):
+            values.append(value.strip().lower())
+        else:
+            raise DatasetRequestError(
+                "invalid_earth_training_parameters",
+                "training_dataset must be a registered Earth dataset",
+                status_code=422,
+            )
+    explicit, inferred = values
+    if explicit is not None and inferred is not None and explicit != inferred:
+        raise DatasetRequestError("dataset_id_conflict", "dataset_id conflicts with training_dataset")
+    return explicit or inferred or EARTH_DATASET_V2_ID
+
+
+def earth_training_profile(dataset_id: Any = None) -> dict:
+    """Return a fresh profile, preserving the exact historical daily default."""
+    resolved_id = _profile_dataset_id(dataset_id)
+    profile = {
         "profile_id": EARTH_PROFILE_ID,
         "model_architectures": [EARTH_SUPPORTED_ARCHITECTURE, EARTH_UPLOADED_ARCHITECTURE],
         "model_sources": list(EARTH_MODEL_SOURCES),
@@ -130,6 +160,18 @@ def earth_training_profile() -> dict:
         "supports_transfer_learning": False,
         "implementation_id": EARTH_IMPLEMENTATION_ID,
     }
+    if resolved_id == EARTH_DATASET_3HOURLY_ID:
+        profile.update({
+            "profile_id": "earth_3hourly_dlinear_v1",
+            "model_architectures": [EARTH_SUPPORTED_ARCHITECTURE, EARTH_UPLOADED_ARCHITECTURE],
+            "model_sources": list(EARTH_MODEL_SOURCES),
+            "window": EARTH_3HOURLY_WINDOW,
+            "horizon": EARTH_3HOURLY_HORIZON,
+            "step_unit": "hour", "step": 3, "frequency_hours": 3,
+            "grid_shape": list(EARTH_3HOURLY_GRID_SHAPE),
+            "implementation_id": EARTH_3HOURLY_IMPLEMENTATION_ID,
+        })
+    return profile
 
 
 def is_earth_dataset_id(dataset_id: Any) -> bool:
@@ -240,11 +282,13 @@ def _strict_float(key: str, value: Any, minimum: float, maximum: float, default:
     return parsed
 
 
-def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[str, Any]]) -> dict:
+def normalize_earth_training_hyperparameters(
+    hyperparameters: Optional[Mapping[str, Any]], *, dataset_id: Any = None,
+) -> dict:
     """Validate and canonicalise Earth training hyperparameters.
 
     Returns a new dictionary containing only the documented keys, with the
-    canonical channel order and the fixed 7/3 window. Unknown keys, internal
+    canonical channel order and the dataset's fixed window. Unknown keys, internal
     ``_`` fields and wrong types are rejected; nothing is silently coerced.
     """
     hypers = dict(hyperparameters or {})
@@ -264,15 +308,8 @@ def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[s
             status_code=422,
         )
 
-    dataset_id = hypers.get("training_dataset")
-    if dataset_id is not None:
-        if not is_earth_dataset_id(dataset_id):
-            raise DatasetRequestError(
-                "invalid_earth_training_parameters",
-                "training_dataset must be a registered Earth dataset",
-                status_code=422,
-            )
-        dataset_id = str(dataset_id).strip().lower()
+    resolved_dataset_id = _profile_dataset_id(dataset_id, hypers)
+    profile = earth_training_profile(resolved_dataset_id)
 
     architecture = hypers.get("model_architecture")
     if architecture is not None:
@@ -308,7 +345,7 @@ def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[s
             status_code=409,
         )
 
-    for key, expected in (("window", EARTH_WINDOW), ("horizon", EARTH_HORIZON)):
+    for key, expected in (("window", profile["window"]), ("horizon", profile["horizon"])):
         value = hypers.get(key)
         if value is None:
             continue
@@ -358,8 +395,8 @@ def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[s
         EARTH_LEARNING_RATE[2],
     )
     model_source_value = str(hypers.get("model_source") or "official").strip().lower()
-    normalized["window"] = EARTH_WINDOW
-    normalized["horizon"] = EARTH_HORIZON
+    normalized["window"] = profile["window"]
+    normalized["horizon"] = profile["horizon"]
     # The architecture label follows the model source: the official DLinear, or the
     # generic uploaded marker. Nothing here decides which code runs; that is the
     # server-side pinned model reference's job.
@@ -387,8 +424,8 @@ def normalize_earth_training_hyperparameters(hyperparameters: Optional[Mapping[s
                 status_code=422,
             )
         normalized["custom_model_params"] = dict(custom_params)
-    if dataset_id is not None:
-        normalized["training_dataset"] = dataset_id
+    if dataset_id is not None or hypers.get("training_dataset") is not None:
+        normalized["training_dataset"] = resolved_dataset_id
     return normalized
 
 
@@ -409,11 +446,14 @@ def require_earth_training_configuration(
     model_source: Any,
     uploaded_model_id: Any,
     hyperparameters: Optional[Mapping[str, Any]],
+    dataset_id: Any = None,
 ) -> dict:
     """Reject unsupported Earth configurations, then validate the parameters.
 
-    Both model sources are supported. The uploaded source requires an uploaded
-    model id; the official source must not carry one. The heavy compatibility work
+    Daily and three-hour releases support both sources when the corresponding
+    uploaded-model feed declaration and dry-run pass.
+    The uploaded source requires an uploaded model id; the official source must
+    not carry one. The heavy compatibility work
     (ownership, version, parameter schema, Earth tensor contract) belongs to the
     training service, which owns the database session.
     """
@@ -424,6 +464,7 @@ def require_earth_training_configuration(
             "Earth model_source must be 'official' or 'uploaded'",
             status_code=409,
         )
+    resolved_dataset_id = _profile_dataset_id(dataset_id, hyperparameters)
     has_uploaded_id = uploaded_model_id not in (None, "", 0)
     if normalized_source == "uploaded" and not has_uploaded_id:
         raise DatasetRequestError(
@@ -438,13 +479,21 @@ def require_earth_training_configuration(
             status_code=422,
         )
     hypers = dict(hyperparameters or {})
+    if _profile_dataset_id(dataset_id, hypers) == EARTH_DATASET_3HOURLY_ID:
+        requested_source = hypers.get("model_source")
+        requested_architecture = hypers.get("model_architecture")
+        expected_architecture = EARTH_UPLOADED_ARCHITECTURE if normalized_source == "uploaded" else EARTH_SUPPORTED_ARCHITECTURE
+        if ((requested_source is not None and requested_source != normalized_source)
+                or (requested_architecture is not None and requested_architecture != expected_architecture)):
+            raise DatasetRequestError("dataset_training_configuration_not_supported",
+                                      "Earth model source and architecture declarations disagree", status_code=409)
     if hypers.get("transfer_learning") not in (None, False, 0, "false", "False", ""):
         raise DatasetRequestError(
             "dataset_training_configuration_not_supported",
             "Transfer learning is not available for Earth",
             status_code=409,
         )
-    normalized = normalize_earth_training_hyperparameters(hypers)
+    normalized = normalize_earth_training_hyperparameters(hypers, dataset_id=dataset_id)
     # The caller (HTTP layer or uploaded-model flow) is authoritative about the
     # source, so apply it explicitly rather than trusting a request field.
     normalized["model_source"] = normalized_source
@@ -485,7 +534,16 @@ def build_earth_training_spec(
     uses an uploaded model, its pinned reference (including the verified source
     text) travels in the same server-side channel.
     """
-    normalized = normalize_earth_training_hyperparameters(hyperparameters)
+    dataset_id = _profile_dataset_id(dataset_binding.get("dataset_id"), hyperparameters)
+    normalized = normalize_earth_training_hyperparameters(hyperparameters, dataset_id=dataset_id)
+    if dataset_id == EARTH_DATASET_3HOURLY_ID and (uploaded_model is not None or normalized["model_source"] == "uploaded"):
+        reference = dict(uploaded_model or {})
+        if (not isinstance(reference.get("package_id"), str) or not reference["package_id"]
+                or type(reference.get("version")) is not int or reference["version"] < 1
+                or not isinstance(reference.get("content_hash"), str) or len(reference["content_hash"]) != 64
+                or not isinstance(reference.get("source_text"), str) or not reference["source_text"].strip()
+                or not isinstance(reference.get("param_schema"), dict)):
+            raise DatasetRequestError("uploaded_model_reference_missing", "Three-hour training requires a frozen verified model reference", status_code=409)
     if uploaded_model is not None:
         # A pinned uploaded reference *is* the model source, whatever a caller
         # passed in the parameter dict; trusting the parameter alone would let the
@@ -505,6 +563,7 @@ def build_earth_training_spec(
             "dataset_snapshot": copy.deepcopy(dataset_binding.get("dataset_snapshot")),
         },
         "hyperparameters": normalized,
+        "training_profile": earth_training_profile(dataset_id),
     }
     if uploaded_model is not None:
         spec["uploaded_model"] = {
@@ -521,14 +580,14 @@ def split_window_counts(
     window: int = EARTH_WINDOW,
     horizon: int = EARTH_HORIZON,
 ) -> dict:
-    """Return the sample count per split for a fixed window/horizon pair."""
+    """Return counts from contiguous steps; ``split_days`` retains its legacy name."""
     counts = {}
     for name, days in split_days.items():
         available = int(days) - int(window) - int(horizon) + 1
         if available < 1:
             raise DatasetRequestError(
                 "invalid_earth_training_parameters",
-                f"Split {name} has too few days for window={window} horizon={horizon}",
+                f"Split {name} has too few time steps for window={window} horizon={horizon}",
                 status_code=422,
             )
         counts[name] = available
@@ -537,6 +596,12 @@ def split_window_counts(
 
 __all__ = [
     "EARTH_ALLOWED_PARAMETER_KEYS",
+    "EARTH_3HOURLY_ARTIFACT_SCHEMA",
+    "EARTH_3HOURLY_METRICS_SCHEMA",
+    "EARTH_3HOURLY_IMPLEMENTATION_ID",
+    "EARTH_3HOURLY_WINDOW",
+    "EARTH_3HOURLY_HORIZON",
+    "EARTH_3HOURLY_GRID_SHAPE",
     "EARTH_ARTIFACT_SCHEMA",
     "EARTH_CHANNELS",
     "EARTH_CHANNEL_UNITS",

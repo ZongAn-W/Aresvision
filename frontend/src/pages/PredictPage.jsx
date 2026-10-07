@@ -1050,11 +1050,15 @@ export default function PredictPage() {
     try {
       const payload = await fetchEarthPredictContext(normalized);
       setEarthContext(payload);
-      setEarthOrigin((current) => (
-        current && payload?.origins?.dates?.includes(current)
+      setEarthOrigin((current) => {
+        const availableOrigins = Array.isArray(payload?.origins?.timestamps) && payload.origins.timestamps.length
+          ? payload.origins.timestamps : (payload?.origins?.dates || []);
+        return (
+        current && availableOrigins.includes(current)
           ? current
           : pickDefaultOrigin(payload?.origins)
-      ));
+        );
+      });
     } catch (requestError) {
       setEarthContext(null);
       const resolved = resolveEarthPredictErrorMessage(requestError);
@@ -1119,7 +1123,8 @@ export default function PredictPage() {
         datasetVersion: payload?.dataset_version,
         datasetFingerprint: payload?.dataset_fingerprint,
         forecastOrigin: payload?.forecast_origin,
-        targetDates: payload?.target_dates,
+        targetDates: payload?.target_timestamps || payload?.target_dates,
+        targetTimestamps: payload?.target_timestamps,
       });
       if (earthRequestRef.current
         && shouldClearEarthResult(earthRequestRef.current, nextKey)) {
@@ -1140,6 +1145,7 @@ export default function PredictPage() {
   const earthCopy = useMemo(() => ({
     title: t('predict.earthTitle'),
     note: t('predict.earthNote'),
+    threeHourlyNote: t('predict.earthThreeHourlyNote'),
     taskLabel: t('predict.earthTaskLabel'),
     taskPlaceholder: t('predict.earthTaskPlaceholder'),
     originLabel: t('predict.earthOriginLabel'),
@@ -1154,8 +1160,10 @@ export default function PredictPage() {
     emptyNoTask: t('predict.earthEmptyNoTask'),
     fieldEmpty: t('predict.earthFieldEmpty'),
     dayTabsLabel: t('predict.earthDayTabsLabel'),
-    originLine: (origin, first, last) => t('predict.earthOriginLine')(origin, first, last),
-    originSplit: (split) => t('predict.earthOriginSplit')(split),
+    originLine: (origin, first, last, threeHourly = false) => t('predict.earthOriginLine', {
+      origin, first, last, threeHourly,
+    }),
+    originSplit: (split) => t('predict.earthOriginSplit', { split }),
     rangeLabel: t('predict.earthRangeLabel'),
     validCellsLabel: t('predict.earthValidCells'),
     leadHeader: t('predict.earthLeadHeader'),
@@ -1165,6 +1173,11 @@ export default function PredictPage() {
     residualMode: t('predict.earthResidualMode'),
     physicalMode: t('predict.earthPhysicalMode'),
     dayUnit: t('predict.earthDayUnit'),
+    stepUnit: t('predict.earthStepUnit'),
+    dailyFrequency: t('predict.earthDailyFrequency'),
+    factFrequency: t('predict.earthFactFrequency'),
+    timestampHeader: t('predict.earthTimestampHeader'),
+    daySuffix: t('predict.earthDaySuffix'),
     factDataset: t('predict.earthFactDataset'),
     factModel: t('predict.earthFactModel'),
     official: t('predict.earthModelOfficial'),

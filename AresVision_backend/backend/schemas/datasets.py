@@ -34,6 +34,11 @@ class DatasetTime(BaseModel):
     count: Optional[int] = None
     step: Optional[int] = None
     step_unit: Optional[str] = None
+    frequency_hours: Optional[int] = None
+    time_zone: Optional[str] = None
+    label: Optional[str] = None
+    interval_start: Optional[str] = None
+    interval_end_exclusive: Optional[str] = None
 
 
 class DatasetGrid(BaseModel):
@@ -61,14 +66,17 @@ class DatasetVariable(BaseModel):
     label: str
     units: str
     role: Literal["target_and_input", "optional_input"]
+    missing_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    valid_mask: Optional[str] = None
 
 
 class DatasetSplit(BaseModel):
     model_config = MODEL_CONFIG
 
-    start: str
-    end: str
+    start: Optional[str]
+    end: Optional[str]
     days: int
+    steps: Optional[int] = None
 
 
 class DatasetTrainingProfile(BaseModel):
@@ -90,6 +98,8 @@ class DatasetTrainingProfile(BaseModel):
     window: int
     horizon: int
     step_unit: str
+    step: Optional[int] = None
+    frequency_hours: Optional[int] = None
     optional_channels: list[str] = Field(default_factory=list)
     default_selected_channels: list[str] = Field(default_factory=list)
     input_units: dict[str, str] = Field(default_factory=dict)
@@ -114,9 +124,14 @@ class DatasetDescriptor(BaseModel):
     availability_reason: Optional[str] = None
     manifest_sha256: Optional[str] = None
     data_sha256: Optional[str] = None
+    manifest_content_sha256: Optional[str] = None
     dataset_fingerprint: Optional[str] = None
     capabilities: DatasetCapabilities
     time: DatasetTime
+    frequency_hours: Optional[int] = None
+    step_unit: Optional[str] = None
+    step: Optional[int] = None
+    grid_shape: Optional[list[int]] = None
     grid: Optional[DatasetGrid] = None
     channel_order: list[str] = Field(default_factory=list)
     variables: list[DatasetVariable] = Field(default_factory=list)
@@ -129,6 +144,7 @@ class DatasetListResponse(BaseModel):
     model_config = MODEL_CONFIG
 
     items: list[DatasetDescriptor]
+    default_earth_dataset_id: str
 
 
 __all__ = [

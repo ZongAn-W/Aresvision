@@ -1,17 +1,34 @@
 """Earth historical prediction response models.
 
-The public contract is intentionally explicit: a client gets the selectable
-forecast origins, the three target dates, the real published grid, the three DU
-fields and the metrics — never a bare array it would have to interpret.
+The public contract keeps daily dates and adds explicit UTC timestamps for the
+three-hour release, along with the real grid, DU fields and ordered lead metrics.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 MODEL_CONFIG = ConfigDict(allow_inf_nan=False)
+
+
+class _ConditionalTemporalFields(BaseModel):
+    """Omit absent new fields while retaining every legacy default/null field.
+
+    Global exclude_unset/exclude_none would also alter old grid/model responses.
+    Only the additive temporal fields need conditional serialization.
+    """
+
+    conditional_fields: ClassVar[frozenset[str]] = frozenset()
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_temporal_fields(self, handler):
+        result = handler(self)
+        for name in self.conditional_fields:
+            if name not in self.model_fields_set:
+                result.pop(name, None)
+        return result
 
 
 class EarthPredictGrid(BaseModel):
@@ -46,16 +63,31 @@ class EarthPredictFieldDay(BaseModel):
     valid_cells: int
 
 
-class EarthLeadMetric(BaseModel):
+class EarthLeadMetric(_ConditionalTemporalFields):
     model_config = MODEL_CONFIG
 
-    lead_day: int
+    conditional_fields = frozenset({"lead_day", "lead_step", "lead_hours"})
+
+    lead_day: Optional[int] = Field(default=None, ge=1)
+    lead_step: Optional[int] = Field(default=None, ge=1)
+    lead_hours: Optional[int] = Field(default=None, ge=1)
     rmse: float
     mae: float
 
 
-class EarthPredictMetrics(BaseModel):
+class EarthHorizonMetric(BaseModel):
     model_config = MODEL_CONFIG
+
+    horizon_hours: int = Field(..., ge=1)
+    lead_steps: int = Field(..., ge=1)
+    rmse: float
+    mae: float
+
+
+class EarthPredictMetrics(_ConditionalTemporalFields):
+    model_config = MODEL_CONFIG
+
+    conditional_fields = frozenset({"by_horizon"})
 
     unit: str
     target: str
@@ -63,10 +95,16 @@ class EarthPredictMetrics(BaseModel):
     reference_available: bool
     overall: dict[str, float] = Field(default_factory=dict)
     by_lead: list[EarthLeadMetric] = Field(default_factory=list)
+    by_horizon: Optional[list[EarthHorizonMetric]] = None
 
 
-class EarthPredictOrigins(BaseModel):
+class EarthPredictOrigins(_ConditionalTemporalFields):
     model_config = MODEL_CONFIG
+
+    conditional_fields = frozenset({
+        "kind", "time_zone", "frequency_hours", "step_unit", "step", "timestamps",
+        "input_offset_days", "target_offset_days", "input_offset_hours", "target_offset_hours",
+    })
 
     start: str
     end: str
@@ -74,8 +112,16 @@ class EarthPredictOrigins(BaseModel):
     dates: list[str] = Field(default_factory=list)
     window: int
     horizon: int
-    input_offset_days: int
-    target_offset_days: int
+    input_offset_days: Optional[int] = None
+    target_offset_days: Optional[int] = None
+    kind: Optional[str] = None
+    time_zone: Optional[str] = None
+    frequency_hours: Optional[int] = None
+    step_unit: Optional[str] = None
+    step: Optional[int] = None
+    timestamps: Optional[list[str]] = None
+    input_offset_hours: Optional[int] = None
+    target_offset_hours: Optional[int] = None
 
 
 class EarthPredictRunBlock(BaseModel):
@@ -107,8 +153,10 @@ class EarthPredictModelIdentity(BaseModel):
     uploaded_model_source_embedded: Optional[bool] = None
 
 
-class EarthPredictContextResponse(BaseModel):
+class EarthPredictContextResponse(_ConditionalTemporalFields):
     model_config = MODEL_CONFIG
+
+    conditional_fields = frozenset({"frequency_hours", "step_unit", "step", "time_zone", "timestamp_rule"})
 
     planet: str = "earth"
     task_id: int
@@ -119,6 +167,11 @@ class EarthPredictContextResponse(BaseModel):
     target_unit: str
     window: int
     horizon: int
+    frequency_hours: Optional[int] = None
+    step_unit: Optional[str] = None
+    step: Optional[int] = None
+    time_zone: Optional[str] = None
+    timestamp_rule: Optional[str] = None
     input_channel_order: list[str] = Field(default_factory=list)
     input_units: list[str] = Field(default_factory=list)
     grid: EarthPredictGrid
@@ -134,11 +187,16 @@ class EarthPredictRequest(BaseModel):
     model_config = MODEL_CONFIG
 
     training_task_id: int = Field(..., ge=1)
-    forecast_origin: str = Field(..., min_length=8, max_length=10)
+    forecast_origin: str = Field(..., min_length=8, max_length=40)
 
 
-class EarthPredictResponse(BaseModel):
+class EarthPredictResponse(_ConditionalTemporalFields):
     model_config = MODEL_CONFIG
+
+    conditional_fields = frozenset({
+        "input_timestamps", "target_timestamps", "frequency_hours", "step_unit", "step",
+        "time_zone", "timestamp_rule", "cache_key",
+    })
 
     planet: str = "earth"
     task_id: int
@@ -157,6 +215,14 @@ class EarthPredictResponse(BaseModel):
     origin_split: str
     input_dates: list[str] = Field(default_factory=list)
     target_dates: list[str] = Field(default_factory=list)
+    input_timestamps: Optional[list[str]] = None
+    cache_key: Optional[str] = None
+    target_timestamps: Optional[list[str]] = None
+    frequency_hours: Optional[int] = None
+    step_unit: Optional[str] = None
+    step: Optional[int] = None
+    time_zone: Optional[str] = None
+    timestamp_rule: Optional[str] = None
     window: int
     horizon: int
     grid: EarthPredictGrid
@@ -169,6 +235,7 @@ class EarthPredictResponse(BaseModel):
 
 __all__ = [
     "EarthLeadMetric",
+    "EarthHorizonMetric",
     "EarthPredictContextResponse",
     "EarthPredictFieldDay",
     "EarthPredictGrid",

@@ -15,6 +15,13 @@ class UserModelEarthVerdict(BaseModel):
     output_shape: Optional[List[int]] = None
 
 
+class UserModelEarthDatasetVerdict(UserModelEarthVerdict):
+    dataset_id: str
+    status: str = "unknown"
+    code: Optional[str] = None
+    contract_schema: Optional[str] = None
+
+
 class UserModelValidationReport(BaseModel):
     ok: bool = False
     errors: List[str] = Field(default_factory=list)
@@ -24,6 +31,8 @@ class UserModelValidationReport(BaseModel):
     #: that do not opt in, which keeps the historical report shape.
     datasets: Optional[Dict[str, Any]] = None
     earth: Optional[UserModelEarthVerdict] = None
+    earth_datasets: Optional[Dict[str, UserModelEarthDatasetVerdict]] = None
+    mars: Optional[Dict[str, bool]] = None
 
 
 class UserModelPackageResponse(BaseModel):

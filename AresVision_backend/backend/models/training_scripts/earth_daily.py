@@ -1,8 +1,8 @@
 """Independent Earth MERRA-2 training entry point for the official DLinear model.
 
 This script deliberately does not touch any Mars data path: it reads a verified
-``earth_merra2_daily_v2`` (or v1) release through the dataset registry, builds
-7 day -> 3 day windows with training-only normalization, trains the official
+daily or three-hour release through the dataset registry, builds its dataset
+profile's windows with training-only normalization, trains the official
 DLinear, evaluates validation and test in DU and writes one versioned checkpoint.
 
 The parent process passes everything through ``ARESVISION_EARTH_TRAINING_SPEC``
@@ -38,7 +38,9 @@ if str(BACKEND_DIR) not in sys.path:
 
 from services.dataset_registry import DatasetRegistry  # noqa: E402
 from services.dataset_identity import DatasetRequestError  # noqa: E402
-from services.earth_dataset import EarthOzoneWindows  # noqa: E402
+from services.earth_dataset import (  # noqa: E402
+    EarthOzoneWindows, EarthThreeHourlyWindows, build_threehour_training_cache,
+)
 from services.earth_training_artifact import (  # noqa: E402
     EarthArtifactError,
     ErrorAccumulator,
@@ -55,6 +57,7 @@ from services.earth_training_contract import (  # noqa: E402
     EARTH_TRAINING_SPEC_SCHEMA,
     EARTH_WINDOW,
     normalize_earth_training_hyperparameters,
+    earth_training_profile,
     split_window_counts,
 )
 from services.earth_model_source import (  # noqa: E402
@@ -69,6 +72,7 @@ from services.earth_model_source import (  # noqa: E402
 SPEC_ENV_VAR = "ARESVISION_EARTH_TRAINING_SPEC"
 PROGRESS_EVERY_BATCHES = 20
 GRID_HORIZON_INDEX = 1
+THREE_HOUR_TILE_SHAPE = (24, 48)
 
 
 class EarthTrainingError(RuntimeError):
@@ -95,10 +99,14 @@ def _build_loaders(
     registry: DatasetRegistry,
     batch_size: int,
     seed: int,
+    cache_root: Optional[Path] = None,
 ):
     """Build the three split datasets sharing one training-fitted normalization."""
     binding = spec["dataset_binding"]
-    hyperparameters = normalize_earth_training_hyperparameters(spec["hyperparameters"])
+    hyperparameters = normalize_earth_training_hyperparameters(
+        spec["hyperparameters"], dataset_id=binding["dataset_id"]
+    )
+    profile = earth_training_profile(binding["dataset_id"])
     release = registry.get_earth_snapshot(binding["dataset_id"])
     assert_release_matches_binding(release, binding)
 
@@ -106,49 +114,62 @@ def _build_loaders(
     # Fit statistics on the published training period, then build each split
     # independently so no input or target window can cross a manifest boundary.
     normalization = normalization_from_release(release, ["TO3", *selected])
+    window_type = EarthThreeHourlyWindows if profile["window"] == 56 else EarthOzoneWindows
     splits = {
-        name: EarthOzoneWindows.from_release(
+        name: window_type.from_release(
             release,
             split=name,
-            window=EARTH_WINDOW,
-            horizon=EARTH_HORIZON,
+            window=profile["window"],
+            horizon=profile["horizon"],
             selected_channels=selected,
-            normalization=None if name == "train" else normalization,
+            normalization=normalization,
         )
         for name in ("train", "validation", "test")
     }
     counts = {name: len(dataset) for name, dataset in splits.items()}
+    if window_type is EarthThreeHourlyWindows:
+        from config import EARTH_TRAINING_CACHE_DIR
+        cache_path = build_threehour_training_cache(
+            release, ["TO3", *selected], normalization,
+            cache_root if cache_root is not None else EARTH_TRAINING_CACHE_DIR,
+        )
+        for dataset in splits.values():
+            dataset.use_training_cache(cache_path)
     split_ranges = {
         name: {
-            "date_start": str(dataset.dates[0]),
-            "date_end": str(dataset.dates[-1]),
+            "date_start": (np.datetime_as_string(dataset.dates[0], unit="s") + "Z"
+                           if window_type is EarthThreeHourlyWindows else str(dataset.dates[0])),
+            "date_end": (np.datetime_as_string(dataset.dates[-1], unit="s") + "Z"
+                         if window_type is EarthThreeHourlyWindows else str(dataset.dates[-1])),
             "window_count": int(len(dataset)),
         }
         for name, dataset in splits.items()
     }
     generator = torch.Generator()
     generator.manual_seed(seed)
+    wrapper = _SpatialTileDataset if window_type is EarthThreeHourlyWindows else _ArrayDataset
     train_loader = torch.utils.data.DataLoader(
-        _ArrayDataset(splits["train"]),
+        wrapper(splits["train"]),
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
         generator=generator,
     )
     validation_loader = torch.utils.data.DataLoader(
-        _ArrayDataset(splits["validation"]),
+        wrapper(splits["validation"]),
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
     )
     test_loader = torch.utils.data.DataLoader(
-        _ArrayDataset(splits["test"]),
+        wrapper(splits["test"]),
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
     )
     return {
         "release": release,
+        "profile": profile,
         "normalization": normalization,
         "input_channel_order": ["TO3", *selected],
         "splits": splits,
@@ -161,22 +182,52 @@ def _build_loaders(
 
 
 class _ArrayDataset(torch.utils.data.Dataset):
-    """Thin Tensor wrapper so the loaders can use the default collate."""
+    """Convert only the requested window; never expand all overlapping windows."""
 
     def __init__(self, source: EarthOzoneWindows):
         self.source = source
-        self.inputs = torch.from_numpy(
-            np.stack([source[index][0] for index in range(len(source))])
-        )
-        self.targets = torch.from_numpy(
-            np.stack([source[index][1] for index in range(len(source))])
-        )
 
     def __len__(self) -> int:
         return len(self.source)
 
     def __getitem__(self, index):
-        return self.inputs[index], self.targets[index]
+        inputs, targets = self.source[index]
+        return torch.from_numpy(inputs), torch.from_numpy(targets)
+
+
+class _SpatialTileDataset(_ArrayDataset):
+    """Read disjoint tiles for the shared, spatially independent DLinear weights.
+
+    A batch is a batch of spatial tiles. Temporal sample counts still refer to
+    forecast windows; evaluation visits every cell of every window exactly once.
+    """
+
+    def __init__(self, source):
+        super().__init__(source)
+        self.tiles = [
+            (slice(lat, lat + THREE_HOUR_TILE_SHAPE[0]),
+             slice(lon, lon + THREE_HOUR_TILE_SHAPE[1]))
+            for lat in range(0, 240, THREE_HOUR_TILE_SHAPE[0])
+            for lon in range(0, 480, THREE_HOUR_TILE_SHAPE[1])
+        ]
+
+    def __len__(self):
+        return len(self.source) * len(self.tiles)
+
+    def __getitem__(self, index):
+        window_index, tile_index = divmod(index, len(self.tiles))
+        latitude, longitude = self.tiles[tile_index]
+        inputs, targets = self.source.read_window(
+            window_index, lat_slice=latitude, lon_slice=longitude
+        )
+        return torch.from_numpy(inputs), torch.from_numpy(targets)
+
+
+def _forward_batch(model, inputs, *, model_source, horizon):
+    return earth_forward_for_model(
+        model, inputs, model_source=model_source, horizon=horizon,
+        height=inputs.shape[-2], width=inputs.shape[-1],
+    )
 
 
 def _evaluate_split(
@@ -190,14 +241,16 @@ def _evaluate_split(
 ) -> tuple[dict, float]:
     """Return DU metrics plus the mean normalized MSE for a whole partition."""
     model.eval()
-    accumulator = ErrorAccumulator()
+    dataset_id = (getattr(getattr(dataset, "_release", None), "metadata", {}) or {}).get("dataset_id")
+    accumulator = ErrorAccumulator(dataset_id=dataset_id)
+    horizon = getattr(dataset, "horizon", EARTH_HORIZON)
     total_loss = 0.0
     total_loss_elements = 0
     with torch.no_grad():
         for inputs, targets in loader:
             inputs = inputs.to(device)
             targets = targets.to(device)
-            output = earth_forward_for_model(model, inputs, model_source=model_source)
+            output = _forward_batch(model, inputs, model_source=model_source, horizon=horizon)
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during evaluation")
             loss = loss_function(output, targets)
@@ -219,6 +272,7 @@ def run_training(
     output_path: Path,
     registry: DatasetRegistry,
     device: Optional[str] = None,
+    cache_root: Optional[Path] = None,
 ) -> dict:
     """Train, evaluate and publish one Earth checkpoint.
 
@@ -236,7 +290,12 @@ def run_training(
     if not isinstance(binding, dict):
         raise EarthTrainingError("Training spec has no dataset binding")
 
-    hyperparameters = normalize_earth_training_hyperparameters(spec["hyperparameters"])
+    hyperparameters = normalize_earth_training_hyperparameters(
+        spec["hyperparameters"], dataset_id=binding["dataset_id"]
+    )
+    profile = earth_training_profile(binding["dataset_id"])
+    if spec.get("training_profile") is not None and spec["training_profile"] != profile:
+        raise EarthTrainingError("Training spec profile disagrees with the dataset")
     epochs = hyperparameters["epochs"]
     batch_size = hyperparameters["batch_size"]
     learning_rate = hyperparameters["learning_rate"]
@@ -268,7 +327,7 @@ def run_training(
 
     seed_everything(seed)
     resolved_device = resolve_device(device)
-    prepared = _build_loaders(spec, registry, batch_size, seed)
+    prepared = _build_loaders(spec, registry, batch_size, seed, cache_root=cache_root)
     order = prepared["input_channel_order"]
     dataset_by_name = prepared["splits"]
     train_dataset = dataset_by_name["train"]
@@ -278,6 +337,7 @@ def run_training(
         input_channel_order=order,
         linear_hidden_layers=hidden_layers,
         uploaded_model=uploaded_reference if model_source == MODEL_SOURCE_UPLOADED else None,
+        dataset_id=binding["dataset_id"],
     )
     try:
         model, model_build_config, model_warnings = build_earth_model_for_plan(plan)
@@ -298,7 +358,7 @@ def run_training(
     print(f"Training Device: {resolved_device}", flush=True)
     print(
         f"EarthModel={model_label}, Dataset={binding['dataset_id']}@{binding['dataset_version']}, "
-        f"Channels={','.join(order)}, Window={EARTH_WINDOW}, Horizon={EARTH_HORIZON}",
+        f"Channels={','.join(order)}, Window={profile['window']}, Horizon={profile['horizon']}",
         flush=True,
     )
     if model_source == MODEL_SOURCE_UPLOADED:
@@ -334,7 +394,7 @@ def run_training(
             inputs = inputs.to(resolved_device)
             targets = targets.to(resolved_device)
             optimizer.zero_grad(set_to_none=True)
-            output = earth_forward_for_model(model, inputs, model_source=model_source)
+            output = _forward_batch(model, inputs, model_source=model_source, horizon=profile["horizon"])
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during training")
             loss = loss_function(output, targets)
@@ -429,16 +489,21 @@ def run_training(
     )
     for row in test_metrics["by_lead"]:
         print(
-            f"Earth test lead day {row['lead_day']}: RMSE={row['rmse']:.6f} "
+            f"Earth test lead {row.get('lead_hours', row.get('lead_day'))} "
+            f"{'hours' if 'lead_hours' in row else 'day'}: RMSE={row['rmse']:.6f} "
             f"MAE={row['mae']:.6f}",
             flush=True,
         )
+    for row in test_metrics.get("by_horizon", []):
+        print(f"Earth test cumulative {row['horizon_hours']} hours: "
+              f"RMSE={row['rmse']:.6f} MAE={row['mae']:.6f}", flush=True)
 
     metrics = build_metrics_block(
         validation=validation_metrics,
         test=test_metrics,
         validation_window_count=prepared["counts"]["validation"],
         test_window_count=prepared["counts"]["test"],
+        dataset_id=binding["dataset_id"],
     )
     run = {
         "task_id": task_id,
@@ -459,6 +524,11 @@ def run_training(
         "device": str(resolved_device),
         "duration_seconds": round(time.time() - start_time, 3),
     }
+    if profile["window"] == 56:
+        run["memory_strategy"] = "normalized_memmap_spatial_tiles"
+        run["spatial_tile_shape"] = list(THREE_HOUR_TILE_SHAPE)
+        run["batch_unit"] = "spatial_tile"
+        run["missing_value_policy"] = "reject_selected_channel_missing_values"
     uploaded_block = None
     if model_source == MODEL_SOURCE_UPLOADED:
         uploaded_block = {
@@ -505,8 +575,8 @@ def run_training(
     sample_inputs, _ = next(iter(prepared["test_loader"]))
     sample_inputs = sample_inputs.to(resolved_device)
     with torch.no_grad():
-        before = earth_forward_for_model(model, sample_inputs, model_source=model_source)
-        after = earth_forward_for_model(reloaded, sample_inputs, model_source=model_source)
+        before = _forward_batch(model, sample_inputs, model_source=model_source, horizon=profile["horizon"])
+        after = _forward_batch(reloaded, sample_inputs, model_source=model_source, horizon=profile["horizon"])
     if not torch.equal(before, after):
         raise EarthTrainingError("The published checkpoint does not reproduce the trained model")
     print(f"Model saved: {saved_path}", flush=True)
@@ -538,13 +608,22 @@ def _load_spec_from_env() -> dict:
     return spec
 
 
-def _build_registry() -> DatasetRegistry:
-    from config import EARTH_MERRA2_DIR, EARTH_MERRA2_V1_DIR
+def _build_registry(spec: Optional[dict] = None) -> DatasetRegistry:
+    from config import EARTH_MERRA2_DIR, EARTH_MERRA2_V1_DIR, EARTH_MERRA2_3HOURLY_DIR
 
+    threehour_dir = EARTH_MERRA2_3HOURLY_DIR
+    if (spec or {}).get("dataset_binding", {}).get("dataset_id") == "earth_merra2_3hourly_v1":
+        data_path = (spec or {}).get("data_path")
+        if data_path is not None:
+            path = Path(data_path)
+            if path.name != "earth_merra2_3hourly.nc" or not path.is_absolute():
+                raise EarthTrainingError("The server three-hour data path is invalid")
+            threehour_dir = path.parent
     return DatasetRegistry(
         EARTH_MERRA2_DIR,
         earth_dataset_id="earth_merra2_daily_v2",
         legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
+        earth_3hourly_package_dir=threehour_dir,
     )
 
 
@@ -554,7 +633,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         spec = _load_spec_from_env()
-        run_training(spec, Path(args.output_path), _build_registry())
+        run_training(spec, Path(args.output_path), _build_registry(spec))
     except (EarthTrainingError, EarthArtifactError, DatasetRequestError, ValueError) as exc:
         print(f"Earth training failed: {exc}", flush=True)
         return 1

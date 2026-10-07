@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import json
 import math
+import multiprocessing
 import os
+import re
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -36,9 +39,15 @@ from services.earth_dataset import (
     fit_normalization,
     input_units,
     release_split_codes,
+    threehour_release_split_codes,
     validate_normalization,
 )
 from services.earth_training_contract import (
+    EARTH_3HOURLY_ARTIFACT_SCHEMA,
+    EARTH_3HOURLY_METRICS_SCHEMA,
+    EARTH_3HOURLY_IMPLEMENTATION_ID,
+    EARTH_3HOURLY_WINDOW,
+    EARTH_3HOURLY_HORIZON,
     EARTH_ARTIFACT_SCHEMA,
     EARTH_HORIZON,
     EARTH_IMPLEMENTATION_ID,
@@ -47,7 +56,9 @@ from services.earth_training_contract import (
     EARTH_TARGET_UNIT,
     EARTH_UPLOADED_ARCHITECTURE,
     EARTH_WINDOW,
+    earth_training_profile,
 )
+from services.dataset_identity import EARTH_DATASET_3HOURLY_ID
 from services.training_split import normalize_split_ratios, TrainingSplitError
 from services.earth_model_source import (
     MODEL_SOURCE_OFFICIAL,
@@ -65,6 +76,8 @@ from training_backbones.earth_daily_model import (
 
 METRIC_KEYS = ("rmse", "mae")
 LEAD_DAYS = (1, 2, 3)
+THREE_HOURLY_HORIZONS = (24, 48, 72)
+THREE_HOURLY_TIMESTAMP_RULE = "interval_center"
 RUN_REQUIRED_KEYS = (
     "task_id",
     "optimizer",
@@ -85,12 +98,16 @@ class EarthArtifactError(ValueError):
 
 # ── metrics ────────────────────────────────────────────────────────────────
 
-def compute_earth_metrics(predictions_du, targets_du) -> dict:
+def compute_earth_metrics(predictions_du, targets_du, dataset_id: str | None = None) -> dict:
     """Return overall and per-lead RMSE/MAE in DU for ``[N, 3, 1, H, W]`` arrays.
 
     Every ``(forecast origin, lead day, grid cell)`` contributes equally, so the
     numbers are grid-uniform spatial errors, never an area-weighted global mean.
     """
+    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        accumulator = ErrorAccumulator(dataset_id=dataset_id)
+        accumulator.update(predictions_du, targets_du)
+        return accumulator.result()
     prediction = np.asarray(predictions_du, dtype="float64")
     target = np.asarray(targets_du, dtype="float64")
     if prediction.shape != target.shape:
@@ -129,20 +146,24 @@ class ErrorAccumulator:
     aggregate over error elements in float64.
     """
 
-    def __init__(self) -> None:
-        self._squared = np.zeros(len(LEAD_DAYS), dtype="float64")
-        self._absolute = np.zeros(len(LEAD_DAYS), dtype="float64")
-        self._counts = np.zeros(len(LEAD_DAYS), dtype="float64")
+    def __init__(self, dataset_id: str | None = None) -> None:
+        self._three_hourly = dataset_id == EARTH_DATASET_3HOURLY_ID
+        leads = 24 if self._three_hourly else len(LEAD_DAYS)
+        self._squared = np.zeros(leads, dtype="float64")
+        self._absolute = np.zeros(leads, dtype="float64")
+        self._counts = np.zeros(leads, dtype="float64")
 
     def update(self, predictions_du, targets_du) -> None:
         prediction = np.asarray(predictions_du, dtype="float64")
         target = np.asarray(targets_du, dtype="float64")
         if prediction.shape != target.shape or prediction.ndim != 5:
-            raise EarthArtifactError("Accumulated batches must be [N, 3, 1, lat, lon]")
+            raise EarthArtifactError("Accumulated batches must be [N, horizon, 1, lat, lon]")
+        if self._three_hourly and (prediction.shape[1] != 24 or prediction.shape[2] != 1):
+            raise EarthArtifactError("Three-hourly metrics require exactly 24 TO3 leads")
         if not np.isfinite(prediction).all() or not np.isfinite(target).all():
             raise EarthArtifactError("Metrics require finite predictions and references")
         error = prediction - target
-        for index in range(min(len(LEAD_DAYS), prediction.shape[1])):
+        for index in range(min(len(self._counts), prediction.shape[1])):
             lead_error = error[:, index]
             self._squared[index] += float((lead_error ** 2).sum())
             self._absolute[index] += float(np.abs(lead_error).sum())
@@ -153,19 +174,31 @@ class ErrorAccumulator:
             raise EarthArtifactError("No valid samples were accumulated")
         by_lead = [
             {
-                "lead_day": int(lead_day),
+                **({"lead_step": index + 1, "lead_hours": (index + 1) * 3}
+                   if self._three_hourly else {"lead_day": index + 1}),
                 "rmse": math.sqrt(float(self._squared[index] / self._counts[index])),
                 "mae": float(self._absolute[index] / self._counts[index]),
             }
-            for index, lead_day in enumerate(LEAD_DAYS)
+            for index in range(len(self._counts))
         ]
         total = float(self._counts.sum())
         squared = float(self._squared.sum())
         absolute = float(self._absolute.sum())
-        return {
+        result = {
             "overall": {"rmse": math.sqrt(squared / total), "mae": absolute / total},
             "by_lead": by_lead,
         }
+        if self._three_hourly:
+            result["by_horizon"] = []
+            for hours in THREE_HOURLY_HORIZONS:
+                steps = hours // 3
+                count = float(self._counts[:steps].sum())
+                result["by_horizon"].append({
+                    "horizon_hours": hours, "lead_steps": steps,
+                    "rmse": math.sqrt(float(self._squared[:steps].sum()) / count),
+                    "mae": float(self._absolute[:steps].sum()) / count,
+                })
+        return result
 
 
 def build_metrics_block(
@@ -174,6 +207,7 @@ def build_metrics_block(
     test: Mapping[str, Any],
     validation_window_count: int,
     test_window_count: int,
+    dataset_id: str | None = None,
 ) -> dict:
     """Assemble the persisted metrics block for one training run.
 
@@ -182,19 +216,19 @@ def build_metrics_block(
     numbers were aggregated over.
     """
     block = {
-        "schema": EARTH_METRICS_SCHEMA,
+        "schema": EARTH_3HOURLY_METRICS_SCHEMA if dataset_id == EARTH_DATASET_3HOURLY_ID else EARTH_METRICS_SCHEMA,
         "target": EARTH_TARGET_CHANNEL,
         "unit": EARTH_TARGET_UNIT,
         "aggregation": "forecast_origin_lead_grid_uniform",
         "splits": {
-            "validation": _checked_split_metrics(validation, validation_window_count),
-            "test": _checked_split_metrics(test, test_window_count),
+            "validation": _checked_split_metrics(validation, validation_window_count, dataset_id),
+            "test": _checked_split_metrics(test, test_window_count, dataset_id),
         },
     }
     return block
 
 
-def _checked_split_metrics(metrics: Mapping[str, Any], window_count: int) -> dict:
+def _checked_split_metrics(metrics: Mapping[str, Any], window_count: int, dataset_id: str | None = None) -> dict:
     if not isinstance(metrics, Mapping):
         raise EarthArtifactError("Split metrics must be a mapping")
     counts = int(window_count)
@@ -207,6 +241,44 @@ def _checked_split_metrics(metrics: Mapping[str, Any], window_count: int) -> dic
     for key in METRIC_KEYS:
         block["overall"][key] = _finite_float(overall.get(key), f"overall.{key}")
     by_lead = metrics.get("by_lead")
+    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if not isinstance(by_lead, (list, tuple)) or len(by_lead) != 24:
+            raise EarthArtifactError("Three-hourly metrics require 24 ordered leads")
+        for index, row in enumerate(by_lead):
+            if not isinstance(row, Mapping) or row.get("lead_step") != index + 1 or row.get("lead_hours") != (index + 1) * 3:
+                raise EarthArtifactError("Three-hourly lead step/hour order is invalid")
+            block["by_lead"].append({
+                "lead_step": index + 1, "lead_hours": (index + 1) * 3,
+                "rmse": _finite_float(row.get("rmse"), f"lead[{index}].rmse"),
+                "mae": _finite_float(row.get("mae"), f"lead[{index}].mae"),
+            })
+        horizons = metrics.get("by_horizon")
+        if not isinstance(horizons, (list, tuple)) or len(horizons) != 3:
+            raise EarthArtifactError("Three-hourly metrics require 24/48/72-hour summaries")
+        block["by_horizon"] = []
+        for index, hours in enumerate(THREE_HOURLY_HORIZONS):
+            row = horizons[index]
+            if not isinstance(row, Mapping) or row.get("horizon_hours") != hours or row.get("lead_steps") != hours // 3:
+                raise EarthArtifactError("Three-hourly horizon order is invalid")
+            block["by_horizon"].append({
+                "horizon_hours": hours, "lead_steps": hours // 3,
+                "rmse": _finite_float(row.get("rmse"), f"horizon[{index}].rmse"),
+                "mae": _finite_float(row.get("mae"), f"horizon[{index}].mae"),
+            })
+        for group in (block["overall"], *block["by_lead"], *block["by_horizon"]):
+            if any(group[key] < 0 for key in METRIC_KEYS):
+                raise EarthArtifactError("RMSE and MAE cannot be negative")
+        # Every lead contains the same forecast-origin/grid elements. Cumulative
+        # summaries must therefore agree with those 24 persisted lead metrics.
+        for summary in [*block["by_horizon"], {**block["overall"], "lead_steps": 24}]:
+            leads = block["by_lead"][:summary["lead_steps"]]
+            expected = {
+                "rmse": math.sqrt(sum(row["rmse"] ** 2 for row in leads) / len(leads)),
+                "mae": sum(row["mae"] for row in leads) / len(leads),
+            }
+            if any(not math.isclose(summary[key], expected[key], rel_tol=1e-6, abs_tol=1e-9) for key in METRIC_KEYS):
+                raise EarthArtifactError("Three-hourly cumulative metrics disagree with lead metrics")
+        return block
     if not isinstance(by_lead, (list, tuple)) or len(by_lead) != len(LEAD_DAYS):
         raise EarthArtifactError("Split metrics require one entry per lead day")
     for index, row in enumerate(by_lead):
@@ -301,7 +373,7 @@ def build_model_reference(
     reference = {
         "model_source": MODEL_SOURCE_UPLOADED,
         "architecture": EARTH_UPLOADED_ARCHITECTURE,
-        "implementation_id": uploaded_model.get("package_id"),
+        "implementation_id": model_config.get("implementation_id") or uploaded_model.get("package_id"),
         "uploaded_model": {
             "package_id": uploaded_model.get("package_id"),
             "display_name": uploaded_model.get("display_name"),
@@ -344,6 +416,9 @@ def build_checkpoint_payload(
     """Assemble the complete checkpoint payload as plain, serialisable data."""
     order = require_earth_channel_order(input_channel_order)
     binding = _binding_payload(dataset_binding)
+    dataset_id = binding["dataset_id"]
+    three_hourly = dataset_id == EARTH_DATASET_3HOURLY_ID
+    profile = earth_training_profile(dataset_id) if three_hourly else earth_training_profile()
     try:
         normalized_split_ratios = normalize_split_ratios(split_ratios)
     except TrainingSplitError as exc:
@@ -355,28 +430,47 @@ def build_checkpoint_payload(
         "input_channel_order": order,
         "input_units": input_units(order),
         "tensor_layout": "BTCHW",
-        "step_unit": "day",
-        "window": EARTH_WINDOW,
-        "horizon": EARTH_HORIZON,
+        "step_unit": profile["step_unit"],
+        "window": profile["window"],
+        "horizon": profile["horizon"],
         "strict_split_windows": True,
         "split_policy": "published_manifest_splits" if has_manifest_ranges else "legacy_compatibility",
         "split_window_counts": {str(key): int(value) for key, value in dict(split_window_counts).items()},
         "split_ratios": _plain(normalized_split_ratios),
         "split_ranges": _plain(dict(split_ranges or {})),
     }
+    if three_hourly:
+        contract.update({
+            "profile_id": profile["profile_id"],
+            "dataset_id": dataset_id,
+            "step": 3, "frequency_hours": 3,
+            "time_zone": "UTC",
+            "timestamp_rule": THREE_HOURLY_TIMESTAMP_RULE,
+            "time_aggregation": "three_hour_mean",
+            "timestamp_offset_minutes": 90,
+            "grid_shape": list(profile["grid_shape"]),
+        })
     run_block = {str(key): _plain(value) for key, value in dict(run).items()}
     resolved_task_id = int(task_id if task_id is not None else run_block.get("task_id", 0))
     run_block["task_id"] = resolved_task_id
     model_config = earth_model_config(
-        order, linear_hidden_layers, implementation_id=EARTH_IMPLEMENTATION_ID
+        order, linear_hidden_layers,
+        window=profile["window"], horizon=profile["horizon"],
+        height=profile["grid_shape"][0], width=profile["grid_shape"][1],
+        implementation_id=profile["implementation_id"],
     )
+    if three_hourly and model_source == MODEL_SOURCE_UPLOADED:
+        from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, IMPLEMENTATION_ID
+        model_config.update(architecture=EARTH_UPLOADED_ARCHITECTURE, implementation_id=IMPLEMENTATION_ID,
+                            contract_schema=CONTRACT_SCHEMA, spatial_tile_shape=[24, 48])
+        contract.update(uploaded_model_schema=CONTRACT_SCHEMA, spatial_tile_shape=[24, 48], dtype="float32")
     model_ref = build_model_reference(
         model_source=model_source,
         model_config=model_config,
         uploaded_model=uploaded_model,
     )
     payload = {
-        "artifact_schema": EARTH_ARTIFACT_SCHEMA,
+        "artifact_schema": EARTH_3HOURLY_ARTIFACT_SCHEMA if three_hourly else EARTH_ARTIFACT_SCHEMA,
         "model_state_dict": state_dict_to_cpu(model),
         "model_config": model_config,
         "model_ref": model_ref,
@@ -430,12 +524,15 @@ def _plain(value: Any) -> Any:
         return int(value)
     if isinstance(value, (float, np.floating)):
         return float(value)
+    if isinstance(value, np.datetime64):
+        # Preserve subdaily UTC timestamps rather than the legacy date truncation.
+        if value.dtype.name == "datetime64[D]":
+            return str(value)
+        return np.datetime_as_string(value, unit="s") + "Z"
     if isinstance(value, np.generic):
         return _plain(value.item())
     if isinstance(value, np.ndarray):
         return [_plain(item) for item in value.tolist()]
-    if isinstance(value, np.datetime64):
-        return str(value.astype("datetime64[D]"))
     if isinstance(value, Mapping):
         return {str(key): _plain(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set)):
@@ -455,8 +552,12 @@ def validate_checkpoint_payload(
     """Validate every contract field and return the normalized payload."""
     if not isinstance(payload, Mapping):
         raise EarthArtifactError("Checkpoint must be a mapping")
-    if payload.get("artifact_schema") != EARTH_ARTIFACT_SCHEMA:
+    artifact_schema = payload.get("artifact_schema")
+    if artifact_schema not in (EARTH_ARTIFACT_SCHEMA, EARTH_3HOURLY_ARTIFACT_SCHEMA):
         raise EarthArtifactError("Unsupported Earth checkpoint schema")
+    three_hourly = artifact_schema == EARTH_3HOURLY_ARTIFACT_SCHEMA
+    metric_dataset_id = EARTH_DATASET_3HOURLY_ID if three_hourly else None
+    profile = earth_training_profile(metric_dataset_id)
 
     state_dict = payload.get("model_state_dict")
     if not isinstance(state_dict, Mapping) or not state_dict:
@@ -481,6 +582,8 @@ def validate_checkpoint_payload(
     model_source = str(model_ref.get("model_source") or MODEL_SOURCE_OFFICIAL)
     if model_source not in (MODEL_SOURCE_OFFICIAL, MODEL_SOURCE_UPLOADED):
         raise EarthArtifactError(f"Unsupported checkpoint model source: {model_source}")
+    # Three-hourly checkpoints may carry an uploaded model reference, but only
+    # when the independent three-hour Earth source contract has been validated.
     if model_source == MODEL_SOURCE_OFFICIAL:
         if model_config.get("architecture") != "dlinear":
             raise EarthArtifactError("Checkpoint model is not the official DLinear")
@@ -513,13 +616,47 @@ def validate_checkpoint_payload(
     if bool(model_config.get("use_sphere")):
         raise EarthArtifactError("Earth checkpoints never use SPHERE")
     if (int(model_config.get("window", -1)), int(model_config.get("horizon", -1))) != (
-        EARTH_WINDOW, EARTH_HORIZON,
+        profile["window"], profile["horizon"],
     ):
-        raise EarthArtifactError("model_config must fix window=7 and horizon=3")
+        raise EarthArtifactError(f"model_config must fix window={profile['window']} and horizon={profile['horizon']}")
     height, width = int(model_config.get("height", -1)), int(model_config.get("width", -1))
     if height < 1 or width < 1:
         raise EarthArtifactError("model_config grid shape is invalid")
-    hidden_layers = int((model_config.get("architecture_params") or {}).get("linear_hidden_layers", 2))
+    expected_implementation = EARTH_3HOURLY_IMPLEMENTATION_ID
+    if three_hourly and model_source == MODEL_SOURCE_UPLOADED:
+        from training_backbones.earth_3hourly_uploaded_contract import (
+            CONTRACT_SCHEMA, IMPLEMENTATION_ID, build_config,
+        )
+        from services.uploaded_model_source import hash_source_bytes
+        expected_implementation = IMPLEMENTATION_ID
+        if (model_config.get("architecture") != EARTH_UPLOADED_ARCHITECTURE
+                or model_config.get("contract_schema") != CONTRACT_SCHEMA
+                or model_config.get("spatial_tile_shape") != [24, 48]):
+            raise EarthArtifactError("Three-hour uploaded model schema or tile shape is invalid")
+        if (type(uploaded.get("version")) is not int or uploaded["version"] < 1
+                or hash_source_bytes(uploaded["source_text"].encode("utf-8")) != uploaded["content_hash"]):
+            raise EarthArtifactError("Three-hour uploaded source identity is invalid")
+        try:
+            expected_config = build_config(order, uploaded.get("custom_model_params"))
+        except ValueError as exc:
+            raise EarthArtifactError(str(exc)) from exc
+        if uploaded.get("build_config") != expected_config:
+            raise EarthArtifactError("Three-hour uploaded build config disagrees with the contract")
+        training_contract = payload.get("training_contract") or {}
+        if (training_contract.get("uploaded_model_schema") != CONTRACT_SCHEMA
+                or training_contract.get("spatial_tile_shape") != [24, 48]
+                or training_contract.get("dtype") != "float32"):
+            raise EarthArtifactError("Three-hour uploaded execution contract is invalid")
+    if three_hourly and (
+        [height, width] != profile["grid_shape"]
+        or model_config.get("implementation_id") != expected_implementation
+        or model_ref.get("implementation_id") != expected_implementation
+    ):
+        raise EarthArtifactError("Three-hourly model grid or implementation is invalid")
+    architecture_params = model_config.get("architecture_params")
+    if architecture_params is not None and not isinstance(architecture_params, Mapping):
+        raise EarthArtifactError("model_config architecture_params must be a mapping")
+    hidden_layers = int((architecture_params or {}).get("linear_hidden_layers", 2))
     if hidden_layers < 1 or hidden_layers > 4:
         raise EarthArtifactError("model_config linear_hidden_layers is out of range")
     # An uploaded model's architecture is whatever its source defines; only the
@@ -540,15 +677,29 @@ def validate_checkpoint_payload(
         raise EarthArtifactError("Training contract channel order disagrees with the model")
     if list(contract.get("input_units") or []) != input_units(order):
         raise EarthArtifactError("Training contract input units are inconsistent")
-    if contract.get("tensor_layout") != "BTCHW" or contract.get("step_unit") != "day":
+    if contract.get("tensor_layout") != "BTCHW" or contract.get("step_unit") != profile["step_unit"]:
         raise EarthArtifactError("Training contract layout or step unit is unsupported")
-    if (int(contract.get("window", -1)), int(contract.get("horizon", -1))) != (EARTH_WINDOW, EARTH_HORIZON):
-        raise EarthArtifactError("Training contract must fix window=7 and horizon=3")
+    if (int(contract.get("window", -1)), int(contract.get("horizon", -1))) != (profile["window"], profile["horizon"]):
+        raise EarthArtifactError("Training contract window/horizon disagrees with its dataset profile")
+    if three_hourly:
+        expected_fields = {
+            "dataset_id": EARTH_DATASET_3HOURLY_ID,
+            "profile_id": profile["profile_id"],
+            "step": 3, "frequency_hours": 3, "time_zone": "UTC",
+            "timestamp_rule": THREE_HOURLY_TIMESTAMP_RULE,
+            "time_aggregation": "three_hour_mean", "timestamp_offset_minutes": 90,
+            "grid_shape": profile["grid_shape"],
+        }
+        for key, expected in expected_fields.items():
+            if contract.get(key) != expected:
+                raise EarthArtifactError(f"Three-hourly training contract {key} is invalid")
     if contract.get("strict_split_windows") is not True:
         raise EarthArtifactError("Training contract must declare strict split windows")
     split_policy = contract.get("split_policy")
     if split_policy not in ("published_manifest_splits", "legacy_compatibility"):
         raise EarthArtifactError("Training contract split policy is unsupported")
+    if three_hourly and split_policy != "published_manifest_splits":
+        raise EarthArtifactError("Three-hourly checkpoints require published chronological split ranges")
     counts = contract.get("split_window_counts")
     if not isinstance(counts, Mapping) or not counts:
         raise EarthArtifactError("Training contract has no split window counts")
@@ -582,6 +733,9 @@ def validate_checkpoint_payload(
         raise EarthArtifactError("Checkpoint dataset snapshot must be an object")
     if snapshot.get("planet") != "earth":
         raise EarthArtifactError("Checkpoint dataset binding is not an Earth release")
+    bound_three_hourly = binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID
+    if bound_three_hourly != three_hourly:
+        raise EarthArtifactError("Daily and three-hourly checkpoint schemas cannot cross dataset profiles")
     if binding.get("dataset_id") != snapshot.get("dataset_id"):
         raise EarthArtifactError("Checkpoint dataset id disagrees with its snapshot")
     if binding.get("dataset_fingerprint") != snapshot.get("dataset_fingerprint"):
@@ -592,6 +746,8 @@ def validate_checkpoint_payload(
     grid_shape = [int(value) for value in (grid.get("shape") or [])]
     if grid_shape != [height, width]:
         raise EarthArtifactError("Checkpoint grid shape disagrees with the model config")
+    if three_hourly:
+        _validate_threehourly_binding(binding, contract, normalization)
     if expected_binding is not None:
         _compare_binding(binding, expected_binding)
 
@@ -603,17 +759,36 @@ def validate_checkpoint_payload(
         raise EarthArtifactError(f"Run record is missing {missing[0]}")
     if run.get("run_complete") is not True:
         raise EarthArtifactError("Checkpoint run is not marked complete")
+    if three_hourly:
+        for key in ("task_id", "best_epoch", "epochs_completed"):
+            if type(run.get(key)) is not int or run[key] < 1:
+                raise EarthArtifactError(f"Three-hourly run {key} must be a positive integer")
+        if run["best_epoch"] > run["epochs_completed"]:
+            raise EarthArtifactError("Three-hourly best epoch exceeds the completed epochs")
+        if run.get("seed") is not None and (type(run["seed"]) is not int or not 0 <= run["seed"] < 2**32):
+            raise EarthArtifactError("Three-hourly run seed is invalid")
+        for key in ("optimizer", "loss"):
+            if not isinstance(run.get(key), str) or not run[key].strip():
+                raise EarthArtifactError(f"Three-hourly run {key} must be a non-empty string")
+        for key in ("device", "created_utc"):
+            if run.get(key) is not None and not isinstance(run[key], str):
+                raise EarthArtifactError(f"Three-hourly run {key} must be a string")
     if expected_task_id is not None and int(run.get("task_id", -1)) != int(expected_task_id):
         raise EarthArtifactError("Checkpoint belongs to a different task")
 
     metrics = payload.get("metrics")
-    if not isinstance(metrics, Mapping) or metrics.get("schema") != EARTH_METRICS_SCHEMA:
+    expected_metrics_schema = EARTH_3HOURLY_METRICS_SCHEMA if three_hourly else EARTH_METRICS_SCHEMA
+    if not isinstance(metrics, Mapping) or metrics.get("schema") != expected_metrics_schema:
         raise EarthArtifactError("Checkpoint has no Earth metrics block")
     if metrics.get("unit") != EARTH_TARGET_UNIT or metrics.get("target") != EARTH_TARGET_CHANNEL:
         raise EarthArtifactError("Checkpoint metrics must be TO3 in DU")
     splits = metrics.get("splits")
     if not isinstance(splits, Mapping) or "test" not in splits or "validation" not in splits:
         raise EarthArtifactError("Checkpoint metrics require validation and test splits")
+    if three_hourly:
+        for name in ("validation", "test"):
+            if not isinstance(splits[name], Mapping) or splits[name].get("window_count") != counts[name]:
+                raise EarthArtifactError(f"Three-hourly {name} metric window count disagrees with the contract")
     validated = dict(payload)
     validated["model_state_dict"] = dict(state_dict)
     validated["model_config"] = dict(model_config)
@@ -628,21 +803,103 @@ def validate_checkpoint_payload(
         "unit": metrics["unit"],
         "aggregation": metrics.get("aggregation"),
         "splits": {
-            name: _validated_split_metrics(splits.get(name), name)
+            name: _validated_split_metrics(splits.get(name), name, metric_dataset_id)
             for name in ("validation", "test")
         },
     }
     return validated
 
 
-def _validated_split_metrics(metrics: Any, name: str) -> dict:
+def _validated_split_metrics(metrics: Any, name: str, dataset_id: str | None = None) -> dict:
     """Strictly validate one split's metrics block read back from a checkpoint."""
     if not isinstance(metrics, Mapping):
         raise EarthArtifactError(f"Checkpoint metrics for {name} must be a mapping")
     counts = metrics.get("window_count")
     if isinstance(counts, bool) or not isinstance(counts, int) or counts < 1:
         raise EarthArtifactError(f"Checkpoint {name} window_count is invalid")
-    return _checked_split_metrics(metrics, counts)
+    return _checked_split_metrics(metrics, counts, dataset_id)
+
+
+def _threehour_time(value: Any, label: str) -> np.datetime64:
+    if (not isinstance(value, str) or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None):
+        raise EarthArtifactError(f"Three-hourly {label} must be a UTC timestamp")
+    try:
+        if not 2020 <= datetime.fromisoformat(value[:-1]).year <= 2021:
+            raise ValueError("timestamp outside the published release years")
+        parsed = np.datetime64(value.removesuffix("Z"), "ns")
+    except (ValueError, TypeError) as exc:
+        raise EarthArtifactError(f"Three-hourly {label} timestamp is invalid") from exc
+    if np.isnat(parsed):
+        raise EarthArtifactError(f"Three-hourly {label} timestamp is invalid")
+    return parsed
+
+
+def _validate_threehourly_binding(binding: Mapping, contract: Mapping, normalization: Mapping) -> None:
+    """Keep cadence, chronological ranges and train-only statistics inseparable."""
+    snapshot = binding["dataset_snapshot"]
+    time = snapshot.get("time") or {}
+    if not isinstance(time, Mapping):
+        raise EarthArtifactError("Three-hourly checkpoint time must be a mapping")
+    if (binding.get("dataset_version") != "v1"
+            or snapshot.get("dataset_version") != binding.get("dataset_version")
+            or binding.get("dataset_identity_status") != "verified"
+            or snapshot.get("frequency_hours") != 3
+            or snapshot.get("step_unit") != "hour" or snapshot.get("step") != 3
+            or time.get("kind") != "datetime" or time.get("time_zone") != "UTC"
+            or time.get("label") != "interval_center"):
+        raise EarthArtifactError("Three-hourly checkpoint binding cadence or version is invalid")
+    fingerprint = binding.get("dataset_fingerprint")
+    if (not isinstance(fingerprint, str) or len(fingerprint) != 64
+            or any(char not in "0123456789abcdef" for char in fingerprint)):
+        raise EarthArtifactError("Three-hourly checkpoint requires a SHA-256 dataset fingerprint")
+    ranges, counts = contract["split_ranges"], contract["split_window_counts"]
+    published = snapshot.get("splits") or {}
+    if not isinstance(published, Mapping):
+        raise EarthArtifactError("Three-hourly checkpoint splits must be a mapping")
+    previous_end = None
+    for name in ("train", "validation", "test"):
+        entry = ranges[name]
+        first = _threehour_time(entry["date_start"], f"{name} start")
+        last = _threehour_time(entry["date_end"], f"{name} end")
+        span = last - first
+        if (span < np.timedelta64(0, "h") or span % np.timedelta64(3, "h") != np.timedelta64(0, "h")
+                or first - first.astype("datetime64[D]") != np.timedelta64(90, "m")
+                or last - last.astype("datetime64[D]") != np.timedelta64(22 * 60 + 30, "m")):
+            raise EarthArtifactError(f"Three-hourly {name} range must cover complete UTC days")
+        if previous_end is not None and first - previous_end != np.timedelta64(3, "h"):
+            raise EarthArtifactError("Three-hourly split ranges must be consecutive and non-overlapping")
+        previous_end = last
+        step_count = int(span // np.timedelta64(3, "h")) + 1
+        if (int(counts[name]) != step_count - 56 - 24 + 1
+                or entry.get("window_count") != counts[name]):
+            raise EarthArtifactError(f"Three-hourly {name} window count disagrees with its time range")
+        split = published.get(name)
+        if (not isinstance(split, Mapping) or split.get("steps") != step_count
+                or split.get("start") != str(first.astype("datetime64[D]"))
+                or split.get("end") != str(last.astype("datetime64[D]"))):
+            raise EarthArtifactError(f"Three-hourly {name} range disagrees with the bound manifest")
+    for key, expected in {
+        "frequency_hours": 3, "step_unit": "hour", "step": 3,
+        "time_zone": "UTC", "timestamp_rule": THREE_HOURLY_TIMESTAMP_RULE,
+    }.items():
+        if normalization.get(key) != expected:
+            raise EarthArtifactError(f"Three-hourly normalization {key} is invalid")
+    train = ranges["train"]
+    for normalization_key, range_key in (("fit_time_start", "date_start"), ("fit_time_end", "date_end")):
+        if _threehour_time(normalization.get(normalization_key), normalization_key) != _threehour_time(train[range_key], range_key):
+            raise EarthArtifactError("Three-hourly normalization must fit the complete training interval only")
+    if normalization.get("fit_step_count") != published["train"]["steps"]:
+        raise EarthArtifactError("Three-hourly normalization fitted step count disagrees with the train split")
+    if (type(normalization.get("target_channel_index")) is not int
+            or normalization["target_channel_index"] != 0
+            or type(normalization.get("ddof")) is not int or normalization["ddof"] != 0
+            or normalization.get("epsilon") != 1e-6):
+        raise EarthArtifactError("Three-hourly normalization target index or population convention is invalid")
+    constants = normalization.get("constant_channel_mask")
+    if (not isinstance(constants, list) or len(constants) != len(contract["input_channel_order"])
+            or any(type(value) is not bool for value in constants)):
+        raise EarthArtifactError("Three-hourly normalization constant mask is invalid")
 
 
 def _compare_binding(binding: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
@@ -700,6 +957,28 @@ def load_earth_training_artifact(
         expected_task_id=expected_task_id,
         expected_channel_order=expected_order,
     )
+    if expected_hyperparameters is not None:
+        requested_id = expected_hyperparameters.get("training_dataset")
+        actual_id = validated["dataset_binding"].get("dataset_id")
+        if requested_id == EARTH_DATASET_3HOURLY_ID or actual_id == EARTH_DATASET_3HOURLY_ID:
+            if requested_id is not None and requested_id != actual_id:
+                raise EarthArtifactError("Checkpoint dataset profile does not match the task")
+            for key in ("window", "horizon"):
+                requested = expected_hyperparameters.get(key)
+                if requested is not None and requested != validated["model_config"][key]:
+                    raise EarthArtifactError(f"Checkpoint {key} does not match the task")
+            model_ref = validated["model_ref"]
+            source = model_ref.get("model_source", MODEL_SOURCE_OFFICIAL)
+            if expected_hyperparameters.get("model_source", MODEL_SOURCE_OFFICIAL) != source:
+                raise EarthArtifactError("Checkpoint model source does not match the task")
+            if source == MODEL_SOURCE_UPLOADED:
+                uploaded = model_ref["uploaded_model"]
+                for task_key, reference_key in (
+                    ("_uploaded_model_id", "package_id"), ("_uploaded_model_version", "version"),
+                    ("_uploaded_model_content_hash", "content_hash"), ("custom_model_params", "custom_model_params"),
+                ):
+                    if task_key in expected_hyperparameters and expected_hyperparameters[task_key] != uploaded[reference_key]:
+                        raise EarthArtifactError(f"Checkpoint {reference_key} does not match the task")
     return EarthCheckpoint(
         path=str(artifact_path),
         payload=validated,
@@ -735,6 +1014,7 @@ def build_earth_model_from_checkpoint(
                 horizon=int(checkpoint.model_config.get("horizon", EARTH_HORIZON)),
                 height=int(checkpoint.model_config.get("height", 36)),
                 width=int(checkpoint.model_config.get("width", 72)),
+                dataset_id=checkpoint.dataset_binding.get("dataset_id"),
             )
         except EarthModelBuildError as exc:
             raise EarthArtifactError(str(exc), code=exc.code) from exc
@@ -748,6 +1028,47 @@ def build_earth_model_from_checkpoint(
         ) from exc
     model.eval()
     return model, warnings
+
+
+def verify_earth_model_reload_isolated(path: Any, *, timeout_seconds: float = 30.0) -> None:
+    """Check executable checkpoint reload without running uploaded code in the parent."""
+    context = multiprocessing.get_context("spawn")
+    receive, send = context.Pipe(duplex=False)
+    process = context.Process(target=_earth_model_reload_child, args=(str(path), send))
+    try:
+        process.start()
+        send.close()
+        process.join(timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join(1)
+            if process.is_alive():
+                process.kill()
+                process.join(1)
+            raise EarthArtifactError("Earth checkpoint model reload timed out")
+        if not receive.poll():
+            raise EarthArtifactError("Earth checkpoint model reload exited without a result")
+        result = receive.recv()
+        if not result["ok"]:
+            raise EarthArtifactError(result["message"], code=result["code"])
+    finally:
+        receive.close()
+        send.close()
+        if process.pid is not None and not process.is_alive():
+            process.close()
+
+
+def _earth_model_reload_child(path: str, connection) -> None:
+    try:
+        torch.set_num_threads(2)
+        checkpoint = load_earth_training_artifact(path)
+        _verify_round_trip(Path(path), checkpoint.payload)
+        connection.send({"ok": True})
+    except Exception as exc:
+        connection.send({"ok": False, "message": str(exc),
+                         "code": getattr(exc, "code", "invalid_earth_training_artifact")})
+    finally:
+        connection.close()
 
 
 # ── atomic save ────────────────────────────────────────────────────────────
@@ -801,6 +1122,9 @@ def _verify_round_trip(path: Path, expected: Mapping[str, Any]) -> None:
     channels = int(expected["model_config"]["input_channels"])
     height = int(expected["model_config"]["height"])
     width = int(expected["model_config"]["width"])
+    if expected.get("artifact_schema") == EARTH_3HOURLY_ARTIFACT_SCHEMA:
+        # Gridpoint temporal weights are independent of spatial tile dimensions.
+        height, width = min(height, 24), min(width, 48)
     generator = torch.Generator().manual_seed(20200101)
     probe = torch.randn((2, window, channels, height, width), generator=generator)
     with torch.no_grad():
@@ -822,6 +1146,11 @@ def _reference_model_from_payload(payload: Mapping[str, Any]) -> torch.nn.Module
             horizon=int(payload["model_config"].get("horizon", EARTH_HORIZON)),
             height=int(payload["model_config"].get("height", 36)),
             width=int(payload["model_config"].get("width", 72)),
+            dataset_id=(
+                EARTH_DATASET_3HOURLY_ID
+                if payload.get("artifact_schema") == EARTH_3HOURLY_ARTIFACT_SCHEMA
+                else None
+            ),
         )
     else:
         model = forecaster_from_config(payload["model_config"])
@@ -836,12 +1165,19 @@ def _forward_payload_model(
     """Run one model from a payload descriptor through the shared Earth interface."""
     model_ref = payload.get("model_ref") or {}
     model_source = str(model_ref.get("model_source") or MODEL_SOURCE_OFFICIAL)
-    return earth_forward_for_model(model, probe, model_source=model_source)
+    return earth_forward_for_model(
+        model, probe, model_source=model_source,
+        horizon=int(payload["model_config"]["horizon"]),
+        height=int(probe.shape[-2]), width=int(probe.shape[-1]),
+    )
 
 
 def normalization_from_release(release, input_channel_order: Sequence[str]) -> dict:
     """Fit the published training normalization for a verified release."""
     order = require_earth_channel_order(input_channel_order)
+    if release.metadata.get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
+        from services.earth_dataset import fit_threehour_normalization
+        return fit_threehour_normalization(release, order)
     dates = np.asarray(release.dates, dtype="datetime64[D]")
     splits = (release.metadata.get("splits") or {})
     train = splits.get("train") or {}
@@ -885,6 +1221,7 @@ def available_origin_range(
     reference window exists after it, both inside the published release. This is
     why future dates without published truth are not offered at all.
     """
+    _require_daily_prediction_release(release)
     dates = np.asarray(release.dates, dtype="datetime64[D]")
     # A sample owns input indices [origin - window + 1, origin] and target
     # indices [origin + 1, origin + horizon], so the first legal origin sits at
@@ -909,6 +1246,7 @@ def available_origin_range(
 
 def forecast_dates(release, origin: str, horizon: int = EARTH_HORIZON) -> list[str]:
     """Return the ``horizon`` consecutive target dates after ``origin``."""
+    _require_daily_prediction_release(release)
     dates = np.asarray(release.dates, dtype="datetime64[D]")
     matches = np.flatnonzero(dates == np.datetime64(origin, "D"))
     if matches.size == 0:
@@ -932,6 +1270,7 @@ def forecast_dates(release, origin: str, horizon: int = EARTH_HORIZON) -> list[s
 
 def origin_split(release, origin: str) -> str:
     """Return the published train/validation/test split containing an origin."""
+    _require_daily_prediction_release(release)
     dates = np.asarray(release.dates, dtype="datetime64[D]")
     matches = np.flatnonzero(dates == np.datetime64(origin, "D"))
     if matches.size == 0:
@@ -942,6 +1281,145 @@ def origin_split(release, origin: str) -> str:
     codes = release_split_codes(dates, release.metadata)
     labels = {0: "train", 1: "validation", 2: "test"}
     return labels[int(codes[int(matches[0])])]
+
+
+def _require_daily_prediction_release(release) -> None:
+    if (getattr(release, "metadata", None) or {}).get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
+        raise EarthArtifactError(
+            "Three-hourly datetime prediction is not available through the daily date interface",
+            code="dataset_prediction_not_supported",
+        )
+
+
+def _threehour_prediction_times(release) -> np.ndarray:
+    """Keep timestamp indexing separate from the retained date-only interface."""
+    metadata = getattr(release, "metadata", None) or {}
+    time_metadata = metadata.get("time") or {}
+    if (metadata.get("dataset_id") != EARTH_DATASET_3HOURLY_ID
+            or metadata.get("frequency_hours") != 3
+            or metadata.get("step_unit") != "hour" or metadata.get("step") != 3
+            or time_metadata.get("kind") != "datetime"
+            or time_metadata.get("time_zone") != "UTC"
+            or time_metadata.get("label") != THREE_HOURLY_TIMESTAMP_RULE):
+        raise EarthArtifactError("Prediction requires the fixed three-hour UTC interval-centre release")
+    try:
+        times = np.asarray(release.dates, dtype="datetime64[ns]")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise EarthArtifactError("The three-hour prediction time axis is invalid") from exc
+    if (times.ndim != 1 or not len(times) or np.isnat(times).any()
+            or np.any(np.diff(times) != np.timedelta64(3, "h"))
+            or np.any((times - times.astype("datetime64[D]")) % np.timedelta64(3, "h")
+                      != np.timedelta64(90, "m"))):
+        raise EarthArtifactError("Prediction timestamps must be unique, continuous three-hour UTC interval centres")
+    return times
+
+
+def _threehour_iso_utc(timestamp) -> str:
+    return np.datetime_as_string(np.datetime64(timestamp, "s"), unit="s") + "Z"
+
+
+def _parse_threehour_origin(origin: str) -> np.datetime64:
+    """Accept explicit UTC ISO timestamps and preserve subsecond precision."""
+    if (not isinstance(origin, str) or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|\+00:00)",
+            origin) is None):
+        raise EarthArtifactError(
+            "forecast_origin must be an ISO datetime with an explicit UTC Z or +00:00 offset",
+            code="invalid_earth_prediction_origin",
+        )
+    literal = origin[:-1] if origin.endswith("Z") else origin[:-6]
+    try:
+        # datetime rejects impossible calendar values; NumPy retains nanoseconds
+        # so a fractional timestamp cannot silently match a whole-second sample.
+        parsed = datetime.fromisoformat(literal)
+        if not 2020 <= parsed.year <= 2021:
+            raise EarthArtifactError("Origin is outside the published release years",
+                                     code="earth_prediction_origin_out_of_range")
+        return np.datetime64(literal, "ns")
+    except EarthArtifactError:
+        raise
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise EarthArtifactError(
+            "The forecast origin is not a valid UTC timestamp in the published release",
+            code="invalid_earth_prediction_origin",
+        ) from exc
+
+
+def threehour_available_origin_range(release, *, strict_split=False) -> dict:
+    """Offer every centre with 56 inputs ending at it and 24 following truths.
+
+    Backtesting uses the complete release; the origin's published split remains
+    a label and does not restrict historical selection to the test partition.
+    """
+    times = _threehour_prediction_times(release)
+    first = EARTH_3HOURLY_WINDOW - 1
+    stop = len(times) - EARTH_3HOURLY_HORIZON
+    if stop <= first:
+        raise EarthArtifactError(
+            "The release has no origin with complete 56-step inputs and 24-step references",
+            code="earth_prediction_origin_out_of_range",
+        )
+    indices = range(first, stop)
+    if strict_split:
+        codes = threehour_release_split_codes(release.dates, release.metadata)
+        indices = [i for i in indices if np.all(codes[i - 55:i + 25] == codes[i])]
+    timestamps = [_threehour_iso_utc(times[i]) for i in indices]
+    if not timestamps:
+        raise EarthArtifactError("No complete windows within the published splits", code="earth_prediction_origin_out_of_range")
+    return {
+        "kind": "datetime", "time_zone": "UTC", "frequency_hours": 3,
+        "step_unit": "hour", "step": 3,
+        "start": timestamps[0], "end": timestamps[-1], "count": len(timestamps),
+        "dates": timestamps, "timestamps": timestamps,
+        "window": EARTH_3HOURLY_WINDOW, "horizon": EARTH_3HOURLY_HORIZON,
+        "input_offset_hours": -(EARTH_3HOURLY_WINDOW - 1) * 3,
+        "target_offset_hours": 3,
+    }
+
+
+def threehour_origin_index(release, origin: str, *, strict_split=False) -> int:
+    """Resolve a UTC origin without rounding to a day or a nearby sample."""
+    times = _threehour_prediction_times(release)
+    target = _parse_threehour_origin(origin)
+    matches = np.flatnonzero(times == target)
+    if matches.size != 1:
+        subsecond = target - target.astype("datetime64[s]")
+        seconds = int((target - target.astype("datetime64[m]")) / np.timedelta64(1, "s"))
+        raise EarthArtifactError(
+            "The forecast origin is not a timestamp in the published dataset",
+            code=("invalid_earth_prediction_origin" if seconds or subsecond != np.timedelta64(0, "ns")
+                  else "earth_prediction_origin_out_of_range"),
+        )
+    index = int(matches[0])
+    if index < EARTH_3HOURLY_WINDOW - 1 or index + EARTH_3HOURLY_HORIZON >= len(times):
+        raise EarthArtifactError(
+            "The forecast origin has no complete 56-step input and 24-step reference window",
+            code="earth_prediction_origin_out_of_range",
+        )
+    if strict_split:
+        codes = threehour_release_split_codes(release.dates, release.metadata)
+        if not np.all(codes[index - 55:index + 25] == codes[index]):
+            raise EarthArtifactError("The uploaded model window crosses a published split",
+                                     code="earth_prediction_origin_out_of_range")
+    return index
+
+
+def threehour_forecast_timestamps(release, origin: str) -> list[str]:
+    """Return the 24 exact target centres at +3 through +72 hours."""
+    index = threehour_origin_index(release, origin)
+    times = _threehour_prediction_times(release)
+    return [_threehour_iso_utc(value)
+            for value in times[index + 1:index + 1 + EARTH_3HOURLY_HORIZON]]
+
+
+def threehour_origin_split(release, origin: str) -> str:
+    """Label the selected UTC origin using the verified release's split blocks."""
+    index = threehour_origin_index(release, origin)
+    try:
+        codes = threehour_release_split_codes(release.dates, release.metadata)
+    except (TypeError, ValueError) as exc:
+        raise EarthArtifactError("The published three-hour split contract is invalid") from exc
+    return {0: "train", 1: "validation", 2: "test"}[int(codes[index])]
 
 
 __all__ = [
@@ -962,4 +1440,8 @@ __all__ = [
     "origin_split",
     "save_earth_artifact_atomic",
     "validate_checkpoint_payload",
+    "threehour_available_origin_range",
+    "threehour_forecast_timestamps",
+    "threehour_origin_index",
+    "threehour_origin_split",
 ]

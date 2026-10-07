@@ -799,9 +799,9 @@ export async function downloadUserModel(modelId) {
  * “Mars 可用”不等于“Earth 可用”，所以训练页在选择 Earth + 上传模型时必须问服务端，
  * 不能在前端推断。结论来自上传校验时的 Earth dry-run。
  */
-export async function fetchUploadedModelEarthCompatibility(modelId, { signal } = {}) {
+export async function fetchUploadedModelEarthCompatibility(modelId, { signal, datasetId = 'earth_merra2' } = {}) {
   const res = await authedFetch(
-    `${BASE}/user-models/${encodeURIComponent(modelId)}/earth-compatibility`,
+    `${BASE}/user-models/${encodeURIComponent(modelId)}/earth-compatibility?dataset_id=${encodeURIComponent(datasetId)}`,
     { signal },
   );
   if (!res.ok) {

@@ -14,6 +14,7 @@ import {
   isoDayNumber,
   nextPlaybackDate,
   pointIdentity,
+  resolveEarthDatasetId,
   regionalIdentity,
   shiftDate,
 } from './earthOverviewModel.js';
@@ -51,6 +52,24 @@ const fieldExpectation = {
   variable: 'TO3',
   date: '2020-02-29',
 };
+
+test('Earth entry follows the server default while preserving a valid explicit selection', () => {
+  const catalog = {
+    default_earth_dataset_id: 'earth_merra2_3hourly_v1',
+    items: [
+      { dataset_id: 'openmars_mcd', planet: 'mars' },
+      { dataset_id: 'earth_merra2_daily_v2', planet: 'earth' },
+      { dataset_id: 'earth_merra2_3hourly_v1', planet: 'earth', availability: 'missing' },
+    ],
+  };
+  assert.equal(resolveEarthDatasetId(catalog), 'earth_merra2_3hourly_v1');
+  assert.equal(resolveEarthDatasetId(catalog, 'earth_merra2_daily_v2'), 'earth_merra2_daily_v2');
+  assert.equal(resolveEarthDatasetId({ ...catalog, default_earth_dataset_id: 'openmars_mcd' }), null);
+  assert.equal(resolveEarthDatasetId({
+    default_earth_dataset_id: 'earth_merra2_daily_v1',
+    items: [{ dataset_id: 'earth_merra2_daily_v1', planet: 'earth' }],
+  }), null);
+});
 
 test('ISO date parsing is strict and timezone independent', () => {
   const day0 = isoDayNumber('2020-01-01');

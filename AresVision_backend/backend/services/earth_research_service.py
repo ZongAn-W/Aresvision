@@ -23,6 +23,7 @@ import numpy as np
 
 from services.dataset_registry import DatasetRegistry
 from services.dataset_identity import DatasetRequestError
+from services.dataset_identity import EARTH_DATASET_3HOURLY_ID
 from services.earth_dataset_metadata import VARIABLE_LABELS, VerifiedEarthRelease
 from services.earth_overview_service import (
     GLOBAL_AGGREGATION,
@@ -42,6 +43,7 @@ POLAR_MIN_ABS_LATITUDE = 60.0
 POLAR_SAMPLING = "daily_mean"
 POLAR_NOTE = "diurnal_variation_not_resolvable"
 DIURNAL_UNAVAILABLE_REASON = "daily_data_has_no_diurnal_samples"
+THREE_HOUR_DAILY_AGGREGATION = "utc_daily_mean_of_8_three_hour_means"
 
 SEASONAL_AGGREGATION = "equal_longitude_mean"
 REGIONAL_AGGREGATION = GLOBAL_AGGREGATION  # spherical_cell_area_mean
@@ -498,7 +500,7 @@ class EarthResearchService:
             regional_series[variable] = _finite_list(data["global"])
             seasonal[variable] = {
                 # z[i][t]: latitude rows in ascending order, then the daily series.
-                "z": _finite_matrix(data["zonal"].T),
+                "z": _finite_matrix(self._seasonal_display(release, data["zonal"]).T),
                 "units": units,
                 "aggregation": SEASONAL_AGGREGATION,
             }
@@ -532,7 +534,8 @@ class EarthResearchService:
             "end": dates[-1],
             "day_count": day_count,
             "dates": dates,
-            "latitude": [float(value) for value in release.latitude],
+            "latitude": [float(value) for value in (
+                release.latitude.reshape(-1, 4).mean(axis=1) if self._is_threehour(release) else release.latitude)],
             "bands": self._bands(release),
             "variables": [
                 {"id": str(declared["id"]), "units": str(declared["units"])}
@@ -563,12 +566,24 @@ class EarthResearchService:
         release = self._release(dataset_id, expected_fingerprint)
         year = self._require_year(year)
         variable_id, units = self._require_variable(release, variable)
-        first, last = self._year_bounds(release, year)
-        field = np.asarray(release.fields[variable_id], dtype="float64")[first:last + 1]
+        if self._is_threehour(release):
+            field = self._variable_data(release, year, variable_id)["annual"][None]
+        else:
+            first, last = self._year_bounds(release, year)
+            field = np.asarray(release.fields[variable_id], dtype="float64")[first:last + 1]
         diagnostics = compute_spatial_diagnostics(
             field, release.latitude, self._latitude_bounds(release)
         )
         anomaly = diagnostics["anomaly"]
+        latitude, longitude = release.latitude, release.longitude
+        render_meta = {}
+        if self._is_threehour(release):
+            from services.earth_3hourly_overview import render_block_mean
+            anomaly = render_block_mean(anomaly, release.latitude)
+            latitude = release.latitude.reshape(-1, 4).mean(axis=1)
+            longitude = release.longitude.reshape(-1, 4).mean(axis=1)
+            render_meta = {"source_grid_shape": [240, 480], "render_grid_shape": [60, 120],
+                           "render_method": "spherical_cell_area_mean_4x4"}
         bound = _finite_or_none(np.abs(anomaly).max()) if anomaly.size else None
         if bound is None or bound == 0.0:
             color_range = {"min": 0.0, "max": 0.0, "centered_on_zero": True}
@@ -579,12 +594,13 @@ class EarthResearchService:
             "year": int(year),
             "variable": variable_id,
             "units": units,
-            "lat": [float(value) for value in release.latitude],
-            "lon": [float(value) for value in release.longitude],
+            "lat": [float(value) for value in latitude],
+            "lon": [float(value) for value in longitude],
             "anomaly": _finite_matrix(anomaly),
             "reference": SPATIAL_REFERENCE,
             "color_range": color_range,
             "bands": diagnostics["bands"],
+            **render_meta,
         }
 
     def get_polar_dynamics(
@@ -755,7 +771,7 @@ class EarthResearchService:
             "dataset_version": release.metadata.get("dataset_version"),
             "dataset_fingerprint": release.metadata["dataset_fingerprint"],
             "source": SOURCE_LABEL,
-            "cadence": CADENCE,
+            "cadence": ("UTC daily means aggregated from 3-hour means" if self._is_threehour(release) else CADENCE),
             "calendar": release.metadata["time"]["calendar"],
             "year": int(year),
             "date_range": {"start": dates[0], "end": dates[-1]},
@@ -815,6 +831,8 @@ class EarthResearchService:
 
     def _year_dates(self, release: VerifiedEarthRelease, year: int) -> list[str]:
         first, last = self._year_bounds(release, year)
+        if self._is_threehour(release):
+            return _iso_dates(np.unique(release.dates[first:last + 1].astype("datetime64[D]")))
         return _iso_dates(release.dates[first:last + 1])
 
     def _require_date_in_year(self, date: Any, dates: Sequence[str]) -> int:
@@ -839,7 +857,8 @@ class EarthResearchService:
 
     # ── cached per-year aggregates ─────────────────────────────────────
     def _invalidate(self, release: VerifiedEarthRelease) -> None:
-        fingerprint = release.metadata["dataset_fingerprint"]
+        fingerprint = (release.metadata["dataset_id"], release.metadata.get("dataset_version"),
+                       release.metadata["dataset_fingerprint"])
         if self._cached_fingerprint != fingerprint:
             self._variable_cache = {}
             self._year_cache = {}
@@ -859,6 +878,12 @@ class EarthResearchService:
             self._invalidate(release)
             cached = self._variable_cache.get(key)
             if cached is not None:
+                return cached
+
+            if self._is_threehour(release):
+                cached = self._threehour_variable_data(release, year, variable)
+                self._registry.get_earth_overview_snapshot(release.metadata["dataset_id"], release.metadata["dataset_fingerprint"])
+                self._variable_cache[key] = cached
                 return cached
 
             first, last = self._year_bounds(release, year)
@@ -883,6 +908,45 @@ class EarthResearchService:
             }
             self._variable_cache[key] = cached
             return cached
+
+    @staticmethod
+    def _is_threehour(release):
+        return release.metadata["dataset_id"] == EARTH_DATASET_3HOURLY_ID
+
+    def _threehour_variable_data(self, release, year, variable):
+        """Retain daily scalar/zonal statistics and one annual field, never a yearly cube."""
+        from services.earth_3hourly_overview import iter_threehour_chunks
+        first, last = self._year_bounds(release, year)
+        times = release.dates[first:last + 1]
+        days, counts = np.unique(times.astype("datetime64[D]"), return_counts=True)
+        if (np.any(counts != 8) or np.any(np.diff(times) != np.timedelta64(3, "h"))
+                or np.any(times[::8] - days != np.timedelta64(90, "m"))):
+            raise EarthOverviewError("incomplete_daily_aggregate", "Daily analysis requires eight consecutive UTC samples per day", 503)
+        latitude = release.latitude
+        bounds = self._latitude_bounds(release)
+        membership = _band_membership(latitude)
+        global_values, zonal_values = [], []
+        bands = {band: [] if indexes else None for band, indexes in membership.items()}
+        annual = np.zeros((240, 480), dtype="float64")
+        for _, values in iter_threehour_chunks(release, variable, first, last + 1):
+            if len(values) != 8 or not np.isfinite(values).all():
+                raise EarthOverviewError("incomplete_daily_aggregate", "Daily analysis requires eight valid samples in every source cell", 503)
+            daily = values.mean(axis=0, dtype="float64")
+            annual += daily
+            global_values.append(cell_area_mean_series(daily[None], latitude, bounds)[0])
+            zonal_values.append(equal_longitude_mean(daily[None])[0])
+            for band, indexes in membership.items():
+                if indexes:
+                    bands[band].append(band_area_mean_series(daily[None], latitude, indexes, bounds)[0])
+        return {"units": self._units(release, variable), "global": np.asarray(global_values),
+                "bands": {band: np.asarray(values) if values is not None else None for band, values in bands.items()},
+                "zonal": np.asarray(zonal_values), "annual": annual / len(days)}
+
+    def _seasonal_display(self, release, zonal):
+        if not self._is_threehour(release):
+            return zonal
+        weights = latitude_band_weights(latitude_cell_edges(release.latitude, self._latitude_bounds(release)))
+        return np.sum(zonal.reshape(-1, 60, 4) * weights.reshape(1, 60, 4), axis=2) / weights.reshape(60, 4).sum(axis=1)
 
     def _bands(self, release: VerifiedEarthRelease) -> list[dict]:
         """The five latitude bands of this release, with real sampled extremes."""
@@ -933,6 +997,8 @@ class EarthResearchService:
             "dataset_version": metadata.get("dataset_version"),
             "dataset_fingerprint": metadata["dataset_fingerprint"],
             "schema": metadata.get("schema"),
+            **({"frequency_hours": 3, "time_zone": "UTC", "time_aggregation": THREE_HOUR_DAILY_AGGREGATION}
+               if self._is_threehour(release) else {}),
         }
 
     def _variables(self, release: VerifiedEarthRelease) -> list[dict]:
@@ -953,7 +1019,7 @@ class EarthResearchService:
             self._invalidate(release)
             cached = self._year_cache.get("color_ranges")
             if cached is None:
-                cached = {
+                cached = self._threehour_color_ranges(release) if self._is_threehour(release) else {
                     name: dataset_color_range(
                         np.asarray(release.fields[name], dtype="float32"), name
                     )
@@ -962,6 +1028,28 @@ class EarthResearchService:
                 self._year_cache["color_ranges"] = cached
             return {key: dict(value) for key, value in cached.items()}
 
+    def _threehour_color_ranges(self, release):
+        from services.earth_3hourly_overview import iter_threehour_chunks
+        declarations = release.metadata.get("manifest", {}).get("variables", {})
+        result = {}
+        for name in VARIABLE_IDS:
+            entry = declarations.get(name, {})
+            low, high = entry.get("min"), entry.get("max")
+            if low is None or high is None:
+                # Trusted fixtures can omit the manifest. Published releases
+                # use already-verified global extrema and need no volume scan.
+                low, high = np.inf, -np.inf
+                for _, values in iter_threehour_chunks(release, name):
+                    finite = values[np.isfinite(values)]
+                    if finite.size:
+                        low, high = min(low, float(finite.min())), max(high, float(finite.max()))
+                if not np.isfinite(low) or not np.isfinite(high):
+                    low, high = 0., 1.
+            if name in WIND_VARIABLE_IDS:
+                bound = max(abs(low), abs(high)); low, high = -bound, bound
+            result[name] = {"min": float(low), "max": float(high), "scope": "dataset", "centered_on_zero": name in WIND_VARIABLE_IDS}
+        return result
+
     def _source_meta(self, release: VerifiedEarthRelease) -> dict:
         metadata = release.metadata
         manifest = metadata.get("manifest") if isinstance(metadata.get("manifest"), dict) else {}
@@ -969,32 +1057,36 @@ class EarthResearchService:
         files_count = source.get("daily_file_count")
         return {
             "source": SOURCE_LABEL,
-            "cadence": CADENCE,
+            "cadence": ("3-hour mean (UTC)" if self._is_threehour(release) else CADENCE),
             "schema": metadata.get("schema"),
             "dataset_version": metadata.get("dataset_version"),
             "source_files_count": int(files_count) if isinstance(files_count, int) else None,
             "source_sha256": manifest.get("source_sha256"),
             "processing": _processing_text(manifest.get("processing")),
-            "calendar": metadata["time"]["calendar"],
+            "calendar": metadata["time"].get("calendar", "proleptic_gregorian"),
+            **({"frequency_hours": 3, "time_zone": "UTC", "analysis_aggregation": THREE_HOUR_DAILY_AGGREGATION}
+               if self._is_threehour(release) else {}),
         }
 
     def _time_model(self, release: VerifiedEarthRelease) -> dict:
         time = release.metadata["time"]
-        calendar = time["calendar"]
+        calendar = time.get("calendar", "proleptic_gregorian")
         years: list[int] = []
         for value in release.dates:
             year = int(str(value)[:4])
             if year not in years:
                 years.append(year)
         return {
-            "kind": "iso-date",
+            "kind": "iso-datetime" if self._is_threehour(release) else "iso-date",
             "calendar": calendar,
-            "start": str(time["start"]),
-            "end": str(time["end"]),
-            "count": int(time["count"]),
-            "step": int(time["step"]),
-            "step_unit": "day",
+            "start": (np.datetime_as_string(release.dates[0], unit="s") + "Z") if self._is_threehour(release) else str(time["start"]),
+            "end": (np.datetime_as_string(release.dates[-1], unit="s") + "Z") if self._is_threehour(release) else str(time["end"]),
+            "count": len(release.dates) if self._is_threehour(release) else int(time["count"]),
+            "step": 3 if self._is_threehour(release) else int(time["step"]),
+            "step_unit": "hour" if self._is_threehour(release) else "day",
             "years": years,
+            **({"frequency_hours": 3, "time_zone": "UTC", "timestamp_rule": "interval_center"}
+               if self._is_threehour(release) else {}),
         }
 
     def _geometry(self, release: VerifiedEarthRelease) -> dict:
@@ -1038,9 +1130,14 @@ class EarthResearchService:
                         "spatialDiagnostics": True,
                         "aiInsight": True,
                     },
-                    "unavailable": {"diurnal": DIURNAL_UNAVAILABLE_REASON},
+                    "unavailable": {"diurnal": "three_hourly_diurnal_analysis_not_implemented" if self._is_threehour(release) else DIURNAL_UNAVAILABLE_REASON},
                     "polar_scope": self._polar_scope(release),
-                    "limitations": list(release.metadata.get("limitations", [])) + RESEARCH_LIMITATIONS,
+                    "limitations": list(release.metadata.get("limitations", [])) + ([
+                        "Observation fields and point series are 3-hour UTC means on the native 0.75 degree grid",
+                        "Annual analyses aggregate eight consecutive three-hour samples into UTC daily means",
+                        "Diurnal analysis is not implemented; daily analysis aggregates discard within-day variation",
+                        *RESEARCH_LIMITATIONS[2:],
+                    ] if self._is_threehour(release) else RESEARCH_LIMITATIONS),
                 }
                 self._year_cache["context"] = cached
             # Deep copy the mutable containers so callers cannot edit the cache.

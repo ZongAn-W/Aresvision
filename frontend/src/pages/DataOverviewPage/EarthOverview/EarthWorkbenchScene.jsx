@@ -37,8 +37,12 @@ import {
 import { earthAnalysisControls } from '../workbench/analysisGuidance.js';
 import { buildObservatoryGroups } from '../workbench/observatoryLayout.js';
 import { pointInsideGeometry } from '../workbench/OverviewAdapter.js';
+import { useEarthDatasetCatalog } from './useEarthDatasetCatalog.js';
 import {
   EARTH_VARIABLES,
+  EARTH_3HOURLY_DATASET_ID,
+  EARTH_OVERVIEW_DATASETS,
+  formatEarthTime,
   EARTH_VARIABLE_LABEL_KEYS,
   earthColormap,
   formatEarthNumber,
@@ -85,7 +89,30 @@ import './earthOverview.css';
  */
 const COMPACT_PREVIEW_KEYS = new Set(['globalTrend']);
 
-export default function EarthWorkbenchScene({
+export default function EarthWorkbenchScene(props) {
+  const datasetCatalog = useEarthDatasetCatalog(props.selection?.datasetId || null);
+  if (datasetCatalog.loading) {
+    return <div className="earth-notice" role="status">Loading Earth dataset catalog...</div>;
+  }
+  if (datasetCatalog.error || !datasetCatalog.catalog) {
+    return (
+      <div className="earth-notice earth-notice--error" role="alert">
+        <strong>{datasetCatalog.error?.message || 'Earth dataset catalog is unavailable'}</strong>
+        <button type="button" className="earth-btn" onClick={datasetCatalog.retry}>Retry</button>
+      </div>
+    );
+  }
+  const datasets = datasetCatalog.catalog.items.filter((item) => EARTH_OVERVIEW_DATASETS.includes(item.dataset_id));
+  return (
+    <EarthWorkbenchSceneContent
+      {...props}
+      datasets={datasets}
+      initialDatasetId={datasetCatalog.defaultDatasetId}
+    />
+  );
+}
+
+function EarthWorkbenchSceneContent({
   selection,
   onSelectionChange,
   sceneSwitch,
@@ -95,18 +122,22 @@ export default function EarthWorkbenchScene({
   onOpenPanelChange = null,
   selectedCard = '',
   onSelectedCardChange = null,
+  datasets,
+  initialDatasetId,
 }) {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
   const isZh = settings?.language !== 'en';
 
-  const adapter = useMemo(() => createEarthOverviewAdapter(), []);
+  const [datasetId, setDatasetId] = useState(() => selection?.datasetId || initialDatasetId);
+  const threeHourly = datasetId === EARTH_3HOURLY_DATASET_ID;
+  const adapter = useMemo(() => createEarthOverviewAdapter({ datasetId }), [datasetId]);
   const [analysisPresentation, setAnalysisPresentation] = useState('board');
   const [boardDriver, setBoardDriver] = useState('T2M');
   const controller = useOverviewController({
     adapter,
-    initialSelection: selection
+    initialSelection: selection && (selection.datasetId || initialDatasetId) === datasetId
       ? { value: selection.date, variable: selection.variable, point: selection.point }
       : null,
     onSelectionChange,
@@ -135,6 +166,28 @@ export default function EarthWorkbenchScene({
   const [latInput, setLatInput] = useState('');
   const [lonInput, setLonInput] = useState('');
   const [inputError, setInputError] = useState('');
+
+  useEffect(() => {
+    setWindFields(null); setWindStatus('idle'); setWindError('');
+    setLatInput(''); setLonInput(''); setInputError('');
+    setShowAnomaly(false); setShowWindVectors(false); setShowContours(false);
+    setShowTerminator(false); setBandId('global');
+    setViewMode(threeHourly ? '2d' : '3d');
+    onSelectedCardChange?.('');
+  }, [datasetId]);
+
+  const datasetSelector = (
+    <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+      <span>{isZh ? 'Earth 数据集' : 'Earth dataset'}</span>
+      <select value={datasetId} onChange={(event) => { controller.clearPoint(); controller.retrySource(); setDatasetId(event.target.value); }} aria-label={isZh ? 'Earth 数据集' : 'Earth dataset'}>
+        {datasets.map((item) => (
+          <option key={item.dataset_id} value={item.dataset_id}>
+            {item.display_name}{item.availability !== 'available' ? ` · ${item.availability}` : ''}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 
   const variable = controller.variable;
   const scope = bandId;
@@ -402,6 +455,10 @@ export default function EarthWorkbenchScene({
     },
     units: displayField.unit,
     date: displayField.value,
+    timestamp: displayField.timestamp,
+    source_grid_shape: displayField.sourceGridShape,
+    render_grid_shape: displayField.renderGridShape,
+    render_method: displayField.renderMethod,
   } : null;
 
   const fallback2d = mapField ? (
@@ -557,6 +614,7 @@ export default function EarthWorkbenchScene({
 
   const rail = useRail ? (
     <EarthObservationRail
+      frequencyHours={threeHourly ? 3 : 24}
       year={controller.year}
       years={controller.years}
       onYearChange={controller.selectYear}
@@ -591,6 +649,7 @@ export default function EarthWorkbenchScene({
   // 没有点位时显示占位说明，栏宽常驻，避免选中点位时页面横向跳动。
   const railEnd = useRail ? (
     <EarthObservationRail
+      frequencyHours={threeHourly ? 3 : 24}
       pointSide
       point={controller.pointCell || controller.point}
       pointSeries={controller.pointSeries}
@@ -634,6 +693,7 @@ export default function EarthWorkbenchScene({
       <>
         <PanelSectionLabel>{t('observatory.dataSource.title')}</PanelSectionLabel>
         <PanelCard>
+          {datasetSelector}
           <FieldRow label={t('observatory.dataSource.current')} value={controller.sourceLabel} />
           <FieldRow
             label={t('observatory.dataSource.fingerprint')}
@@ -642,11 +702,11 @@ export default function EarthWorkbenchScene({
           <FieldRow label={t('observatory.dataSource.grid')} value={descriptorText} />
           <FieldRow
             label={t('observatory.dataSource.timeModel')}
-            value={`ISO ${controller.time?.start || '--'} ~ ${controller.time?.end || '--'} (${controller.timeAxis.length} ${isZh ? '天' : 'days'})`}
+            value={`${formatEarthTime(controller.time?.start)} ~ ${formatEarthTime(controller.time?.end)} (${controller.timeAxis.length} ${threeHourly ? (isZh ? '个 3 小时时间步' : 'three-hour steps') : (isZh ? '天' : 'days')})`}
           />
           <FieldRow
             label={t('observatory.dataSource.aggregation')}
-            value={isZh ? '全球 5° 单元球面面积加权均值' : 'Global 5° cell spherical area-weighted mean'}
+            value={threeHourly ? (isZh ? '0.75° 原始网格；地图按 4×4 单元面积平均至 60×120，点位查询保留原始分辨率' : 'Native 0.75° grid; map uses 4×4 cell area means at 60×120; point queries keep native resolution') : (isZh ? '全球 5° 单元球面面积加权均值' : 'Global 5° cell spherical area-weighted mean')}
           />
         </PanelCard>
 
@@ -906,8 +966,8 @@ export default function EarthWorkbenchScene({
         />
       )}
       sourceSlot={(
-        <ObservatorySourceButton label={t('observatory.dataSource.title')}
-          openPanel={openPanel} onOpenPanelChange={onOpenPanelChange} />
+        <>{datasetSelector}<ObservatorySourceButton label={t('observatory.dataSource.title')}
+          openPanel={openPanel} onOpenPanelChange={onOpenPanelChange} /></>
       )}
       variableSlot={observatoryView === 'observe' ? (
         <ToolbarSelect
@@ -955,6 +1015,7 @@ export default function EarthWorkbenchScene({
               <p className="earth-scene__subtitle">{t('earthOverview.subtitle')}</p>
             </div>
             {sceneSwitch}
+            {datasetSelector}
           </header>
           <div className="earth-notice earth-notice--error" role="alert">
             <strong>{t('earthOverview.errors.datasetUnavailable')}</strong>
@@ -1004,8 +1065,8 @@ export default function EarthWorkbenchScene({
           boardSlot={<EarthAnalysisBoard state={cardByKey.get(boardCardKey)?.state} mode={controller.mode}
             variable={variable} driver={boardDriver} scope={scope} isZh={isZh} onRetry={controller.retryCards} />}
           contextNote={isZh
-            ? '按所选年份统计全年数据；调整条件后自动更新。'
-            : 'Charts summarize the selected year and update automatically.'}
+            ? `按所选年份统计全年${threeHourly ? ' UTC 日平均' : ''}数据；调整条件后自动更新。`
+            : `Charts summarize the selected year${threeHourly ? ' using UTC daily means' : ''} and update automatically.`}
           onRetryCard={controller.retryCards}
           aiSlot={observatoryView === 'analyze' ? insightSlot : null}
         />

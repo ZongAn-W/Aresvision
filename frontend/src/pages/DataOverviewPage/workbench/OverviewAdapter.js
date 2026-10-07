@@ -181,7 +181,7 @@ export function nearestGeometryCell(geometry, lat, lon) {
 // ── 时间模型 ────────────────────────────────────────────────────────────
 
 export function isIsoTimeModel(time) {
-  return time?.kind === 'iso-date';
+  return time?.kind === 'iso-date' || time?.kind === 'iso-datetime';
 }
 
 export function isMarsTimeModel(time) {
@@ -195,20 +195,30 @@ export function isValidIsoDate(value) {
     && new Date(timestamp).toISOString().slice(0, 10) === value;
 }
 
+function validUtcDatetime(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().replace('.000Z', 'Z') === value;
+}
+
+function validIsoValue(time, value) {
+  return time?.kind === 'iso-datetime' ? validUtcDatetime(value) : isValidIsoDate(value);
+}
+
 /** 时间轴取值列表：Mars 为 Ls 采样，Earth 为 ISO 日期。 */
 export function timeValues(time) {
   if (!Array.isArray(time?.values)) return [];
-  return time.values.filter((value) => (isIsoTimeModel(time) ? isValidIsoDate(value) : isFiniteNumber(value)));
+  return time.values.filter((value) => (isIsoTimeModel(time) ? validIsoValue(time, value) : isFiniteNumber(value)));
 }
 
 /** 时间轴取值 → 稳定 key；用于判断“当前帧是否已经展示”。 */
 export function timeValueKey(time, value) {
-  if (isIsoTimeModel(time)) return isValidIsoDate(value) ? value : null;
+  if (isIsoTimeModel(time)) return validIsoValue(time, value) ? value : null;
   return isFiniteNumber(value) ? value : null;
 }
 
 export function formatTimeValue(time, value, { isZh = true } = {}) {
-  if (isIsoTimeModel(time)) return isValidIsoDate(value) ? value : '--';
+  if (isIsoTimeModel(time)) return validIsoValue(time, value) ? value : '--';
   if (!isFiniteNumber(value)) return '--';
   return `${isZh ? 'Ls' : 'Ls'} ${value.toFixed(1)}\u00B0`;
 }
@@ -368,17 +378,17 @@ export function normalizeSelection(adapter, selection, { previous = null } = {})
  * （2020-02-29 → 2021-02-28），绝不落到 3 月 1 日。
  */
 export function dateInSelectedYear(date, year) {
-  if (!isValidIsoDate(date) || !Number.isInteger(year)) return null;
+  if (!(isValidIsoDate(date) || validUtcDatetime(date)) || !Number.isInteger(year)) return null;
   const month = Number(date.slice(5, 7));
   const day = Number(date.slice(8, 10));
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const safeDay = Math.min(day, lastDay);
   const candidate = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(safeDay).padStart(2, '0')}`;
-  return isValidIsoDate(candidate) ? candidate : null;
+  return isValidIsoDate(candidate) ? candidate + (date.length > 10 ? date.slice(10) : '') : null;
 }
 
 export function yearOfIsoDate(date) {
-  return isValidIsoDate(date) ? Number(date.slice(0, 4)) : null;
+  return isValidIsoDate(date) || validUtcDatetime(date) ? Number(date.slice(0, 4)) : null;
 }
 
 export function yearsInTimeModel(time) {

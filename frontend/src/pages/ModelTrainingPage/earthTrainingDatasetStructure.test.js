@@ -22,9 +22,11 @@ function stripComments(source) {
     .join('\n');
 }
 
-test('训练页把 earth_merra2_daily_v2 作为第三个数据集选项列出', () => {
+test('训练页把旧日频和三小时 Earth 数据集列为独立选项', () => {
   assert.match(workspaceSource, /TRAINING_DATASET_EARTH_MERRA2_V2/);
   assert.match(workspaceSource, /datasetEarthMerra2V2/);
+  assert.match(workspaceSource, /TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1/);
+  assert.match(workspaceSource, /datasetEarthMerra23HourlyV1/);
   assert.match(workspaceSource, /data-training-dataset-option=\{option\.value\}/);
   // 选项仍是直接列出的单选按钮，没有退回原生下拉。
   assert.doesNotMatch(workspaceSource, /<select[^>]*data-training-dataset-list/);
@@ -36,9 +38,10 @@ test('切换数据集走 Earth 专用换挡逻辑，而不是原始 setter', () 
   // 草稿快照函数已在早前提交中改名（旧断言停留在 captureMarsTrainingSnapshot）。
   assert.match(pageSource, /captureTrainingDraft\(/);
   assert.match(pageSource, /resolveMarsTrainingRestore\(marsSnapshotRef\.current\)/);
-  // Earth 生效时切到规范通道顺序与 7→3；有 Earth 草稿时优先恢复草稿通道。
-  assert.match(pageSource, /setWindow\(EARTH_WINDOW\)/);
-  assert.match(pageSource, /setHorizon\(EARTH_HORIZON\)/);
+  // Earth 生效时切到规范通道顺序与 profile 窗口；有 Earth 草稿时优先恢复草稿通道。
+  assert.match(pageSource, /setWindow\(earthProfile\.window\)/);
+  assert.match(pageSource, /setHorizon\(earthProfile\.horizon\)/);
+  assert.match(pageSource, /datasetId: trainingDataset/);
   assert.match(
     pageSource,
     /setSelectionChannels|setSelectedChannels\(restore \? restore\.selectedChannels : \[\.\.\.EARTH_OPTIONAL_CHANNELS\]\)/,
@@ -49,7 +52,7 @@ test('Earth 提交走独立路径并携带顶层 dataset_id', () => {
   const code = stripComments(pageSource);
   assert.match(code, /if \(earthMode\) \{/);
   assert.match(code, /buildEarthTrainingHyperparameters\(/);
-  assert.match(code, /datasetId: TRAINING_DATASET_EARTH_MERRA2_V2/);
+  assert.match(code, /datasetId: trainingDataset/);
   // Earth 分支不得复用火星的超参数构造器。
   const earthBranch = code.slice(code.indexOf('if (earthMode) {'), code.indexOf('if (modelSource === \'official\' && !selectedScriptAvailable)'));
   assert.doesNotMatch(earthBranch, /buildTrainingHyperparameters\(/);
@@ -67,7 +70,7 @@ test('api.startTrainingTask 发送 dataset_id 并保留结构化错误', () => {
 });
 
 test('Earth 面板展示真实划分、单位与不可用原因', () => {
-  assert.match(panelSource, /describeEarthSplitSamples\(availability\?\.splits\)/);
+  assert.match(panelSource, /describeEarthSplitSamples\(availability\?\.splits/);
   assert.match(panelSource, /data-earth-splits="true"/);
   assert.match(panelSource, /data-earth-channels="true"/);
   assert.match(panelSource, /data-earth-input-units="true"/);
@@ -76,10 +79,11 @@ test('Earth 面板展示真实划分、单位与不可用原因', () => {
 });
 
 test('Earth 模式隐藏火星专属控件（模型来源切换、SPHERE、迁移）', () => {
-  assert.match(workspaceSource, /const isEarth = trainingDataset === TRAINING_DATASET_EARTH_MERRA2_V2/);
+  assert.match(workspaceSource, /const isEarth = isEarthTrainingDataset\(trainingDataset\)/);
+  assert.match(workspaceSource, /isEarthThreeHourly/);
   assert.match(workspaceSource, /data-earth-model-block="true"/);
   // Earth 的专家页签不含迁移学习；模型结构页签也不出现（DLinear 只有线性隐藏层数）。
-  assert.match(workspaceSource, /\? \['payload', 'training', 'strategy', 'tags'\]/);
+  assert.match(workspaceSource, /\? \['payload', 'training', \.\.\.\(isUploaded \? \['customParams'\] : \[\]\), 'strategy', 'tags'\]/);
   assert.match(workspaceSource, /data-earth-fixed-split="true"/);
   assert.match(workspaceSource, /disabled readOnly/);
 });

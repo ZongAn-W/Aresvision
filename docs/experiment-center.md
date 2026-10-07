@@ -10,6 +10,8 @@
 - 已训练模型预测：[README 的预测与缓存章节](../README.md#已训练模型预测与缓存)
 - 地球训练与历史预测（已开放）：[地球训练与历史预测](earth-training.md)
 
+Earth 默认数据集读取 `/api/datasets` 的 `default_earth_dataset_id`。日频保留 7→3 和原上传契约；三小时使用 UTC、240×480、56→24，支持官方 DLinear 与[独立 v1 上传模型](earth-3hourly-uploaded-model.md)。三小时提供专用模板、自定义参数、可用/不可用/未知兼容性及原因，旧日频/Mars 结论不自动放行。任务与窗口独立，切换不迁移旧任务；数据包可用性由 descriptor 单独报告。
+
 火星数据集约定：`mcd_overview` 只表示逻辑数据集身份，训练和预测均读取 `MCD_RAW_3H_DIR` 的原始全量 MCD MY24–MY35（默认 `data/MCD_Output_global_10m_ls_lst/`）；`data/mcd_overview/*.nc` 仅是生成的 overview 产物。`openmars_mcd` 始终读取 OpenMARS + `MCD_DIR`。
 
 新火星 checkpoint 保存训练时每个输入通道的空间均值/尺度以及目标 `target_mean/target_scale`，预测和测试指标复用 checkpoint 参数；旧纯 `state_dict` 任务保持 legacy compatibility，并明确标记为重新拟合归一化。
@@ -81,9 +83,9 @@
 | 编号 | 分区 | 内容 |
 | --- | --- | --- |
 | 01 | 模型名称 | 可编辑的实验名称（`.experiment-canvas-head`，`data-config-group="name"`）与字段级错误 |
-| 02 | 数据集 | 训练数据集把全部选项直接列成单选列表（独占分区，选项横排）：`openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v2`（第 34 节） |
-| 03 | 模型 | 模型来源胶囊（上传模型 / 官方模型）+ 上传模型卡片或官方架构选择器；选中地球数据集时改为固定的「官方 DLinear」摘要，不显示来源切换、上传卡与架构选择器 |
-| 04 | 超参数 | 侧边页签（148px）+ 右侧真实字段；页签依次是输入与预测、训练参数，再按模型来源追加专家字段页签；地球的页签为输入与预测 / 训练参数 / 训练策略 / 实验标签（无迁移学习，也不出现模型结构页签） |
+| 02 | 数据集 | 训练数据集把 Mars 与 Earth 选项直接列成单选列表（独占分区，选项横排），包括 `openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v2`、`earth_merra2_3hourly_v1`；Earth 默认入口值来自服务端 catalog |
+| 03 | 模型 | Mars 保留原来源/架构；日频 Earth 保留原官方/上传来源；三小时 Earth 开放官方 DLinear / 独立 v1 契约上传模型、dataset_id 兼容性和专用模板 |
+| 04 | 超参数 | 侧边页签（148px）+ 右侧真实字段；页签依次是输入与预测、训练参数，再按模型来源追加专家字段页签；Earth 使用各自的时间步与发布 split，无迁移学习 |
 
 四段各自是一张卡片（surface-1 + 13px 圆角 + 细描边，段间 14px 留白），卡片内左侧 38px 是编号轨道（第 30 节）。
 卡片标题已经写明「数据集」「模型」，卡内的「训练数据集」「模型来源」两个小标签已删除（第 32 节），
@@ -231,7 +233,7 @@ const readiness = useMemo(() => {
 - **没有自动实验结论。**
 - **没有资源估算。** 见第 5 节。
 - **个人上传数据仍不能直接作为训练数据。** 训练数据由服务器管理。
-- **Earth 训练仍未开放。** 指定地球数据集返回 409。
+- **Earth 其他官方架构、SPHERE 和迁移学习未开放。** 日频支持原 Earth 上传契约，三小时支持独立 v1 上传契约；两者均保留官方 DLinear。
 - **没有跨实验批量重跑或多任务并行调度。**
 
 ## 12. 代码入口与验证
