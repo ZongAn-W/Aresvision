@@ -7,6 +7,7 @@
 /Data/
 /docs/superpowers/
 /frontend/output/
+/backup/
 
 # IDE / local tooling
 .idea/
@@ -14,6 +15,8 @@
 .cursor/
 .claude/
 .playwright-cli/
+playwright-report/
+test-results/
 *.swp
 *.swo
 
@@ -37,6 +40,10 @@ yarn-error.log*
 **/*.py[cod]
 *.egg-info/
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
 /AresVision_backend/backend/.pytest_*/
 backend-test-tmp*/
 **/.venv/
@@ -46,6 +53,7 @@ backend-test-tmp*/
 
 # Environment and local databases
 AresVision_backend/backend/.env
+AresVision_backend/backend/.env.parked
 *.db
 *.db-shm
 *.db-wal
@@ -95,5 +103,3 @@ AresVision_backend/backend/models/**/__pycache__/
 Thumbs.db
 /AresVision_backend/backend/data/MCD_Output_global_10m_ls_lst
 /AresVision_backend/backend/data/mcd_cache
-docs/uploaded-model-template.py
-docs/uploaded-model-training.md
