@@ -12,6 +12,7 @@ import {
   normalizeCompareDataSource,
   sortCompareItems,
 } from './compareTrainingModelsData';
+import { getMetricAggregationLabel, getSplitLabel } from '../predictionMetricMeta';
 
 const GOOD_METRICS = new Set(['r2', 'ssim']);
 
@@ -122,7 +123,9 @@ function SummaryTable({ items, precision, isZh }) {
             {isZh ? '多模型综合排名' : 'Multi-model ranking'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
-            {isZh ? '默认按 RMSE 升序，支持切换 RMSE / MAE / SSIM / R² 排序。' : 'Defaults to RMSE ascending; switch sorting across RMSE, MAE, SSIM, and R².'}
+            {isZh
+              ? '整体指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；默认按 RMSE 升序，支持切换 RMSE / MAE / SSIM / R² 排序。'
+              : 'Overall metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; default sorting is RMSE ascending, with RMSE, MAE, SSIM, and R² available.'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -164,12 +167,22 @@ function SummaryTable({ items, precision, isZh }) {
             {sorted.map((item, index) => {
               const hypers = item.hyperparameters || {};
               const overall = item.metrics?.overall || {};
+              const aggregationLabel = getMetricAggregationLabel(item.metrics, isZh);
+              const splitLabel = getSplitLabel(item.metrics, isZh);
               return (
                 <tr key={item.task_id} style={{ borderTop: `1px solid ${C.border}` }}>
                   <td style={{ padding: '12px', color: C.ice, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 800 }}>
                     <span style={{ color: index === 0 ? C.green : C.ice40, marginRight: 8 }}>#{index + 1}</span>
                     {item.model_name || `Task #${item.task_id}`}
                     <div style={{ color: C.ice40, fontSize: 'calc(10px * var(--font-scale, 1))', marginTop: 3 }}>Task #{item.task_id}</div>
+                    <div style={{ color: C.blue, fontSize: 'calc(9px * var(--font-scale, 1))', lineHeight: 1.35, marginTop: 5, fontWeight: 700 }}>
+                      {aggregationLabel}
+                    </div>
+                    {splitLabel && (
+                      <div style={{ color: C.ice40, fontSize: 'calc(9px * var(--font-scale, 1))', lineHeight: 1.35, marginTop: 2 }}>
+                        {splitLabel}
+                      </div>
+                    )}
                   </td>
                   {['rmse', 'mae', 'ssim', 'r2'].map((metric) => (
                     <td key={metric} style={{ padding: '12px', color: GOOD_METRICS.has(metric) ? C.green : C.mars, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
@@ -205,7 +218,7 @@ function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor }) {
             {isZh ? '多模型指标柱状图' : 'Metric comparison'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
-            {isZh ? '切换指标查看模型间差距，RMSE/MAE 越低越好，SSIM/R² 越高越好。' : 'Switch metrics to inspect gaps; lower RMSE/MAE is better and higher SSIM/R² is better.'}
+            {isZh ? '整体指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；切换指标查看模型间差距，RMSE/MAE 越低越好，SSIM/R² 越高越好。' : 'Overall metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; switch metrics to inspect gaps. Lower RMSE/MAE is better and higher SSIM/R² is better.'}
           </div>
         </div>
         <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} />
@@ -312,7 +325,7 @@ function StepCurves({ items, isZh, plotTextColor, plotGridColor }) {
             {isZh ? 'Step 1 / 2 / 3 逐步性能' : 'Step-by-step performance'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
-            {isZh ? '查看预测步长增加时，各模型指标如何变化。' : 'Inspect how each model changes as the forecast step increases.'}
+            {isZh ? '逐步指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；查看预测步长增加时各模型如何变化。' : 'Per-step metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; inspect how each model changes as the forecast step increases.'}
           </div>
         </div>
         <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} />

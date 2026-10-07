@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 import config
 from config import MOLA_TOPOGRAPHY_PATH
@@ -22,6 +23,7 @@ from training_backbones.uploaded_model_contract import (
     expand_topography_batch,
     normalize_auxiliary_inputs,
     run_uploaded_model,
+    uploaded_model_requires_ls,
     uploaded_model_requires_topography,
 )
 from training_backbones.uploaded_model_dataset_spec import (
@@ -29,6 +31,8 @@ from training_backbones.uploaded_model_dataset_spec import (
     declares_earth_feed,
     earth_incompatibility_reasons,
     normalize_dataset_declarations,
+    EARTH_3HOURLY_FEED_KEY,
+    earth_3hourly_feed_from_spec,
 )
 from training_backbones.uploaded_model_source_check import (
     ALLOWED_IMPORT_ROOTS,
@@ -70,6 +74,8 @@ class UserModelValidationResult:
     earth_errors: list[str] = field(default_factory=list)
     earth_output_shape: list[int] | None = None
     earth_checked: bool = False
+    earth_compatibilities: dict[str, Any] = field(default_factory=dict)
+    mars_ok: bool | None = None
 
     def report_dict(self) -> dict[str, Any]:
         report = {
@@ -78,15 +84,18 @@ class UserModelValidationResult:
             "warnings": self.warnings,
             "output_shape": self.output_shape,
         }
-        # Only publish the Earth block when the model opts in, so existing uploads
-        # keep the historical report shape.
-        if self.datasets or self.earth_checked or self.earth_errors:
+        if self.mars_ok is not None:
+            report["mars"] = {"compatible": self.mars_ok}
+        # Keep legacy reports unchanged for models without dataset declarations.
+        if self.datasets or self.earth_checked or self.earth_errors or self.earth_compatibilities:
             report["datasets"] = self.datasets
             report["earth"] = {
                 "compatible": self.earth_ok,
                 "errors": self.earth_errors,
                 "output_shape": self.earth_output_shape,
             }
+            if self.earth_compatibilities:
+                report["earth_datasets"] = self.earth_compatibilities
         return report
 
 
@@ -94,7 +103,7 @@ class UserModelValidator:
     def __init__(self, timeout_seconds: float | None = 30.0):
         self.timeout_seconds = timeout_seconds
 
-    def validate_file(self_or_file_path, file_path: Path | None = None) -> UserModelValidationResult:
+    def validate_file(self_or_file_path, file_path: Path | None = None, *, earth_probe=None) -> UserModelValidationResult:
         if isinstance(self_or_file_path, UserModelValidator):
             path = file_path
             timeout_seconds = self_or_file_path.timeout_seconds
@@ -106,19 +115,20 @@ class UserModelValidator:
             raise TypeError("validate_file() missing required file_path")
 
         if timeout_seconds is None:
-            return UserModelValidator._validate_file_in_process(Path(path))
-        return UserModelValidator._validate_file_with_timeout(Path(path), timeout_seconds)
+            return UserModelValidator._validate_file_in_process(Path(path), earth_probe=earth_probe)
+        return UserModelValidator._validate_file_with_timeout(Path(path), timeout_seconds, earth_probe=earth_probe)
 
     @staticmethod
     def _validate_file_with_timeout(
         file_path: Path,
         timeout_seconds: float,
+        *, earth_probe=None,
     ) -> UserModelValidationResult:
         context = multiprocessing.get_context("spawn")
         result_queue = context.Queue(maxsize=1)
         process = context.Process(
             target=_validate_file_child,
-            args=(str(file_path), result_queue),
+            args=(str(file_path), result_queue, earth_probe),
         )
         process.start()
         process.join(timeout_seconds)
@@ -155,10 +165,12 @@ class UserModelValidator:
             earth_errors=list(payload.get("earth_errors", [])),
             earth_output_shape=payload.get("earth_output_shape"),
             earth_checked=bool(payload.get("earth_checked", False)),
+            earth_compatibilities=dict(payload.get("earth_compatibilities", {})),
+            mars_ok=payload.get("mars_ok"),
         )
 
     @staticmethod
-    def _validate_file_in_process(file_path: Path) -> UserModelValidationResult:
+    def _validate_file_in_process(file_path: Path, *, earth_probe=None) -> UserModelValidationResult:
         path = Path(file_path)
         errors: list[str] = []
         warnings: list[str] = []
@@ -221,7 +233,7 @@ class UserModelValidator:
         module_name = f"_aresvision_user_model_{uuid.uuid4().hex}"
         try:
             module = UserModelValidator._import_module(path, module_name)
-            return UserModelValidator._validate_module(module, warnings)
+            return UserModelValidator._validate_module(module, warnings, earth_probe=earth_probe)
         except Exception as exc:  # noqa: BLE001 - return validation errors, not service exceptions.
             return UserModelValidationResult(
                 ok=False,
@@ -253,7 +265,7 @@ class UserModelValidator:
         return module
 
     @staticmethod
-    def _validate_module(module: Any, warnings: list[str]) -> UserModelValidationResult:
+    def _validate_module(module: Any, warnings: list[str], *, earth_probe=None) -> UserModelValidationResult:
         import torch
 
         model_spec = getattr(module, "MODEL_SPEC", None)
@@ -324,6 +336,11 @@ class UserModelValidator:
                 param_schema=param_schema,
             )
 
+        if EARTH_3HOURLY_FEED_KEY in datasets:
+            return UserModelValidator._validate_three_hour_module(
+                module, datasets, param_schema, warnings, earth_probe=earth_probe,
+            )
+
         dry_run_config = {
             "in_channels": 1,
             "window": 3,
@@ -363,7 +380,11 @@ class UserModelValidator:
         try:
             model.eval()
             with torch.no_grad():
-                x = torch.zeros(2, 3, 1, 8, 16)
+                x = torch.zeros(
+                    2, dry_run_config["window"], dry_run_config["in_channels"],
+                    dry_run_config["height"], dry_run_config["width"],
+                    dtype=torch.float32,
+                )
                 topography_batch = None
                 if uploaded_model_requires_topography(model):
                     target_latitude, target_longitude = global_cell_center_coordinates(
@@ -398,12 +419,13 @@ class UserModelValidator:
             )
 
         output_shape = list(output.shape) if hasattr(output, "shape") else None
-        if output_shape != EXPECTED_OUTPUT_SHAPE:
+        expected_initial_shape = EXPECTED_OUTPUT_SHAPE
+        if output_shape != expected_initial_shape:
             return UserModelValidationResult(
                 ok=False,
                 errors=[
                     "Unexpected output shape: "
-                    f"expected {EXPECTED_OUTPUT_SHAPE}, got {output_shape}"
+                    f"expected {expected_initial_shape}, got {output_shape}"
                 ],
                 warnings=warnings,
                 display_name=display_name,
@@ -416,7 +438,7 @@ class UserModelValidator:
         # The Mars dry-run passed. Whether the model may also be trained on Earth
         # data is a separate question, answered only by its own declaration and its
         # own dry-run against the Earth tensor contract.
-        earth_ok, earth_errors, earth_output_shape, earth_checked = (
+        earth_ok, earth_errors, earth_output_shape, earth_checked, earth_compatibilities = (
             UserModelValidator._validate_earth_compatibility(
                 model=model,
                 build_model=build_model,
@@ -440,6 +462,58 @@ class UserModelValidator:
             earth_errors=earth_errors,
             earth_output_shape=earth_output_shape,
             earth_checked=earth_checked,
+            earth_compatibilities=earth_compatibilities,
+        )
+
+    @staticmethod
+    def _validate_three_hour_module(module, datasets, param_schema, warnings, *, earth_probe=None):
+        from training_backbones.earth_3hourly_uploaded_contract import (
+            CONTRACT_SCHEMA, RESERVED_PARAMETERS, channel_orders, dry_run,
+        )
+
+        model_spec = module.MODEL_SPEC
+        errors = []
+        shape = None
+        code = "uploaded_model_earth_3hourly_dry_run_failed"
+        try:
+            if model_spec.get("auxiliary_inputs"):
+                raise ValueError("Three-hour Earth uses only the declared tensor channels")
+            if any(k in RESERVED_PARAMETERS or k.startswith("_") for k in param_schema):
+                code = "uploaded_model_contract_invalid"
+                raise ValueError("MODEL_SPEC.parameters cannot override server contract or dataset identity")
+            params, parameter_errors = UserModelValidator.normalize_custom_params(
+                param_schema, (earth_probe or {}).get("custom_model_params"),
+            )
+            if parameter_errors:
+                code = "invalid_earth_training_parameters"
+                raise ValueError("; ".join(parameter_errors))
+            orders = [earth_probe["input_channel_order"]] if earth_probe else channel_orders()
+            for order in orders:
+                shape = dry_run(module.build_model, order, params)
+        except Exception as exc:
+            errors = [f"Earth three-hour dry-run failed: {exc}"]
+        verdict = {
+            "compatible": not errors, "status": "unavailable" if errors else "available",
+            "code": code if errors else None, "errors": errors, "output_shape": shape,
+            "contract_schema": CONTRACT_SCHEMA, "dataset_id": EARTH_3HOURLY_FEED_KEY,
+        }
+        # The legacy verdict is independent of the three-hour run.
+        legacy = None
+        if "earth_merra2" in datasets and earth_probe is None:
+            legacy_spec = dict(model_spec)
+            legacy_spec["datasets"] = {"earth_merra2": datasets["earth_merra2"]}
+            legacy = UserModelValidator._validate_module(
+                SimpleNamespace(MODEL_SPEC=legacy_spec, build_model=module.build_model), warnings,
+            )
+        return UserModelValidationResult(
+            ok=not errors or bool(legacy and legacy.ok),
+            errors=errors if errors and not (legacy and legacy.ok) else [],
+            warnings=warnings, display_name=model_spec["name"].strip(), description=model_spec.get("description"),
+            param_schema=param_schema, output_shape=shape, datasets=datasets,
+            earth_ok=bool(legacy and legacy.earth_ok),
+            earth_errors=legacy.earth_errors if legacy else ["MODEL_SPEC does not declare the earth_merra2 daily feed"],
+            earth_output_shape=legacy.earth_output_shape if legacy else None, earth_checked=True,
+            earth_compatibilities={EARTH_3HOURLY_FEED_KEY: verdict}, mars_ok=bool(legacy and legacy.ok),
         )
 
     @staticmethod
@@ -451,7 +525,7 @@ class UserModelValidator:
         auxiliary_inputs: dict[str, Any],
         param_schema: dict[str, Any],
         warnings: list[str],
-    ) -> tuple[bool, list[str], list[int] | None, bool]:
+    ) -> tuple[bool, list[str], list[int] | None, bool, dict[str, Any]]:
         """Return ``(compatible, errors, output_shape, checked)`` for the Earth feed.
 
         A model that never declares the Earth feed is reported as incompatible
@@ -462,7 +536,18 @@ class UserModelValidator:
         """
         import torch
 
-        if not declares_earth_feed(model_spec):
+        three_hour_feed = earth_3hourly_feed_from_spec(model_spec)
+        daily_feed = model_spec.get("datasets", {}).get("earth_merra2") if isinstance(model_spec, dict) else None
+        if daily_feed is None:
+            if three_hour_feed is not None:
+                three_ok, three_errors, three_shape = UserModelValidator._validate_earth_3hourly_compatibility(
+                    build_model=build_model, model_spec=model_spec, param_schema=param_schema, feed=three_hour_feed,
+                )
+                return False, ["MODEL_SPEC does not declare the earth_merra2 daily feed"], None, True, {
+                    EARTH_3HOURLY_FEED_KEY: {
+                        "compatible": three_ok, "errors": three_errors, "output_shape": three_shape,
+                    }
+                }
             reasons = earth_incompatibility_reasons(
                 model_spec,
                 auxiliary_inputs,
@@ -472,7 +557,7 @@ class UserModelValidator:
                 window=EARTH_DRY_RUN_WINDOW,
                 horizon=EARTH_DRY_RUN_HORIZON,
             )
-            return False, reasons, None, False
+            return False, reasons, None, False, {}
 
         reasons = earth_incompatibility_reasons(
             model_spec,
@@ -484,7 +569,7 @@ class UserModelValidator:
             horizon=EARTH_DRY_RUN_HORIZON,
         )
         if reasons:
-            return False, reasons, None, True
+            return False, reasons, None, True, {}
 
         last_shape: list[int] | None = None
         for channel_count in EARTH_DRY_RUN_CHANNELS:
@@ -500,9 +585,9 @@ class UserModelValidator:
             try:
                 earth_model = build_model(config)
             except Exception as exc:  # noqa: BLE001
-                return False, [f"build_model(config) failed for the Earth feed: {exc}"], last_shape, True
+                return False, [f"build_model(config) failed for the Earth feed: {exc}"], last_shape, True, {}
             if not isinstance(earth_model, torch.nn.Module):
-                return False, ["build_model(config) must return torch.nn.Module"], last_shape, True
+                return False, ["build_model(config) must return torch.nn.Module"], last_shape, True, {}
             attach_uploaded_model_contract(earth_model, model_spec)
             try:
                 earth_model.eval()
@@ -530,7 +615,7 @@ class UserModelValidator:
                         f"{EARTH_DRY_RUN_HEIGHT}, {EARTH_DRY_RUN_WIDTH}] input: {exc}"
                     ],
                     last_shape,
-                    True,
+                    True, {},
                 )
             last_shape = list(output.shape) if hasattr(output, "shape") else None
             expected = [
@@ -546,9 +631,40 @@ class UserModelValidator:
                         f"expected {expected}, got {last_shape}"
                     ],
                     last_shape,
-                    True,
+                    True, {},
                 )
-        return True, [], last_shape, True
+        compatibilities: dict[str, Any] = {
+            "earth_merra2": {
+                "compatible": True,
+                "errors": [],
+                "output_shape": last_shape,
+            }
+        }
+        if three_hour_feed is not None:
+            three_ok, three_errors, three_shape = UserModelValidator._validate_earth_3hourly_compatibility(
+                build_model=build_model,
+                model_spec=model_spec,
+                param_schema=param_schema,
+                feed=three_hour_feed,
+            )
+            compatibilities[EARTH_3HOURLY_FEED_KEY] = {
+                "compatible": three_ok,
+                "errors": three_errors,
+                "output_shape": three_shape,
+            }
+        return True, [], last_shape, True, compatibilities
+
+    @staticmethod
+    def _validate_earth_3hourly_compatibility(*, build_model, model_spec, param_schema, feed):
+        """Exercise the server's actual spatial-tile invocation."""
+        from training_backbones.earth_3hourly_uploaded_contract import channel_orders, dry_run
+        try:
+            params = {name: schema["default"] for name, schema in param_schema.items()}
+            for order in channel_orders():
+                shape = dry_run(build_model, order, params)
+            return True, [], shape
+        except Exception as exc:  # noqa: BLE001 - stable upload verdict
+            return False, [f"Earth three-hourly dry-run failed: {exc}"], None
 
     @staticmethod
     def _normalize_parameters(parameters: Any) -> tuple[dict[str, Any], list[str]]:
@@ -753,12 +869,16 @@ def _validation_payload(result: UserModelValidationResult) -> dict[str, Any]:
         "earth_errors": result.earth_errors,
         "earth_output_shape": result.earth_output_shape,
         "earth_checked": result.earth_checked,
+        "earth_compatibilities": result.earth_compatibilities,
+        "mars_ok": result.mars_ok,
     }
 
 
-def _validate_file_child(file_path: str, result_queue: Any) -> None:
+def _validate_file_child(file_path: str, result_queue: Any, earth_probe=None) -> None:
     try:
-        result = UserModelValidator._validate_file_in_process(Path(file_path))
+        import torch
+        torch.set_num_threads(2)
+        result = UserModelValidator._validate_file_in_process(Path(file_path), earth_probe=earth_probe)
         result_queue.put(_validation_payload(result))
     except BaseException as exc:  # noqa: BLE001 - child process must report failures.
         result_queue.put(
@@ -775,5 +895,6 @@ def _validate_file_child(file_path: str, result_queue: Any) -> None:
                 "earth_errors": [],
                 "earth_output_shape": None,
                 "earth_checked": False,
+                "earth_compatibilities": {},
             }
         )

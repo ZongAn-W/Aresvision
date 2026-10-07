@@ -40,6 +40,16 @@ test('result panel shows dataset identity fields returned by the backend', () =>
   assert.match(resultSource, /copy\.datasetLabel/);
 });
 
+test('result panel shows the pinned uploaded model identity when available', () => {
+  assert.match(resultSource, /getUploadedModelIdentity\(activeTask, hyperparameters\)/);
+  assert.match(resultSource, /hyperparameters\?\._uploaded_model_name/);
+  assert.match(resultSource, /hyperparameters\?\._uploaded_model_version/);
+  assert.match(resultSource, /hyperparameters\?\._uploaded_model_filename/);
+  assert.match(resultSource, /copy\.customModelLabel/);
+  assert.match(resultSource, /copy\.customModelVersionLabel/);
+  assert.match(resultSource, /copy\.customModelFileLabel/);
+});
+
 test('result panel exposes prediction, comparison, copy and maintenance actions', () => {
   assert.match(resultSource, /copy\.useForPrediction/);
   assert.match(resultSource, /copy\.goCompare/);

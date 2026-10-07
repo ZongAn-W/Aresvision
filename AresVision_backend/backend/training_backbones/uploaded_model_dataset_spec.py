@@ -42,9 +42,11 @@ Backward compatibility rules:
 from __future__ import annotations
 
 from typing import Any
+from training_backbones.earth_3hourly_uploaded_contract import FEED
 
-#: Key of the Earth feed inside ``MODEL_SPEC.datasets``.
+#: Keys of the independent Earth feeds inside ``MODEL_SPEC.datasets``.
 EARTH_FEED_KEY = "earth_merra2"
+EARTH_3HOURLY_FEED_KEY = "earth_merra2_3hourly_v1"
 
 EARTH_FEED_FIELDS = frozenset({
     "grid",
@@ -53,6 +55,7 @@ EARTH_FEED_FIELDS = frozenset({
     "auxiliary_inputs",
     "target_leading_channels",
 })
+EARTH_3HOURLY_FEED_FIELDS = frozenset(FEED)
 
 #: Auxiliary inputs that exist only for Mars. The Earth feed never provides them.
 MARS_ONLY_AUXILIARY_INPUTS = ("ls", "topography")
@@ -141,6 +144,31 @@ def normalize_earth_feed(feed: Any) -> dict[str, Any]:
     return normalized
 
 
+def normalize_earth_3hourly_feed(feed: Any) -> dict[str, Any]:
+    """Validate the versioned Earth three-hour uploaded-model contract."""
+    if not isinstance(feed, dict):
+        raise DatasetCapabilityError(f"MODEL_SPEC.datasets.{EARTH_3HOURLY_FEED_KEY} must be a dict")
+    unexpected = sorted(set(feed) - EARTH_3HOURLY_FEED_FIELDS)
+    if unexpected:
+        raise DatasetCapabilityError(
+            f"MODEL_SPEC.datasets.{EARTH_3HOURLY_FEED_KEY} unexpected fields: {unexpected}"
+        )
+    def exact(actual, expected):
+        if type(actual) is not type(expected):
+            return False
+        if isinstance(expected, list):
+            return len(actual) == len(expected) and all(exact(a, b) for a, b in zip(actual, expected))
+        return actual == expected
+
+    for key, value in FEED.items():
+        actual = feed.get(key)
+        if not exact(actual, value):
+            raise DatasetCapabilityError(
+                f"MODEL_SPEC.datasets.{EARTH_3HOURLY_FEED_KEY}.{key} must equal {value!r}"
+            )
+    return dict(feed)
+
+
 def normalize_dataset_declarations(model_spec: Any) -> dict[str, dict[str, Any]]:
     """Return the normalized ``datasets`` block, or ``{}`` when it is absent."""
     if not isinstance(model_spec, dict):
@@ -150,29 +178,41 @@ def normalize_dataset_declarations(model_spec: Any) -> dict[str, dict[str, Any]]
         return {}
     if not isinstance(datasets, dict):
         raise DatasetCapabilityError("MODEL_SPEC.datasets must be a dict")
+    if EARTH_3HOURLY_FEED_KEY in datasets:
+        extra = set(model_spec) - {"name", "description", "parameters", "datasets", "auxiliary_inputs"}
+        if extra:
+            raise DatasetCapabilityError(f"Earth three-hour MODEL_SPEC unexpected fields: {sorted(extra)}")
 
     normalized: dict[str, dict[str, Any]] = {}
     for name, feed in datasets.items():
         if not isinstance(name, str) or not name.strip():
             raise DatasetCapabilityError("MODEL_SPEC.datasets keys must be non-empty strings")
-        if name.strip() != EARTH_FEED_KEY:
+        if name.strip() == EARTH_FEED_KEY:
+            normalized[EARTH_FEED_KEY] = normalize_earth_feed(feed)
+        elif name.strip() == EARTH_3HOURLY_FEED_KEY:
+            normalized[EARTH_3HOURLY_FEED_KEY] = normalize_earth_3hourly_feed(feed)
+        else:
             raise DatasetCapabilityError(
-                f"MODEL_SPEC.datasets supports only {EARTH_FEED_KEY}, got unknown feed {name!r}"
+                "MODEL_SPEC.datasets supports only earth_merra2 and "
+                f"{EARTH_3HOURLY_FEED_KEY}, got unknown feed {name!r}"
             )
-        normalized[EARTH_FEED_KEY] = normalize_earth_feed(feed)
     return normalized
 
 
 def declares_earth_feed(model_spec: Any) -> bool:
     """Whether the spec declares an Earth feed at all (malformed counts as declared)."""
     return isinstance(model_spec, dict) and isinstance(model_spec.get("datasets"), dict) \
-        and EARTH_FEED_KEY in model_spec["datasets"]
+        and (EARTH_FEED_KEY in model_spec["datasets"] or EARTH_3HOURLY_FEED_KEY in model_spec["datasets"])
 
 
 def earth_feed_from_spec(model_spec: Any) -> dict[str, Any] | None:
     """Return the normalized Earth feed, or ``None`` when it is not declared."""
     declarations = normalize_dataset_declarations(model_spec)
     return declarations.get(EARTH_FEED_KEY)
+
+
+def earth_3hourly_feed_from_spec(model_spec: Any) -> dict[str, Any] | None:
+    return normalize_dataset_declarations(model_spec).get(EARTH_3HOURLY_FEED_KEY)
 
 
 def earth_incompatibility_reasons(
@@ -193,7 +233,7 @@ def earth_incompatibility_reasons(
     its ``parameters`` is still judged on what it actually receives.
     """
     reasons: list[str] = []
-    if not declares_earth_feed(model_spec):
+    if earth_feed_from_spec(model_spec) is None:
         reasons.append(
             "MODEL_SPEC does not declare the earth_merra2 dataset feed; "
             "an uploaded model must opt in before it can be trained on Earth data"
@@ -241,10 +281,13 @@ def earth_incompatibility_reasons(
 __all__ = [
     "DatasetCapabilityError",
     "EARTH_FEED_KEY",
+    "EARTH_3HOURLY_FEED_KEY",
     "MARS_ONLY_AUXILIARY_INPUTS",
     "declares_earth_feed",
     "earth_feed_from_spec",
+    "earth_3hourly_feed_from_spec",
     "earth_incompatibility_reasons",
     "normalize_dataset_declarations",
     "normalize_earth_feed",
+    "normalize_earth_3hourly_feed",
 ]

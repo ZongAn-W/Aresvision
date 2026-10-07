@@ -5,6 +5,7 @@ import C from '../constants/colors';
 import { useT } from '../i18n';
 import { useSettings } from '../contexts/SettingsContext';
 import { performTaskAction } from '../services/api';
+import { getMetricAggregationLabel, getSplitLabel } from '../pages/PredictPage/predictionMetricMeta';
 
 /**
  * 模型测试结果弹窗
@@ -14,6 +15,7 @@ export default function ModelTestModal({ taskId, onClose }) {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings.theme === 'light';
+  const isZh = settings?.language !== 'en';
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -240,6 +242,23 @@ export default function ModelTestModal({ taskId, onClose }) {
                   <div style={{ width: 4, height: 14, background: C.mars, borderRadius: 2 }} />
                   {t('modelTest.metricsTitle')}
                 </div>
+
+                {data.metric_meta && (
+                  <div style={{
+                    margin: '-6px 0 16px',
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: isLight ? '#f5f7fa' : 'rgba(255,255,255,0.03)',
+                    color: isLight ? '#667085' : '#aab2c0',
+                    fontSize: 'calc(10px * var(--font-scale, 1))',
+                    lineHeight: 1.5
+                  }}>
+                    <div>{getMetricAggregationLabel(data.metric_meta, isZh)}</div>
+                    {getSplitLabel(data.metric_meta, isZh) && (
+                      <div>{getSplitLabel(data.metric_meta, isZh)}</div>
+                    )}
+                  </div>
+                )}
                 
                 {data.metrics ? renderMetrics(data.metrics) : (
                   <div style={{ padding: '20px', textAlign: 'center', opacity: 0.5, fontStyle: 'italic' }}>

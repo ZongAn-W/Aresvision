@@ -20,6 +20,7 @@ from training_backbones.user_model_runner import (  # noqa: E402
     parse_json_arg,
     prepare_tensors,
 )
+from services.mars_data_service import MarsDataError  # noqa: E402
 from training_backbones.uploaded_model_contract import (  # noqa: E402
     attach_uploaded_model_contract,
     expand_topography_batch,
@@ -439,6 +440,7 @@ def _write_raw_3h_mcd_file(
             "T": 20.0,
             "V": 30.0,
             "FSDS": 40.0,
+            "DUST": 50.0,
         }.items():
             ds.createVariable(var_name, "f4", ("time", "lat", "lon"))[:] = base + delta
         ds["O3COL"].units = "um-atm"
@@ -863,8 +865,8 @@ def test_prepare_tensors_builds_uploaded_runner_dataset_from_mcd_overview():
         if workspace_tmp.exists():
             workspace_tmp.rmdir()
 
-    assert list(x_torch.shape) == [9, 2, 3, 2, 3]
-    assert list(y_torch.shape) == [9, 2, 1, 2, 3]
+    assert list(x_torch.shape) == [6, 2, 3, 2, 3]
+    assert list(y_torch.shape) == [6, 2, 1, 2, 3]
     assert height == 2
     assert width == 3
 
@@ -1032,9 +1034,9 @@ def test_prepare_tensors_aligns_ls_to_history_when_window_differs_from_horizon()
         if workspace_tmp.exists():
             workspace_tmp.rmdir()
 
-    assert list(x_torch.shape) == [8, 3, 1, 2, 3]
-    assert list(y_torch.shape) == [8, 2, 1, 2, 3]
-    assert list(ls_torch.shape) == [8, 3]
+    assert list(x_torch.shape) == [4, 3, 1, 2, 3]
+    assert list(y_torch.shape) == [4, 2, 1, 2, 3]
+    assert list(ls_torch.shape) == [4, 3]
     assert torch.equal(ls_torch[0], torch.tensor([0.0, 1.0, 2.0]))
 
 
@@ -1097,8 +1099,8 @@ def test_prepare_tensors_rejects_partial_file_ls_as_unaligned_timeline():
         if workspace_tmp.exists():
             workspace_tmp.rmdir()
 
-    assert list(x_torch.shape) == [9, 2, 1, 2, 3]
-    assert list(y_torch.shape) == [9, 2, 1, 2, 3]
+    assert list(x_torch.shape) == [6, 2, 1, 2, 3]
+    assert list(y_torch.shape) == [6, 2, 1, 2, 3]
     assert ls_torch is None
 
 
@@ -1126,7 +1128,7 @@ def test_required_ls_rejects_file_length_mismatch_with_file_context():
 
 
 @pytest.mark.parametrize("bad_value", [float("nan"), float("inf")])
-def test_prepare_tensors_preserves_non_finite_ls_for_explicit_validation(bad_value):
+def test_prepare_tensors_rejects_non_finite_ls_during_data_preparation(bad_value):
     workspace_tmp = BACKEND_DIR / ".test_tmp" / f"uploaded_runner_non_finite_ls_{uuid.uuid4().hex}"
     overview_dir = workspace_tmp / "mcd_overview"
     data_file = overview_dir / "MCD_MY24_overview.nc"
@@ -1135,19 +1137,17 @@ def test_prepare_tensors_preserves_non_finite_ls_for_explicit_validation(bad_val
         dataset.variables["Ls"][1] = bad_value
 
     try:
-        x_torch, _y_torch, ls_torch, *_rest = prepare_tensors(
-            workspace_tmp / "openmars",
-            workspace_tmp / "MCD",
-            [],
-            window=2,
-            horizon=2,
-            training_dataset="mcd_overview",
-            mcd_overview_dir=overview_dir,
-            return_ls=True,
-        )
-        model = attach_uploaded_model_contract(_LsRecordingModel(), LS_MODEL_SPEC)
-        with pytest.raises(ValueError, match="finite"):
-            run_uploaded_model(model, x_torch, ls_torch, context="dataset Ls")
+        with pytest.raises(MarsDataError, match="NaN or Inf|finite"):
+            prepare_tensors(
+                workspace_tmp / "openmars",
+                workspace_tmp / "MCD",
+                [],
+                window=2,
+                horizon=2,
+                training_dataset="mcd_overview",
+                mcd_overview_dir=overview_dir,
+                return_ls=True,
+            )
     finally:
         if data_file.exists():
             data_file.unlink()
@@ -1155,6 +1155,31 @@ def test_prepare_tensors_preserves_non_finite_ls_for_explicit_validation(bad_val
             overview_dir.rmdir()
         if workspace_tmp.exists():
             workspace_tmp.rmdir()
+
+
+def test_prepare_tensors_rejects_masked_mars_values(tmp_path):
+    overview_dir = tmp_path / "mcd_overview"
+    overview_dir.mkdir()
+    path = overview_dir / "MCD_MY24_overview.nc"
+    with netCDF4.Dataset(str(path), "w", format="NETCDF4") as dataset:
+        dataset.createDimension("time", 6)
+        dataset.createDimension("lat", 2)
+        dataset.createDimension("lon", 3)
+        dataset.createVariable("Ls", "f4", ("time",))[:] = np.arange(6, dtype=np.float32)
+        ozone = dataset.createVariable("o3col", "f4", ("time", "lat", "lon"), fill_value=-9999.0)
+        ozone[:] = 1.0
+        ozone[1, 0, 0] = ozone._FillValue
+    with pytest.raises(MarsDataError, match="masked|missing"):
+        prepare_tensors(
+            tmp_path / "openmars",
+            tmp_path / "MCD",
+            [],
+            window=2,
+            horizon=2,
+            training_dataset="mcd_overview",
+            mcd_overview_dir=overview_dir,
+            return_ls=True,
+        )
 
 
 def test_prepare_tensors_builds_uploaded_runner_dataset_from_raw_3h_mcd():
@@ -1185,8 +1210,8 @@ def test_prepare_tensors_builds_uploaded_runner_dataset_from_raw_3h_mcd():
         if workspace_tmp.exists():
             workspace_tmp.rmdir()
 
-    assert list(x_torch.shape) == [17, 2, 4, 36, 72]
-    assert list(y_torch.shape) == [17, 2, 1, 36, 72]
+    assert list(x_torch.shape) == [14, 2, 4, 36, 72]
+    assert list(y_torch.shape) == [14, 2, 1, 36, 72]
     assert height == 36
     assert width == 72
 

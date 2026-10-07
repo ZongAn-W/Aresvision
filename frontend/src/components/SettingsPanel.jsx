@@ -3,6 +3,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useT } from '../i18n';
 import C from '../constants/colors';
 import { useScrollLock } from '../hooks/useScrollLock';
+import { DEFAULT_TRAINING_DEFAULTS } from '../utils/trainingDefaults';
 
 /* ─── 面板内 isLight 上下文 ─── */
 const LightCtx = createContext(false);
@@ -90,6 +91,30 @@ function SettingRow({ label, children }) {
   );
 }
 
+function NumberSetting({ label, value, min, max, step = 1, onChange }) {
+  return (
+    <SettingRow label={label}>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value ?? ''}
+        onChange={onChange}
+        style={{
+          width: 112,
+          padding: '5px 7px',
+          border: '1px solid var(--border)',
+          borderRadius: 5,
+          background: 'var(--bg-muted)',
+          color: 'var(--text)',
+          fontSize: 'calc(11px * var(--font-scale, 1))',
+        }}
+      />
+    </SettingRow>
+  );
+}
+
 /** 紧凑型 pill 切换（用于行内 unit 选择等） */
 function InlinePill({ options, value, onChange }) {
   const isLight = useContext(LightCtx);
@@ -164,6 +189,21 @@ export default function SettingsPanel({ open, onClose }) {
   const t = useT();
   const panelRef = useRef(null);
   const isLight = settings.theme === 'light';
+  const trainingDefaults = settings.trainingDefaults || DEFAULT_TRAINING_DEFAULTS;
+  const ratioTotal = ['trainRatio', 'validationRatio', 'testRatio']
+    .reduce((total, key) => total + (Number(trainingDefaults[key]) || 0), 0);
+  const ratioTotalPercent = Math.round(ratioTotal * 10000) / 100;
+  const ratioTotalValid = Math.abs(ratioTotal - 1) < 0.000001;
+  const updateTrainingNumber = (key, rawValue) => {
+    updateSetting(`trainingDefaults.${key}`, rawValue);
+  };
+  const updateRatio = (key, rawValue) => {
+    if (rawValue === '') {
+      updateSetting(`trainingDefaults.${key}`, '');
+      return;
+    }
+    updateSetting(`trainingDefaults.${key}`, String(Number(rawValue) / 100));
+  };
   useScrollLock(open);
 
   // 点击面板外侧关闭
@@ -217,7 +257,7 @@ export default function SettingsPanel({ open, onClose }) {
           top: 0,
           right: 0,
           bottom: 0,
-          width: 360,
+          width: 'min(360px, 100vw)',
           zIndex: 3000,
           background: 'var(--bg-card-strong)',
           backdropFilter: 'blur(18px)',
@@ -361,6 +401,84 @@ export default function SettingsPanel({ open, onClose }) {
               {Math.round((settings.appearance?.uiScale || 1) * 100)}%
             </div>
           </div>
+          <Divider />
+
+          {/* ── 训练默认值 ── */}
+          <SectionHeader label={t('settings.training.label')} />
+          <p style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: 'var(--text-30)', marginBottom: 12, lineHeight: 1.5 }}>
+            {t('settings.training.desc')}
+          </p>
+          {[
+            ['epochs', t('settings.training.epochs'), 1, 1000, 1],
+            ['batchSize', t('settings.training.batchSize'), 1, 64, 1],
+            ['learningRate', t('settings.training.learningRate'), 0.000001, 1, 0.0001],
+            ['window', t('settings.training.window'), 1, 30, 1],
+            ['horizon', t('settings.training.horizon'), 1, 30, 1],
+          ].map(([key, label, min, max, step]) => (
+            <NumberSetting
+              key={key}
+              label={label}
+              min={min}
+              max={max}
+              step={step}
+              value={trainingDefaults[key]}
+              onChange={event => updateTrainingNumber(key, event.target.value)}
+            />
+          ))}
+
+          <Divider />
+          <SectionHeader label={t('settings.training.strategyLabel')} />
+          {[
+            ['trainRatio', t('settings.training.trainRatio'), 1],
+            ['validationRatio', t('settings.training.validationRatio'), 0],
+            ['testRatio', t('settings.training.testRatio'), 1],
+          ].map(([key, label, min]) => (
+            <NumberSetting
+              key={key}
+              label={label}
+              min={min}
+              max={98}
+              step={1}
+              value={trainingDefaults[key] === '' ? '' : Math.round(Number(trainingDefaults[key]) * 100)}
+              onChange={event => updateRatio(key, event.target.value)}
+            />
+          ))}
+          <p role="status" data-valid={ratioTotalValid ? 'true' : 'false'} style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: ratioTotalValid ? 'var(--text-30)' : C.mars, margin: '0 0 12px', lineHeight: 1.5 }}>
+            {ratioTotalValid
+              ? t('settings.training.ratioTotalValid', { total: ratioTotalPercent })
+              : t('settings.training.ratioTotalInvalid', { total: ratioTotalPercent })}
+          </p>
+          <NumberSetting
+            label={t('settings.training.seed')}
+            min={0}
+            max={2147483647}
+            value={trainingDefaults.seed}
+            onChange={event => updateTrainingNumber('seed', event.target.value)}
+          />
+          <NumberSetting
+            label={t('settings.training.earlyStoppingPatience')}
+            min={0}
+            max={200}
+            value={trainingDefaults.earlyStoppingPatience}
+            onChange={event => updateTrainingNumber('earlyStoppingPatience', event.target.value)}
+          />
+          <Checkbox label={t('settings.training.transferEnabled')} checked={trainingDefaults.transferEnabled === true} onChange={value => updateSetting('trainingDefaults.transferEnabled', value)} />
+          <SettingRow label={t('settings.training.freezeMode')}>
+            <select value={trainingDefaults.transferFreezeMode || 'none'} onChange={event => updateSetting('trainingDefaults.transferFreezeMode', event.target.value)} style={{ width: 112, padding: '5px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg-muted)', color: 'var(--text)', fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+              <option value="none">{t('settings.training.freezeNone')}</option>
+              <option value="backbone">{t('settings.training.freezeBackbone')}</option>
+              <option value="head">{t('settings.training.freezeHead')}</option>
+            </select>
+          </SettingRow>
+          <NumberSetting
+            label={t('settings.training.finetuneLearningRate')}
+            min={0.000001}
+            max={1}
+            step={0.00001}
+            value={trainingDefaults.finetuneLearningRate}
+            onChange={event => updateTrainingNumber('finetuneLearningRate', event.target.value)}
+          />
+
           <Divider />
 
           {/* ── 单位制 ── */}

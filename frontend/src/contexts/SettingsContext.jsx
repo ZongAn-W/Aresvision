@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { DEFAULT_FONT_SCALE, FONT_SCALE_VAR, normalizeFontScale } from '../utils/fontScale';
+import { DEFAULT_TRAINING_DEFAULTS, normalizeTrainingDefaults } from '../utils/trainingDefaults';
 
 const STORAGE_KEY = 'aresvision_settings';
 
@@ -23,6 +24,9 @@ export const DEFAULT_SETTINGS = {
   appearance: {
     uiScale: DEFAULT_FONT_SCALE,         // font scale only
   },
+  trainingDefaults: {
+    ...DEFAULT_TRAINING_DEFAULTS,
+  },
 };
 
 /** 深合并：以 defaults 结构为准，用 saved 中的值覆盖，忽略 saved 中多余的键 */
@@ -39,6 +43,18 @@ function deepMerge(defaults, saved) {
     } else if (key in saved) {
       result[key] = saved[key];
     }
+  }
+  if (defaults === DEFAULT_SETTINGS && result.trainingDefaults) {
+    const normalizedTrainingDefaults = normalizeTrainingDefaults(result.trainingDefaults);
+    for (const key of ['trainRatio', 'validationRatio', 'testRatio']) {
+      const rawRatio = result.trainingDefaults[key];
+      const ratio = Number(rawRatio);
+      const minimum = key === 'validationRatio' ? 0 : 0.01;
+      if (rawRatio === '' || (Number.isFinite(ratio) && ratio >= minimum && ratio <= 0.98)) {
+        normalizedTrainingDefaults[key] = rawRatio === '' ? '' : ratio;
+      }
+    }
+    result.trainingDefaults = normalizedTrainingDefaults;
   }
   return result;
 }

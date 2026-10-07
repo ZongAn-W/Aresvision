@@ -51,6 +51,8 @@ async def _patch_training_table_columns(conn) -> None:
         ("model_source", "VARCHAR(20) DEFAULT 'official'"),
         ("uploaded_model_id", "VARCHAR(36)"),
         ("uploaded_model_version", "INTEGER"),
+        ("queued_at", "DATETIME"),
+        ("queue_position", "INTEGER"),
     ]
 
     for col_name, col_def in columns_to_add:

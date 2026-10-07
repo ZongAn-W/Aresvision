@@ -77,6 +77,8 @@ class TrainingTaskResponse(BaseModel):
     uploaded_model_version: Optional[int] = None
     status: str
     start_time: datetime
+    queued_at: Optional[datetime] = None
+    queue_position: Optional[int] = None
     end_time: Optional[datetime]
     hyperparameters: str
     log_file_path: Optional[str]

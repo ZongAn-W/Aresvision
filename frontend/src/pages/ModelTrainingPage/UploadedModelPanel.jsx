@@ -38,15 +38,57 @@ function ValidationMessages({ report, labels, fieldHintStyle }) {
   );
 }
 
+function ModelRenameForm({ model, onRename, onCancel, busy, labels }) {
+  const [name, setName] = useState(model.display_name || '');
+  const [error, setError] = useState('');
+
+  return (
+    <form
+      className="experiment-uploaded-rename"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (busy) return;
+        const normalized = name.trim();
+        if (!normalized || Array.from(normalized).length > 120) {
+          setError(labels.nameRequired);
+          return;
+        }
+        if (await onRename(model.id, normalized)) onCancel();
+      }}
+    >
+      <label>
+        <span>{labels.name}</span>
+        <input
+          type="text"
+          value={name}
+          maxLength={120}
+          autoFocus
+          disabled={busy}
+          aria-invalid={Boolean(error)}
+          onChange={(event) => { setName(event.target.value); setError(''); }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && !busy) { event.stopPropagation(); onCancel(); }
+          }}
+        />
+      </label>
+      <div className="experiment-uploaded-detail-actions">
+        <button type="submit" className="experiment-expert-action" disabled={busy}>{labels.saveName}</button>
+        <button type="button" className="experiment-expert-action" disabled={busy} onClick={onCancel}>{labels.cancelRename}</button>
+      </div>
+      {error ? <div className="experiment-uploaded-model-error" role="alert">{error}</div> : null}
+    </form>
+  );
+}
+
 /**
  * 上传模型区域（紧凑版）。
  *
- * 默认只显示当前模型的胶囊式摘要（截断文件名、版本 · 自定义参数数量）
- * 与主上传动作（上传模型）。整套模型管理（列表、重新校验、删除）
+ * 默认只显示当前模型的胶囊式摘要（截断显示名称、版本 · 自定义参数数量）
+ * 与主上传动作（上传模型）。整套模型管理（列表、下载、改名、重新校验、删除）
  * 收在可展开的「管理模型」里，不抢占主上传操作的视觉层级。
  * 自定义模型参数的编辑入口只保留在右侧配置检查器，这里不再重复提供。
  *
- * 上传、选择、重新校验、删除、模板与说明下载、区内 inline error
+ * 上传、选择、下载源码、改名、重新校验、删除、模板与说明下载、区内 inline error
  * 全部保留；校验失败、版本不匹配等错误通过 `inlineError` 直接显示在区域顶部。
  * 展开区里的「文件格式要求」与底部「校验状态」两行已按用户要求删除。
  */
@@ -57,6 +99,8 @@ export default function UploadedModelPanel({
   onUpload,
   onRevalidate,
   onDelete,
+  onRename,
+  onDownload,
   uploading = false,
   busy = false,
   selectionDisabled = false,
@@ -71,9 +115,10 @@ export default function UploadedModelPanel({
 }) {
   const fileRef = useRef(null);
   const [manageOpen, setManageOpen] = useState(false);
+  const [renamingId, setRenamingId] = useState(null);
   const selected = models.find((item) => item.id === selectedId) || null;
   const paramCount = Object.keys(selected?.param_schema || {}).length;
-  const selectedName = selected?.original_filename || selected?.display_name || labels.noFilename;
+  const selectedName = selected?.display_name || selected?.original_filename || labels.noFilename;
 
   const pickFile = () => fileRef.current?.click();
 
@@ -132,7 +177,7 @@ export default function UploadedModelPanel({
           className="experiment-uploaded-link is-quiet"
           aria-expanded={manageOpen}
           aria-controls="experiment-uploaded-manage"
-          onClick={() => setManageOpen((value) => !value)}
+          onClick={() => { setManageOpen((value) => !value); setRenamingId(null); }}
         >
           {labels.manage}
         </button>
@@ -167,7 +212,7 @@ export default function UploadedModelPanel({
                     className="experiment-uploaded-item"
                     aria-pressed={active}
                     data-uploaded-model-item={model.id}
-                    onClick={() => onSelect(model.id)}
+                    onClick={() => { onSelect(model.id); setRenamingId(null); }}
                     disabled={selectionDisabled}
                   >
                     <span className="experiment-uploaded-item-name" title={model.original_filename || ''}>
@@ -188,6 +233,22 @@ export default function UploadedModelPanel({
           {selected ? (
             <div className="experiment-uploaded-detail">
               <div className="experiment-uploaded-detail-actions">
+                <button
+                  type="button"
+                  className="experiment-expert-action"
+                  onClick={() => onDownload(selected.id)}
+                  disabled={busy}
+                >
+                  {labels.download}
+                </button>
+                <button
+                  type="button"
+                  className="experiment-expert-action"
+                  onClick={() => setRenamingId(selected.id)}
+                  disabled={busy}
+                >
+                  {labels.rename}
+                </button>
                 <button
                   type="button"
                   className="experiment-expert-action"
@@ -213,6 +274,16 @@ export default function UploadedModelPanel({
                   {labels.delete}
                 </button>
               </div>
+              {renamingId === selected.id ? (
+                <ModelRenameForm
+                  key={`${selected.id}:${selected.display_name}`}
+                  model={selected}
+                  onRename={onRename}
+                  onCancel={() => setRenamingId(null)}
+                  busy={busy}
+                  labels={labels}
+                />
+              ) : null}
               <ValidationMessages report={selected.validation_report} labels={labels} fieldHintStyle={fieldHintStyle} />
             </div>
           ) : null}

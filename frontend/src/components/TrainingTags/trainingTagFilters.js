@@ -20,9 +20,11 @@ export function filterTaggedTasks(tasks = [], { tagIds = [], untagged = false, s
 /** 目录状态分组：运行中同时覆盖排队中的任务。 */
 export const TRAINING_STATUS_GROUPS = {
   all: null,
+  queued: ['queued'],
   running: ['pending', 'running'],
   completed: ['completed'],
   failed: ['failed'],
+  cancelled: ['cancelled'],
 };
 
 export function createTrainingStatusMatcher(statusQuery) {

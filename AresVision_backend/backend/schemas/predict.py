@@ -14,8 +14,16 @@ class PredictRequest(BaseModel):
     )
     horizon: int = Field(default=3, ge=1, le=30)
     ls_start: float = Field(default=90.0, ge=0, le=360)
-    mars_year: int = Field(default=27)
     training_task_id: int | None = Field(default=None, ge=1)
+
+
+class PredictSourceMeta(BaseModel):
+    """火星预测使用服务器完整数据集，不按 MY 年份隔离。"""
+
+    requested_source: str
+    effective_source: str
+    fallback: bool = False
+    message: str | None = None
 
 
 class PredictFieldData(BaseModel):
@@ -33,10 +41,11 @@ class PredictResponse(BaseModel):
     residual: list[PredictFieldData]
     selected_variables: list[str]
     horizon: int
+    input_ls_values: list[float] = Field(default_factory=list)
     ls_values: list[float]
     model_info: dict = Field(default_factory=dict)
     metrics: dict[str, Any] | None = None
-    source_meta: SourceMeta | None = None
+    source_meta: PredictSourceMeta | None = None
 
 
 class StepMetrics(BaseModel):
@@ -47,10 +56,27 @@ class StepMetrics(BaseModel):
     r2: float
 
 
+class MetricAggregation(BaseModel):
+    """Describes how the overall and per-step metric values were aggregated."""
+
+    overall: str
+    per_step: str
+
+
+class SplitMetadata(BaseModel):
+    """Identifies the ratios used for the evaluation test partition."""
+
+    ratios: dict[str, float]
+    source: str
+    legacy_compatibility: bool = False
+
+
 class EvalMetricsResponse(BaseModel):
     overall: StepMetrics
     per_step: list[StepMetrics]
-    source_meta: SourceMeta | None = None
+    aggregation: MetricAggregation | None = None
+    split_meta: SplitMetadata | None = None
+    source_meta: PredictSourceMeta | None = None
 
 
 class TrainingModelCompareRequest(BaseModel):
@@ -61,6 +87,8 @@ class TrainingModelCompareRequest(BaseModel):
 class TrainingModelMetrics(BaseModel):
     overall: StepMetrics
     per_step: list[StepMetrics]
+    aggregation: MetricAggregation | None = None
+    split_meta: SplitMetadata | None = None
 
 
 class TrainingModelCompareItem(BaseModel):

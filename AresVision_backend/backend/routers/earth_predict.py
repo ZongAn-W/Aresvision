@@ -111,6 +111,7 @@ async def get_earth_predict_context(
         "run": context.run,
         "model": context.model,
         "warnings": context.warnings,
+        **getattr(context, "temporal", {}),
     }
 
 
@@ -120,7 +121,7 @@ async def run_earth_predict(
     payload: EarthPredictRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Forecast the three days after a selected historical origin."""
+    """Forecast the daily or three-hour leads after a historical origin."""
     task = await _load_task(request, payload.training_task_id, current_user)
     registry = _registry(request)
     try:

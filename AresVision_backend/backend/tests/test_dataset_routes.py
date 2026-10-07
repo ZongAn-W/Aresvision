@@ -14,13 +14,19 @@ if str(BACKEND_DIR) not in sys.path:
 
 from routers.datasets import router  # noqa: E402
 from services.dataset_registry import EXPECTED_DATA_SHA256, EXPECTED_MANIFEST_SHA256, DatasetRegistry  # noqa: E402
+from config import DEFAULT_EARTH_DATASET_ID, resolve_default_earth_dataset_id  # noqa: E402
 
-DATASET_ORDER = ["openmars_mcd", "mcd_overview", "earth_merra2_daily_v1", "earth_merra2_daily_v2"]
+DATASET_ORDER = [
+    "openmars_mcd", "mcd_overview", "earth_merra2_daily_v1", "earth_merra2_daily_v2",
+    "earth_merra2_3hourly_v1",
+]
 
 
-def build_client(**registry_kwargs):
+def build_client(*, default_earth_dataset_id=None, **registry_kwargs):
     app = FastAPI()
     app.state.dataset_registry = DatasetRegistry(**registry_kwargs)
+    if default_earth_dataset_id is not None:
+        app.state.default_earth_dataset_id = default_earth_dataset_id
     app.include_router(router, prefix="/api")
     return TestClient(app)
 
@@ -43,8 +49,10 @@ def test_earth_release_is_described_from_real_metadata(earth_release):
     with client:
         response = client.get("/api/datasets")
         assert response.status_code == 200
-        items = response.json()["items"]
+        catalog = response.json()
+        items = catalog["items"]
         assert [item["dataset_id"] for item in items] == DATASET_ORDER
+        assert catalog["default_earth_dataset_id"] == DEFAULT_EARTH_DATASET_ID
 
         result = client.get("/api/datasets/earth_merra2_daily_v1").json()
 
@@ -133,6 +141,7 @@ def test_missing_earth_package_keeps_the_catalog_usable(tmp_path):
         assert response.status_code == 200
         items = response.json()["items"]
         assert [item["dataset_id"] for item in items] == DATASET_ORDER
+        assert response.json()["default_earth_dataset_id"] == DEFAULT_EARTH_DATASET_ID
         earth = items[2]
         assert earth["availability"] == "missing"
         assert earth["availability_reason"] == "package_missing"
@@ -151,6 +160,11 @@ def test_missing_earth_package_keeps_the_catalog_usable(tmp_path):
         # The published training profile is static entry-point metadata, so it is
         # available even when the package cannot be verified.
         assert earth["training_profile"]["profile_id"] == "earth_daily_dlinear_v1"
+        three_hourly = items[-1]
+        assert three_hourly["availability"] == "missing"
+        assert three_hourly["availability_reason"] == "package_missing"
+        assert three_hourly["training_profile"]["window"] == 56
+        assert three_hourly["training_profile"]["horizon"] == 24
 
         detail = client.get("/api/datasets/earth_merra2_daily_v1")
         assert detail.status_code == 200
@@ -292,6 +306,31 @@ def test_openapi_exposes_both_dataset_routes(earth_release):
     assert "/api/datasets/{dataset_id}" in schema["paths"]
     assert "DatasetDescriptor" in schema["components"]["schemas"]
     assert "DatasetListResponse" in schema["components"]["schemas"]
+    assert "default_earth_dataset_id" in schema["components"]["schemas"]["DatasetListResponse"]["properties"]
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, "earth_merra2_daily_v2"),
+    ("earth_merra2_daily_v2", "earth_merra2_daily_v2"),
+    ("EARTH_MERRA2_3HOURLY_V1", "earth_merra2_3hourly_v1"),
+])
+def test_default_earth_dataset_configuration_accepts_registered_earth_ids(value, expected):
+    assert resolve_default_earth_dataset_id(value) == expected
+
+
+@pytest.mark.parametrize("value", ["earth_merra2_daily_v1", "openmars_mcd", "unknown", " "])
+def test_default_earth_dataset_configuration_rejects_unsupported_ids(value):
+    with pytest.raises(ValueError, match="ARESVISION_DEFAULT_EARTH_DATASET_ID"):
+        resolve_default_earth_dataset_id(value)
+
+
+def test_catalog_default_can_be_switched_without_changing_its_dataset_inventory(earth_release):
+    client = build_client(**earth_release, default_earth_dataset_id="earth_merra2_3hourly_v1")
+    with client:
+        catalog = client.get("/api/datasets").json()
+
+    assert catalog["default_earth_dataset_id"] == "earth_merra2_3hourly_v1"
+    assert [item["dataset_id"] for item in catalog["items"]] == DATASET_ORDER
 
 
 def test_registry_construction_does_not_read_the_package(tmp_path):

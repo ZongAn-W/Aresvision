@@ -278,6 +278,13 @@ async def get_task_logs(task_id: int, current_user: User = Depends(get_current_u
     task = await _get_task_with_access_check(task_id, current_user)
 
     if not task.log_file_path or not Path(task.log_file_path).exists():
+        try:
+            metrics = json.loads(task.metrics or "{}")
+        except (TypeError, ValueError):
+            metrics = {}
+        error = metrics.get("error") if isinstance(metrics, dict) else None
+        if error:
+            return LogResponse(lines=[f"[Training failed before logs started] {error}"])
         return LogResponse(lines=["[No logs available yet]"])
 
     try:
@@ -299,6 +306,15 @@ async def stop_task(task_id: int, current_user: User = Depends(get_current_user)
     if not success:
         raise HTTPException(status_code=400, detail="Cannot stop task (not found or not running)")
     return {"message": "Task stopped", "status": "success"}
+
+
+@router.post("/training/tasks/{task_id}/cancel")
+async def cancel_task(task_id: int, current_user: User = Depends(get_current_user)):
+    await _get_task_with_access_check(task_id, current_user)
+    success = await training_service.cancel_training(task_id)
+    if not success:
+        raise HTTPException(status_code=409, detail="Cannot cancel task (only queued tasks can be cancelled)")
+    return {"message": "Task cancelled", "status": "success"}
 
 
 @router.delete("/training/tasks/{task_id}")

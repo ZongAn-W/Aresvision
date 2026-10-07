@@ -6,6 +6,7 @@ from pathlib import Path
 
 import netCDF4
 import numpy as np
+import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -79,7 +80,7 @@ def _write_overview_file(path: Path, offset: float) -> None:
             var[:] = base + delta
 
 
-def _write_raw_3h_mcd_file(path: Path, offset: float) -> None:
+def _write_raw_3h_mcd_file(path: Path, offset: float, *, include_dust: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with netCDF4.Dataset(str(path), "w", format="NETCDF4") as ds:
         ds.createDimension("time", 10)
@@ -94,13 +95,16 @@ def _write_raw_3h_mcd_file(path: Path, offset: float) -> None:
         lon[:] = np.linspace(-180.0, 175.0, 72, dtype=np.float32)
 
         base = np.arange(10 * 37 * 72, dtype=np.float32).reshape(10, 37, 72) + offset
-        for var_name, delta in {
+        raw_variables = {
             "O3COL": 0.0,
             "U": 10.0,
             "T": 20.0,
             "V": 30.0,
             "FSDS": 40.0,
-        }.items():
+        }
+        if include_dust:
+            raw_variables["Dust_Optical_Depth"] = 50.0
+        for var_name, delta in raw_variables.items():
             var = ds.createVariable(var_name, "f4", ("time", "lat", "lon"))
             var[:] = base + delta
         ds["O3COL"].units = "um-atm"
@@ -143,6 +147,70 @@ def test_official_training_loader_builds_tensors_from_mcd_overview(tmp_path):
     assert width == 3
 
 
+def test_mars_year_blocks_allow_cross_year_windows(tmp_path):
+    overview_dir = tmp_path / "mcd_overview"
+    _write_overview_file(overview_dir / "MCD_MY27_overview.nc", 27.0)
+    _write_overview_file(overview_dir / "MCD_MY28_overview.nc", 28.0)
+    demo3 = _load_demo3_module()
+
+    prepared = demo3._prepare_training_data(
+        openmars_dir=tmp_path / "openmars",
+        mcd_dir=tmp_path / "MCD",
+        mcd_overview_dir=overview_dir,
+        selected_channels=["U"],
+        window=2,
+        horizon=2,
+        training_dataset="mcd_overview",
+    )
+
+    assert prepared.volume_metadata.sample_starts.tolist() == list(range(9))
+    assert prepared.volume_metadata.sample_mars_years == (27, 27, 27, 27, 27, 27, 28, 28, 28)
+
+
+def test_zero_validation_ratio_reaches_runner_split_without_reallocation(tmp_path):
+    overview_dir = tmp_path / "mcd_overview"
+    _write_overview_file(overview_dir / "MCD_MY27_overview.nc", 27.0)
+    _write_overview_file(overview_dir / "MCD_MY28_overview.nc", 28.0)
+    demo3 = _load_demo3_module()
+
+    prepared = demo3._prepare_training_data(
+        openmars_dir=tmp_path / "openmars",
+        mcd_dir=tmp_path / "MCD",
+        mcd_overview_dir=overview_dir,
+        selected_channels=["U"],
+        window=2,
+        horizon=2,
+        training_dataset="mcd_overview",
+        train_ratio=0.8,
+        validation_ratio=0.0,
+        test_ratio=0.2,
+    )
+    train, validation, test = demo3._split_training_data(
+        prepared,
+        {"train_ratio": 0.8, "validation_ratio": 0.0, "test_ratio": 0.2},
+    )
+    assert len(train) == 5
+    assert len(validation) == 0
+    assert len(test) == 1
+
+
+def test_mars_file_without_year_metadata_fails_explicitly(tmp_path):
+    overview_dir = tmp_path / "mcd_overview"
+    _write_overview_file(overview_dir / "MCD_without_year_overview.nc", 27.0)
+    demo3 = _load_demo3_module()
+
+    with pytest.raises(ValueError, match="identify Mars year"):
+        demo3.prepare_training_tensors(
+            openmars_dir=tmp_path / "openmars",
+            mcd_dir=tmp_path / "MCD",
+            mcd_overview_dir=overview_dir,
+            selected_channels=["U"],
+            window=2,
+            horizon=2,
+            training_dataset="mcd_overview",
+        )
+
+
 def test_official_training_loader_builds_tensors_from_raw_3h_mcd_dataset(tmp_path):
     workspace_tmp = BACKEND_DIR / ".test_tmp" / f"training_loader_raw_{uuid.uuid4().hex}"
     raw_dir = workspace_tmp / "MCD_Output_global_10m_ls_lst"
@@ -178,3 +246,21 @@ def test_official_training_loader_builds_tensors_from_raw_3h_mcd_dataset(tmp_pat
     assert list(ls_torch.shape) == [17, 2]
     assert height == 36
     assert width == 72
+
+
+def test_raw_mcd_dust_channel_is_rejected_when_field_is_missing(tmp_path):
+    raw_dir = tmp_path / "MCD_Output_global_10m_ls_lst"
+    path = raw_dir / "MCD_MY24_global_3h_5deg_10m_ls_lst.nc"
+    _write_raw_3h_mcd_file(path, 0.0, include_dust=False)
+    demo3 = _load_demo3_module()
+
+    with pytest.raises(ValueError, match="Dust"):
+        demo3.prepare_training_tensors(
+            openmars_dir=tmp_path / "openmars",
+            mcd_dir=tmp_path / "MCD",
+            mcd_overview_dir=raw_dir,
+            selected_channels=["D"],
+            window=2,
+            horizon=2,
+            training_dataset="mcd_overview",
+        )

@@ -16,7 +16,6 @@ const TRAINED_CONTEXT = {
   trainingTaskId: 42,
   horizon: 3,
   selectedVars: ['Temperature', 'U_Wind'],
-  marsYear: 27,
   lsStart: 90,
 };
 
@@ -28,7 +27,6 @@ test('prediction context normalizes selected variables without dropping request 
     modelMode: 'trained',
     trainingTaskId: 42,
     horizon: 3,
-    marsYear: 27,
     lsStart: 90,
     selectedVars: ['Temperature', 'U_Wind'],
     // 地球历史预测身份：火星上下文留空，键不变。
@@ -36,6 +34,13 @@ test('prediction context normalizes selected variables without dropping request 
     datasetId: '',
     datasetFingerprint: '',
   });
+});
+
+test('Mars cache treats 0 and 360 degrees as the same Ls position', () => {
+  assert.equal(
+    buildPredictionContextKey({ ...TRAINED_CONTEXT, lsStart: 0 }),
+    buildPredictionContextKey({ ...TRAINED_CONTEXT, lsStart: 360 }),
+  );
 });
 
 test('地球历史预测上下文把预测起点与数据集身份并入键，火星键不受影响', () => {
@@ -66,7 +71,7 @@ test('地球历史预测上下文把预测起点与数据集身份并入键，�
   // 火星键保持原有构成，不因新增字段而失效。
   assert.equal(
     buildPredictionContextKey(TRAINED_CONTEXT),
-    'mode:trained|task:42|h:3|my:27|ls:90|vars:Temperature,U_Wind'
+    'mode:trained|task:42|h:3|ls:90|vars:Temperature,U_Wind'
   );
 });
 
@@ -80,13 +85,19 @@ test('prediction context key is stable for reordered variables', () => {
   );
 });
 
+test('Mars prediction context ignores legacy Mars-year values', () => {
+  assert.equal(
+    buildPredictionContextKey({ ...TRAINED_CONTEXT, marsYear: 27 }),
+    buildPredictionContextKey({ ...TRAINED_CONTEXT, marsYear: 28 }),
+  );
+});
+
 test('prediction context key changes with every critical single-model parameter', () => {
   const key = buildPredictionContextKey(TRAINED_CONTEXT);
   const changes = [
     { modelMode: 'system' },
     { trainingTaskId: 43 },
     { horizon: 2 },
-    { marsYear: 28 },
     { lsStart: 91 },
     { selectedVars: ['Temperature'] },
   ];
@@ -164,14 +175,12 @@ test('system distribution key normalizes variables and follows the complete cont
     buildErrorDistributionKey({
       modelMode: 'system',
       selectedVars: ['Temperature'],
-      marsYear: 27,
       lsStart: 90,
       horizon: 3,
     }),
     buildErrorDistributionKey({
       modelMode: 'system',
       selectedVars: ['Temperature'],
-      marsYear: 27,
       lsStart: 91,
       horizon: 3,
     })
@@ -182,7 +191,6 @@ test('system prediction metrics key does not include personal data source mode',
   const base = {
     modelMode: 'system',
     selectedVars: ['Temperature'],
-    marsYear: 27,
     lsStart: 90,
     horizon: 3,
   };

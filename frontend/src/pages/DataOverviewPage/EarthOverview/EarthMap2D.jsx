@@ -1,16 +1,13 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useT } from '../../../i18n/index.js';
 import { useSettings } from '../../../contexts/SettingsContext';
-import { getRgbStr } from '../../../utils/colormaps';
+import { drawEarthRaster } from './earthMapRaster.js';
 import {
   VIEWBOX_HEIGHT,
   VIEWBOX_WIDTH,
-  clippedCellEdges,
   coastlinePaths,
   coverageRect,
-  gridCellRect,
   nearestIndex,
-  normalizeColorValue,
   pointInsideCoverage,
   unproject,
 } from './earthMapGeometry.js';
@@ -66,47 +63,19 @@ export default function EarthMap2D({
   const { settings } = useSettings();
   const isLight = settings?.theme === 'light';
   const svgRef = useRef(null);
+  const canvasRef = useRef(null);
   const clipId = `${useId()}-coverage`;
   const patternId = `${useId()}-nodata`;
   const { paths: coastline, status: coastlineStatus, retry } = useCoastline();
-
-  const cellEdges = useMemo(() => {
-    if (!field?.lat || !field?.lon) return null;
-    try {
-      return {
-        lat: clippedCellEdges(field.lat, field.coverage?.latitude_range),
-        lon: clippedCellEdges(field.lon, field.coverage?.longitude_range),
-      };
-    } catch {
-      return null;
-    }
-  }, [field?.lat, field?.lon, field?.coverage]);
 
   const coverage = field?.coverage ?? null;
   const colorMin = field?.color_range?.min;
   const colorMax = field?.color_range?.max;
 
-  const cells = useMemo(() => {
-    if (!cellEdges || !Array.isArray(field?.field)) return [];
-    const rects = [];
-    for (let row = 0; row < field.field.length; row += 1) {
-      const rowValues = field.field[row];
-      for (let col = 0; col < rowValues.length; col += 1) {
-        const value = rowValues[col];
-        const position = normalizeColorValue(value, colorMin, colorMax);
-        if (position === null) continue;
-        rects.push({
-          key: `${row}-${col}`,
-          rect: gridCellRect(cellEdges.lat, cellEdges.lon, row, col),
-          fill: getRgbStr(colormap, position),
-          value,
-          row,
-          col,
-        });
-      }
-    }
-    return rects;
-  }, [cellEdges, field?.field, colorMin, colorMax, colormap]);
+  useEffect(() => {
+    const context = canvasRef.current?.getContext('2d');
+    if (context) drawEarthRaster(context, field, colormap);
+  }, [field, colorMin, colorMax, colormap]);
 
   const marker = useMemo(() => {
     if (!selectedPoint || !Number.isFinite(selectedPoint.lat) || !Number.isFinite(selectedPoint.lon)) {
@@ -138,7 +107,9 @@ export default function EarthMap2D({
     // 先前端快速吸附到最近采样点，最终位置以接口返回的 grid_point 为准。
     onPointSelect?.({
       requested: { lat, lon },
-      preview: { lat: field.lat[latIndex], lon: field.lon[lonIndex], latIndex, lonIndex },
+      preview: field.source_grid_shape
+        ? { lat, lon } // The display's block centres must not select a different source cell.
+        : { lat: field.lat[latIndex], lon: field.lon[lonIndex], latIndex, lonIndex },
     });
   }, [coverage, field?.lat, field?.lon, onOutOfCoverage, onPointSelect]);
 
@@ -185,21 +156,11 @@ export default function EarthMap2D({
           fill={`url(#${patternId})`}
         />
 
-        {/* 2. 有效数据格（全球 v2 为 36×72）。点击由 svg 统一处理，
-            这样覆盖区外的点击也能给出"区域外无数据"，而不是被无数据图层吞掉。 */}
-        <g data-testid="earth-map-cells">
-          {cells.map((cell) => (
-            <rect
-              key={cell.key}
-              x={cell.rect.x}
-              y={cell.rect.y}
-              width={cell.rect.width}
-              height={cell.rect.height}
-              fill={cell.fill}
-              className="earth-map2d__cell"
-            />
-          ))}
-        </g>
+        {/* The field uses one raster node at every resolution; SVG keeps the overlays and hit testing. */}
+        <foreignObject x="0" y="0" width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} pointerEvents="none">
+          <canvas ref={canvasRef} width="1440" height="720" data-testid="earth-map-canvas"
+            style={{ width: '100%', height: '100%', display: 'block' }} />
+        </foreignObject>
 
         {/* 3. 经纬网 + 海岸线（不遮挡点击） */}
         <g className="earth-map2d__graticule" pointerEvents="none">

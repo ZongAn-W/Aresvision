@@ -804,6 +804,36 @@
   flex-wrap: wrap;
 }
 
+.experiment-uploaded-rename {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.experiment-uploaded-rename label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-60);
+  font-size: calc(var(--experiment-text-small) * var(--font-scale, 1));
+}
+
+.experiment-uploaded-rename input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--experiment-surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.experiment-uploaded-rename input:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+}
+
 /* 官方模型块 */
 .experiment-official-block {
   display: grid;
@@ -3354,6 +3384,28 @@ input[type='number']::-webkit-inner-spin-button {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.experiment-earth-contract {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem 0.55rem;
+  margin-top: 0.65rem;
+  color: var(--text-secondary, #8ea1b5);
+  font-size: 0.78rem;
+}
+
+.experiment-earth-contract span,
+.experiment-earth-contract strong {
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.26));
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  white-space: nowrap;
+}
+
+.experiment-earth-contract strong {
+  color: var(--danger-color, #fca5a5);
+  border-color: color-mix(in srgb, var(--danger-color, #fca5a5) 42%, transparent);
 }
 
 /* Training console visual finish. Keep the existing grid, sticky rules and states. */

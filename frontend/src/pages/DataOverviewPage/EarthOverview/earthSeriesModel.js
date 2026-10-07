@@ -4,12 +4,12 @@
  * 曲线显示原始物理值，不做 Z-score、平滑或插值，也不与火星 Ls 混用。
  */
 
-import { EARTH_VARIABLE_UNITS, isValidIsoDate } from './earthOverviewModel.js';
+import { EARTH_VARIABLE_UNITS, isValidEarthTime } from './earthOverviewModel.js';
 
 /** 当前展示日期对应的数值；找不到就是无数据，绝不用邻近日期替代。 */
 export function currentSeriesValue(series, date) {
   if (!series || !Array.isArray(series.dates) || !Array.isArray(series.values)) return null;
-  if (!isValidIsoDate(date)) return null;
+  if (!isValidEarthTime(date)) return null;
   const index = series.dates.indexOf(date);
   if (index < 0) return null;
   const value = series.values[index];
@@ -51,7 +51,7 @@ export function buildPointTrace(series, { variable, units, isLight }) {
 
 /** 只跟随已展示的 field.date，不预先移动到尚未展示的请求日期。 */
 export function buildDateMarker(displayedDate) {
-  if (!isValidIsoDate(displayedDate)) return [];
+  if (!isValidEarthTime(displayedDate)) return [];
   return [{
     type: 'line',
     x0: displayedDate,

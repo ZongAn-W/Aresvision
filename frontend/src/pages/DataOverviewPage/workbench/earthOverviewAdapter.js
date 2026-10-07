@@ -11,7 +11,9 @@
 import C from '../../../constants/colors.js';
 import { fetchDataset, fetchEarthField, fetchEarthPointSeries, fetchEarthRegionalSeries, fetchEarthOverviewContext } from '../../../services/datasets.js';
 import {
-  EARTH_DATASET_ID,
+  EARTH_OVERVIEW_DATASETS,
+  isThreeHourlyDataset,
+  earthTimeValues,
   EARTH_VARIABLES,
   EARTH_VARIABLE_UNITS,
   canRequestEarthData,
@@ -19,7 +21,6 @@ import {
   isValidFieldPayload,
   isValidPointPayload,
   isValidRegionalPayload,
-  isoDayNumber,
 } from '../EarthOverview/earthOverviewModel.js';
 import {
   CAPABILITY_REASONS,
@@ -45,26 +46,20 @@ function card(key, color, capability, extra = {}) {
   return { key, title: CARD_TITLES[key], color, capability, ...extra };
 }
 
-function allDatesBetween(start, end) {
-  if (typeof start !== 'string' || typeof end !== 'string') return [];
-  const values = [];
-  const last = isoDayNumber(end);
-  for (let index = isoDayNumber(start); index <= last; index += 1) {
-    values.push(new Date(index * 86_400_000).toISOString().slice(0, 10));
-  }
-  return values;
-}
-
 function buildGeometry(context, descriptor) {
   const grid = descriptor?.grid || {};
   const centers = context?.geometry || {};
-  const latCenters = Array.isArray(centers.lat_centers)
+  let latCenters = Array.isArray(centers.lat_centers)
     ? centers.lat_centers
     : (Array.isArray(grid.latitude_values) ? grid.latitude_values : null);
-  const lonCenters = Array.isArray(centers.lon_centers)
+  let lonCenters = Array.isArray(centers.lon_centers)
     ? centers.lon_centers
     : (Array.isArray(grid.longitude_values) ? grid.longitude_values : null);
   if (!latCenters || !lonCenters) return null;
+  if (isThreeHourlyDataset(descriptor?.dataset_id) && latCenters.length === 240 && lonCenters.length === 480) {
+    const blocks = (axis) => Array.from({ length: axis.length / 4 }, (_, index) => axis.slice(index * 4, index * 4 + 4).reduce((sum, value) => sum + value, 0) / 4);
+    latCenters = blocks(latCenters); lonCenters = blocks(lonCenters);
+  }
   const latBounds = Array.isArray(centers.lat_bounds) && centers.lat_bounds.length === 2
     ? centers.lat_bounds
     : (grid.cell_bounds?.latitude || grid.latitude_range || null);
@@ -104,7 +99,7 @@ function buildVariables(context, descriptor) {
   });
 }
 
-export function buildEarthCards() {
+export function buildEarthCards({ threeHourly = false } = {}) {
   return {
     temporal: [
       card('seasonal', C.blue, 'researchSuite'),
@@ -114,7 +109,7 @@ export function buildEarthCards() {
       card('polar', '#cbeef3', 'polar'),
       card('diurnal', C.mars, 'diurnal', {
         status: CARD_STATUS.UNSUPPORTED,
-        reason: CAPABILITY_REASONS.DIURNAL_DAILY_MEAN,
+        reason: threeHourly ? CAPABILITY_REASONS.NOT_IMPLEMENTED : CAPABILITY_REASONS.DIURNAL_DAILY_MEAN,
       }),
     ],
     drivers: [
@@ -132,7 +127,11 @@ export function buildEarthCards() {
  * @param {{ datasetId?: string }} [options]
  * @returns {object} 满足 OverviewAdapter 契约的 Earth 适配器。
  */
-export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}) {
+export function createEarthOverviewAdapter({ datasetId } = {}) {
+  if (!EARTH_OVERVIEW_DATASETS.includes(datasetId)) {
+    throw new TypeError('Earth dataset id must come from the server catalog');
+  }
+  const threeHourly = isThreeHourlyDataset(datasetId);
   let researchClient = null;
   let researchKey = null;
   let resolvedFingerprint = null;
@@ -150,7 +149,7 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
   return {
     planet: 'earth',
     sourceId: datasetId,
-    sourceLabel: 'MERRA-2 daily global 5° compact v2',
+    sourceLabel: threeHourly ? 'MERRA-2 · 3 hours UTC · 0.75°' : 'MERRA-2 daily global 5° compact v2',
 
     async resolve({ signal } = {}) {
       const descriptor = await fetchDataset(datasetId, { signal });
@@ -176,6 +175,7 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
       const time = context?.time || {};
       const start = time.start || descriptor.time?.start || null;
       const end = time.end || descriptor.time?.end || null;
+      const values = earthTimeValues(start, end, threeHourly ? 3 : 24);
 
       return {
         status: 'ready',
@@ -185,16 +185,17 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
         sourceMeta: context?.source_meta || null,
         limitations: context?.limitations || descriptor.limitations || [],
         time: {
-          kind: 'iso-date',
+          kind: threeHourly ? 'iso-datetime' : 'iso-date',
           calendar: time.calendar || 'proleptic_gregorian',
           start,
           end,
-          values: allDatesBetween(start, end),
+          values,
           years: Array.isArray(time.years) && time.years.length
             ? time.years
-            : Array.from(new Set(allDatesBetween(start, end).map((value) => Number(value.slice(0, 4))))),
-          step: time.step ?? 1,
-          stepUnit: time.step_unit || 'day',
+            : Array.from(new Set(values.map((value) => Number(value.slice(0, 4))))),
+          step: threeHourly ? 3 : time.step ?? 1,
+          stepUnit: threeHourly ? 'hour' : time.step_unit || 'day',
+          ...(threeHourly ? { frequencyHours: 3, timeZone: 'UTC' } : {}),
         },
         variables: buildVariables(context, descriptor),
         geometry,
@@ -210,10 +211,10 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
           aiInsight: context?.capabilities?.aiInsight !== false,
         },
         capabilityReasons: {
-          diurnal: context?.unavailable?.diurnal || CAPABILITY_REASONS.DIURNAL_DAILY_MEAN,
+          diurnal: context?.unavailable?.diurnal || (threeHourly ? CAPABILITY_REASONS.NOT_IMPLEMENTED : CAPABILITY_REASONS.DIURNAL_DAILY_MEAN),
         },
         polarScope: context?.polar_scope || null,
-        cards: buildEarthCards(),
+        cards: buildEarthCards({ threeHourly }),
         defaults: { variable: 'TO3', value: start, mode: 'temporal' },
       };
     },
@@ -221,7 +222,7 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
     // ── 逐日场 / 序列 ──────────────────────────────────────────────
     loadField({ value, variable, signal }) {
       return fetchEarthField(datasetId, {
-        variable, date: value, fingerprint: resolvedFingerprint, signal,
+        variable, ...(threeHourly ? { timestamp: value } : { date: value }), fingerprint: resolvedFingerprint, signal,
       });
     },
 
@@ -276,6 +277,8 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
         },
         coverage: payload.coverage,
         statistics: payload.statistics,
+        ...(threeHourly ? { timestamp: payload.timestamp, sourceGridShape: payload.source_grid_shape,
+          renderGridShape: payload.render_grid_shape, renderMethod: payload.render_method || payload.render?.method } : {}),
       };
     },
 
@@ -286,6 +289,7 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
         unit: payload.units,
         aggregation: payload.aggregation,
         coverage: payload.coverage,
+        ...(threeHourly ? { timestamps: payload.timestamps, frequencyHours: 3 } : {}),
       };
     },
 
@@ -297,10 +301,14 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
         requested: payload.requested,
         gridPoint: payload.grid_point,
         selection: payload.selection,
+        ...(threeHourly ? { timestamps: payload.timestamps, frequencyHours: 3 } : {}),
       };
     },
 
     cellForPoint(geometry, point) {
+      // A display block is not a native observation. Preserve the click's exact
+      // coordinates so the server selects from the full 240 x 480 source grid.
+      if (threeHourly) return { lat: point?.lat, lon: point?.lon };
       const cell = nearestGeometryCell(geometry, point?.lat, point?.lon);
       if (!cell) return null;
       return { lat: cell.lat, lon: cell.lon, row: cell.row, col: cell.col };
@@ -312,7 +320,7 @@ export function createEarthOverviewAdapter({ datasetId = EARTH_DATASET_ID } = {}
      */
     async loadCard({ cardKey, variable, year, signal }) {
       if (cardKey === 'diurnal') {
-        return { status: 'unsupported', reason: CAPABILITY_REASONS.DIURNAL_DAILY_MEAN };
+        return { status: 'unsupported', reason: threeHourly ? CAPABILITY_REASONS.NOT_IMPLEMENTED : CAPABILITY_REASONS.DIURNAL_DAILY_MEAN };
       }
       const client = clientFor(resolvedFingerprint);
       if (!Number.isInteger(year)) {

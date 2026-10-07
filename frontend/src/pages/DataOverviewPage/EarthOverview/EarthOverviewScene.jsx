@@ -9,6 +9,7 @@ import { useEarthOverview } from './useEarthOverview.js';
 import {
   EARTH_VARIABLE_LABEL_KEYS,
   EARTH_VARIABLES,
+  EARTH_OVERVIEW_DATASETS,
   earthColormap,
   formatEarthNumber,
 } from './earthOverviewModel.js';
@@ -36,7 +37,7 @@ function EarthInfoCard({ descriptor }) {
         <li>{t('earthOverview.info.grid')}: {shape} · {resolution}</li>
         <li>{t('earthOverview.info.coverage')}: {coverage}</li>
         <li>{t('earthOverview.info.units')}: {EARTH_VARIABLES.map((id) => `${id} ${descriptor?.variables?.find((v) => v.id === id)?.units || ''}`.trim()).join(' · ')}</li>
-        <li>{t('earthOverview.info.dailyMean')}</li>
+        <li>{descriptor?.frequency_hours === 3 ? 'UTC · 3h' : t('earthOverview.info.dailyMean')}</li>
         <li>{grid?.coverage === 'global'
           ? t('earthOverview.info.areaWeighted')
           : t('earthOverview.info.pointSampled')}</li>
@@ -76,22 +77,23 @@ export default function EarthOverviewScene({ selection, onSelectionChange, scene
     regionalSeries, pointSeries, seriesError, pointGrid, playing, outOfCoverage,
     setPlaying, chooseDate, chooseVariable, choosePoint, stepDate, restart,
     markOutOfCoverage, dismissOutOfCoverage,
-    retryDescriptor,
+    retryDescriptor, catalog, catalogLoading, catalogError, retryCatalog,
   } = overview;
 
   // Keep the parent selection in sync so leaving and returning to Earth is stable.
   React.useEffect(() => {
-    if (!onSelectionChange) return;
+    if (!onSelectionChange || !overview.datasetId) return;
     onSelectionChange({
       date: overview.selection.date,
       variable: overview.selection.variable,
       point: overview.selection.point,
+      datasetId: overview.datasetId,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overview.selection.date, overview.selection.variable, overview.selection.point]);
+  }, [overview.datasetId, overview.selection.date, overview.selection.variable, overview.selection.point]);
 
   const colormap = earthColormap(overview.selection.variable, settings?.colormap);
-  const unavailable = descriptorError || (descriptor && !ready);
+  const unavailable = catalogError || descriptorError || (descriptor && !ready);
   const units = field?.units
     || descriptor?.variables?.find((v) => v.id === overview.selection.variable)?.units
     || '';
@@ -135,21 +137,28 @@ export default function EarthOverviewScene({ selection, onSelectionChange, scene
             <p className="earth-scene__subtitle">{t('earthOverview.subtitle')}</p>
           </div>
           {sceneSwitch}
+          <label>Earth <select value={overview.datasetId || ''} disabled={catalogLoading || !catalog} onChange={(event) => overview.chooseDataset(event.target.value)}>
+            {(catalog?.items || []).filter((item) => EARTH_OVERVIEW_DATASETS.includes(item.dataset_id)).map((item) => (
+              <option key={item.dataset_id} value={item.dataset_id}>
+                {item.display_name}{item.availability !== 'available' ? ` · ${item.availability}` : ''}
+              </option>
+            ))}
+          </select></label>
         </header>
 
         {unavailable ? (
           <div className="earth-notice earth-notice--error" role="alert">
-            <strong>{t('earthOverview.errors.datasetUnavailable')}</strong>
+            <strong>{catalogError?.message || t('earthOverview.errors.datasetUnavailable')}</strong>
             {descriptorError?.availabilityReason || descriptor?.availability_reason ? (
               <code>{descriptorError?.availabilityReason || descriptor.availability_reason}</code>
             ) : null}
-            <button type="button" className="earth-btn" onClick={() => retryDescriptor()}>
+            <button type="button" className="earth-btn" onClick={() => (catalogError ? retryCatalog() : retryDescriptor())}>
               {t('earthOverview.actions.retry')}
             </button>
           </div>
         ) : null}
 
-        {descriptorLoading && !descriptor ? (
+        {(catalogLoading || (!catalogError && descriptorLoading)) && !descriptor ? (
           <div className="earth-notice" role="status">{t('earthOverview.loading')}</div>
         ) : null}
 
@@ -209,6 +218,7 @@ export default function EarthOverviewScene({ selection, onSelectionChange, scene
         ) : null}
 
         <EarthTimeline
+          frequencyHours={overview.frequencyHours}
           start={start}
           end={end}
           requestedDate={overview.selection.date}

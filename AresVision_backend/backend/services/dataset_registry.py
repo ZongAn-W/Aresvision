@@ -1,8 +1,9 @@
 """Public server dataset catalog.
 
 The registry is the single authority for dataset identity: fixed ids, release
-versions, artifact fingerprints and availability. Earth metadata is verified
-against pinned release hashes and cached per file signature; Mars entries stay
+versions, artifact fingerprints and availability. Daily Earth releases retain
+pinned hashes; three-hour releases verify their configured manifest and content.
+Results are cached per file signature; Mars entries stay
 ``unverified`` because this stage does not probe the large Mars directories.
 """
 
@@ -19,6 +20,8 @@ from services.dataset_identity import (
     DATASET_IDS,
     EARTH_DATASET_ID,
     EARTH_DATASET_V2_ID,
+    EARTH_DATASET_3HOURLY_ID,
+    EARTH_DATASET_IDS,
     IDENTITY_STATUS_UNVERSIONED,
     IDENTITY_STATUS_VERIFIED,
     REGISTERED_DATASET_IDS,
@@ -38,6 +41,7 @@ from services.earth_dataset_metadata import (
     VerifiedEarthRelease,
     package_signature,
     read_earth_release,
+    read_earth_3hourly_release,
 )
 
 logger = logging.getLogger("aresvision.datasets")
@@ -56,6 +60,14 @@ EARTH_DISPLAY_NAME = "MERRA-2 daily ozone compact v1"
 EARTH_V2_DATASET_VERSION = "v2"
 EARTH_V2_DISPLAY_NAME = "MERRA-2 daily global 5 degree compact v2"
 EARTH_SCHEMA = "aresvision_earth_daily_v1"
+EARTH_3HOURLY_SCHEMA = "aresvision_earth_3hourly_v1"
+EARTH_3HOURLY_DATA_FILE = "earth_merra2_3hourly.nc"
+EARTH_3HOURLY_DISPLAY_NAME = "MERRA-2 3-hourly global 0.75 degree v1"
+
+
+def earth_3hourly_training_profile() -> dict:
+    """Publish the official DLinear contract for the independent release."""
+    return earth_training_profile(EARTH_DATASET_3HOURLY_ID)
 
 LEGACY_DATASET_REASON = "legacy_dataset_not_probed"
 
@@ -169,6 +181,7 @@ class DatasetRegistry:
         data_file_name: str = DATA_FILE_NAME,
         earth_dataset_id: Optional[str] = None,
         legacy_earth_package_dir: Any = None,
+        earth_3hourly_package_dir: Any = None,
     ):
         self._earth_package_dir = Path(earth_package_dir).expanduser()
         primary_id = earth_dataset_id or (
@@ -203,6 +216,15 @@ class DatasetRegistry:
             "display": EARTH_V2_DISPLAY_NAME if secondary_id == EARTH_DATASET_V2_ID else EARTH_DISPLAY_NAME,
         }
         self._data_file_name = data_file_name
+        for spec in self._earth_specs.values():
+            spec["data_file_name"] = data_file_name
+        self._earth_specs[EARTH_DATASET_3HOURLY_ID] = {
+            "path": Path(earth_3hourly_package_dir).expanduser()
+            if earth_3hourly_package_dir is not None
+            else self._earth_package_dir.parent / "merra2_3hourly_v1",
+            "version": "v1", "display": EARTH_3HOURLY_DISPLAY_NAME,
+            "data_file_name": EARTH_3HOURLY_DATA_FILE,
+        }
         # NetCDF reads are serialized: one verification at a time protects the
         # library handle and keeps the cache consistent.
         self._lock = threading.Lock()
@@ -224,7 +246,7 @@ class DatasetRegistry:
                 "unknown_dataset", "Unknown dataset id", status_code=404
             )
         normalized = dataset_id.strip().lower()
-        if normalized in (EARTH_DATASET_ID, EARTH_DATASET_V2_ID):
+        if normalized in EARTH_DATASET_IDS:
             return copy.deepcopy(self._earth_descriptor(normalized))
         return copy.deepcopy(self._mars_descriptor(normalized))
 
@@ -237,7 +259,7 @@ class DatasetRegistry:
         unversioned binding.
         """
         normalized = self._require_trainable(dataset_id)
-        if normalized in (EARTH_DATASET_ID, EARTH_DATASET_V2_ID):
+        if normalized in EARTH_DATASET_IDS:
             return self._earth_training_binding(normalized)
         return {
             "dataset_id": normalized,
@@ -257,7 +279,7 @@ class DatasetRegistry:
         """Accept a registered Earth id or a legacy Mars training id, else raise."""
         if isinstance(dataset_id, str):
             normalized = dataset_id.strip().lower()
-            if normalized in (EARTH_DATASET_ID, EARTH_DATASET_V2_ID):
+            if normalized in EARTH_DATASET_IDS:
                 return normalized
         return require_training_dataset(dataset_id)
 
@@ -280,6 +302,12 @@ class DatasetRegistry:
             "binding_basis": REGISTRY_BINDING_BASIS,
             "version_status": IDENTITY_STATUS_VERIFIED,
         }
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            snapshot.update({
+                "manifest_content_sha256": metadata.get("manifest_content_sha256"),
+                "frequency_hours": 3, "step_unit": "hour", "step": 3,
+                "training_profile": earth_training_profile(dataset_id),
+            })
         return {
             "dataset_id": dataset_id,
             "dataset_version": metadata.get("dataset_version"),
@@ -295,8 +323,9 @@ class DatasetRegistry:
 
         This is the neutral entry point shared by the overview API, training and
         historical prediction. Only this registry touches the package path and
-        the pinned hashes; callers get an immutable snapshot whose arrays stay
-        readable after the NetCDF handle is closed.
+        the release hashes. Daily callers get immutable field arrays that remain
+        readable after the NetCDF handle closes. The three-hour snapshot contains
+        metadata and coordinates; its large fields stay on disk.
 
         ``expected_fingerprint=None`` takes the currently verified release.
         """
@@ -336,7 +365,7 @@ class DatasetRegistry:
                 "unknown_dataset", "Unknown dataset id", status_code=404
             )
         normalized = dataset_id.strip().lower()
-        if normalized not in (EARTH_DATASET_ID, EARTH_DATASET_V2_ID):
+        if normalized not in EARTH_DATASET_IDS:
             raise DatasetRequestError(
                 "dataset_overview_not_supported",
                 "This dataset has no Earth overview",
@@ -368,6 +397,26 @@ class DatasetRegistry:
         }
 
     def _base_earth_descriptor(self, dataset_id: str, availability: str, reason: Optional[str]) -> dict:
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            descriptor = {
+                "dataset_id": dataset_id, "display_name": EARTH_3HOURLY_DISPLAY_NAME,
+                "planet": "earth", "dataset_version": "v1", "schema": EARTH_3HOURLY_SCHEMA,
+                "availability": availability, "availability_reason": reason,
+                "manifest_sha256": None, "manifest_content_sha256": None,
+                "data_sha256": None, "dataset_fingerprint": None,
+                "capabilities": {"metadata": True, "training": True,
+                                 "web_overview": True, "trained_prediction": True},
+                "time": {"kind": "datetime", "calendar": None, "start": None, "end": None,
+                         "count": None, "step": 3, "step_unit": "hour",
+                         "frequency_hours": 3, "time_zone": "UTC"},
+                "frequency_hours": 3, "step_unit": "hour", "step": 3,
+                "grid_shape": [240, 480], "grid": None,
+                "channel_order": [], "variables": [], "splits": None,
+                "training_profile": earth_3hourly_training_profile(),
+                "limitations": ["Uploaded three-hour models require the independent versioned contract and dry-run",
+                                 "Overview fields use a server display grid; point queries use the native 240 by 480 grid"],
+            }
+            return descriptor
         is_v2 = dataset_id == EARTH_DATASET_V2_ID
         descriptor = {
             "dataset_id": dataset_id,
@@ -377,6 +426,10 @@ class DatasetRegistry:
             "availability": availability,
             "availability_reason": reason,
             "capabilities": dict(EARTH_DESCRIPTOR_CAPABILITIES),
+            # Additive catalog fields leave the existing daily time/profile
+            # contract intact and make cadence explicit for both Earth families.
+            "frequency_hours": 24, "step_unit": "day", "step": 1,
+            "grid_shape": [36, 72] if is_v2 else [31, 49],
         }
         descriptor.update(_blank_dynamic_earth_fields())
         # The profile describes the wired entry point, so it is published even
@@ -404,27 +457,34 @@ class DatasetRegistry:
         changes mid verification drops the whole cache.
         """
         spec = self._earth_specs[dataset_id]
-        signature = package_signature(spec["path"], data_file_name=self._data_file_name)
+        signature = package_signature(spec["path"], data_file_name=spec["data_file_name"])
         with self._lock:
             if (
                 dataset_id in self._earth_cache_release
                 and signature == self._earth_cache_signature.get(dataset_id)
             ):
                 return self._earth_cache_release[dataset_id]
+            if (dataset_id == EARTH_DATASET_3HOURLY_ID
+                    and signature == self._earth_cache_signature.get(dataset_id)
+                    and dataset_id in self._earth_cache_descriptor):
+                return None  # An unchanged missing/invalid new package is already classified.
             self._earth_cache_release.pop(dataset_id, None)
             self._earth_cache_descriptor.pop(dataset_id, None)
             self._earth_cache_signature.pop(dataset_id, None)
             self.verification_count += 1
-            if not spec["manifest"] or not spec["data"]:
+            if dataset_id != EARTH_DATASET_3HOURLY_ID and (not spec["manifest"] or not spec["data"]):
                 self._earth_cache_descriptor[dataset_id] = self._unavailable_earth_descriptor(dataset_id, REASON_PACKAGE_MISSING)
                 return None
             try:
-                release = read_earth_release(
-                    spec["path"], expected_manifest_sha256=spec["manifest"],
-                    expected_data_sha256=spec["data"], dataset_id=dataset_id,
-                    dataset_version=spec["version"],
-                    data_file_name=self._data_file_name,
-                )
+                if dataset_id == EARTH_DATASET_3HOURLY_ID:
+                    release = read_earth_3hourly_release(spec["path"])
+                else:
+                    release = read_earth_release(
+                        spec["path"], expected_manifest_sha256=spec["manifest"],
+                        expected_data_sha256=spec["data"], dataset_id=dataset_id,
+                        dataset_version=spec["version"],
+                        data_file_name=spec["data_file_name"],
+                    )
             except EarthPackageError as exc:
                 reason = exc.reason
                 logger.warning(
@@ -437,7 +497,7 @@ class DatasetRegistry:
                     # Settle the negative result for the current signature; a
                     # package that changed mid verification is retried at once.
                     self._earth_cache_signature[dataset_id] = package_signature(
-                        spec["path"], data_file_name=self._data_file_name
+                        spec["path"], data_file_name=spec["data_file_name"]
                     )
                 return None
             except Exception:
@@ -459,11 +519,20 @@ class DatasetRegistry:
     def _available_earth_descriptor(self, dataset_id: str, metadata: dict) -> dict:
         descriptor = self._base_earth_descriptor(dataset_id, "available", None)
         descriptor.update(copy.deepcopy(metadata))
+        descriptor["grid_shape"] = list(metadata["grid"]["shape"])
         # ``manifest`` is verified provenance that the analysis services read from
         # the release, not part of the public descriptor: it lists source files
         # and is far larger than the descriptor contract. The response model would
         # drop it anyway, so it never reaches a client.
         descriptor.pop("manifest", None)
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            descriptor["training_profile"] = earth_3hourly_training_profile()
+            descriptor["limitations"] = [
+                "Uploaded three-hour models require the independent versioned contract and dry-run",
+                "The three-hourly release is configured on the server and verified against its manifest",
+                "Overview fields use a server display grid; point queries use the native 240 by 480 grid",
+            ]
+            return descriptor
         descriptor["limitations"] = _physical_limitations(metadata.get("limitations"))
         descriptor["limitations"].extend(EARTH_APPLICATION_LIMITATIONS)
         return descriptor

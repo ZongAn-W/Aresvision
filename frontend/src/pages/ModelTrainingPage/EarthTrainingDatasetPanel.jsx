@@ -1,7 +1,6 @@
 import {
-  EARTH_HORIZON,
   EARTH_TARGET_UNIT,
-  EARTH_WINDOW,
+  getEarthTrainingProfile,
   describeEarthInputUnits,
   describeEarthSplitSamples,
   getEarthChannelOptions,
@@ -10,7 +9,7 @@ import {
 /**
  * Earth MERRA-2 数据集说明面板。
  *
- * 只展示服务端 registry 与训练契约里的真实数值：日期划分与 7→3 样本数由
+ * 只展示服务端 registry 与训练契约里的真实数值：日期划分与 profile 窗口样本数由
  * descriptor.splits 推算，通道单位来自固定契约，发布指纹直接显示服务端返回值。
  * 缺包或不可用时仍显示原因，但由父组件禁用提交，不提供伪造日期或坐标。
  */
@@ -21,10 +20,13 @@ export default function EarthTrainingDatasetPanel({
   sectionTitleStyle,
   fieldHintStyle,
 }) {
-  const splits = describeEarthSplitSamples(availability?.splits);
+  const profile = getEarthTrainingProfile(availability?.datasetId);
+  const splits = describeEarthSplitSamples(availability?.splits, profile.window, profile.horizon);
   const inputUnits = describeEarthInputUnits(selectedChannels);
   const channels = getEarthChannelOptions();
-  const shape = availability?.trainingProfile?.grid_shape || [36, 72];
+  const shape = availability?.gridShape || availability?.trainingProfile?.grid_shape || profile.gridShape;
+  const resolution = shape[0] === 240 ? '0.75° × 0.75°' : '5° × 5°';
+  const cadence = profile.frequencyHours === 3 ? '3-hour UTC' : 'daily UTC';
 
   return (
     <div className="experiment-earth-panel" data-earth-dataset-panel="true">
@@ -40,11 +42,11 @@ export default function EarthTrainingDatasetPanel({
       <dl className="experiment-earth-facts">
         <div>
           <dt>{copy.earthGridLabel}</dt>
-          <dd>{`${shape[0]} × ${shape[1]} · 5° × 5° · global`}</dd>
+          <dd>{`${shape[0]} × ${shape[1]} · ${resolution} · global · ${cadence}`}</dd>
         </div>
         <div>
           <dt>{copy.earthWindowLabel}</dt>
-          <dd>{copy.earthWindowValue(EARTH_WINDOW, EARTH_HORIZON)}</dd>
+          <dd>{copy.earthWindowValue(profile.window, profile.horizon, profile.frequencyHours)}</dd>
         </div>
         <div>
           <dt>{copy.earthTargetLabel}</dt>
@@ -58,7 +60,7 @@ export default function EarthTrainingDatasetPanel({
         </div>
       </dl>
 
-      {/* 只读细节默认收起：网格/7→3/目标/指纹是提交前必须确认的，日期划分与通道
+      {/* 只读细节默认收起：网格/窗口/目标/指纹是提交前必须确认的，日期划分与通道
           明细属于参考信息，展开才看。data-* 钩子在收起时仍在 DOM 中。 */}
       <details className="experiment-earth-details" data-earth-details="true">
         <summary className="experiment-expert-heading" data-earth-details-toggle="true">

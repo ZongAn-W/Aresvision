@@ -53,18 +53,22 @@ function getDirectoryCompleteness(task) {
 function groupDirectoryTasks(items, isZh, showRecent) {
   const groups = [
     { id: 'recent', label: isZh ? '最近实验' : 'Recent experiments', tasks: [] },
+    { id: 'queued', label: isZh ? '排队中' : 'Queued', tasks: [] },
     { id: 'running', label: isZh ? '运行中' : 'Running', tasks: [] },
     { id: 'completed', label: isZh ? '已完成' : 'Completed', tasks: [] },
     { id: 'failed', label: isZh ? '失败或需修复' : 'Failed or needs attention', tasks: [] },
+    { id: 'cancelled', label: isZh ? '已取消' : 'Cancelled', tasks: [] },
   ];
   const recentIds = new Set(showRecent ? [...items]
     .sort((a, b) => Date.parse(b.end_time || b.start_time || 0) - Date.parse(a.end_time || a.start_time || 0))
     .slice(0, 3).map((task) => task.id) : []);
   items.forEach((task) => {
     const status = String(task.status || '').toLowerCase();
-    const group = recentIds.has(task.id) ? groups[0]
-      : status === 'running' || status === 'pending' ? groups[1]
-        : status === 'completed' ? groups[2] : groups[3];
+    const group = recentIds.has(task.id) && status !== 'queued' ? groups[0]
+      : status === 'queued' ? groups[1]
+        : status === 'running' || status === 'pending' ? groups[2]
+          : status === 'completed' ? groups[3]
+            : status === 'cancelled' ? groups[5] : groups[4];
     group.tasks.push(task);
   });
   return groups.filter((group) => group.tasks.length);
@@ -85,6 +89,7 @@ function ExperimentDirectoryRow({
   isProcessing,
   onSelect,
   onStop,
+  onCancel,
   copy,
   isZh,
 }) {
@@ -92,6 +97,7 @@ function ExperimentDirectoryRow({
   const hyperparameters = useMemo(() => parseTaskHyperparameters(task.hyperparameters), [task.hyperparameters]);
   const metric = getCoreMetric(task);
   const isActiveRun = task.status === 'running' || task.status === 'pending';
+  const isQueued = task.status === 'queued';
   const channels = normalizeTaskChannels(task, channelOrder);
   const channelLabel = channels.length > 0
     ? channels.map((channel) => channelMap[channel]?.short || channel).join(' + ')
@@ -158,6 +164,14 @@ function ExperimentDirectoryRow({
           </div>
         </>
       ) : null}
+      {isQueued ? (
+        <div className="experiment-center-actions" onClick={(event) => event.stopPropagation()}>
+          <span className="training-tag-hint">{copy.queuePosition(task.queue_position)}</span>
+          <button type="button" className="experiment-center-button" style={{ minHeight: 34, padding: '6px 10px', fontSize: 'calc(11px * var(--font-scale, 1))' }} disabled={isProcessing} onClick={() => onCancel(task.id)}>
+            {copy.cancelQueued}
+          </button>
+        </div>
+      ) : null}
 
       <details className="experiment-directory-row-details" onClick={(event) => event.stopPropagation()}>
         <summary>{isZh ? '标签与详情' : 'Tags and details'}<span aria-hidden="true">⌄</span></summary>
@@ -186,6 +200,7 @@ export default function ExperimentDirectory({
   isProcessing,
   onSelectTask,
   onStop,
+  onCancel,
   tasksLoading = false,
   tasksError = false,
   onCreateTask,
@@ -213,6 +228,8 @@ export default function ExperimentDirectory({
     running: t('experimentCenter.filterRunning'),
     completed: t('experimentCenter.filterCompleted'),
     failed: t('experimentCenter.filterFailed'),
+    queued: t('experimentCenter.filterQueued'),
+    cancelled: t('experimentCenter.filterCancelled'),
   };
 
   // 目录只有三种需要区别对待的状态：还在取任务列表、取失败、或确实没有实验。
@@ -300,6 +317,7 @@ export default function ExperimentDirectory({
             isProcessing={isProcessing}
             onSelect={onSelectTask}
             onStop={onStop}
+            onCancel={onCancel}
             copy={copy}
             isZh={isZh}
           />

@@ -318,8 +318,10 @@ class ModelTrainingTask(Base):
     )
     uploaded_model_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hyperparameters: Mapped[str] = mapped_column(Text, nullable=False)  # JSON stored as string
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending, running, completed, failed
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending, queued, running, completed, failed, cancelled
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    queue_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     log_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     output_model_path: Mapped[str | None] = mapped_column(String(500), nullable=True)

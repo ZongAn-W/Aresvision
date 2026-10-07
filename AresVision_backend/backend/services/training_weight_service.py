@@ -14,7 +14,7 @@ from sqlalchemy import select
 from config import MAX_TRAINING_WEIGHT_SIZE_MB, TRAINING_WEIGHTS_DIR
 from database.engine import async_session_maker
 from database.models import TrainingWeightFile
-from services.earth_training_contract import EARTH_ARTIFACT_SCHEMA
+from services.earth_training_contract import EARTH_ARTIFACT_SCHEMA, EARTH_3HOURLY_ARTIFACT_SCHEMA
 
 
 class TrainingWeightService:
@@ -127,7 +127,7 @@ class TrainingWeightService:
         # An Earth checkpoint is a *container*, not a bare state dict. It must not
         # be reported as a compatible Mars transfer weight, and its tensors must
         # not be extracted and passed off as one.
-        if loaded.get("artifact_schema") == EARTH_ARTIFACT_SCHEMA:
+        if loaded.get("artifact_schema") in (EARTH_ARTIFACT_SCHEMA, EARTH_3HOURLY_ARTIFACT_SCHEMA):
             return {
                 "ok": False,
                 "errors": [

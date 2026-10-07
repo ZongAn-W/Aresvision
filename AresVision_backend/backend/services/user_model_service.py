@@ -103,7 +103,40 @@ class UserModelService:
             )
             return package
 
-    async def get_earth_compatibility(self, package_id: str, user_id: int) -> dict:
+    async def rename_package(
+        self, package_id: str, user_id: int, display_name: str
+    ) -> UserModelPackage:
+        name = display_name.strip()
+        if not name or len(name) > 120:
+            raise ValueError("Model name must contain 1 to 120 characters")
+
+        async with self.sessionmaker() as session:
+            package = await self._get_package_for_user_in_session(session, package_id, user_id)
+            if package.display_name != name:
+                package.display_name = name
+                package.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+                await session.refresh(package)
+            return package
+
+    async def get_source_for_download(
+        self, package_id: str, user_id: int
+    ) -> tuple[Path, str]:
+        package = await self.get_package_for_user(package_id, user_id)
+        source_path = Path(package.storage_path).resolve()
+        if not source_path.is_relative_to(self.storage_root.resolve()) or not source_path.is_file():
+            raise FileNotFoundError("Uploaded model source file not found")
+        # Keep Unicode names, but never put an uploaded path or control characters
+        # into the attachment filename. The stored .source suffix is private.
+        filename = Path(package.original_filename.replace("\\", "/")).name
+        filename = re.sub(r"[\x00-\x1f\x7f]", "", filename)
+        if Path(filename).suffix.lower() != ".py":
+            filename = "model.py"
+        return source_path, filename
+
+    async def get_earth_compatibility(
+        self, package_id: str, user_id: int, *, dataset_id: str = "earth_merra2"
+    ) -> dict:
         """Report whether a stored package may be trained on Earth data.
 
         The verdict is read from the package's own validation report, which was
@@ -111,6 +144,8 @@ class UserModelService:
         dry-run is repeated per request, so this stays cheap; callers that need a
         fresh proof can use ``revalidate`` first.
         """
+        if dataset_id not in {"earth_merra2", "earth_merra2_daily_v1", "earth_merra2_daily_v2", "earth_merra2_3hourly_v1"}:
+            raise ValueError("Unknown Earth dataset_id")
         package = await self.get_package_for_user(package_id, user_id)
         try:
             report = json.loads(package.validation_report or "{}")
@@ -118,20 +153,44 @@ class UserModelService:
             report = {}
         if not isinstance(report, dict):
             report = {}
-        earth = report.get("earth") if isinstance(report.get("earth"), dict) else {}
+        if dataset_id == "earth_merra2_3hourly_v1":
+            verdicts = report.get("earth_datasets")
+            earth = verdicts.get(dataset_id) if isinstance(verdicts, dict) else None
+        else:
+            earth = report.get("earth")
+        earth = earth if isinstance(earth, dict) else {}
         datasets = report.get("datasets") if isinstance(report.get("datasets"), dict) else {}
         available = os.path.isfile(package.storage_path or "")
-        compatible = bool(earth.get("compatible")) and available
+        compatible = earth.get("compatible") is True and available and package.validation_status == "valid" and report.get("ok") is True
+        code = earth.get("code")
+        status = "available" if compatible else ("unavailable" if earth else "unknown")
+        if dataset_id == "earth_merra2_3hourly_v1" and earth:
+            from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA
+            if (earth.get("contract_schema") != CONTRACT_SCHEMA or earth.get("dataset_id") != dataset_id
+                    or earth.get("status") == "unknown"
+                    or (earth.get("compatible") is True and (earth.get("status") != "available"
+                        or earth.get("output_shape") != [2, 24, 1, 24, 48]))):
+                compatible, status, code = False, "unknown", "uploaded_model_compatibility_unknown"
         reasons = list(earth.get("errors") or [])
         if not available:
             compatible = False
             reasons = [
                 "the uploaded model file is missing; re-upload or revalidate the model"
             ] + reasons
+            status, code = "unavailable", "uploaded_model_missing"
         elif not earth:
             reasons = [
                 "this model has no Earth compatibility result yet; revalidate it to check"
             ]
+            code = "uploaded_model_compatibility_unknown"
+            if package.validation_status == "invalid":
+                status, code = "unavailable", "uploaded_model_contract_invalid"
+                reasons = list(report.get("errors") or reasons)
+        if available and hashlib.sha256(Path(package.storage_path).read_bytes()).hexdigest() != package.content_hash:
+            compatible, status, code = False, "unavailable", "uploaded_model_tampered"
+            reasons = ["The uploaded source no longer matches the verified digest"]
+        if not compatible and not reasons:
+            reasons = ["Revalidate this model for the selected dataset"]
         warnings = list(report.get("warnings") or [])
         return {
             "package_id": package.id,
@@ -143,6 +202,10 @@ class UserModelService:
             "reasons": reasons,
             "warnings": warnings,
             "datasets": datasets,
+            "dataset_id": dataset_id,
+            "status": status,
+            "code": code,
+            "contract_schema": earth.get("contract_schema"),
             "output_shape": earth.get("output_shape"),
         }
 

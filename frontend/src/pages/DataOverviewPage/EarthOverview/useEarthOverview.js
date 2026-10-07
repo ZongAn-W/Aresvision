@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { fetchDataset, fetchEarthField, fetchEarthRegionalSeries, fetchEarthPointSeries } from '../../../services/datasets';
 import { createEarthRequestCoordinator } from './earthRequestCoordinator.js';
+import { useEarthDatasetCatalog } from './useEarthDatasetCatalog.js';
 import {
-  EARTH_DATASET_ID,
+  earthTimeAtIndex,
+  earthTimeIndex,
+  isThreeHourlyDataset,
   canRequestEarthData,
   fieldIdentity,
   initialEarthSelection,
@@ -13,7 +16,6 @@ import {
   nextPlaybackDate,
   pointIdentity,
   regionalIdentity,
-  shiftDate,
 } from './earthOverviewModel.js';
 
 const PLAYBACK_DELAY_MS = 600;
@@ -28,6 +30,12 @@ const CHANNEL_POINT = 'point-series';
  * token 身份与请求身份检查才会写入状态，迟到的响应不会覆盖新选择。
  */
 export function useEarthOverview(initialSelection = null) {
+  const datasetCatalog = useEarthDatasetCatalog(initialSelection?.datasetId || null);
+  const [datasetId, setDatasetId] = useState(() => initialSelection?.datasetId || null);
+  const frequencyHours = isThreeHourlyDataset(datasetId) ? 3 : 24;
+  const currentDatasetRef = useRef(datasetId);
+  currentDatasetRef.current = datasetId;
+  const mountedDatasetRef = useRef(datasetId);
   const coordinatorRef = useRef(null);
   if (coordinatorRef.current === null) coordinatorRef.current = createEarthRequestCoordinator();
   const coordinator = coordinatorRef.current;
@@ -63,12 +71,12 @@ export function useEarthOverview(initialSelection = null) {
     setDescriptorLoading(true);
     setDescriptorError(null);
     try {
-      const payload = await fetchDataset(EARTH_DATASET_ID, { signal });
-      if (signal?.aborted) return;
+      const payload = await fetchDataset(datasetId, { signal });
+      if (signal?.aborted || currentDatasetRef.current !== datasetId) return;
       setDescriptor(payload);
       setSelection((previous) => initialEarthSelection(payload, previous));
     } catch (error) {
-      if (error?.name === 'AbortError') return;
+      if (error?.name === 'AbortError' || currentDatasetRef.current !== datasetId) return;
       setDescriptor(null);
       setDescriptorError({
         code: error?.code || 'invalid_request',
@@ -77,17 +85,31 @@ export function useEarthOverview(initialSelection = null) {
         message: error?.message || '',
       });
     } finally {
-      if (!signal?.aborted) setDescriptorLoading(false);
+      if (!signal?.aborted && currentDatasetRef.current === datasetId) setDescriptorLoading(false);
     }
-  }, []);
+  }, [datasetId]);
 
   useEffect(() => {
+    if (!datasetId && datasetCatalog.defaultDatasetId) setDatasetId(datasetCatalog.defaultDatasetId);
+  }, [datasetCatalog.defaultDatasetId, datasetId]);
+
+  useEffect(() => {
+    if (!datasetId) return undefined;
+    coordinator.invalidateAll();
+    setDescriptor(null); setField(null); setRegionalSeries(null); setPointSeries(null);
+    setFieldRequestedDate(null); setFieldError(null); setSeriesError(null);
+    setFieldLoading(false); setPlaying(false); setOutOfCoverage(null);
+    if (mountedDatasetRef.current !== datasetId) {
+      setSelection((previous) => ({ date: null, variable: previous.variable, point: null }));
+      mountedDatasetRef.current = datasetId;
+    }
     const controller = new AbortController();
     loadDescriptor(controller.signal);
     return () => controller.abort();
-  }, [loadDescriptor]);
+  }, [datasetCatalog.defaultDatasetId, datasetId, loadDescriptor]);
 
   const descriptorAttempts = useRef(0);
+  useEffect(() => { descriptorAttempts.current = 0; }, [datasetId]);
   const refreshDescriptor = useCallback(async () => {
     // A version change resets the scene once, without an automatic retry loop.
     if (descriptorAttempts.current >= 1) return;
@@ -106,16 +128,16 @@ export function useEarthOverview(initialSelection = null) {
       return undefined;
     }
     const context = regionalIdentity({
-      datasetId: EARTH_DATASET_ID, fingerprint, variable: selection.variable, start, end,
+      datasetId, fingerprint, variable: selection.variable, start, end,
     });
     const token = coordinator.start(CHANNEL_REGIONAL, context);
-    fetchEarthRegionalSeries(EARTH_DATASET_ID, {
+    fetchEarthRegionalSeries(datasetId, {
       variable: selection.variable, fingerprint, signal: token.signal,
     })
       .then((payload) => {
         if (!coordinator.settle(token, context)) return;
         if (!isValidRegionalPayload(payload, {
-          datasetId: EARTH_DATASET_ID, fingerprint, variable: selection.variable, start, end,
+          datasetId, fingerprint, variable: selection.variable, start, end,
         })) {
           setSeriesError({ code: 'invalid_response', message: 'invalid regional payload' });
           return;
@@ -135,7 +157,7 @@ export function useEarthOverview(initialSelection = null) {
         });
       });
     return () => coordinator.cancel(CHANNEL_REGIONAL);
-  }, [coordinator, fingerprint, ready, selection.variable, start, end]);
+  }, [coordinator, datasetId, fingerprint, ready, selection.variable, start, end]);
 
   // ── 点位序列 ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -145,18 +167,18 @@ export function useEarthOverview(initialSelection = null) {
       return undefined;
     }
     const context = pointIdentity({
-      datasetId: EARTH_DATASET_ID, fingerprint, variable: selection.variable,
+      datasetId, fingerprint, variable: selection.variable,
       lat: point.lat, lon: point.lon, start, end,
     });
     const token = coordinator.start(CHANNEL_POINT, context);
-    fetchEarthPointSeries(EARTH_DATASET_ID, {
+    fetchEarthPointSeries(datasetId, {
       variable: selection.variable, lat: point.lat, lon: point.lon,
       fingerprint, signal: token.signal,
     })
       .then((payload) => {
         if (!coordinator.settle(token, context)) return;
         if (!isValidPointPayload(payload, {
-          datasetId: EARTH_DATASET_ID, fingerprint, variable: selection.variable, start, end,
+          datasetId, fingerprint, variable: selection.variable, start, end,
         })) {
           setSeriesError({ code: 'invalid_response', message: 'invalid point payload' });
           return;
@@ -176,7 +198,7 @@ export function useEarthOverview(initialSelection = null) {
         });
       });
     return () => coordinator.cancel(CHANNEL_POINT);
-  }, [coordinator, fingerprint, ready, selection.point, selection.variable, start, end]);
+  }, [coordinator, datasetId, fingerprint, ready, selection.point, selection.variable, start, end]);
 
   // ── 场（当前请求日期） ────────────────────────────────────────────
   useEffect(() => {
@@ -188,17 +210,17 @@ export function useEarthOverview(initialSelection = null) {
     setFieldRequestedDate(date);
     setFieldLoading(true);
     const context = fieldIdentity({
-      datasetId: EARTH_DATASET_ID, fingerprint, variable: selection.variable, date,
+      datasetId, fingerprint, variable: selection.variable, date,
     });
     const token = coordinator.start(CHANNEL_FIELD, context);
-    fetchEarthField(EARTH_DATASET_ID, {
-      variable: selection.variable, date, fingerprint, signal: token.signal,
+    fetchEarthField(datasetId, {
+      variable: selection.variable, ...(frequencyHours === 3 ? { timestamp: date } : { date }), fingerprint, signal: token.signal,
     })
       .then((payload) => {
         if (!coordinator.settle(token, context)) return;
         setFieldLoading(false);
         if (!isValidFieldPayload(payload, {
-          datasetId: EARTH_DATASET_ID, fingerprint, variable: selection.variable, date,
+          datasetId, fingerprint, variable: selection.variable, date,
         })) {
           setField(null);
           setFieldError({ code: 'invalid_response', message: 'invalid field payload' });
@@ -221,7 +243,7 @@ export function useEarthOverview(initialSelection = null) {
         });
       });
     return () => coordinator.cancel(CHANNEL_FIELD);
-  }, [coordinator, fingerprint, ready, selection.date, selection.variable]);
+  }, [coordinator, datasetId, frequencyHours, fingerprint, ready, selection.date, selection.variable]);
 
   // 版本变化只重取一次元信息，等待用户继续。
   useEffect(() => {
@@ -240,6 +262,7 @@ export function useEarthOverview(initialSelection = null) {
     if (!playing) return undefined;
     const next = nextPlaybackDate({
       start, end, displayedDate, requestedDate: selection.date, ready: Boolean(field), playing,
+      frequencyHours,
     });
     if (!next) {
       // 展示完最后一天即停止；"从首日重播"由用户显式触发。
@@ -250,7 +273,7 @@ export function useEarthOverview(initialSelection = null) {
       setSelection((previous) => ({ ...previous, date: next }));
     }, PLAYBACK_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [displayedDate, end, field, playing, selection.date, start]);
+  }, [displayedDate, end, field, playing, selection.date, start, frequencyHours]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -302,11 +325,13 @@ export function useEarthOverview(initialSelection = null) {
     setPlaying(false);
     setSelection((previous) => {
       if (!previous.date) return previous;
-      const next = shiftDate(previous.date, days);
+      const current = earthTimeIndex(start, end, previous.date, frequencyHours);
+      if (current === null) return previous;
+      const next = earthTimeAtIndex(start, current + days, frequencyHours);
       if (next < start || next > end) return previous;
       return { ...previous, date: next };
     });
-  }, [end, start]);
+  }, [end, start, frequencyHours]);
 
   const pointGrid = useMemo(() => {
     if (pointSeries?.grid_point) return pointSeries.grid_point;
@@ -315,6 +340,13 @@ export function useEarthOverview(initialSelection = null) {
   }, [pointSeries, selection.point]);
 
   return {
+    datasetId,
+    frequencyHours,
+    chooseDataset: setDatasetId,
+    catalog: datasetCatalog.catalog,
+    catalogLoading: datasetCatalog.loading,
+    catalogError: datasetCatalog.error,
+    retryCatalog: datasetCatalog.retry,
     descriptor,
     descriptorLoading,
     descriptorError,
@@ -342,6 +374,6 @@ export function useEarthOverview(initialSelection = null) {
     dismissOutOfCoverage,
     stepDate,
     restart,
-    retryDescriptor: loadDescriptor,
+    retryDescriptor: () => loadDescriptor(),
   };
 }

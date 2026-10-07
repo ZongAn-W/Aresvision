@@ -612,7 +612,6 @@ export default function PredictSidebar({
   isLight,
   loading,
   requestContextLocked = false,
-  isSwitchingSource,
   error,
   modelMode,
   setModelMode,
@@ -624,9 +623,6 @@ export default function PredictSidebar({
   trainingTasksLoading = false,
   selectedTrainingOption,
   analysisVisibility = {},
-  marsYear,
-  setMarsYear,
-  availableMarsYears,
   lsStart,
   setLsStart,
   predStep,
@@ -645,10 +641,6 @@ export default function PredictSidebar({
   const canShowSystemHyperparams = analysisVisibility.systemHyperparams !== false;
   const isCompareMode = modelMode === PREDICT_MODEL_MODE_COMPARE;
   const compareSelection = getCompareSelectionState(selectedCompareTrainingTaskIds);
-
-  const years = Array.isArray(availableMarsYears) && availableMarsYears.length > 0
-    ? availableMarsYears
-    : [27, 28];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -718,14 +710,13 @@ export default function PredictSidebar({
           <ActionButton
             onClick={handlePredict}
             disabled={loading
-              || isSwitchingSource
               || predictionHorizonLimit == null
               || predStep > predictionHorizonLimit
               || (isCompareMode && !compareSelection.canCompare)}
             accent={isCompareMode ? C.green : C.mars}
           >
-            {(loading || isSwitchingSource) ? (
-              isSwitchingSource ? (isZh ? '加载数据中…' : 'Loading data...') : t('predict.runningBtn')
+            {loading ? (
+              t('predict.runningBtn')
             ) : isCompareMode ? (isZh ? '开始对比' : 'Start comparison') : t('predict.runBtn')}
           </ActionButton>
 
@@ -742,27 +733,11 @@ export default function PredictSidebar({
       <GlowCard style={{ padding: 20 }}>
         <SectionTitle
           title={t('predict.sidebar.parameters')}
-          subtitle={isZh ? '调整火星年和起始太阳黄经。预测数据由服务器后台维护。' : 'Adjust Mars year and starting solar longitude. Prediction data is server-managed.'}
+          subtitle={isZh ? '在服务器完整火星数据集上选择起始太阳黄经。' : 'Choose a starting solar longitude on the complete server Mars dataset.'}
           accent={C.mars}
         />
 
         <div style={{ display: 'grid', gap: 16 }}>
-          <div>
-            <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50, marginBottom: 8 }}>
-              {t('predict.marsYear')}
-            </div>
-            <OptionChips
-              disabled={requestContextLocked || isSwitchingSource}
-              items={years.map((year) => ({
-                value: year,
-                label: `MY ${year}`,
-                color: C.mars,
-              }))}
-              activeValue={marsYear}
-              onChange={setMarsYear}
-            />
-          </div>
-
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
               <span style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50 }}>{t('predict.startLs')}</span>

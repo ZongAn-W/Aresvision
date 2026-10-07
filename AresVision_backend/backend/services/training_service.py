@@ -23,6 +23,7 @@ from sqlalchemy import delete, select, update
 from config import (
     EARTH_MERRA2_DIR,
     EARTH_MERRA2_V1_DIR,
+    EARTH_MERRA2_3HOURLY_DIR,
     MCD_VARIABLES,
     TRAINING_RESULTS_DIR,
     TRAINING_SCRIPTS_DIR,
@@ -33,6 +34,7 @@ from database.models import ModelTrainingTask, PredictionAnalysisCache, Training
 from services.data_service import DataService
 from services.dataset_identity import (
     DatasetRequestError,
+    EARTH_DATASET_3HOURLY_ID,
     is_earth_training_task,
     resolve_dataset_id,
     require_training_dataset,
@@ -41,10 +43,12 @@ from services.dataset_registry import DatasetRegistry
 from services.earth_training_artifact import (
     EarthArtifactError,
     load_earth_training_artifact,
+    verify_earth_model_reload_isolated,
 )
 from services.earth_training_contract import (
     EARTH_TRAINING_SCRIPT,
     build_earth_training_spec,
+    canonical_channel_order,
     is_earth_dataset_id,
     require_earth_training_configuration,
 )
@@ -59,6 +63,7 @@ from training_backbones.uploaded_model_earth_gate import (
 )
 from services.personal_data_source_service import PersonalDataSourceService
 from services.model_artifacts import is_valid_model_weight_file
+from services.mars_checkpoint import validate_mars_checkpoint, mars_checkpoint_identity_snapshot
 from services.training_failures import CUDA_OOM_ERROR_CODE, classify_training_log
 from services.training_channels import (
     ARCHITECTURE_PARAM_KEYS,
@@ -116,6 +121,151 @@ class TrainingService:
         # The uploaded-model EARTH compatibility dry-run is the same one the upload
         # page runs, so it is shared rather than reimplemented. Injected in tests.
         self._earth_model_validator = earth_model_validator
+        self._scheduler_started = False
+        self._scheduler_task: asyncio.Task | None = None
+        self._queue_event: asyncio.Event | None = None
+        self._queue_specs: dict[int, dict[str, Any]] = {}
+
+    async def start(self) -> None:
+        if self._scheduler_started:
+            return
+        self._scheduler_started = True
+        self._queue_event = asyncio.Event()
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(ModelTrainingTask).where(ModelTrainingTask.status == "running")
+            )
+            recovery_time = datetime.now(timezone.utc)
+            for task in result.scalars().all():
+                log_path = Path(task.log_file_path or "")
+                output_path = Path(task.output_model_path or "")
+                saved_marker = False
+                if log_path.is_file() and output_path.is_file() and is_valid_model_weight_file(output_path):
+                    try:
+                        saved_marker = "Model saved:" in log_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                    except OSError:
+                        saved_marker = False
+
+                task.end_time = recovery_time
+                task.pid = None
+                if saved_marker:
+                    task.status = "completed"
+                    task.progress = 100.0
+                    parsed_metrics = self._extract_metrics_from_log(log_path)
+                    task.metrics = json.dumps(
+                        parsed_metrics or {"note": "completed after server restart"}
+                    )
+                else:
+                    task.status = "failed"
+                    task.metrics = json.dumps(
+                        {"note": "Training interrupted by server restart"}
+                    )
+            await session.commit()
+        self._scheduler_task = asyncio.create_task(self._scheduler_loop())
+        self._wake_scheduler()
+
+    async def stop(self) -> None:
+        self._scheduler_started = False
+        task = self._scheduler_task
+        self._scheduler_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    def _wake_scheduler(self) -> None:
+        if self._queue_event is not None:
+            self._queue_event.set()
+
+    async def _recalculate_queue_positions(self, session) -> None:
+        result = await session.execute(
+            select(ModelTrainingTask)
+            .where(ModelTrainingTask.status == "queued")
+            .order_by(ModelTrainingTask.queued_at.asc(), ModelTrainingTask.id.asc())
+        )
+        for position, task in enumerate(result.scalars().all(), start=1):
+            task.queue_position = position
+
+    async def _scheduler_loop(self) -> None:
+        while self._scheduler_started:
+            task_id = None
+            spec = None
+            recovered_task = None
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    select(ModelTrainingTask)
+                    .where(ModelTrainingTask.status == "queued")
+                    .order_by(ModelTrainingTask.queued_at.asc(), ModelTrainingTask.id.asc())
+                    .limit(1)
+                )
+                task = result.scalars().first()
+                if task is not None:
+                    task.status = "running"
+                    task.start_time = datetime.now(timezone.utc)
+                    task.queue_position = None
+                    task_id = task.id
+                    spec = self._queue_specs.pop(task_id, None)
+                    await session.commit()
+                    await self._recalculate_queue_positions(session)
+                    await session.commit()
+            if task_id is None:
+                self._queue_event.clear()
+                try:
+                    await asyncio.wait_for(self._queue_event.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            if spec is None:
+                async with async_session_maker() as session:
+                    row = await session.get(ModelTrainingTask, task_id)
+                    recovered_task = row
+                    spec = {
+                        "script_name": row.model_script,
+                        "hyperparameters": json.loads(row.hyperparameters or "{}"),
+                        "log_file": Path(row.log_file_path),
+                        "output_path": Path(row.output_model_path),
+                        "env_overrides": {},
+                        "temp_data_root": None,
+                        "earth_training_spec": None,
+                    }
+            try:
+                if recovered_task is not None and getattr(recovered_task, "dataset_id", None) == EARTH_DATASET_3HOURLY_ID:
+                    # Only the newly opened dataset uses this recovery path.
+                    # Historical daily queue payloads keep their existing flow.
+                    spec["earth_training_spec"] = await asyncio.to_thread(
+                        self._restore_3hourly_training_spec, recovered_task
+                    )
+                await self._run_training_subprocess(task_id, **spec)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Queued training task %s failed", task_id)
+                async with async_session_maker() as session:
+                    row = await session.get(ModelTrainingTask, task_id)
+                    if row is not None and row.status == "running":
+                        row.status = "failed"
+                        row.end_time = datetime.now(timezone.utc)
+                        row.metrics = json.dumps({"error": str(exc)})
+                        await session.commit()
+
+    async def cancel_training(self, task_id: int) -> bool:
+        async with async_session_maker() as session:
+            task = await session.get(ModelTrainingTask, task_id)
+            if task is None or task.status != "queued":
+                return False
+            task.status = "cancelled"
+            task.end_time = datetime.now(timezone.utc)
+            task.queue_position = None
+            task.metrics = json.dumps({"note": "Cancelled while queued"})
+            self._queue_specs.pop(task_id, None)
+            await self._recalculate_queue_positions(session)
+            await session.commit()
+        self._wake_scheduler()
+        return True
 
     def _earth_validator(self) -> Any:
         if self._earth_model_validator is None:
@@ -148,6 +298,7 @@ class TrainingService:
         dataset_id: str | None = None,
         dataset_registry: DatasetRegistry | None = None,
     ) -> ModelTrainingTask:
+        requested_model_source = model_source
         model_source = (model_source or "official").strip().lower()
         if model_source not in ("official", "uploaded"):
             model_source = "official"
@@ -159,16 +310,18 @@ class TrainingService:
         # uploaded package load or subprocess scheduling happens.
         resolved_dataset_id = resolve_dataset_id(dataset_id, hyperparameters or {})
         earth_training = is_earth_dataset_id(resolved_dataset_id)
-        earth_source = model_source if earth_training else "official"
+        earth_source = (
+            requested_model_source if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID
+            else model_source if earth_training else "official"
+        )
         earth_reference: dict | None = None
         earth_model_warnings: list[str] = []
         if not earth_training:
             # The Mars runners keep rejecting Earth identities; Earth has its own
             # preparation and training path below.
             require_training_dataset(resolved_dataset_id)
-        registry = dataset_registry or DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2", legacy_earth_package_dir=EARTH_MERRA2_V1_DIR)
-        dataset_binding = registry.build_training_binding(resolved_dataset_id)
-        if earth_training:
+        registry = dataset_registry or self._default_dataset_registry()
+        if earth_training and resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
             # Reject unsupported Earth configurations (SPHERE, transfer learning,
             # wrong architecture, missing/extra uploaded id) and validate the strict
             # parameter contract before the task row exists.
@@ -176,6 +329,14 @@ class TrainingService:
                 model_source=earth_source,
                 uploaded_model_id=uploaded_model_id,
                 hyperparameters=hyperparameters or {},
+                dataset_id=resolved_dataset_id,
+            )
+        dataset_binding = registry.build_training_binding(resolved_dataset_id)
+        if earth_training and resolved_dataset_id != EARTH_DATASET_3HOURLY_ID:
+            # Preserve the daily package-before-configuration error precedence.
+            require_earth_training_configuration(
+                model_source=earth_source, uploaded_model_id=uploaded_model_id,
+                hyperparameters=hyperparameters or {}, dataset_id=resolved_dataset_id,
             )
 
         source = _normalize_training_data_source(data_source)
@@ -199,6 +360,8 @@ class TrainingService:
                     uploaded_model_id=uploaded_model_id,
                     user_model_service=user_model_service,
                     custom_model_params=(hyperparameters or {}).get("custom_model_params"),
+                    dataset_id=resolved_dataset_id,
+                    input_channel_order=canonical_channel_order((hyperparameters or {}).get("selected_channels")),
                 )
         elif model_source == "uploaded":
             model_script, raw_hypers = await self._resolve_uploaded_training_entrypoint(
@@ -228,6 +391,8 @@ class TrainingService:
             preserved_keys.extend([
                 "_uploaded_model_id",
                 "_uploaded_model_version",
+                "_uploaded_model_name",
+                "_uploaded_model_filename",
                 "_uploaded_model_path",
                 "_uploaded_model_param_schema",
                 "custom_model_params",
@@ -244,6 +409,7 @@ class TrainingService:
                 model_source=model_source,
                 uploaded_model_id=uploaded_model_id,
                 hyperparameters=raw_hypers,
+                dataset_id=resolved_dataset_id,
             )
             payload_hypers["training_dataset"] = resolved_dataset_id
         else:
@@ -261,8 +427,11 @@ class TrainingService:
             payload_hypers["_uploaded_model_version"] = earth_reference.version
             payload_hypers["_uploaded_model_content_hash"] = earth_reference.content_hash
             payload_hypers["_uploaded_model_name"] = earth_reference.display_name
+            payload_hypers["_uploaded_model_filename"] = Path(earth_reference.source_path).name
             payload_hypers["_uploaded_model_param_schema"] = dict(earth_reference.param_schema)
             payload_hypers["custom_model_params"] = dict(earth_reference.custom_model_params)
+            if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+                payload_hypers["_earth_uploaded_reference"] = earth_reference.checkpoint_reference()
         if earth_training:
             # Earth has no transfer source; the parameter contract already rejects it.
             transfer_env_overrides = {}
@@ -289,7 +458,8 @@ class TrainingService:
                 uploaded_model_version=payload_hypers.get("_uploaded_model_version"),
                 hyperparameters=json.dumps(payload_hypers),
                 custom_model_name=custom_model_name,
-                status="pending",
+                status="queued",
+                queued_at=datetime.now(timezone.utc),
                 **dataset_binding,
             )
             session.add(task)
@@ -331,6 +501,14 @@ class TrainingService:
                         else None
                     ),
                 )
+                if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+                    # This path originates in the verified server registry and
+                    # travels only through the internal subprocess environment.
+                    # It is never accepted as a client hyperparameter or exposed
+                    # in the public identity snapshot.
+                    earth_training_spec["data_path"] = str(Path(registry.get_earth_snapshot(
+                        resolved_dataset_id, expected_fingerprint=dataset_binding["dataset_fingerprint"]
+                    ).data_path).resolve())
                 if earth_reference is not None:
                     # The child never reads the user's current upload; it gets the
                     # pinned source through this server-side channel only.
@@ -351,20 +529,75 @@ class TrainingService:
                 payload_hypers.get("_effective_data_source", source),
             )
 
-            asyncio.create_task(
-                self._run_training_subprocess(
-                    task_id,
-                    model_script,
-                    payload_hypers,
-                    log_file,
-                    output_path,
-                    env_overrides=env_overrides,
-                    temp_data_root=temp_data_root,
-                    earth_training_spec=earth_training_spec,
-                )
-            )
+            if not hasattr(self, "_queue_specs"):
+                self._queue_specs = {}
+            self._queue_specs[task_id] = {
+                "script_name": model_script,
+                "hyperparameters": payload_hypers,
+                "log_file": log_file,
+                "output_path": output_path,
+                "env_overrides": env_overrides,
+                "temp_data_root": temp_data_root,
+                "earth_training_spec": earth_training_spec,
+            }
+            if getattr(self, "_scheduler_started", False):
+                await self._recalculate_queue_positions(session)
+                await session.commit()
+                self._wake_scheduler()
+            else:
+                task.status = "running"
+                await session.commit()
+                asyncio.create_task(self._run_training_subprocess(task_id, **self._queue_specs.pop(task_id)))
 
             return task
+
+    @staticmethod
+    def _default_dataset_registry() -> DatasetRegistry:
+        return DatasetRegistry(
+            EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2",
+            legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
+            earth_3hourly_package_dir=EARTH_MERRA2_3HOURLY_DIR,
+        )
+
+    def _restore_3hourly_training_spec(self, task: Any) -> dict:
+        """Rebuild a queued server spec from its frozen task identity after restart."""
+        raw_hypers = json.loads(task.hyperparameters or "{}")
+        public_hypers = {key: value for key, value in raw_hypers.items() if not key.startswith("_")}
+        normalized = require_earth_training_configuration(
+            model_source=raw_hypers.get("model_source", "official"),
+            uploaded_model_id=raw_hypers.get("_uploaded_model_id"),
+            hyperparameters=public_hypers, dataset_id=task.dataset_id,
+        )
+        binding = {
+            key: getattr(task, key, None) for key in (
+                "dataset_id", "dataset_version", "dataset_fingerprint",
+                "dataset_identity_status", "dataset_snapshot",
+            )
+        }
+        if (binding["dataset_identity_status"] != "verified"
+                or not binding["dataset_version"] or not binding["dataset_fingerprint"]
+                or not binding["dataset_snapshot"]):
+            raise DatasetRequestError(
+                "dataset_identity_not_verified",
+                "A queued three-hourly task must retain its verified dataset identity",
+                status_code=409,
+            )
+        release = self._default_dataset_registry().get_earth_snapshot(
+            EARTH_DATASET_3HOURLY_ID, expected_fingerprint=binding["dataset_fingerprint"],
+        )
+        reference = raw_hypers.get("_earth_uploaded_reference")
+        if normalized.get("model_source") == "uploaded":
+            if (not isinstance(reference, dict)
+                    or reference.get("package_id") != task.uploaded_model_id
+                    or reference.get("version") != task.uploaded_model_version
+                    or reference.get("content_hash") != raw_hypers.get("_uploaded_model_content_hash")):
+                raise DatasetRequestError("uploaded_model_reference_missing", "Queued task has no matching frozen model reference", status_code=409)
+        spec = build_earth_training_spec(
+            task_id=task.id, dataset_binding=binding, hyperparameters=normalized,
+            uploaded_model=raw_hypers.get("_earth_uploaded_reference"),
+        )
+        spec["data_path"] = str(Path(release.data_path).resolve())
+        return spec
 
     def _resolve_training_entrypoint(
         self,
@@ -377,6 +610,8 @@ class TrainingService:
         uploaded_only_keys = {
             "_uploaded_model_id",
             "_uploaded_model_version",
+            "_uploaded_model_name",
+            "_uploaded_model_filename",
             "_uploaded_model_path",
             "_uploaded_model_param_schema",
             "custom_model_params",
@@ -396,6 +631,8 @@ class TrainingService:
         uploaded_model_id: Any,
         user_model_service: Any | None,
         custom_model_params: Any,
+        dataset_id: str = "earth_merra2_daily_v2",
+        input_channel_order: list[str] | None = None,
     ) -> tuple[dict, list[str]]:
         """Pin one uploaded model for an Earth run.
 
@@ -434,15 +671,6 @@ class TrainingService:
 
         # Earth compatibility is its own question: a model validated for Mars is not
         # thereby usable on the Earth feed.
-        verdict = evaluate_package_earth_compatibility(package, validator=self._earth_validator())
-        if not verdict.compatible:
-            raise DatasetRequestError(
-                "uploaded_model_not_earth_compatible",
-                "The uploaded model is not compatible with Earth data: "
-                + "; ".join(verdict.reasons or ["unsupported model"]),
-                status_code=422,
-            )
-
         try:
             param_schema = json.loads(getattr(package, "param_schema", None) or "{}")
         except Exception:
@@ -457,6 +685,19 @@ class TrainingService:
                 "invalid_earth_training_parameters",
                 param_errors[0],
                 status_code=422,
+            )
+
+        verdict = await asyncio.to_thread(
+            evaluate_package_earth_compatibility, package, validator=self._earth_validator(),
+            dataset_id=dataset_id,
+            earth_probe={"input_channel_order": input_channel_order, "custom_model_params": resolved_params}
+            if dataset_id == EARTH_DATASET_3HOURLY_ID else None,
+        )
+        if not verdict.compatible:
+            raise DatasetRequestError(
+                verdict.code or "uploaded_model_not_earth_compatible",
+                "The uploaded model is not compatible with this Earth dataset: "
+                + "; ".join(verdict.reasons or ["unsupported model"]), status_code=422,
             )
 
         reference = build_reference(
@@ -495,6 +736,9 @@ class TrainingService:
             raise ValueError("user_model_service is required for uploaded model training")
 
         package = await user_model_service.get_package_for_user(uploaded_model_id, user_id)
+        report = json.loads(getattr(package, "validation_report", None) or "{}")
+        if isinstance(report, dict) and (report.get("mars") or {}).get("compatible") is False:
+            raise ValueError("The uploaded model is not compatible with Mars data")
         if getattr(package, "validation_status", None) != "valid":
             raise ValueError("Uploaded model package must be valid before training")
 
@@ -509,6 +753,8 @@ class TrainingService:
         payload["model_source"] = "uploaded"
         payload["_uploaded_model_id"] = getattr(package, "id", uploaded_model_id)
         payload["_uploaded_model_version"] = getattr(package, "version", None)
+        payload["_uploaded_model_name"] = getattr(package, "display_name", None)
+        payload["_uploaded_model_filename"] = getattr(package, "original_filename", None)
         payload["_uploaded_model_path"] = getattr(package, "storage_path", None)
         payload["_uploaded_model_param_schema"] = param_schema
         payload.setdefault("custom_model_params", {})
@@ -898,16 +1144,56 @@ class TrainingService:
             # binding and carry the task's own metrics.
             earth_artifact: dict | None = None
             earth_artifact_error: Exception | None = None
+            mars_snapshot: dict | None = None
             if earth_training_spec is not None and model_artifact_valid:
                 try:
+                    expected_hypers = dict(earth_training_spec["hyperparameters"])
+                    uploaded = earth_training_spec.get("uploaded_model")
+                    if uploaded:
+                        expected_hypers.update({
+                            "_uploaded_model_id": uploaded["package_id"],
+                            "_uploaded_model_version": uploaded["version"],
+                            "_uploaded_model_content_hash": uploaded["content_hash"],
+                            "custom_model_params": uploaded["custom_model_params"],
+                        })
                     earth_artifact = await asyncio.to_thread(
                         load_earth_training_artifact,
                         output_path,
                         earth_training_spec["dataset_binding"],
-                        earth_training_spec["hyperparameters"],
+                        expected_hypers,
                         earth_training_spec["task_id"],
                     )
+                    if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+                        await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
                 except Exception as exc:  # noqa: BLE001 - reported as a task failure
+                    earth_artifact_error = exc
+                    model_artifact_valid = False
+            elif model_artifact_valid and not earth_training_spec:
+                try:
+                    import torch
+                    try:
+                        checkpoint = await asyncio.to_thread(
+                            torch.load, output_path, map_location="cpu", weights_only=True
+                        )
+                    except Exception:
+                        # Pre-versioned Mars artifacts remain readable as legacy
+                        # weights. New runner-produced envelopes are validated
+                        # strictly below; arbitrary legacy bytes keep the older
+                        # file-existence contract for compatibility.
+                        checkpoint = None
+                    task_hypers = self._parse_task_hyperparameters(task)
+                    if isinstance(checkpoint, dict) and ("schema" in checkpoint or isinstance(checkpoint.get("model_state_dict"), dict) or "data_binding" in checkpoint):
+                        validate_mars_checkpoint(
+                            checkpoint,
+                            selected_channels=list(task_hypers.get("selected_channels") or []),
+                            window=int(task_hypers.get("window", 3)),
+                            horizon=int(task_hypers.get("horizon", 3)),
+                        )
+                        mars_snapshot = mars_checkpoint_identity_snapshot(checkpoint)
+                        expected_dataset = getattr(task, "dataset_id", None) or task_hypers.get("training_dataset")
+                        if expected_dataset and mars_snapshot["dataset_id"] != expected_dataset:
+                            raise ValueError("Mars checkpoint data identity does not match the training task")
+                except Exception as exc:  # noqa: BLE001 - artifact contract failure
                     earth_artifact_error = exc
                     model_artifact_valid = False
             status = "completed" if model_artifact_valid else "failed"
@@ -946,6 +1232,17 @@ class TrainingService:
                             # parent just verified, never from log scraping.
                             task.metrics = json.dumps(earth_artifact.metrics)
                         else:
+                            # New Mars runners publish a checkpoint envelope
+                            # containing the exact source manifest and
+                            # normalization contract. Persist the same snapshot
+                            # on the task so prediction does not trust a new
+                            # request or a mutable environment.
+                            if mars_snapshot is not None:
+                                task.dataset_snapshot = json.dumps(mars_snapshot, sort_keys=True)
+                                task.dataset_fingerprint = mars_snapshot["dataset_fingerprint"]
+                                task.dataset_identity_status = "verified"
+                            else:
+                                task.dataset_identity_status = "legacy"
                             parsed_metrics = self._extract_metrics_from_log(log_file)
                             task.metrics = json.dumps(parsed_metrics) if parsed_metrics else json.dumps({"note": "completed"})
                     elif returncode == 0:
@@ -1110,6 +1407,9 @@ class TrainingService:
             if not task:
                 return False
 
+            queued = task.status == "queued"
+            getattr(self, "_queue_specs", {}).pop(task_id, None)
+
             if task.status == "running":
                 await self.stop_training(task_id)
                 await session.refresh(task)
@@ -1136,6 +1436,11 @@ class TrainingService:
             )
             await session.delete(task)
             await session.commit()
+            if queued:
+                async with async_session_maker() as position_session:
+                    await self._recalculate_queue_positions(position_session)
+                    await position_session.commit()
+                self._wake_scheduler()
             return True
 
     def _extract_metrics_from_log(self, log_file: Path) -> dict | None:

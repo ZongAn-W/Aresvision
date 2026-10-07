@@ -2,9 +2,11 @@
 
 ## 当前发布
 
+独立三小时产品的构建、验证、注册、官方 DLinear 后端 56→24 训练与历史回测见 [Earth MERRA-2 三小时数据构建、训练与历史回测](earth-merra2-3hourly.md)。它不替换本节日频发布；三小时后端回测已支持 UTC datetime、24 组全球预测/参考/残差与 DU 指标，三小时总览已支持 UTC timestamp、降采样显示、原生点位与后端日聚合；训练/预测前端已支持 56→24 配置、UTC 起点和 24 个 lead 展示；日频日期轴、7→3、上传模型与旧 checkpoint 保留。
+
 项目默认 Earth 数据集是 `earth_merra2_daily_v2`（版本 `v2`），目录为 `data/earth/merra2_daily_v2/`。旧的 `earth_merra2_daily_v1` 保留在原目录并继续按 v1 指纹和 31×49 区域契约提供只读兼容访问；v1 请求不会映射到 v2。
 
-v2 来源是 E 盘 `MERRA2/raw` 的 SLV 与 RAD 产品，从原始文件重新计算，生成后运行时不再读取原始盘。当前仅使用五个变量：`TO3`、`U10M`、`V10M`、`T2M`、`SWGDN`。Earth 总览、官方 DLinear 网页训练与历史日期预测均已开放，见 [地球训练与历史预测](earth-training.md)；仍不开放 SPHERE、迁移学习、上传模型与地球其他架构，也不提供无参考真值的未来外推。
+v2 来源是 E 盘 `MERRA2/raw` 的 SLV 与 RAD 产品，从原始文件重新计算，生成后运行时不再读取原始盘。当前仅使用五个变量：`TO3`、`U10M`、`V10M`、`T2M`、`SWGDN`。日频 Earth 总览、官方 DLinear 与兼容上传模型网页训练、历史日期预测均已开放，见 [地球训练与历史预测](earth-training.md)；仍不开放 SPHERE、迁移学习与地球其他官方架构，也不提供无参考真值的未来外推。
 
 ## v2 数据契约
 
@@ -97,3 +99,4 @@ conda run -n AresVision python -m pytest `
 生产发布的固定 SHA-256 在 `services/dataset_registry.py` 中锁定；修改 v2 数据必须创建新目录、ID/版本和新的固定哈希，不能覆盖 v1 或复用旧身份。
 
 2026-09-24 的实际验证范围、发布 SHA、质量统计和回归命令见 [预处理与替换记录](plans/2026-09-23-earth-reprocessing.md)。
+训练窗口严格限制在 manifest 发布 split 内：2020 年 train、2021-01-01 至 2021-06-30 validation、2021-07-01 至 2021-12-31 test。每个 split 独立生成完整窗口；历史预测可以使用 origin 前的完整 7 天历史输入，但不会改变训练 split 或归一化拟合范围。

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.machinery
 import json
 import os
 import re
@@ -34,6 +36,9 @@ from services.training_channels import (  # noqa: E402
     extract_architecture_params,
 )
 from services.transfer_learning_strategy import apply_freeze_strategy  # noqa: E402
+from services.training_split import split_sample_ranges
+from services.mars_data_service import MarsDataError, prepare_scaled_volume, identity_snapshot
+from services.mars_checkpoint import build_mars_checkpoint
 from training_backbones.model_zoo import (  # noqa: E402
     SpherePhaseWarpFrontEnd,
     build_forecaster,
@@ -73,6 +78,8 @@ class PreparedTrainingData:
         y_std: float,
         height: int,
         width: int,
+        metadata: dict[str, Any] | None = None,
+        volume_metadata: Any | None = None,
     ) -> None:
         self.x = x
         self.ls = ls
@@ -81,12 +88,53 @@ class PreparedTrainingData:
         self.y_std = float(y_std)
         self.height = int(height)
         self.width = int(width)
+        self.metadata = dict(metadata or {})
+        self.volume_metadata = volume_metadata
+        self.split_ranges = {}
+        self.split_window_starts = None
+        self.split_policy = "legacy_compatibility"
+        if volume_metadata is not None:
+            self.volume_metadata = volume_metadata
+            self.input_means = volume_metadata.input_means
+            self.input_stds = volume_metadata.input_stds
+            self.dataset_id = volume_metadata.dataset_id
+            self.source_type = volume_metadata.source_type
+            self.data_dir = volume_metadata.data_dir
+            self.data_directories = volume_metadata.data_directories
+            self.manifest = volume_metadata.manifest
+            self.fingerprint = volume_metadata.fingerprint
+            self.sample_starts = volume_metadata.sample_starts
+            self.sample_mars_years = volume_metadata.sample_mars_years
+            self.train_sample_end = volume_metadata.train_sample_end
+            self.split_ranges = volume_metadata.split_ranges
+            self.split_window_starts = volume_metadata.split_window_starts
+            self.split_policy = volume_metadata.split_policy
+            self.height = volume_metadata.height
+            self.width = volume_metadata.width
 
 
 def parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ensure_optional_module_specs() -> None:
+    """Keep torch optimizer imports compatible with lightweight test stubs."""
+    scipy_module = sys.modules.get("scipy")
+    if scipy_module is not None and not hasattr(scipy_module, "sparse"):
+        # Some loader tests install a tiny scipy.interpolate stub. Restore the
+        # real package before later inference code asks scipy to import sparse.
+        sys.modules.pop("scipy.interpolate", None)
+        sys.modules.pop("scipy", None)
+        importlib.import_module("scipy")
+    for name in ("sklearn", "sklearn.metrics", "sklearn.preprocessing", "scipy", "scipy.interpolate"):
+        module = sys.modules.get(name)
+        if module is not None and getattr(module, "__spec__", None) is None:
+            module.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+
+
+_ensure_optional_module_specs()
 
 
 def parse_selected_channels(value: Any) -> list[str]:
@@ -152,14 +200,15 @@ def natural_sort_key(value: Any) -> list[Any]:
 
 def _clean_array(value: Any) -> np.ndarray:
     array = np.asanyarray(value)
-    if np.ma.isMaskedArray(array):
-        array = array.filled(np.nan)
-    return np.nan_to_num(
-        np.asarray(array, dtype=np.float32),
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    )
+    if np.ma.isMaskedArray(array) and np.any(np.ma.getmaskarray(array)):
+        raise MarsDataError("Mars data contains masked or missing values; training requires complete finite fields")
+    try:
+        result = np.asarray(array, dtype=np.float32)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise MarsDataError("Mars data contains non-numeric values") from exc
+    if not np.all(np.isfinite(result)):
+        raise MarsDataError("Mars data contains NaN or Inf values; training requires finite fields")
+    return result
 
 
 def _read_ls_variable(dataset: Any, file_path: Path) -> np.ndarray:
@@ -476,9 +525,11 @@ def _prepare_training_data(
     window: int,
     horizon: int,
     training_dataset: Any = TRAINING_DATASET_OPENMARS_MCD,
+    train_ratio: float = 0.7,
+    validation_ratio: float = 0.2,
+    test_ratio: float = 0.1,
+    strict_windows: bool = True,
 ) -> PreparedTrainingData:
-    from sklearn.preprocessing import StandardScaler
-
     selected = parse_selected_channels(selected_channels)
     dataset = normalize_training_dataset(training_dataset)
     window = int(window)
@@ -486,56 +537,39 @@ def _prepare_training_data(
     if window <= 0 or horizon <= 0:
         raise ValueError("window and horizon must be positive")
 
-    if dataset == TRAINING_DATASET_MCD_OVERVIEW:
-        ozone, ls_values, features = _load_mcd_full_training_dataset(Path(mcd_overview_dir), selected)
-    else:
-        ozone, ls_values = _load_openmars(Path(openmars_dir))
-        features = _load_mcd_features(Path(mcd_dir), selected, ls_values)
-
-    feature_names = [MCD_VARS_MAP[channel][1] for channel in selected]
-    feature_arrays = [ozone] + [features[name] for name in feature_names]
-    time_count = min(
-        [int(ls_values.shape[0])]
-        + [int(feature.shape[0]) for feature in feature_arrays]
+    volume = prepare_scaled_volume(
+        training_dataset=dataset,
+        openmars_dir=openmars_dir,
+        mcd_dir=mcd_dir,
+        raw_dir=mcd_overview_dir,
+        selected_channels=selected,
+        window=window,
+        horizon=horizon,
+        split_ratios={
+            "train_ratio": float(train_ratio),
+            "validation_ratio": float(validation_ratio),
+            "test_ratio": float(test_ratio),
+        },
+        require_ls=True,
     )
-    height = min(int(feature.shape[1]) for feature in feature_arrays)
-    width = min(int(feature.shape[2]) for feature in feature_arrays)
-    if time_count <= 0 or height <= 0 or width <= 0:
-        raise ValueError("Loaded data has invalid dimensions")
-
-    feature_arrays = [
-        _clean_array(feature[:time_count, :height, :width])
-        for feature in feature_arrays
-    ]
-    ozone = feature_arrays[0]
-    ls_values = _clean_array(ls_values[:time_count]).reshape(-1)
-    raw_inputs = np.stack(feature_arrays, axis=-1)
-    sample_count = time_count - window - horizon + 1
-    if sample_count <= 0:
-        raise ValueError(
-            "Not enough time steps for requested window and horizon: "
-            f"time={time_count}, window={window}, horizon={horizon}"
+    scaled_inputs = volume.values
+    scaled_target = volume.y_scaled
+    ls_values = volume.ls
+    sample_starts = np.asarray(volume.sample_starts, dtype=np.int64)
+    sample_count = int(sample_starts.size)
+    height, width = volume.height, volume.width
+    strict_starts = getattr(volume, "split_window_starts", None)
+    if strict_windows and strict_starts and all(name in strict_starts for name in ("train", "validation", "test")):
+        training_starts = np.asarray(
+            [start for name in ("train", "validation", "test") for start in strict_starts[name]],
+            dtype=np.int64,
         )
-
-    split_time_index = int(0.8 * sample_count) + window
-    split_time_index = max(1, min(time_count, split_time_index))
-    scaled_inputs = np.zeros_like(raw_inputs, dtype=np.float32)
-    for channel_index in range(raw_inputs.shape[-1]):
-        scaler = StandardScaler()
-        scaler.fit(raw_inputs[:split_time_index, ..., channel_index].reshape(split_time_index, -1))
-        scaled_inputs[..., channel_index] = scaler.transform(
-            raw_inputs[..., channel_index].reshape(time_count, -1)
-        ).reshape(time_count, height, width)
-
-    target_training_part = ozone[:split_time_index]
-    target_mean = float(target_training_part.mean())
-    target_std = float(target_training_part.std())
-    scaled_target = (ozone - target_mean) / (target_std + 1e-6)
-
+    else:
+        training_starts = np.asarray(volume.sample_starts, dtype=np.int64)
     input_sequences: list[np.ndarray] = []
     ls_sequences: list[np.ndarray] = []
     target_sequences: list[np.ndarray] = []
-    for index in range(sample_count):
+    for index in training_starts.tolist():
         input_sequences.append(scaled_inputs[index : index + window])
         ls_sequences.append(ls_values[index : index + window])
         target_sequences.append(scaled_target[index + window : index + window + horizon])
@@ -543,15 +577,35 @@ def _prepare_training_data(
     x_tensor = torch.tensor(np.asarray(input_sequences)).permute(0, 1, 4, 2, 3).float()
     ls_tensor = torch.tensor(np.asarray(ls_sequences)).float()
     y_tensor = torch.tensor(np.asarray(target_sequences)).unsqueeze(2).float()
-    return PreparedTrainingData(
+    prepared = PreparedTrainingData(
         x=x_tensor,
         ls=ls_tensor,
         y=y_tensor,
-        y_mean=target_mean,
-        y_std=target_std,
+        y_mean=volume.y_mean,
+        y_std=volume.y_std,
         height=height,
         width=width,
+        metadata=identity_snapshot(
+            training_dataset=dataset,
+            openmars_dir=openmars_dir,
+            mcd_dir=mcd_dir,
+            raw_dir=mcd_overview_dir,
+            selected_channels=selected,
+            window=window,
+            horizon=horizon,
+            split_ratios={
+                "train_ratio": float(train_ratio),
+                "validation_ratio": float(validation_ratio),
+                "test_ratio": float(test_ratio),
+            },
+            normalization=volume,
+        ),
+        volume_metadata=volume,
     )
+    # The training tensor contains only strict partition windows. The attached
+    # volume keeps the complete timeline for prediction and identity checks.
+    prepared.sample_starts = training_starts
+    return prepared
 
 
 def prepare_training_tensors(
@@ -562,6 +616,9 @@ def prepare_training_tensors(
     window: int,
     horizon: int,
     training_dataset: Any = TRAINING_DATASET_OPENMARS_MCD,
+    train_ratio: float = 0.7,
+    validation_ratio: float = 0.2,
+    test_ratio: float = 0.1,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int]:
     prepared = _prepare_training_data(
         openmars_dir=openmars_dir,
@@ -571,6 +628,10 @@ def prepare_training_tensors(
         window=window,
         horizon=horizon,
         training_dataset=training_dataset,
+        train_ratio=train_ratio,
+        validation_ratio=validation_ratio,
+        test_ratio=test_ratio,
+        strict_windows=False,
     )
     return prepared.x, prepared.ls, prepared.y, prepared.height, prepared.width
 
@@ -602,6 +663,8 @@ def apply_transfer_learning(
         raise ValueError("Transfer learning is enabled but ARESVISION_TRANSFER_WEIGHT_PATH is missing")
 
     state_dict = torch.load(weight_path, map_location=device, weights_only=True)
+    if isinstance(state_dict, dict) and isinstance(state_dict.get("model_state_dict"), dict):
+        state_dict = state_dict["model_state_dict"]
     model.load_state_dict(state_dict, strict=True)
     freeze_report = apply_freeze_strategy(model, hyperparameters.get("freeze_mode", "none"))
     print(
@@ -655,23 +718,32 @@ def _assert_prediction_shape(prediction: Any, target: Any, context: str) -> None
 
 def _split_training_data(
     prepared: PreparedTrainingData,
-) -> tuple[TensorDataset, TensorDataset]:
-    if len(prepared.x) < 2:
-        raise ValueError("At least two training samples are required")
-    split_index = int(0.8 * len(prepared.x))
-    split_index = min(max(1, split_index), len(prepared.x) - 1)
-    return (
-        TensorDataset(
-            prepared.x[:split_index],
-            prepared.ls[:split_index],
-            prepared.y[:split_index],
-        ),
-        TensorDataset(
-            prepared.x[split_index:],
-            prepared.ls[split_index:],
-            prepared.y[split_index:],
-        ),
-    )
+    ratios: dict[str, float] | None = None,
+) -> tuple[TensorDataset, TensorDataset, TensorDataset]:
+    split_starts = getattr(prepared, "split_window_starts", None)
+    if split_starts:
+        positions = {
+            int(start): index
+            for index, start in enumerate(np.asarray(prepared.sample_starts, dtype=np.int64).tolist())
+        }
+        split_indices = {
+            name: [positions[int(start)] for start in starts if int(start) in positions]
+            for name, starts in split_starts.items()
+        }
+        def make_indexed_dataset(indices):
+            index_tensor = torch.tensor(indices, dtype=torch.long)
+            return TensorDataset(
+                prepared.x.index_select(0, index_tensor),
+                prepared.ls.index_select(0, index_tensor),
+                prepared.y.index_select(0, index_tensor),
+            )
+        if all(name in split_indices for name in ("train", "validation", "test")):
+            return tuple(make_indexed_dataset(split_indices[name]) for name in ("train", "validation", "test"))
+    ranges = split_sample_ranges(len(prepared.x), ratios or {"train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": 0.1})
+    def make_dataset(start_end):
+        start, end = start_end
+        return TensorDataset(prepared.x[start:end], prepared.ls[start:end], prepared.y[start:end])
+    return make_dataset(ranges["train"]), make_dataset(ranges["validation"]), make_dataset(ranges["test"])
 
 
 def _evaluate_metrics(
@@ -707,6 +779,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=0.001)
+    parser.add_argument("--train_ratio", type=float, default=0.7)
+    parser.add_argument("--validation_ratio", type=float, default=0.2)
+    parser.add_argument("--test_ratio", type=float, default=0.1)
     parser.add_argument("--window", type=int, default=3)
     parser.add_argument("--horizon", type=int, default=3)
     parser.add_argument("--early_stopping_patience", type=int, default=0)
@@ -784,10 +859,17 @@ def main() -> None:
         window=args.window,
         horizon=args.horizon,
         training_dataset=args.training_dataset,
+            train_ratio=getattr(args, "train_ratio", 0.7),
+            validation_ratio=getattr(args, "validation_ratio", 0.2),
+            test_ratio=getattr(args, "test_ratio", 0.1),
     )
-    train_dataset, validation_dataset = _split_training_data(prepared)
+    train_dataset, validation_dataset, test_dataset = _split_training_data(
+        prepared,
+        {"train_ratio": args.train_ratio, "validation_ratio": args.validation_ratio, "test_ratio": args.test_ratio},
+    )
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=False)
+    has_validation = len(validation_dataset) > 0
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_official_model(
@@ -808,6 +890,7 @@ def main() -> None:
         and args.finetune_learning_rate > 0
         else args.learning_rate
     )
+    _ensure_optional_module_specs()
     optimizer = torch.optim.Adam(trainable_parameters, lr=float(optimizer_learning_rate))
 
     print(f"Training Device: {device}", flush=True)
@@ -821,10 +904,12 @@ def main() -> None:
     print("\n[Step 3] Start Training...", flush=True)
 
     best_validation_loss = float("inf")
+    best_state = None
     patience_counter = 0
     for epoch in range(1, epochs + 1):
         model.train()
         training_loss_sum = 0.0
+        training_loss_count = 0
         for batch_index, (inputs, ls_values, targets) in enumerate(train_loader, start=1):
             inputs = inputs.to(device)
             ls_values = ls_values.to(device)
@@ -839,7 +924,8 @@ def main() -> None:
             loss = criterion(predictions, targets)
             loss.backward()
             optimizer.step()
-            training_loss_sum += float(loss.item())
+            training_loss_sum += float(loss.item()) * int(predictions.numel())
+            training_loss_count += int(predictions.numel())
             if batch_index % 20 == 0 or batch_index == len(train_loader):
                 print(
                     f"Epoch {epoch}/{epochs} Batch {batch_index}/{len(train_loader)} "
@@ -849,6 +935,7 @@ def main() -> None:
 
         model.eval()
         validation_loss_sum = 0.0
+        validation_loss_count = 0
         with torch.no_grad():
             for inputs, ls_values, targets in validation_loader:
                 inputs = inputs.to(device)
@@ -856,20 +943,23 @@ def main() -> None:
                 targets = targets.to(device)
                 predictions = model(inputs, ls_values)
                 _assert_prediction_shape(predictions, targets, f"validation epoch {epoch}")
-                validation_loss_sum += float(criterion(predictions, targets).item())
+                validation_loss = criterion(predictions, targets)
+                validation_loss_sum += float(validation_loss.item()) * int(predictions.numel())
+                validation_loss_count += int(predictions.numel())
 
-        training_loss = training_loss_sum / max(1, len(train_loader))
-        validation_loss = validation_loss_sum / max(1, len(validation_loader))
+        training_loss = training_loss_sum / max(1, training_loss_count)
+        validation_loss = validation_loss_sum / max(1, validation_loss_count)
         print(
             f"Epoch {epoch}/{epochs} Loss={training_loss:.4f} "
             f"Val Loss={validation_loss:.4f}",
             flush=True,
         )
 
-        if patience > 0:
+        if patience > 0 and has_validation:
             if validation_loss < best_validation_loss:
                 best_validation_loss = validation_loss
                 patience_counter = 0
+                best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
@@ -880,11 +970,15 @@ def main() -> None:
                     )
                     break
 
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
     model.eval()
     target_batches: list[np.ndarray] = []
     prediction_batches: list[np.ndarray] = []
     with torch.no_grad():
-        for batch_index, (inputs, ls_values, targets) in enumerate(validation_loader, start=1):
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        for batch_index, (inputs, ls_values, targets) in enumerate(test_loader, start=1):
             predictions = model(inputs.to(device), ls_values.to(device))
             _assert_prediction_shape(
                 predictions,
@@ -894,7 +988,7 @@ def main() -> None:
             prediction_batches.append(predictions.cpu().numpy())
             target_batches.append(targets.numpy())
     if not target_batches:
-        raise ValueError("No validation batches available for metrics")
+        raise ValueError("No test batches available for metrics")
 
     metrics = _evaluate_metrics(
         np.concatenate(target_batches, axis=0),
@@ -911,7 +1005,22 @@ def main() -> None:
 
     output_path = Path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), output_path)
+    torch.save(
+        build_mars_checkpoint(
+            model_state_dict=model.state_dict(),
+            volume=prepared.volume_metadata,
+            selected_channels=hyperparameters["selected_channels"],
+            window=args.window,
+            horizon=args.horizon,
+            split_ratios={
+                "train_ratio": args.train_ratio,
+                "validation_ratio": args.validation_ratio,
+                "test_ratio": args.test_ratio,
+            },
+            seed=seed,
+        ),
+        output_path,
+    )
     print(f"Model saved: {output_path}", flush=True)
 
 

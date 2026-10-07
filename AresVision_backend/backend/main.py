@@ -24,8 +24,10 @@ from fastapi.responses import ORJSONResponse, FileResponse
 
 from config import (
     API_PREFIX,
+    DEFAULT_EARTH_DATASET_ID,
     EARTH_MERRA2_DIR,
     EARTH_MERRA2_V1_DIR,
+    EARTH_MERRA2_3HOURLY_DIR,
     OVERVIEW_MCD_VARIABLES,
     PENDING_REVIEW_DIR,
     TRAINING_WEIGHTS_DIR,
@@ -128,6 +130,7 @@ async def lifespan(app: FastAPI):
     logger.info("[0/4] 初始化数据库...")
     await init_database()
     app.state.db_session = async_session_maker
+    await training_router_module.training_service.start()
 
     # 确保上传目录存在
     USER_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -289,7 +292,12 @@ async def lifespan(app: FastAPI):
     app.state.data_governance_service = data_governance_service
 
     # 数据集注册表（只读目录；构造不读取文件，首次查询时才校验小包）
-    app.state.dataset_registry = DatasetRegistry(EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2", legacy_earth_package_dir=EARTH_MERRA2_V1_DIR)
+    app.state.dataset_registry = DatasetRegistry(
+        EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2",
+        legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
+        earth_3hourly_package_dir=EARTH_MERRA2_3HOURLY_DIR,
+    )
+    app.state.default_earth_dataset_id = DEFAULT_EARTH_DATASET_ID
     # 二维地球总览数值服务（复用同一注册表实例与已验证快照）
     app.state.earth_overview_service = EarthOverviewService(app.state.dataset_registry)
     # 地球科研分析服务（季节/纬带/空间异常/极区动力学，同一注册表与快照）
@@ -354,6 +362,7 @@ async def lifespan(app: FastAPI):
 
     # 关闭时清理
     logger.info("正在关闭服务...")
+    await training_router_module.training_service.stop()
     mcd_worker_task = getattr(app.state, "mcd_cache_worker_task", None)
     if mcd_worker_task is not None:
         mcd_worker_task.cancel()

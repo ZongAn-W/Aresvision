@@ -125,11 +125,15 @@ def test_predict_task_supports_legacy_official_weights(tmp_path):
 
     service._prepare_task_prediction_context = fake_prepare_task_prediction_context
     service._prepare_data = lambda used_mcd_vars, window, horizon, data_dirs=None: stub_prediction_data()
+    # The legacy loader normally supplies these axes with its window metadata.
+    service._last_prepared_window_metadata = {
+        "latitude": torch.linspace(87.5, -87.5, 8).numpy(),
+        "longitude": torch.linspace(-160.0, 120.0, 8).numpy(),
+    }
 
     result = asyncio.run(
         service.predict_task(
             task_id=7,
-            mars_year=27,
             ls_start=90.0,
             horizon=2,
             current_user=SimpleNamespace(id=7, role="user"),
@@ -140,6 +144,8 @@ def test_predict_task_supports_legacy_official_weights(tmp_path):
     assert result["model_info"]["training_model_source"] == "official"
     assert result["selected_variables"] == ["U_Wind"]
     assert len(result["prediction"]) == 2
+    assert result["metrics"]["aggregation"]["overall"] == "mean_over_forecast_steps"
+    assert result["metrics"]["split_meta"]["source"] == "legacy_compatibility"
 
 
 def test_task_test_set_metrics_supports_legacy_official_weights(tmp_path):
@@ -162,7 +168,6 @@ def test_task_test_set_metrics_supports_legacy_official_weights(tmp_path):
     result = asyncio.run(
         service.task_test_set_metrics(
             task_id=7,
-            mars_year=27,
             ls_start=90.0,
             horizon=2,
             current_user=SimpleNamespace(id=7, role="user"),
@@ -171,3 +176,5 @@ def test_task_test_set_metrics_supports_legacy_official_weights(tmp_path):
 
     assert result["overall"]["step"] == 0
     assert len(result["per_step"]) == 2
+    assert result["aggregation"]["overall"] == "pooled_test_set_pixels"
+    assert result["split_meta"]["source"] == "legacy_compatibility"

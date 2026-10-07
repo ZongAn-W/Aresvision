@@ -5,6 +5,7 @@ import {
   EARTH_CHANNEL_ORDER,
   EARTH_DATASET_ID,
   EARTH_HORIZON,
+  EARTH_3HOURLY_DATASET_ID,
   EARTH_MODEL_ARCHITECTURE,
   EARTH_MODEL_SOURCE_OFFICIAL,
   EARTH_OPTIONAL_CHANNELS,
@@ -15,6 +16,8 @@ import {
   describeEarthInputUnits,
   describeEarthSplitSamples,
   getEarthTrainingReadiness,
+  getEarthTrainingProfile,
+  classifyEarthTrainingError,
   getEarthUploadedSelectionBlocker,
   isEarthTrainingDataset,
   normalizeEarthSelectedChannels,
@@ -55,9 +58,67 @@ test('Earth payload fixes the dataset, window/horizon and channel order', () => 
   assert.deepEqual(payload.selected_channels, ['U10M', 'SWGDN']);
 });
 
+test('three-hourly Earth profile uses the 240x480 56-to-24 contract', () => {
+  const profile = getEarthTrainingProfile(EARTH_3HOURLY_DATASET_ID);
+  assert.deepEqual(profile.gridShape, [240, 480]);
+  assert.equal(profile.frequencyHours, 3);
+  assert.equal(profile.stepUnit, 'hour');
+  assert.equal(profile.step, 3);
+  assert.equal(profile.window, 56);
+  assert.equal(profile.horizon, 24);
+  assert.deepEqual(profile.modelSources, ['official', 'uploaded']);
+  const payload = buildEarthTrainingHyperparameters({ datasetId: EARTH_3HOURLY_DATASET_ID });
+  assert.equal(payload.training_dataset, EARTH_3HOURLY_DATASET_ID);
+  assert.equal(payload.window, 56);
+  assert.equal(payload.horizon, 24);
+  assert.equal(payload.model_source, 'official');
+  const unsupportedUpload = buildEarthTrainingHyperparameters({
+    datasetId: EARTH_3HOURLY_DATASET_ID,
+    modelSource: 'uploaded',
+  });
+  assert.equal(unsupportedUpload.model_source, 'uploaded');
+});
+
+test('Earth training errors keep dataset, configuration and checkpoint categories distinct', () => {
+  assert.equal(classifyEarthTrainingError('dataset_unavailable'), 'dataset_unavailable');
+  assert.equal(classifyEarthTrainingError('dataset_training_configuration_not_supported'), 'configuration_unsupported');
+  assert.equal(classifyEarthTrainingError('checkpoint_grid_incompatible'), 'checkpoint_incompatible');
+});
+
+test('uploaded compatibility reads contract axes when the server nests them', () => {
+  const verdict = readEarthUploadedModelCompatibility({
+    compatible: true,
+    datasets: {
+      earth_merra2_3hourly_v1: {
+        dataset: 'earth_merra2_3hourly_v1', frequency_hours: 3,
+        grid_shape: [240, 480], window: 56, horizon: 24,
+      },
+    },
+  });
+  assert.equal(verdict.dataset, EARTH_3HOURLY_DATASET_ID);
+  assert.equal(verdict.frequencyHours, 3);
+  assert.deepEqual(verdict.gridShape, [240, 480]);
+  assert.equal(verdict.window, 56);
+  assert.equal(verdict.horizon, 24);
+});
+
 test('Earth payload preserves the ozone-only selection instead of restoring defaults', () => {
   const payload = buildEarthTrainingHyperparameters({ selectedChannels: [] });
   assert.deepEqual(payload.selected_channels, []);
+});
+
+test('Earth payload omits custom split ratios and keeps the fixed 7-to-3 contract', () => {
+  const payload = buildEarthTrainingHyperparameters({
+    trainRatio: 0.6,
+    validationRatio: 0.25,
+    testRatio: 0.15,
+  });
+
+  assert.equal(Object.hasOwn(payload, 'train_ratio'), false);
+  assert.equal(Object.hasOwn(payload, 'validation_ratio'), false);
+  assert.equal(Object.hasOwn(payload, 'test_ratio'), false);
+  assert.equal(payload.window, 7);
+  assert.equal(payload.horizon, 3);
 });
 
 test('Earth payload never carries server identity or Mars-only fields', () => {
@@ -129,6 +190,14 @@ test('split sample counts follow the published days instead of hard-coded number
   assert.deepEqual(rows.map((row) => row.name), ['train', 'validation', 'test']);
   assert.deepEqual(rows.map((row) => row.windows), [357, 172, 175]);
   assert.deepEqual(describeEarthSplitSamples(null), []);
+});
+
+test('three-hour split sample counts use published step counts', () => {
+  const rows = describeEarthSplitSamples({
+    train: { start: '2020-01-01T01:30:00Z', end: '2020-12-31T22:30:00Z', steps: 2928 },
+  }, 56, 24);
+  assert.equal(rows[0].windows, 2849);
+  assert.equal(rows[0].days, 366);
 });
 
 test('input units list the target first and follow the current selection', () => {

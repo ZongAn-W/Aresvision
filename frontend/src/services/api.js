@@ -399,7 +399,6 @@ export async function fetchPermutationImportance(vars = [], options = {}) {
   const varsStr = vars.length > 0 ? vars.join(',') : 'Temperature,Dust_Optical_Depth,Solar_Flux_DN,U_Wind,V_Wind';
   const params = new URLSearchParams({ vars: varsStr });
   if (options.trainingTaskId) params.set('training_task_id', String(options.trainingTaskId));
-  if (options.marsYear != null) params.set('mars_year', String(options.marsYear));
   if (options.lsStart != null) params.set('ls_start', String(options.lsStart));
   if (options.horizon != null) params.set('horizon', String(options.horizon));
   const res = await authedFetch(`${BASE}/predict/permutation-importance?${params.toString()}`, {
@@ -773,15 +772,36 @@ export function getUserModelDownloadUrl(kind) {
   return `${BASE}/user-models/downloads/${encodeURIComponent(kind)}`;
 }
 
+export async function renameUserModel(modelId, displayName) {
+  const res = await authedFetch(`${BASE}/user-models/${encodeURIComponent(modelId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ display_name: displayName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.json();
+}
+
+export async function downloadUserModel(modelId) {
+  const res = await authedFetch(`${BASE}/user-models/${encodeURIComponent(modelId)}/download`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.blob();
+}
+
 /**
  * 上传模型的 Earth 兼容性结论。
  *
  * “Mars 可用”不等于“Earth 可用”，所以训练页在选择 Earth + 上传模型时必须问服务端，
  * 不能在前端推断。结论来自上传校验时的 Earth dry-run。
  */
-export async function fetchUploadedModelEarthCompatibility(modelId, { signal } = {}) {
+export async function fetchUploadedModelEarthCompatibility(modelId, { signal, datasetId = 'earth_merra2' } = {}) {
   const res = await authedFetch(
-    `${BASE}/user-models/${encodeURIComponent(modelId)}/earth-compatibility`,
+    `${BASE}/user-models/${encodeURIComponent(modelId)}/earth-compatibility?dataset_id=${encodeURIComponent(datasetId)}`,
     { signal },
   );
   if (!res.ok) {
@@ -861,6 +881,15 @@ export async function stopTrainingTask(taskId) {
   const res = await authedFetch(`${BASE}/training/tasks/${taskId}/stop`, {
     method: 'POST',
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `${res.status}`);
+  }
+  return res.json();
+}
+
+export async function cancelTrainingTask(taskId) {
+  const res = await authedFetch(`${BASE}/training/tasks/${taskId}/cancel`, { method: 'POST' });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `${res.status}`);

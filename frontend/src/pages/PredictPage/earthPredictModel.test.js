@@ -4,12 +4,15 @@ import assert from 'node:assert/strict';
 import {
   buildEarthFieldPayload,
   buildEarthPredictKey,
+  earthLeadLabel,
+  getEarthCadence,
   getEarthTrainingModelOptions,
   isEarthTask,
   isOriginSelectable,
   pickDefaultOrigin,
   readEarthLeadMetric,
   readEarthMetric,
+  readEarthHorizonMetric,
   readEarthPredictRequestFromHash,
   resolveEarthColorRanges,
   resolveEarthPredictErrorMessage,
@@ -32,6 +35,7 @@ function buildEarthResponse(overrides = {}) {
     target: 'TO3',
     target_unit: 'DU',
     forecast_origin: '2021-07-08',
+    origin_split: 'test',
     input_dates: ['2021-07-02', '2021-07-03', '2021-07-04', '2021-07-05', '2021-07-06', '2021-07-07', '2021-07-08'],
     target_dates: ['2021-07-09', '2021-07-10', '2021-07-11'],
     window: 7,
@@ -105,6 +109,26 @@ test('Earth cache key separates planet, dataset identity, task and origin', () =
 
   assert.equal(buildEarthPredictKey({ taskId: 0, forecastOrigin: '2021-07-08' }), null);
   assert.equal(buildEarthPredictKey({ taskId: 12 }), null);
+
+  const threeHourly = buildEarthPredictKey({
+    taskId: 12,
+    datasetId: 'earth_merra2_3hourly_v1',
+    datasetVersion: 'v1',
+    datasetFingerprint: 'b'.repeat(64),
+    forecastOrigin: '2021-07-08T01:30:00Z',
+    targetTimestamps: ['2021-07-08T04:30:00Z', '2021-07-08T07:30:00Z'],
+  });
+  assert.match(threeHourly, /origin:2021-07-08T01:30:00Z/);
+  assert.match(threeHourly, /targets:2021-07-08T04:30:00Z,2021-07-08T07:30:00Z/);
+});
+
+test('Earth cadence and leads distinguish 3-hour tasks from daily tasks', () => {
+  const cadence = getEarthCadence({ dataset_id: 'earth_merra2_3hourly_v1', frequency_hours: 3, step: 3 });
+  assert.equal(cadence.threeHourly, true);
+  assert.equal(earthLeadLabel(0, { dataset_id: 'earth_merra2_3hourly_v1' }), '+3h');
+  assert.equal(earthLeadLabel(23, { dataset_id: 'earth_merra2_3hourly_v1' }), '+72h');
+  assert.equal(earthLeadLabel(2, { dataset_id: 'earth_merra2_daily_v2' }), '+3');
+  assert.equal(getEarthCadence({ dataset_id: 'earth_merra2_daily_v2' }).threeHourly, false);
 });
 
 test('changing the Earth result identity clears the previous result', () => {
@@ -149,24 +173,26 @@ test('metrics read only finite values', () => {
   assert.equal(readEarthMetric({ overall: { rmse: Number.NaN } }, 'rmse'), null);
   assert.equal(readEarthLeadMetric(response.metrics, 3, 'rmse'), 3);
   assert.equal(readEarthLeadMetric(response.metrics, 9, 'rmse'), null);
+  assert.equal(readEarthLeadMetric({ by_lead: [{ lead_step: 8, rmse: 4 }] }, 8, 'rmse'), 4);
+  assert.equal(readEarthHorizonMetric({ by_horizon: [{ horizon_hours: 24, rmse: 5 }] }, 24, 'rmse'), 5);
 });
 
 test('origin selection follows the server provided range', () => {
   const origins = {
-    start: '2020-01-08',
+    start: '2020-01-07',
     end: '2021-12-28',
-    count: 721,
-    dates: ['2020-01-08', '2020-01-09', '2021-12-28'],
+    count: 722,
+    dates: ['2020-01-07', '2020-01-08', '2020-01-09', '2021-12-28'],
   };
   assert.equal(isOriginSelectable(origins, '2020-01-09'), true);
-  assert.equal(isOriginSelectable(origins, '2020-01-07'), false);
+  assert.equal(isOriginSelectable(origins, '2020-01-06'), false);
   assert.equal(isOriginSelectable(origins, ''), false);
   // 没有显式日期列表时退化为闭区间判断。
-  assert.equal(isOriginSelectable({ start: '2020-01-08', end: '2021-12-28' }, '2020-06-01'), true);
-  assert.equal(isOriginSelectable({ start: '2020-01-08', end: '2021-12-28' }, '2022-01-01'), false);
+  assert.equal(isOriginSelectable({ start: '2020-01-07', end: '2021-12-28' }, '2020-06-01'), true);
+  assert.equal(isOriginSelectable({ start: '2020-01-07', end: '2021-12-28' }, '2022-01-01'), false);
 
   assert.equal(pickDefaultOrigin(origins, '2020-06-01'), '2020-01-09');
-  assert.equal(pickDefaultOrigin(origins, '2019-01-01'), '2020-01-08');
+  assert.equal(pickDefaultOrigin(origins, '2019-01-01'), '2020-01-07');
   assert.equal(pickDefaultOrigin(origins), '2021-12-28');
   assert.equal(pickDefaultOrigin({ end: '2021-12-28' }), '2021-12-28');
 });

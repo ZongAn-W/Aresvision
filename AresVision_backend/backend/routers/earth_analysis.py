@@ -14,6 +14,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from config import DEFAULT_EARTH_DATASET_ID
+
 from schemas.earth_research import (
     EarthContextResponse,
     EarthInsightRequest,
@@ -31,7 +33,7 @@ logger = logging.getLogger("aresvision.datasets.earth")
 
 router = APIRouter(prefix="/analysis/earth/overview", tags=["Earth Analysis"])
 
-DEFAULT_DATASET_ID = "earth_merra2_daily_v2"
+DEFAULT_DATASET_ID = DEFAULT_EARTH_DATASET_ID
 FINGERPRINT_PATTERN = r"^[0-9a-f]{64}$"
 MAX_DATASET_ID_LENGTH = 128
 
@@ -117,6 +119,12 @@ def _guard_summary(body: EarthInsightRequest) -> None:
 
 def _limitations(digest: dict) -> list[str]:
     scope = digest.get("scope_label") or digest.get("scope") or "global"
+    if digest.get("dataset_id") == "earth_merra2_3hourly_v1":
+        return [
+            "Annual analysis uses UTC daily means aggregated from eight three-hour means; within-day variation is excluded",
+            f"Scope is {scope} on the native global 0.75 degree grid",
+            "Reported correlations are associations, not evidence of causation",
+        ]
     return [
         f"Values are UTC daily means from {SOURCE_LABEL}; the package carries no diurnal cycle",
         f"Scope is {scope} on the published global 5 degree grid",
@@ -300,7 +308,7 @@ def post_insight(request: Request, body: EarthInsightRequest):
     context = {
         "planet": PLANET,
         "source": SOURCE_LABEL,
-        "cadence": CADENCE,
+        "cadence": digest.get("cadence", CADENCE),
         "variable": digest["variable"],
         "units": digest["units"],
         "year": digest["year"],

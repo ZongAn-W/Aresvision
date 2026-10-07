@@ -144,7 +144,7 @@ export function useOverviewController({
   // 年度选择与当前日期保持一致：日期跨年时年度分析自动跟随，切换年度则把日期
   // 平移到目标年的同月同日（闰日取该月最后一天）。Mars 没有该语义，year 为 null。
   const year = useMemo(() => {
-    if (time?.kind === 'iso-date' && typeof selection.value === 'string') {
+    if (['iso-date', 'iso-datetime'].includes(time?.kind) && typeof selection.value === 'string') {
       return yearOfIsoDate(selection.value) ?? selection.year ?? null;
     }
     return selection.year ?? null;
@@ -154,6 +154,7 @@ export function useOverviewController({
   useEffect(() => {
     epochRef.current += 1;
     coordinator.cancelAll();
+    adapter.invalidateResearch?.();
     setResolved(null);
     setSourceStatus(CARD_STATUS.LOADING);
     setSourceError(null);
@@ -203,7 +204,7 @@ export function useOverviewController({
           );
           return {
             ...next,
-            year: next.year ?? (model.time?.kind === 'iso-date' && next.value
+            year: next.year ?? (['iso-date', 'iso-datetime'].includes(model.time?.kind) && next.value
               ? yearOfIsoDate(next.value)
               : null),
           };
@@ -217,7 +218,7 @@ export function useOverviewController({
         setSourceError(describeError(error));
       });
 
-    return () => coordinator.cancel('source');
+    return () => { coordinator.cancel('source'); adapter.invalidateResearch?.(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adapter.planet, adapter.sourceId, adapter.resolve, cardReloadToken]);
 
@@ -226,6 +227,7 @@ export function useOverviewController({
     if (!onSelectionChange) return;
     onSelectionChange({
       value: selection.value,
+      datasetId: adapter.sourceId,
       date: adapter.planet === 'earth' ? selection.value : undefined,
       variable: selection.variable,
       point: selection.point,
@@ -492,7 +494,7 @@ export function useOverviewController({
     setSelection((previous) => {
       const next = { ...previous, year };
       // 保留月日；目标年没有该日期时取该月最后一天，绝不落到 3 月 1 日。
-      if (typeof previous.value === 'string' && previous.value.length === 10) {
+      if (typeof previous.value === 'string') {
         const shifted = dateInSelectedYear(previous.value, year);
         if (shifted) next.value = shifted;
       }
@@ -512,9 +514,14 @@ export function useOverviewController({
     setSourceError(null);
     epochRef.current += 1;
     coordinator.cancelAll();
+    adapter.invalidateResearch?.();
     setResolved(null);
+    setField(null); setFieldError(null); setFieldStatus(CARD_STATUS.IDLE); setRequestedValue(null);
+    setRegionalSeries(null); setRegionalError(null); setRegionalStatus(CARD_STATUS.IDLE);
+    setPointSeries(null); setPointError(null); setPointStatus(CARD_STATUS.IDLE);
+    setPlaying(false); setOutOfCoverage(null); setCardStates({});
     setCardReloadToken((value) => value + 1);
-  }, [coordinator]);
+  }, [adapter, coordinator]);
 
   const retryField = useCallback(() => {
     setFieldStatus(CARD_STATUS.IDLE);
@@ -749,9 +756,9 @@ export function useOverviewController({
     pointStatus,
     pointError,
     point: selection.point,
-    pointCell: adapter.cellForPoint && selection.point
+    pointCell: pointSeries?.gridPoint || (adapter.cellForPoint && selection.point
       ? adapter.cellForPoint(geometry, selection.point.requested || selection.point)
-      : selection.point,
+      : selection.point),
 
     playing,
     outOfCoverage,

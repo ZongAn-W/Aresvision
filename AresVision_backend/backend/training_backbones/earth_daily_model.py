@@ -13,6 +13,11 @@ that safe:
 
 ``use_sphere`` is always false here: SPHERE is a Mars seasonal front end and is
 explicitly not part of the Earth contract.
+
+The historical default remains 7-to-3 on 36x72. Callers select the three-hourly
+56-to-24, 240x480 profile explicitly. DLinear shares its temporal weights across
+grid points, so its forward pass can process spatial tiles without changing
+those weights; callers pass the actual tile height and width to ``earth_forward``.
 """
 
 from __future__ import annotations
@@ -68,7 +73,7 @@ def create_earth_forecaster(
     height: int = EARTH_HEIGHT,
     width: int = EARTH_WIDTH,
 ) -> torch.nn.Module:
-    """Build the official DLinear forecaster for an Earth channel order."""
+    """Build the official DLinear; window/horizon are time steps, not days."""
     order = require_earth_channel_order(input_channel_order)
     hidden_layers = int(linear_hidden_layers)
     if hidden_layers < 1 or hidden_layers > 4:

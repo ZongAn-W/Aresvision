@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import torch
 import numpy as np
@@ -9,7 +10,7 @@ import re
 import netCDF4 as nc
 from pathlib import Path
 
-from config import MCD_DIR, MCD_RAW_3H_DIR, MOLA_TOPOGRAPHY_PATH
+from config import MCD_DIR, MCD_RAW_3H_DIR, MOLA_TOPOGRAPHY_PATH, OPENMARS_DIR
 from database.models import ModelTrainingTask
 from database.engine import async_session_maker
 from core.metrics import compute_error_distribution, compute_metrics, compute_test_set_metrics
@@ -23,7 +24,29 @@ from services.prediction_horizon import validate_prediction_horizon
 from services.netcdf_read_lock import netcdf_read_lock
 from services.model_artifacts import is_valid_model_weight_file
 from services.dataset_identity import DatasetRequestError, is_earth_training_task
+from services.mars_checkpoint import (
+    MARS_LEGACY_SPLIT_POLICY,
+    MarsCheckpointIdentityError,
+    checkpoint_normalization,
+    checkpoint_state_dict,
+    mars_input_channel_order,
+    mars_checkpoint_identity_snapshot,
+    validate_mars_checkpoint,
+)
+from services.mars_data_service import (
+    assert_identity_current,
+    prepare_scaled_volume,
+    parse_channels as parse_mars_channels,
+    resolve_forecast_window,
+)
+from services.mars_dataset_identity import has_mars_file_identity
 from services.prediction_analysis_cache import PredictionAnalysisCacheService
+from services.training_split import (
+    LEGACY_SPLIT_RATIOS,
+    normalize_split_ratios,
+    split_sample_ranges,
+    split_time_boundary,
+)
 from training_backbones.model_zoo import (
     build_forecaster,
     normalize_model_architecture,
@@ -62,7 +85,86 @@ class InferenceService:
         self.mcd_dir = Path(MCD_DIR)
         self.analysis_cache = analysis_cache or PredictionAnalysisCacheService()
 
+    @staticmethod
+    def _task_split_metadata(hypers: dict) -> dict:
+        """Resolve persisted split metadata without applying today's defaults to old tasks."""
+        configured = {
+            key: hypers[key]
+            for key in ("train_ratio", "validation_ratio", "test_ratio")
+            if key in hypers
+        }
+        if len(configured) == 3:
+            try:
+                ratios = normalize_split_ratios(configured)
+            except ValueError:
+                # Corrupt or non-numeric metadata is equivalent to missing
+                # metadata for inference; keep the historical boundary explicit.
+                pass
+            else:
+                return {
+                    "ratios": ratios,
+                    "source": "task_metadata",
+                    "legacy_compatibility": False,
+                }
+        return {
+            "ratios": dict(LEGACY_SPLIT_RATIOS),
+            "source": "legacy_compatibility",
+            "legacy_compatibility": True,
+        }
+
+    @staticmethod
+    def _task_split_ratios_for_loading(hypers: dict) -> dict:
+        """Return validated task ratios while preserving the loader's old default."""
+        configured = {
+            key: hypers[key]
+            for key in ("train_ratio", "validation_ratio", "test_ratio")
+            if key in hypers
+        }
+        if not configured:
+            return {}
+        return InferenceService._task_split_metadata(hypers)["ratios"]
+
+    @staticmethod
+    def _task_test_split_start(sample_count: int, split_meta: dict) -> int:
+        """Return the test boundary under task metadata or legacy 80/20 ratios."""
+        count = int(sample_count)
+        if count <= 1:
+            return 0
+        try:
+            return split_sample_ranges(count, split_meta["ratios"])["test"][0]
+        except ValueError:
+            return min(max(1, int(count * split_meta["ratios"]["train_ratio"])), count - 1)
+
+    @classmethod
+    def _with_test_set_contract(
+        cls,
+        metrics: dict,
+        hypers: dict,
+        *,
+        overall_aggregation: str = "pooled_test_set_pixels",
+    ) -> dict:
+        result = dict(metrics)
+        split_meta = cls._task_split_metadata(hypers)
+        result["split_meta"] = split_meta
+        result["aggregation"] = {
+            "overall": overall_aggregation,
+            "per_step": (
+                "per_forecast_step"
+                if overall_aggregation == "mean_over_forecast_steps"
+                else "pooled_test_set_pixels_per_forecast_step"
+            ),
+        }
+        return result
+
     def _load_task_state_dict(self, task):
+        payload = self._load_task_checkpoint(task)
+        state = checkpoint_state_dict(payload)
+        if state is not None:
+            return state
+        # Legacy Mars checkpoints were bare state_dict files.
+        return payload
+
+    def _load_task_checkpoint(self, task):
         model_path = getattr(task, "output_model_path", None)
         if not is_valid_model_weight_file(model_path):
             raise ValueError("Model file not found")
@@ -71,10 +173,41 @@ class InferenceService:
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError) as exc:
             raise ValueError("Model file not found") from exc
 
+    @staticmethod
+    def _checkpoint_normalization(task) -> dict | None:
+        try:
+            payload = torch.load(getattr(task, "output_model_path", ""), map_location="cpu", weights_only=True)
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("schema"):
+            validate_mars_checkpoint(payload)
+        return checkpoint_normalization(payload)
+
+    @staticmethod
+    def _checkpoint_split_policy(task) -> str:
+        try:
+            payload = torch.load(getattr(task, "output_model_path", ""), map_location="cpu", weights_only=True)
+        except Exception:
+            return MARS_LEGACY_SPLIT_POLICY
+        contract = payload.get("training_contract") if isinstance(payload, dict) else None
+        return str(contract.get("split_policy") or MARS_LEGACY_SPLIT_POLICY) if isinstance(contract, dict) else MARS_LEGACY_SPLIT_POLICY
+
+    @staticmethod
+    def _mars_normalization_cache_key(normalization, selected_channels) -> str:
+        if normalization is None:
+            return "legacy_refit"
+        if not isinstance(normalization, dict) or normalization.get("input_channel_order") != mars_input_channel_order(selected_channels):
+            raise ValueError("Mars checkpoint input_channel_order does not match the model inputs")
+        # Different trained tasks can share files/channels but have different
+        # input and target statistics. Their scaled volumes must stay separate.
+        encoded = json.dumps(normalization, sort_keys=True, allow_nan=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
     async def predict_task(
         self,
         task_id: int,
-        mars_year: int,
         ls_start: float,
         horizon: int = 3,
         current_user=None,
@@ -94,7 +227,6 @@ class InferenceService:
                 hypers=hypers,
                 data_dirs=data_dirs,
                 user_id=current_user.id,
-                mars_year=mars_year,
                 ls_start=ls_start,
                 horizon=horizon,
             )
@@ -104,7 +236,6 @@ class InferenceService:
     async def task_metrics(
         self,
         task_id: int,
-        mars_year: int,
         ls_start: float,
         horizon: int = 3,
         current_user=None,
@@ -113,7 +244,6 @@ class InferenceService:
     ) -> dict:
         result = await self.predict_task(
             task_id=task_id,
-            mars_year=mars_year,
             ls_start=ls_start,
             horizon=horizon,
             current_user=current_user,
@@ -125,7 +255,6 @@ class InferenceService:
     async def task_test_set_metrics(
         self,
         task_id: int,
-        mars_year: int,
         ls_start: float,
         horizon: int = 3,
         current_user=None,
@@ -250,7 +379,6 @@ class InferenceService:
         self,
         task_id: int,
         selected_variables: list[str],
-        mars_year: int,
         ls_start: float,
         horizon: int = 3,
         current_user=None,
@@ -351,11 +479,29 @@ class InferenceService:
             except Exception:
                 hypers = {}
 
+            # The task identity column wins over any legacy hyperparameter. This
+            # prevents a caller from selecting a different source at prediction
+            # time; the legacy marker is retained only when no snapshot exists.
+            effective_dataset = str(getattr(task, "dataset_id", None) or hypers.get("training_dataset") or "openmars_mcd").strip().lower()
+            hypers["training_dataset"] = effective_dataset
+            checkpoint = self._load_task_checkpoint(task)
+            if isinstance(checkpoint, dict) and checkpoint.get("schema"):
+                try:
+                    validate_mars_checkpoint(
+                        checkpoint,
+                        selected_channels=list(hypers.get("selected_channels") or []),
+                        window=int(hypers.get("window", 3)),
+                        horizon=int(hypers.get("horizon", 3)),
+                    )
+                except MarsCheckpointIdentityError as exc:
+                    raise DatasetRequestError("dataset_version_changed", "The Mars checkpoint data identity is incomplete or inconsistent; retrain the model", status_code=409) from exc
+
             data_dirs, temp_data_root = await self._prepare_task_data_env(
                 task=task,
                 hypers=hypers,
                 data_service=data_service,
                 personal_source_service=personal_source_service,
+                checkpoint=checkpoint,
             )
             return task, hypers, data_dirs, temp_data_root
 
@@ -365,7 +511,6 @@ class InferenceService:
         hypers,
         data_dirs,
         user_id,
-        mars_year,
         ls_start,
         horizon,
     ):
@@ -373,24 +518,30 @@ class InferenceService:
             return await asyncio.to_thread(self._predict_task_with_context,
                 task=task,
                 hypers=hypers,
-                mars_year=mars_year,
                 ls_start=ls_start,
                 horizon=horizon,
                 data_dirs=data_dirs,
             )
 
-        return await self.analysis_cache.get_or_compute(
+        result = await self.analysis_cache.get_or_compute(
             user_id=user_id,
             task=task,
             analysis_type="prediction",
             request_params={
-                "mars_year": mars_year,
                 "ls_start": ls_start,
                 "horizon": horizon,
             },
             data_dirs=data_dirs,
             compute=compute,
         )
+        if isinstance(result, dict) and isinstance(result.get("metrics"), dict):
+            result = dict(result)
+            result["metrics"] = self._with_test_set_contract(
+                result["metrics"],
+                hypers,
+                overall_aggregation="mean_over_forecast_steps",
+            )
+        return result
 
     async def _cached_test_set_metrics(
         self, task, hypers, data_dirs, user_id, horizon
@@ -410,7 +561,7 @@ class InferenceService:
                 data_dirs,
             )
 
-        return await self.analysis_cache.get_or_compute(
+        result = await self.analysis_cache.get_or_compute(
             user_id=user_id,
             task=task,
             analysis_type="metrics",
@@ -418,6 +569,7 @@ class InferenceService:
             data_dirs=data_dirs,
             compute=compute,
         )
+        return self._with_test_set_contract(result, hypers)
 
     async def _cached_error_distribution(
         self, task, hypers, data_dirs, user_id, horizon
@@ -488,8 +640,53 @@ class InferenceService:
         hypers: dict,
         data_service=None,
         personal_source_service=None,
+        checkpoint=None,
     ):
-        return {}, None
+        dataset_id = str(getattr(task, "dataset_id", None) or hypers.get("training_dataset") or "openmars_mcd").strip().lower()
+        if dataset_id not in ("mcd_overview", "openmars_mcd"):
+            raise DatasetRequestError("dataset_prediction_not_supported", "This Mars prediction path only supports registered Mars datasets", status_code=409)
+        if checkpoint is None and getattr(task, "output_model_path", None):
+            checkpoint = self._load_task_checkpoint(task)
+        snapshots = []
+        raw_snapshot = getattr(task, "dataset_snapshot", None)
+        try:
+            parsed = json.loads(raw_snapshot) if isinstance(raw_snapshot, str) else raw_snapshot
+        except (TypeError, ValueError):
+            parsed = None
+        if has_mars_file_identity(parsed):
+            snapshots.append(parsed)
+        if isinstance(checkpoint, dict):
+            if "schema" in checkpoint or isinstance(checkpoint.get("model_state_dict"), dict) or "data_binding" in checkpoint:
+                try:
+                    snapshots.append(mars_checkpoint_identity_snapshot(checkpoint))
+                except (ValueError, TypeError) as exc:
+                    raise DatasetRequestError("dataset_version_changed", "The Mars checkpoint lacks a complete data identity; retrain the model", status_code=409) from exc
+            elif has_mars_file_identity(checkpoint.get("dataset_identity")):
+                snapshots.append(checkpoint["dataset_identity"])
+        if snapshots:
+            for snapshot in snapshots:
+                if snapshot.get("dataset_id") != dataset_id:
+                    raise DatasetRequestError("dataset_version_changed", "The Mars data identity does not match the training task", status_code=409)
+                task_fingerprint = getattr(task, "dataset_fingerprint", None)
+                if task_fingerprint and task_fingerprint != (snapshot.get("dataset_fingerprint") or snapshot.get("file_fingerprint")):
+                    raise DatasetRequestError("dataset_version_changed", "The Mars task fingerprint disagrees with its saved data identity", status_code=409)
+                assert_identity_current(
+                    snapshot,
+                    openmars_dir=self.openmars_dir,
+                    mcd_dir=self.mcd_dir,
+                    raw_dir=MCD_RAW_3H_DIR,
+                )
+            hypers["_dataset_identity_status"] = "verified"
+        elif getattr(task, "dataset_fingerprint", None) or getattr(task, "dataset_identity_status", None) == "verified":
+            raise DatasetRequestError("dataset_version_changed", "The verified Mars task is missing its data identity; retrain the model", status_code=409)
+        else:
+            hypers["_dataset_identity_status"] = "legacy"
+        if dataset_id == "mcd_overview":
+            return {"MCD_RAW_3H_DIR": str(MCD_RAW_3H_DIR)}, None
+        return {
+            "ARESVISION_OPENMARS_DIR": str(self.openmars_dir),
+            "ARESVISION_MCD_DIR": str(self.mcd_dir),
+        }, None
 
     @staticmethod
     def _cleanup_temp_data_root(temp_data_root: Path | None) -> None:
@@ -563,13 +760,14 @@ class InferenceService:
         self,
         task,
         hypers: dict,
-        mars_year: int,
         ls_start: float,
         horizon: int,
         data_dirs: dict[str, str] | None = None,
     ) -> dict:
+        checkpoint_payload = self._load_task_checkpoint(task)
+        legacy_normalization = not bool(checkpoint_normalization(checkpoint_payload))
         if getattr(task, "model_source", "official") == "uploaded":
-            pred_scaled, truth_scaled, y_mean, y_std, selected_channels = self._predict_uploaded_task_window(
+            pred_scaled, truth_scaled, y_mean, y_std, selected_channels, input_ls, target_ls, window_meta, latitude, longitude = self._predict_uploaded_task_window(
                 task=task,
                 hypers=hypers,
                 ls_start=ls_start,
@@ -583,9 +781,11 @@ class InferenceService:
                 "model_name": task.custom_model_name,
                 "selected_channels": selected_channels,
                 "weight_file": Path(task.output_model_path).name,
+                "normalization_source": "legacy_refit" if legacy_normalization else "checkpoint",
+                "legacy_compatibility": legacy_normalization,
             }
         else:
-            pred_scaled, truth_scaled, y_mean, y_std, selected_channels = self._predict_official_task_window(
+            pred_scaled, truth_scaled, y_mean, y_std, selected_channels, input_ls, target_ls, window_meta, latitude, longitude = self._predict_official_task_window(
                 task=task,
                 hypers=hypers,
                 ls_start=ls_start,
@@ -600,20 +800,35 @@ class InferenceService:
                 "architecture": normalize_model_architecture(hypers.get("model_architecture", "predrnnv2")),
                 "selected_channels": selected_channels,
                 "weight_file": Path(task.output_model_path).name,
+                "normalization_source": "legacy_refit" if legacy_normalization else "checkpoint",
+                "legacy_compatibility": legacy_normalization,
             }
 
-        actual_horizon = min(int(horizon), int(pred_scaled.shape[0]), int(truth_scaled.shape[0]))
+        actual_horizon = min(
+            int(horizon),
+            int(pred_scaled.shape[0]),
+            int(truth_scaled.shape[0]),
+            len(target_ls),
+        )
+        if actual_horizon <= 0:
+            raise ValueError("Mars prediction returned no complete target Ls values")
         pred_raw = pred_scaled[:actual_horizon] * (y_std + 1e-6) + y_mean
         truth_raw = truth_scaled[:actual_horizon] * (y_std + 1e-6) + y_mean
+        if pred_raw.shape != truth_raw.shape or pred_raw.ndim != 3:
+            raise ValueError("Mars prediction and ground truth spatial shapes must match")
+        lat_arr, lon_arr = self._prediction_coordinates(latitude, longitude, pred_raw.shape[-2:])
         residual_raw = pred_raw - truth_raw
-        metrics = compute_metrics(truth_raw, pred_raw)
+        metrics = self._with_test_set_contract(
+            compute_metrics(truth_raw, pred_raw),
+            hypers,
+            overall_aggregation="mean_over_forecast_steps",
+        )
 
-        lat_arr = np.linspace(-87.5, 87.5, pred_raw.shape[-2], dtype=np.float32)
-        lon_arr = np.linspace(-180.0, 175.0, pred_raw.shape[-1], dtype=np.float32)
-        ls_values = [float((ls_start + (idx + 1) * 5.0) % 360.0) for idx in range(actual_horizon)]
+        input_ls_values = [float(value) for value in input_ls]
+        ls_values = [float(value) for value in target_ls[:actual_horizon]]
         selected_variables = self._channels_to_variable_names(selected_channels)
-        model_info["requested_mars_year"] = int(mars_year)
         model_info["requested_ls_start"] = float(ls_start)
+        model_info.update({key: value for key, value in window_meta.items() if value is not None})
 
         return {
             "ground_truth": self._fields_to_dicts(truth_raw, lat_arr, lon_arr, include_points=False),
@@ -621,6 +836,7 @@ class InferenceService:
             "residual": self._fields_to_dicts(residual_raw, lat_arr, lon_arr, include_points=False),
             "selected_variables": selected_variables,
             "horizon": actual_horizon,
+            "input_ls_values": input_ls_values,
             "ls_values": ls_values,
             "model_info": model_info,
             "metrics": metrics,
@@ -628,8 +844,12 @@ class InferenceService:
                 "requested_source": "training_task",
                 "effective_source": "training_task",
                 "fallback": False,
-                "message": None,
-                "mars_year": int(mars_year),
+                "dataset_identity_status": hypers.get("_dataset_identity_status", "legacy"),
+                "message": (
+                    "legacy dataset identity; source snapshot was unavailable"
+                    if hypers.get("_dataset_identity_status") == "legacy"
+                    else None
+                ),
             },
         }
 
@@ -649,26 +869,96 @@ class InferenceService:
             'T': ('Temperature', 'temp')
         }
         used_mcd_vars = [mcd_vars_map[channel] for channel in active_vars if channel in mcd_vars_map]
-        # 取连续体积并按需切出单个滑窗，避免为整条时间轴物化全部滑窗。
-        volume = self._load_official_task_volume(
-            used_mcd_vars,
-            window,
-            task_horizon,
-            data_dirs=data_dirs,
-        )
-        sample_idx = self._nearest_sequence_index(
-            torch.as_tensor(volume.ls, dtype=torch.float32).unsqueeze(1),
-            ls_start,
-        )
-        x_sample = self._window_slice(
-            volume.values, sample_idx, window
-        ).unsqueeze(0).to(self.device)
-        ls_sample = self._window_slice(
-            np.asarray(volume.ls, dtype=np.float32).reshape(-1, 1), sample_idx, window
-        ).unsqueeze(0).transpose(1, 2).to(self.device)
-        truth_sample = self._window_slice(
-            volume.y_scaled, sample_idx + window, task_horizon
-        )
+        checkpoint_state = self._load_task_state_dict(task)
+        legacy_checkpoint = self._is_legacy_official_state_dict(checkpoint_state)
+        if legacy_checkpoint:
+            x_torch, y_torch, ls_torch, y_mean, y_std = self._prepare_data(
+                used_mcd_vars, window, task_horizon, data_dirs=data_dirs,
+                split_policy=MARS_LEGACY_SPLIT_POLICY,
+            )
+            if ls_torch is None:
+                raise ValueError("Mars prediction requires an Ls timeline")
+            metadata = getattr(self, "_last_prepared_window_metadata", None)
+            latitude = None if metadata is None else metadata.get("latitude")
+            longitude = None if metadata is None else metadata.get("longitude")
+            if metadata and metadata.get("ls_values") is not None:
+                window_info = resolve_forecast_window(
+                    metadata["ls_values"], ls_start, window, task_horizon,
+                    candidate_starts=metadata["sample_starts"],
+                    candidate_mars_years=metadata["sample_mars_years"],
+                    candidate_blocks=metadata["blocks"],
+                )
+                sample_idx = int(np.flatnonzero(metadata["sample_starts"] == window_info["sample_index"])[0])
+                target_ls = window_info["target_ls"]
+            elif metadata and metadata.get("input_ls") is not None:
+                sequence_starts = np.asarray(metadata["input_ls"], dtype=np.float32)[:, 0]
+                window_info = resolve_forecast_window(
+                    sequence_starts,
+                    ls_start,
+                    1,
+                    1,
+                    candidate_starts=np.arange(len(sequence_starts), dtype=np.int64),
+                    candidate_mars_years=metadata.get("sample_mars_years"),
+                )
+                sample_idx = window_info["sample_index"]
+                target_ls = np.asarray(metadata["target_ls"])[sample_idx].astype(float).tolist()
+                window_info["input_ls"] = np.asarray(metadata["input_ls"])[sample_idx].astype(float).tolist()
+                window_info["target_ls"] = target_ls
+            else:
+                # A legacy test double may not expose the shared metadata.
+                # Preserve its historical nearest-start behavior explicitly.
+                ls_rows = ls_torch.detach().cpu().numpy()
+                timeline = np.concatenate([ls_rows[0], ls_rows[1:, -1]])
+                if task_horizon > 1:
+                    timeline = np.concatenate(
+                        [timeline, np.repeat(timeline[-1:], task_horizon - 1)]
+                    )
+                window_info = resolve_forecast_window(
+                    timeline,
+                    ls_start,
+                    window,
+                    task_horizon,
+                )
+                sample_idx = window_info["sample_index"]
+                window_info = {
+                    "input_ls": ls_torch[sample_idx].detach().cpu().numpy().astype(float).tolist(),
+                    "target_ls": timeline[
+                        sample_idx + window : sample_idx + window + task_horizon
+                    ].astype(float).tolist(),
+                }
+                target_ls = window_info["target_ls"]
+            x_sample = x_torch[sample_idx:sample_idx + 1].to(self.device)
+            ls_sample = ls_torch[sample_idx:sample_idx + 1].to(self.device)
+            truth_sample = y_torch[sample_idx, :, 0]
+            data_height, data_width = int(x_torch.shape[-2]), int(x_torch.shape[-1])
+        else:
+            # New checkpoints use the shared continuous-volume preparation.
+            volume = self._load_official_task_volume(
+                used_mcd_vars, window, task_horizon, data_dirs=data_dirs,
+                split_ratios=self._task_split_ratios_for_loading(hypers),
+                normalization=self._checkpoint_normalization(task),
+                split_policy=self._checkpoint_split_policy(task),
+            )
+            window_info = resolve_forecast_window(
+                volume.ls,
+                ls_start,
+                window,
+                task_horizon,
+                candidate_starts=volume.sample_starts,
+                candidate_mars_years=volume.sample_mars_years,
+                candidate_blocks=volume.blocks,
+            )
+            sample_idx = window_info["sample_index"]
+            x_sample = self._window_slice(volume.values, sample_idx, window).unsqueeze(0).to(self.device)
+            ls_sample = self._window_slice(
+                np.asarray(volume.ls, dtype=np.float32).reshape(-1, 1), sample_idx, window
+            ).unsqueeze(0).transpose(1, 2).to(self.device)
+            truth_sample = self._window_slice(volume.y_scaled, sample_idx + window, task_horizon)
+            y_mean, y_std = volume.y_mean, volume.y_std
+            data_height, data_width = int(volume.values.shape[1]), int(volume.values.shape[2])
+            latitude, longitude = volume.latitude, volume.longitude
+
+        latitude, longitude = self._prediction_coordinates(latitude, longitude, (data_height, data_width))
 
         model, uses_legacy_loader = self._load_official_task_model(
             task=task,
@@ -676,8 +966,8 @@ class InferenceService:
             input_channels=1 + len(used_mcd_vars),
             selected_channels=list(active_vars),
             hidden_dims=hidden_dims,
-            height=int(volume.values.shape[1]),
-            width=int(volume.values.shape[2]),
+            height=data_height,
+            width=data_width,
             window=window,
             horizon=task_horizon,
             use_sphere=use_sphere,
@@ -693,8 +983,23 @@ class InferenceService:
             )[0, :, 0].cpu().numpy()
         # 官方模型输出为 (horizon, H, W)（单通道不再保留通道维），
         # 与 `y_torch[idx, :, 0]` 的原始语义一致。
-        truth = truth_sample.squeeze(1).numpy()
-        return pred, truth, volume.y_mean, volume.y_std, list(active_vars)
+        truth = truth_sample.squeeze(1).numpy() if truth_sample.ndim == 4 else truth_sample.numpy()
+        return (
+            pred,
+            truth,
+            y_mean,
+            y_std,
+            list(active_vars),
+            window_info["input_ls"],
+            window_info["target_ls"],
+            {
+                "sample_index": int(window_info.get("sample_index", sample_idx)),
+                "mars_year": window_info.get("mars_year"),
+                "block_index": window_info.get("block_index"),
+            },
+            latitude,
+            longitude,
+        )
 
     @staticmethod
     def _window_slice(volume: np.ndarray, start: int, length: int) -> torch.Tensor:
@@ -730,52 +1035,63 @@ class InferenceService:
         """
         if count <= 0:
             raise ValueError("window count must be positive")
-        region = np.ascontiguousarray(
-            volume[int(start): int(start) + int(count) + int(length) - 1]
-        )
-        if region.shape[0] != int(count) + int(length) - 1:
-            raise ValueError("Not enough time steps to build the requested windows")
-        if region.ndim == 3:
-            region = region[..., None]
-        elif region.ndim != 4 and region.ndim != 2:
-            raise ValueError(f"Unsupported volume layout: {region.shape}")
-        windows = np.lib.stride_tricks.sliding_window_view(region, int(length), axis=0)
-        # 4D 输入: [count, height, width, channels, length] -> [count, length, channels, h, w]
-        # 2D 输入: [count, features, length]               -> [count, length, features]
-        order = (0, 4, 3, 1, 2) if region.ndim == 4 else (0, 2, 1)
-        stacked = torch.from_numpy(np.ascontiguousarray(windows)).permute(*order).float()
-        if region.ndim == 2 and region.shape[1] == 1:
-            # 单列特征（Ls）展开后是 [count, length]，不带尾维。
-            return stacked.reshape(stacked.shape[0], stacked.shape[1])
-        return stacked
+        starts = np.arange(int(start), int(start) + int(count), dtype=np.int64)
+        return InferenceService._window_stack_at_starts(volume, starts, length)
+    @staticmethod
+    def _window_stack_at_starts(volume: np.ndarray, starts: np.ndarray, length: int) -> torch.Tensor:
+        """Build windows at explicit starts on the merged chronological timeline."""
+        starts = np.asarray(starts, dtype=np.int64).reshape(-1)
+        if starts.size == 0:
+            return torch.empty(0)
+        windows = [InferenceService._window_slice(volume, int(start), int(length)) for start in starts]
+        result = torch.stack(windows, dim=0)
+        if np.asarray(volume).ndim == 2 and result.shape[-1] == 1:
+            return result[..., 0]
+        return result
 
-    def _uploaded_task_test_windows(self, volume, window: int, horizon: int):
-        """按与训练一致的 80/20 划分取测试分区滑窗。
+    def _uploaded_task_test_windows(self, volume, window: int, horizon: int, split_ratios=None):
+        """按任务保存的时间顺序划分取测试分区滑窗。
 
         样本数口径与 ``prepare_tensors`` 的逐样本展开相同：
         ``sample_count = total_time - window - horizon + 1``，
-        测试分区起点为 ``int(0.8 * sample_count)``。
+        使用任务保存的完整三项比例；没有完整比例元数据的旧任务继续使用 80/0/20。
         """
-        sample_count = int(volume.values.shape[0]) - int(window) - int(horizon) + 1
+        sample_starts = getattr(volume, "sample_starts", None)
+        if sample_starts is None:
+            sample_starts = np.arange(
+                int(volume.values.shape[0]) - int(window) - int(horizon) + 1,
+                dtype=np.int64,
+            )
+        sample_starts = np.asarray(sample_starts, dtype=np.int64)
+        sample_count = int(sample_starts.size)
         if sample_count <= 0:
             raise ValueError("Not enough time steps to build the requested windows")
-        test_count = sample_count - int(0.8 * sample_count)
-        if test_count <= 0:
+        persisted_starts = getattr(volume, "split_window_starts", None)
+        if persisted_starts and persisted_starts.get("test"):
+            selected_starts = np.asarray(persisted_starts["test"], dtype=np.int64)
+        else:
+            split_meta = self._task_split_metadata(split_ratios or {})
+            test_start = self._task_test_split_start(sample_count, split_meta)
+            selected_starts = sample_starts[test_start:]
+        if selected_starts.size <= 0:
             return torch.empty(0), torch.empty(0), None
-        test_start = sample_count - test_count
-        x_test = self._window_stack(volume.values, test_start, test_count, window)
-        y_test = self._window_stack(volume.y_scaled, test_start + window, test_count, horizon)
+        x_test = self._window_stack_at_starts(volume.values, selected_starts, window)
+        y_test = self._window_stack_at_starts(volume.y_scaled, selected_starts + window, horizon)
         ls_test = (
             None
             if volume.ls is None
-            else self._window_stack(
+            else self._window_stack_at_starts(
                 np.asarray(volume.ls, dtype=np.float32).reshape(-1, 1),
-                test_start,
-                test_count,
+                selected_starts,
                 window,
             )
         )
         return x_test, y_test, ls_test
+
+    @staticmethod
+    def _uploaded_task_split_ratios(hypers: dict) -> dict[str, float]:
+        """Return the ratios used to fit an uploaded task's standardization."""
+        return InferenceService._task_split_metadata(hypers)["ratios"]
 
     def _prepare_uploaded_task_volume(
         self,
@@ -783,6 +1099,7 @@ class InferenceService:
         window: int,
         horizon: int,
         data_dirs=None,
+        normalization=None,
     ):
         """取上传模型所需的标准化体积：优先命中进程内缓存。"""
         from services.prediction_volume_cache import (
@@ -806,6 +1123,7 @@ class InferenceService:
             or directories.get("ARESVISION_MCD_RAW_3H_DIR")
             or MCD_RAW_3H_DIR
         )
+        split_ratios = self._uploaded_task_split_ratios(hypers)
 
         def load():
             return prepare_tensors(
@@ -820,11 +1138,11 @@ class InferenceService:
                 return_coordinates=True,
                 require_coordinates=False,
                 return_scaled_volume=True,
+                normalization=normalization,
+                train_ratio=split_ratios["train_ratio"],
+                validation_ratio=split_ratios["validation_ratio"],
+                test_ratio=split_ratios["test_ratio"],
             )
-
-        if data_dirs:
-            # 个人/临时数据源目录随时可能被清理，不进入进程内缓存。
-            return selected_channels, load()
 
         signature = volume_signature(
             openmars_dir=openmars_dir,
@@ -832,12 +1150,18 @@ class InferenceService:
             selected_channels=selected_channels,
             training_dataset=str(training_dataset),
             mcd_overview_dir=mcd_overview_dir,
-            cache_prefix="uploaded",
+            cache_prefix="uploaded:" + self._mars_normalization_cache_key(normalization, selected_channels),
+            split_ratios=split_ratios,
+            window=window,
+            horizon=horizon,
         )
-        cached = get_scaled_volume(signature)
+        cached = get_scaled_volume(signature) if not data_dirs else None
         if not isinstance(cached, ScaledVolume):
             cached = load()
-            put_scaled_volume(signature, cached)
+            if not data_dirs:
+                put_scaled_volume(signature, cached)
+        # ``prepare_tensors`` applies checkpoint statistics while constructing
+        # the volume; never refit or transform it a second time here.
         return selected_channels, cached
 
     def _prepare_uploaded_topography(self, model, latitude, longitude):
@@ -887,13 +1211,19 @@ class InferenceService:
             window,
             task_horizon,
             data_dirs,
+            normalization=self._checkpoint_normalization(task),
         )
-        # 保留原有 ls_start -> 样本下标的按比例映射（与滑窗展开后的下标语义一致）。
-        sample_count = max(1, int(volume.values.shape[0]) - window - task_horizon + 1)
-        sample_idx = min(
-            max(0, int(round(float(ls_start) / 360.0 * max(1, sample_count - 1)))),
-            sample_count - 1,
+        window_info = resolve_forecast_window(
+            volume.ls,
+            ls_start,
+            window,
+            task_horizon,
+            candidate_starts=volume.sample_starts,
+            candidate_mars_years=volume.sample_mars_years,
+            candidate_blocks=volume.blocks,
         )
+        sample_idx = window_info["sample_index"]
+        latitude, longitude = self._prediction_coordinates(volume.latitude, volume.longitude, (volume.height, volume.width))
         channel_count = int(volume.values.shape[-1])
         config = build_uploaded_model_config(
             in_channels=channel_count,
@@ -941,7 +1271,22 @@ class InferenceService:
             assert_prediction_shape(pred_tensor, truth_tensor.to(self.device), "uploaded prediction")
         pred = pred_tensor[0, :, 0].cpu().numpy()
         truth = truth_tensor[0, :, 0].cpu().numpy()
-        return pred, truth, volume.y_mean, volume.y_std, selected_channels
+        return (
+            pred,
+            truth,
+            volume.y_mean,
+            volume.y_std,
+            selected_channels,
+            window_info["input_ls"],
+            window_info["target_ls"],
+            {
+                "sample_index": int(sample_idx),
+                "mars_year": window_info.get("mars_year"),
+                "block_index": window_info.get("block_index"),
+            },
+            latitude,
+            longitude,
+        )
 
     def _official_task_test_set_metrics(self, task, hypers: dict, horizon: int, data_dirs=None):
         truth_raw, pred_raw, actual_horizon = self._official_task_test_set_arrays(
@@ -950,7 +1295,10 @@ class InferenceService:
             horizon,
             data_dirs=data_dirs,
         )
-        return compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon)
+        return self._with_test_set_contract(
+            compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon),
+            hypers,
+        )
 
     def _official_task_test_set_arrays(self, task, hypers: dict, horizon: int, data_dirs=None):
         window = int(hypers.get("window", 3))
@@ -968,11 +1316,18 @@ class InferenceService:
             'T': ('Temperature', 'temp')
         }
         used_mcd_vars = [mcd_vars_map[channel] for channel in active_vars if channel in mcd_vars_map]
+        split_ratios = self._task_split_ratios_for_loading(hypers)
+        prepare_kwargs = {"data_dirs": data_dirs}
+        if split_ratios:
+            prepare_kwargs["split_ratios"] = split_ratios
+        checkpoint_norm = self._checkpoint_normalization(task)
+        if checkpoint_norm:
+            prepare_kwargs["normalization"] = checkpoint_norm
         x_torch, y_torch, ls_torch, y_mean, y_std = self._prepare_data(
             used_mcd_vars,
             window,
             task_horizon,
-            data_dirs=data_dirs,
+            **prepare_kwargs,
         )
 
         model, uses_legacy_loader = self._load_official_task_model(
@@ -989,10 +1344,22 @@ class InferenceService:
             architecture_params=architecture_params,
         )
 
-        split = int(0.8 * len(x_torch))
-        x_test = x_torch[split:]
-        y_test = y_torch[split:]
-        ls_test = ls_torch[split:]
+        split_meta = self._task_split_metadata(hypers)
+        split_window_starts = getattr(self, "_last_prepared_window_metadata", {}).get("split_window_starts")
+        if split_window_starts and split_window_starts.get("test"):
+            positions = {
+                int(start): index
+                for index, start in enumerate(np.asarray(getattr(self, "_last_prepared_window_metadata", {}).get("sample_starts", ()), dtype=np.int64).tolist())
+            }
+            test_indices = [positions[int(start)] for start in split_window_starts["test"] if int(start) in positions]
+            x_test = x_torch[test_indices]
+            y_test = y_torch[test_indices]
+            ls_test = ls_torch[test_indices]
+        else:
+            split = self._task_test_split_start(len(x_torch), split_meta)
+            x_test = x_torch[split:]
+            y_test = y_torch[split:]
+            ls_test = ls_torch[split:]
         if len(x_test) == 0:
             raise ValueError("No trained model test samples are available")
 
@@ -1027,7 +1394,10 @@ class InferenceService:
             horizon,
             data_dirs=data_dirs,
         )
-        return compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon)
+        return self._with_test_set_contract(
+            compute_test_set_metrics(truth_raw, pred_raw, horizon=actual_horizon),
+            hypers,
+        )
 
     def _uploaded_task_test_set_arrays(self, task, hypers: dict, horizon: int, data_dirs=None):
         from training_backbones.user_model_runner import (
@@ -1043,6 +1413,7 @@ class InferenceService:
             window,
             task_horizon,
             data_dirs,
+            normalization=self._checkpoint_normalization(task),
         )
         config = build_uploaded_model_config(
             in_channels=int(volume.values.shape[-1]),
@@ -1067,7 +1438,10 @@ class InferenceService:
             volume.longitude,
         )
 
-        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(
+            volume, window, task_horizon,
+            {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+        )
         if len(x_test) == 0:
             raise ValueError("No uploaded model test samples are available")
 
@@ -1142,11 +1516,18 @@ class InferenceService:
             'T': ('Temperature', 'temp')
         }
         used_mcd_vars = [mcd_vars_map[channel] for channel in active_channels if channel in mcd_vars_map]
+        split_ratios = self._task_split_ratios_for_loading(hypers)
+        prepare_kwargs = {"data_dirs": data_dirs}
+        if split_ratios:
+            prepare_kwargs["split_ratios"] = split_ratios
+        checkpoint_norm = self._checkpoint_normalization(task)
+        if checkpoint_norm:
+            prepare_kwargs["normalization"] = checkpoint_norm
         x_torch, y_torch, ls_torch, y_mean, y_std = self._prepare_data(
             used_mcd_vars,
             window,
             task_horizon,
-            data_dirs=data_dirs,
+            **prepare_kwargs,
         )
         model, uses_legacy_loader = self._load_official_task_model(
             task=task,
@@ -1162,10 +1543,22 @@ class InferenceService:
             architecture_params=architecture_params,
         )
 
-        split = int(0.8 * len(x_torch))
-        x_test = x_torch[split:].clone()
-        y_test = y_torch[split:]
-        ls_test = ls_torch[split:]
+        split_meta = self._task_split_metadata(hypers)
+        split_window_starts = getattr(self, "_last_prepared_window_metadata", {}).get("split_window_starts")
+        if split_window_starts and split_window_starts.get("test"):
+            positions = {
+                int(start): index
+                for index, start in enumerate(np.asarray(getattr(self, "_last_prepared_window_metadata", {}).get("sample_starts", ()), dtype=np.int64).tolist())
+            }
+            test_indices = [positions[int(start)] for start in split_window_starts["test"] if int(start) in positions]
+            x_test = x_torch[test_indices].clone()
+            y_test = y_torch[test_indices]
+            ls_test = ls_torch[test_indices]
+        else:
+            split = self._task_test_split_start(len(x_torch), split_meta)
+            x_test = x_torch[split:].clone()
+            y_test = y_torch[split:]
+            ls_test = ls_torch[split:]
         if len(x_test) == 0:
             return {"items": [], "baseline_metric": "r2", "baseline_value": 0.0}
 
@@ -1236,6 +1629,7 @@ class InferenceService:
             window,
             task_horizon,
             data_dirs,
+            normalization=self._checkpoint_normalization(task),
         )
         config = build_uploaded_model_config(
             in_channels=int(volume.values.shape[-1]),
@@ -1260,7 +1654,10 @@ class InferenceService:
             volume.longitude,
         )
 
-        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(
+            volume, window, task_horizon,
+            {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+        )
         x_test = x_test.clone()
         if len(x_test) == 0:
             return {"items": [], "baseline_metric": "r2", "baseline_value": 0.0}
@@ -1321,10 +1718,10 @@ class InferenceService:
     @staticmethod
     def _nearest_sequence_index(ls_torch: torch.Tensor, ls_start: float) -> int:
         values = ls_torch[:, 0].detach().cpu().numpy().reshape(-1)
-        if len(values) == 0:
-            return 0
-        diffs = np.abs(((values - float(ls_start) + 180.0) % 360.0) - 180.0)
-        return int(np.argmin(diffs))
+        if values.size == 0:
+            raise ValueError("Mars Ls timeline is empty")
+        padded = np.concatenate([values, values[-1:]])
+        return int(resolve_forecast_window(padded, ls_start, 1, 1)["sample_index"])
 
     @staticmethod
     def _is_legacy_official_state_dict(state_dict) -> bool:
@@ -1398,12 +1795,33 @@ class InferenceService:
         return [channel_map[channel] for channel in list(channels or "") if channel in channel_map]
 
     @staticmethod
+    def _prediction_coordinates(latitude, longitude, spatial_shape):
+        """Preserve loader order and reject guessed or inconsistent output axes."""
+        axes = []
+        for name, values, size in zip(("latitude", "longitude"), (latitude, longitude), spatial_shape):
+            if values is None:
+                raise ValueError(f"Mars prediction {name} coordinates are missing from the data source")
+            try:
+                axis = np.asarray(values, dtype=np.float64)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Mars prediction {name} coordinates must be numeric") from exc
+            if axis.ndim != 1 or axis.size == 0:
+                raise ValueError(f"Mars prediction {name} coordinates must be a non-empty one-dimensional array")
+            if axis.size != size:
+                raise ValueError(f"Mars prediction {name} coordinate length {axis.size} does not match field size {size}")
+            if not np.all(np.isfinite(axis)):
+                raise ValueError(f"Mars prediction {name} coordinates must be finite")
+            axes.append(axis)
+        return tuple(axes)
+
+    @staticmethod
     def _fields_to_dicts(
         fields: np.ndarray,
         lat_arr: np.ndarray,
         lon_arr: np.ndarray,
         include_points: bool = True,
     ) -> list[dict]:
+        lat_arr, lon_arr = InferenceService._prediction_coordinates(lat_arr, lon_arr, fields.shape[-2:])
         result = []
         lat_list = [float(v) for v in lat_arr]
         lon_list = [float(v) for v in lon_arr]
@@ -1445,6 +1863,9 @@ class InferenceService:
 
             # 1. 解析任务参数
             hypers = json.loads(task.hyperparameters)
+            hypers["training_dataset"] = str(getattr(task, "dataset_id", None) or hypers.get("training_dataset") or "openmars_mcd").strip().lower()
+            verified_dirs, _ = await self._prepare_task_data_env(task, hypers)
+            data_dirs = {**(data_dirs or {}), **verified_dirs}
             if getattr(task, "model_source", "official") == "uploaded":
                 return await self._get_uploaded_model_test_results(task, hypers, data_dirs=data_dirs)
 
@@ -1469,11 +1890,18 @@ class InferenceService:
             base_input_dim = 1 + len(used_mcd_vars)
 
             # 3. 加载并预处理数据 (简化版，复用脚本逻辑)
+            split_ratios = self._task_split_ratios_for_loading(hypers)
+            prepare_kwargs = {"data_dirs": data_dirs}
+            if split_ratios:
+                prepare_kwargs["split_ratios"] = split_ratios
+            checkpoint_norm = self._checkpoint_normalization(task)
+            if checkpoint_norm:
+                prepare_kwargs["normalization"] = checkpoint_norm
             X_torch, y_torch, ls_torch, y_mean, y_std = self._prepare_data(
                 used_mcd_vars,
                 window,
                 horizon,
-                data_dirs=data_dirs,
+                **prepare_kwargs,
             )
             
             # 4. 加载模型
@@ -1492,7 +1920,8 @@ class InferenceService:
             )
 
             # 5. 执行推理 (仅针对测试集)
-            split = int(0.8 * len(X_torch))
+            split_meta = self._task_split_metadata(hypers)
+            split = self._task_test_split_start(len(X_torch), split_meta)
             X_test = X_torch[split:]
             y_test_true = y_torch[split:]
             
@@ -1526,10 +1955,15 @@ class InferenceService:
                 y_true_flat = y_true_flat[::step]
                 y_pred_flat = y_pred_flat[::step]
             
+            metric_meta = self._with_test_set_contract({}, hypers)
             return {
                 "y_true": y_true_flat.tolist(),
                 "y_pred": y_pred_flat.tolist(),
-                "metrics": json.loads(task.metrics) if task.metrics else {}
+                "metrics": json.loads(task.metrics) if task.metrics else {},
+                "metric_meta": {
+                    "aggregation": metric_meta["aggregation"],
+                    "split_meta": metric_meta["split_meta"],
+                },
             }
 
     async def _get_uploaded_model_test_results(self, task, hypers, data_dirs=None):
@@ -1548,6 +1982,7 @@ class InferenceService:
             window,
             task_horizon,
             data_dirs,
+            normalization=self._checkpoint_normalization(task),
         )
         config = build_uploaded_model_config(
             in_channels=int(volume.values.shape[-1]),
@@ -1573,7 +2008,10 @@ class InferenceService:
             volume.longitude,
         )
 
-        x_test, y_test, ls_test = self._uploaded_task_test_windows(volume, window, task_horizon)
+        x_test, y_test, ls_test = self._uploaded_task_test_windows(
+            volume, window, task_horizon,
+            {key: hypers[key] for key in ("train_ratio", "validation_ratio", "test_ratio") if key in hypers},
+        )
         y_test_true = y_test
         if len(x_test) == 0:
             raise ValueError("No uploaded model test samples are available")
@@ -1609,152 +2047,115 @@ class InferenceService:
             y_true_flat = y_true_flat[::step]
             y_pred_flat = y_pred_flat[::step]
 
+        metric_meta = self._with_test_set_contract({}, hypers)
         return {
             "y_true": y_true_flat.tolist(),
             "y_pred": y_pred_flat.tolist(),
             "metrics": json.loads(task.metrics) if task.metrics else {},
+            "metric_meta": {
+                "aggregation": metric_meta["aggregation"],
+                "split_meta": metric_meta["split_meta"],
+            },
         }
 
-    def _prepare_data(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None):
+    def _prepare_data(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None, split_ratios=None, normalization=None, split_policy=None):
         """复用训练脚本中的数据加载逻辑"""
-        volume = self._load_official_task_volume(used_mcd_vars, window, horizon, data_dirs)
+        volume = self._load_official_task_volume(used_mcd_vars, window, horizon, data_dirs, split_ratios, normalization, split_policy)
         X_scaled = volume.values
-        T = int(X_scaled.shape[0])
+        sample_starts = getattr(volume, "sample_starts", None)
+        if sample_starts is None:
+            sample_starts = np.arange(
+                int(X_scaled.shape[0]) - int(window) - int(horizon) + 1,
+                dtype=np.int64,
+            )
 
-        X_seq, y_seq, ls_seq = [], [], []
-        for i in range(T - window - horizon + 1):
+        X_seq, y_seq, ls_seq, target_ls_seq = [], [], [], []
+        for i in np.asarray(sample_starts, dtype=np.int64).tolist():
             X_seq.append(X_scaled[i: i + window])
             y_seq.append(volume.y_scaled[i + window: i + window + horizon])
             if volume.ls is not None:
                 ls_seq.append(volume.ls[i: i + window])
+                target_ls_seq.append(volume.ls[i + window: i + window + horizon])
 
         X_torch = torch.tensor(np.array(X_seq)).permute(0, 1, 4, 2, 3).float()
         y_torch = torch.tensor(np.array(y_seq)).unsqueeze(2).float()
         ls_torch = torch.tensor(np.array(ls_seq)).float() if ls_seq else None
+        self._last_prepared_window_metadata = {
+            "sample_starts": np.asarray(sample_starts, dtype=np.int64),
+            "input_ls": None if volume.ls is None else np.asarray(ls_seq),
+            "target_ls": None if volume.ls is None else np.asarray(target_ls_seq),
+            "sample_mars_years": tuple(volume.sample_mars_years),
+            "ls_values": volume.ls,
+            "blocks": tuple(volume.blocks),
+            "latitude": volume.latitude,
+            "longitude": volume.longitude,
+            "split_ranges": volume.split_ranges,
+            "split_window_starts": volume.split_window_starts,
+            "split_policy": volume.split_policy,
+        }
 
         return X_torch, y_torch, ls_torch, volume.y_mean, volume.y_std
 
-    def _load_official_task_volume(self, used_mcd_vars, window, horizon, data_dirs=None):
-        """取官方模型的标准化体积：先查进程内缓存，未命中再加载并写入。"""
-        from services.prediction_volume_cache import (
-            ScaledVolume,
-            get_scaled_volume,
-            put_scaled_volume,
-            volume_signature,
-        )
-
-        if data_dirs:
-            # 个人/临时数据源目录随时可能被清理，不进入进程内缓存。
-            return self._load_scaled_volume(used_mcd_vars, window, horizon, data_dirs)
-
+    def _load_official_task_volume(self, used_mcd_vars, window, horizon, data_dirs=None, split_ratios=None, normalization=None, split_policy=None):
+        from services.prediction_volume_cache import ScaledVolume, get_scaled_volume, put_scaled_volume, volume_signature
+        directories = data_dirs or {}
+        dataset_id = "mcd_overview" if directories.get("MCD_RAW_3H_DIR") or directories.get("ARESVISION_MCD_RAW_3H_DIR") else "openmars_mcd"
+        raw_dir = Path(directories.get("MCD_RAW_3H_DIR") or directories.get("ARESVISION_MCD_RAW_3H_DIR") or MCD_RAW_3H_DIR)
+        channel_map = {"U_Wind": "U", "V_Wind": "V", "Dust_Optical_Depth": "D", "Solar_Flux_DN": "S", "Temperature": "T"}
+        selected_channels = [channel_map[name] for name, _ in used_mcd_vars if name in channel_map]
         signature = volume_signature(
-            openmars_dir=self.openmars_dir,
-            mcd_dir=self.mcd_dir,
-            selected_channels=[var_name for var_name, _ in used_mcd_vars],
-            training_dataset="official_mcd_vars",
-            cache_prefix="official",
+            openmars_dir=Path(directories.get("ARESVISION_OPENMARS_DIR") or self.openmars_dir),
+            mcd_dir=Path(directories.get("ARESVISION_MCD_DIR") or self.mcd_dir),
+            selected_channels=selected_channels,
+            training_dataset=dataset_id,
+            mcd_overview_dir=raw_dir,
+            cache_prefix=(
+                "official:" + repr(tuple(sorted((split_ratios or {}).items())))
+                + ":" + self._mars_normalization_cache_key(normalization, selected_channels)
+            ),
+            split_ratios=split_ratios,
+            window=window,
+            horizon=horizon,
         )
-        cached = get_scaled_volume(signature)
-        if isinstance(cached, ScaledVolume):
-            return cached
-
-        volume = self._load_scaled_volume(used_mcd_vars, window, horizon, data_dirs)
-        put_scaled_volume(signature, volume)
+        if not data_dirs:
+            cached = get_scaled_volume(signature)
+            if isinstance(cached, ScaledVolume):
+                return cached
+        volume = self._shared_volume_to_cache(
+            prepare_scaled_volume(
+                training_dataset=dataset_id,
+                openmars_dir=Path(directories.get("ARESVISION_OPENMARS_DIR") or self.openmars_dir),
+                mcd_dir=Path(directories.get("ARESVISION_MCD_DIR") or self.mcd_dir),
+                raw_dir=raw_dir,
+                selected_channels=selected_channels,
+                window=window,
+                horizon=horizon,
+                split_ratios=split_ratios or dict(LEGACY_SPLIT_RATIOS),
+                normalization=normalization,
+                split_policy=split_policy,
+            )
+        )
+        if not data_dirs:
+            put_scaled_volume(signature, volume)
         return volume
 
-    def _load_scaled_volume(self, used_mcd_vars, window, horizon, data_dirs: dict[str, str] | None = None):
-        """加载 OpenMARS/MCD、插值并标准化，返回连续体积（与 window/horizon 无关的产物）。
-
-        与 ``_prepare_data`` 的数值结果一致：同一批输入文件、同一 ``split_idx`` 与
-        同一 ``StandardScaler`` 拟合区间，只是不再展开成逐样本滑窗张量。
-        """
-        from scipy.interpolate import interp1d
-        from sklearn.preprocessing import StandardScaler
-
+    @staticmethod
+    def _shared_volume_to_cache(volume):
         from services.prediction_volume_cache import ScaledVolume
-
-        # --- Loading OpenMars ---
-        openmars_dir = Path((data_dirs or {}).get("ARESVISION_OPENMARS_DIR") or self.openmars_dir)
-        mcd_dir = Path((data_dirs or {}).get("ARESVISION_MCD_DIR") or self.mcd_dir)
-        o3_list, om_ls_list = [], []
-        def natural_sort_key(s): return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', str(s))]
-        file_list = sorted(glob.glob(str(openmars_dir / "*.nc")), key=natural_sort_key)
-        for f in file_list:
-            with netcdf_read_lock():
-                ds = nc.Dataset(f)
-                try:
-                    o3_list.append(ds.variables['o3col'][:])
-                    om_ls_list.append(ds.variables['Ls'][:] if 'Ls' in ds.variables else ds.variables['ls'][:])
-                finally:
-                    ds.close()
-        y_raw = np.concatenate(o3_list, axis=0)
-        om_ls_raw = np.concatenate(om_ls_list, axis=0)
-
-        # --- Loading MCD ---
-        if used_mcd_vars:
-            short_names = [v[1] for v in used_mcd_vars]
-            vars_dict = {}
-            mcd_data = {sn: [] for sn in short_names}
-            mcd_ls = []
-            for f_nc in sorted(mcd_dir.glob("*.nc"), key=natural_sort_key):
-                if not f_nc.exists(): continue
-                with netcdf_read_lock():
-                    ds = nc.Dataset(f_nc, 'r')
-                    try:
-                        for var_name, sn in used_mcd_vars:
-                            d = ds.variables[var_name][:]
-                            mcd_data[sn].append(d.reshape(d.shape[0]*d.shape[1], d.shape[2], d.shape[3]))
-                        ls_t = ds.variables['Ls'][:] if 'Ls' in ds.variables else ds.variables['ls'][:]
-                        s_d, h_d = ds.variables[used_mcd_vars[0][0]].shape[:2]
-                        ls_e = np.zeros(s_d * h_d)
-                        for i in range(s_d):
-                            ls_e[i*h_d:(i+1)*h_d] = np.linspace(ls_t[i], ls_t[i+1] if i < s_d-1 else ls_t[i]+0.5, h_d, endpoint=False)
-                        mcd_ls.append(ls_e % 360.0)
-                    finally:
-                        ds.close()
-            
-            def unwrap(ls_in):
-                out = np.copy(ls_in); off = 0
-                for j in range(1, len(out)):
-                    if ls_in[j] < ls_in[j-1]-180: off += 360
-                    out[j] += off
-                return out
-            
-            mcd_ls_c = unwrap(np.concatenate(mcd_ls))
-            om_ls_c = unwrap(om_ls_raw)
-            for sn in short_names:
-                combined = np.concatenate(mcd_data[sn], axis=0)
-                vars_dict[sn] = interp1d(mcd_ls_c, combined, axis=0, bounds_error=False, fill_value="extrapolate")(om_ls_c)
-        else:
-            short_names = []
-            vars_dict = {}
-
-        # --- Assembly ---
-        feat_list = [y_raw] + [vars_dict[sn] for sn in short_names]
-        X_raw = np.stack(feat_list, axis=-1)
-        T = X_raw.shape[0]
-        height, width = int(X_raw.shape[1]), int(X_raw.shape[2])
-
-        split_idx = int(0.8 * (T - window - horizon + 1)) + window
-        X_scaled = np.zeros_like(X_raw)
-        for c in range(X_raw.shape[-1]):
-            scaler = StandardScaler()
-            scaler.fit(X_raw[:split_idx, ..., c].reshape(split_idx, -1))
-            X_scaled[..., c] = scaler.transform(X_raw[..., c].reshape(T, -1)).reshape(T, 36, 72)
-
-        y_train_part = y_raw[:split_idx]
-        y_mean, y_std = y_train_part.mean(), y_train_part.std()
-        y_scaled = (y_raw - y_mean) / (y_std + 1e-6)
-
         return ScaledVolume(
-            values=X_scaled,
-            y_scaled=y_scaled,
-            ls=om_ls_raw,
-            y_mean=float(y_mean),
-            y_std=float(y_std),
-            height=height,
-            width=width,
-            latitude=None,
-            longitude=None,
-            split_idx=split_idx,
+            values=volume.values, y_scaled=volume.y_scaled, ls=volume.ls,
+            y_mean=volume.y_mean, y_std=volume.y_std, height=volume.height,
+            width=volume.width, latitude=volume.latitude, longitude=volume.longitude,
+            split_idx=volume.split_idx, input_means=volume.input_means,
+            input_stds=volume.input_stds, dataset_id=volume.dataset_id,
+            source_type=volume.source_type, data_dir=volume.data_dir,
+            manifest=volume.manifest, dataset_fingerprint=volume.fingerprint,
+            sample_starts=volume.sample_starts,
+            sample_mars_years=volume.sample_mars_years,
+            blocks=volume.blocks,
+            train_sample_end=volume.train_sample_end,
+            data_directories=volume.data_directories,
+            split_ranges=volume.split_ranges,
+            split_window_starts=volume.split_window_starts,
+            split_policy=volume.split_policy,
         )

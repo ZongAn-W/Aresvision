@@ -1,17 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../i18n';import { useSettings } from '../contexts/SettingsContext';
+import { normalizeTrainingDefaults } from '../utils/trainingDefaults.js';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import {
   fetchScripts,
   startTrainingTask,
   stopTrainingTask,
+  cancelTrainingTask,
   deleteTrainingTask,
   uploadUserModel,
   fetchUserModels,
   getUserModelDownloadUrl,
   revalidateUserModel,
   deleteUserModel,
+  renameUserModel,
+  downloadUserModel,
   uploadTrainingWeight,
   fetchTrainingWeights,
   deleteTrainingWeight,
@@ -30,6 +34,7 @@ import {
   getTransferFreezeModes,
   isRecurrentArchitecture,
   sanitizeTrainingDataset,
+  TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1,
   TRAINING_DATASET_EARTH_MERRA2_V2,
   TRAINING_DATASET_MCD_OVERVIEW,
   TRAINING_DATASET_OPENMARS_MCD,
@@ -48,9 +53,15 @@ import {
   EARTH_MODEL_SOURCE_UPLOADED,
   EARTH_OPTIONAL_CHANNELS,
   EARTH_WINDOW,
+  EARTH_3HOURLY_DATASET_ID,
+  getEarthTrainingProfile,
+  isEarthTrainingDataset,
   buildEarthTrainingHyperparameters,
+  EARTH_DEFAULT_SPLIT_RATIOS,
+  normalizeEarthSplitRatios,
   captureTrainingDraft,
   getEarthUploadedSelectionBlocker,
+  classifyEarthTrainingError,
   readEarthDatasetAvailability,
   readEarthUploadedModelCompatibility,
   resolveEarthTrainingRestore,
@@ -135,6 +146,10 @@ export default function ModelTrainingPage() {
   const { showToast } = useToast();
   const isLight = settings.theme === 'light';
   const isZh = settings.language !== 'en';
+  const trainingDefaults = useMemo(
+    () => normalizeTrainingDefaults(settings.trainingDefaults),
+    [settings.trainingDefaults],
+  );
   const structureLabelLanguage = isZh ? 'zh' : 'en';
   const locale = isZh ? 'zh-CN' : 'en-US';
 
@@ -204,16 +219,23 @@ export default function ModelTrainingPage() {
       datasetOpenMarsMcd: isZh ? 'OpenMARS + MCD 融合' : 'OpenMARS + MCD',
       datasetMcdOverview: isZh ? 'MCD 全量 MY24-MY35' : 'Full MCD MY24-MY35',
       datasetEarthMerra2V2: isZh ? '地球 MERRA-2 全球 5°' : 'Earth MERRA-2 global 5°',
-      // 地球数据集不再渲染说明面板：发布日期划分、网格、通道单位与发布指纹都由
-      // 服务端在创建任务时校验并绑定，这里只保留无法训练时的阻塞提示。
+      datasetEarthMerra23HourlyV1: isZh ? '地球 MERRA-2 全球 0.75° · 3 小时' : 'Earth MERRA-2 global 0.75° · 3-hourly',
+      // 地球数据集契约由服务端校验并绑定；配置画布显示频率、网格和窗口，
+      // 就绪检查继续负责不可用状态与阻塞提示。
       earthUnavailableTitle: isZh ? '当前不可训练' : 'Not trainable right now',
       earthUnavailableFallback: isZh ? '数据集状态不可用。' : 'The dataset state is unavailable.',
+      earthTrainingErrorDataset: isZh ? '数据集不可用：请检查服务器数据包状态。' : 'Dataset unavailable: check the server data package status.',
+      earthTrainingErrorConfig: isZh ? '配置不支持：该数据集只支持固定的训练配置。' : 'Configuration unsupported: this dataset only supports its fixed training profile.',
+      earthTrainingErrorCheckpoint: isZh ? 'Checkpoint 不兼容：数据集、频率、网格或窗口不匹配。' : 'Checkpoint incompatible: dataset, frequency, grid or window does not match.',
       earthModelFixedNote: isZh
         ? 'Earth 官方模型固定为 DLinear（线性隐藏层数可在「超参数」里调整）。'
         : 'The official Earth model is fixed to DLinear; adjust the linear hidden layers under Hyperparameters.',
+      earthThreeHourlyModelFixedNote: isZh
+        ? '56 → 24 · TO3 (DU) · UTC 三小时 · 240×480'
+        : '56 → 24 · TO3 (DU) · UTC 3-hourly · 240×480',
       earthUploadedCompatibleNote: isZh
-        ? '该上传模型已通过 Earth 兼容性校验：接收过去 7 天 × 选中通道 × 36×72 输入，输出未来 3 天 TO3。训练时会固定当前模型版本与内容指纹。'
-        : 'This uploaded model passed the Earth compatibility check: it accepts 7 days x selected channels x 36x72 and returns 3 days of TO3. The current version and content hash are pinned when training starts.',
+        ? '该上传模型已通过 Earth 兼容性校验：数据集、频率、网格、输入窗口和输出窗口均匹配。训练时会固定当前模型版本与内容指纹。'
+        : 'This uploaded model passed the Earth compatibility check: dataset, frequency, grid, input window and horizon match. The current version and content hash are pinned when training starts.',
       earthUploadedIncompatible: isZh
         ? '该上传模型不适用于 Earth 数据。'
         : 'This uploaded model is not compatible with Earth data.',
@@ -221,13 +243,14 @@ export default function ModelTrainingPage() {
       earthIncompatible: isZh ? 'Earth 不兼容' : 'Not Earth compatible',
       earthCompatibilityChecking: isZh ? '正在检查 Earth 兼容性…' : 'Checking Earth compatibility…',
       earthCompatibilityFailed: isZh ? '无法读取 Earth 兼容性结论。' : 'Could not read the Earth compatibility result.',
+      earthCompatibilityUnknown: isZh ? '兼容性未知' : 'Compatibility unknown',
       earthUploadedHelpTitle: isZh ? 'Earth 上传模型要求' : 'Earth uploaded model requirements',
       earthUploadedHelpItems: isZh
         ? '单个 .py 文件导出 MODEL_SPEC 与 build_model(config)；MODEL_SPEC.datasets 必须声明 earth_merra2；输入 [B,7,C,36,72]，输出 [B,3,1,36,72]；不得要求 Ls 或 MOLA 地形（火星专用）。'
         : 'One .py file exporting MODEL_SPEC and build_model(config); MODEL_SPEC.datasets must declare earth_merra2; input [B,7,C,36,72] and output [B,3,1,36,72]; it must not require Ls or MOLA topography (Mars-only).',
       earthBaseInput: isZh ? 'TO3（必选）' : 'TO3 (required)',
-      earthWindowField: isZh ? '过去 7 天' : 'Past 7 days',
-      earthHorizonField: isZh ? '未来 3 天' : 'Next 3 days',
+      earthWindowField: isZh ? '输入窗口' : 'Input window',
+      earthHorizonField: isZh ? '输出窗口' : 'Output horizon',
       sourceDefault: getTrainingSourceLabel('default', { isZh }),
       sourceHintDefault: isZh
         ? '训练数据由管理员在服务器后台维护，普通用户不再切换自有融合数据。'
@@ -427,6 +450,13 @@ export default function ModelTrainingPage() {
       uploadingModel: isZh ? '上传中...' : 'Uploading...',
       revalidateModel: isZh ? '重新校验' : 'Revalidate',
       deleteUploadedModel: isZh ? '删除' : 'Delete',
+      downloadUploadedModel: isZh ? '下载源码' : 'Download source',
+      renameUploadedModel: isZh ? '重命名' : 'Rename',
+      uploadedModelName: isZh ? '自定义模型名称' : 'Custom model name',
+      saveUploadedModelName: isZh ? '保存' : 'Save',
+      cancelUploadedModelRename: isZh ? '取消' : 'Cancel',
+      uploadedModelNameRequired: isZh ? '请输入模型名称（最多 120 个字符）。' : 'Enter a model name (up to 120 characters).',
+      renameUploadedModelSuccess: isZh ? '自定义模型名称已更新' : 'Custom model name updated',
       uploadedModelValid: isZh ? '可训练' : 'Valid',
       uploadedModelInvalid: isZh ? '需修正' : 'Invalid',
       uploadedModelPending: isZh ? '校验中' : 'Pending',
@@ -534,6 +564,8 @@ export default function ModelTrainingPage() {
       loginToStart: isZh ? '登录后开始实验' : 'Sign in to start',
       starting: isZh ? '正在启动...' : 'Starting...',
       stopTraining: isZh ? '停止训练' : 'Stop training',
+      cancelQueued: isZh ? '取消排队' : 'Cancel queue',
+      queuePosition: (position) => position ? (isZh ? `队列第 ${position} 位` : `Queue position ${position}`) : (isZh ? '等待调度' : 'Waiting for scheduler'),
       testModel: isZh ? '模型测试' : 'Test model',
       deleteRecord: isZh ? '删除记录' : 'Delete record',
       renameModel: isZh ? '重命名' : 'Rename',
@@ -560,6 +592,9 @@ export default function ModelTrainingPage() {
       datasetStatusLabel: isZh ? '身份校验' : 'Identity status',
       datasetFingerprintLabel: isZh ? '发布指纹' : 'Release fingerprint',
       modelSourceLabel: isZh ? '模型来源' : 'Model source',
+      customModelLabel: isZh ? '自定义模型' : 'Custom model',
+      customModelVersionLabel: isZh ? '模型版本' : 'Model version',
+      customModelFileLabel: isZh ? '模型文件' : 'Model file',
       inputChannelsLabel: isZh ? '输入通道' : 'Input channels',
       windowLabel: isZh ? '输入窗口' : 'Input window',
       horizonLabel: isZh ? '预测步长' : 'Horizon',
@@ -622,16 +657,19 @@ export default function ModelTrainingPage() {
   const [selectedTrainingWeightId, setSelectedTrainingWeightId] = useState('');
   const [uploadingWeight, setUploadingWeight] = useState(false);
   const [trainingDataset, setTrainingDataset] = useState(TRAINING_DATASET_OPENMARS_MCD);
-  const [transferEnabled, setTransferEnabled] = useState(false);
+  const [transferEnabled, setTransferEnabled] = useState(trainingDefaults.transferEnabled);
   const [transferSourceType, setTransferSourceType] = useState('task');
   const [transferSourceTaskId, setTransferSourceTaskId] = useState('');
-  const [transferFreezeMode, setTransferFreezeMode] = useState('none');
-  const [finetuneLearningRate, setFinetuneLearningRate] = useState(0.0001);
+  const [transferFreezeMode, setTransferFreezeMode] = useState(trainingDefaults.transferFreezeMode);
+  const [finetuneLearningRate, setFinetuneLearningRate] = useState(trainingDefaults.finetuneLearningRate);
   const [modelArchitecture, setModelArchitecture] = useState('predrnnv2');
   const [useSphere, setUseSphere] = useState(false);
-  const [epochs, setEpochs] = useState(10);
-  const [batchSize, setBatchSize] = useState(32);
-  const [learningRate, setLearningRate] = useState(0.001);
+  const [epochs, setEpochs] = useState(trainingDefaults.epochs);
+  const [batchSize, setBatchSize] = useState(trainingDefaults.batchSize);
+  const [learningRate, setLearningRate] = useState(trainingDefaults.learningRate);
+  const [trainRatio, setTrainRatio] = useState(trainingDefaults.trainRatio);
+  const [validationRatio, setValidationRatio] = useState(trainingDefaults.validationRatio);
+  const [testRatio, setTestRatio] = useState(trainingDefaults.testRatio);
   const [stlstmLayers, setStlstmLayers] = useState(3);
   const [customModelName, setCustomModelName] = useState('');
   const [modelNameError, setModelNameError] = useState('');
@@ -639,10 +677,10 @@ export default function ModelTrainingPage() {
   const [architectureParamsByModel, setArchitectureParamsByModel] = useState(() =>
     createDefaultArchitectureParamsByModel()
   );
-  const [window_, setWindow] = useState(3);
-  const [horizon, setHorizon] = useState(3);
-  const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(0);
-  const [seed, setSeed] = useState(11);
+  const [window_, setWindow] = useState(trainingDefaults.window);
+  const [horizon, setHorizon] = useState(trainingDefaults.horizon);
+  const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(trainingDefaults.earlyStoppingPatience);
+  const [seed, setSeed] = useState(trainingDefaults.seed);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [testTaskId, setTestTaskId] = useState(null);
   const [renameTask, setRenameTask] = useState(null);
@@ -661,18 +699,20 @@ export default function ModelTrainingPage() {
   const runBarNodeRef = useRef(null);
   const runBarObserverRef = useRef(null);
 
-  // ── Earth 模式派生值 ────────────────────────────────────────────────
-  const earthMode = trainingDataset === TRAINING_DATASET_EARTH_MERRA2_V2;
+  // ── Earth 模式派生值（旧日频与 3 小时 profile 共用状态机） ──────────
+  const earthMode = isEarthTrainingDataset(trainingDataset);
   const earthDatasetDescriptor = useMemo(
-    () => datasetCatalog.find((item) => item.dataset_id === TRAINING_DATASET_EARTH_MERRA2_V2) || null,
-    [datasetCatalog],
+    () => datasetCatalog.find((item) => item.dataset_id === trainingDataset) || null,
+    [datasetCatalog, trainingDataset],
   );
   const earthAvailability = useMemo(
     () => readEarthDatasetAvailability(earthDatasetDescriptor),
     [earthDatasetDescriptor],
   );
   // Earth 使用规范通道顺序；火星保持原有 U/V/D/S/T 顺序。
-  const activeChannelOrder = earthMode ? EARTH_CHANNEL_ORDER : channelOrder;
+  const activeChannelOrder = earthMode
+    ? (trainingDataset === EARTH_3HOURLY_DATASET_ID ? EARTH_OPTIONAL_CHANNELS : EARTH_CHANNEL_ORDER)
+    : channelOrder;
   const activeChannelMap = useMemo(
     () => (earthMode
       ? Object.fromEntries(EARTH_CHANNEL_ORDER.map((channel) => [
@@ -703,7 +743,7 @@ export default function ModelTrainingPage() {
       selectedChannels,
       customModelParams,
     });
-    if (normalized === TRAINING_DATASET_EARTH_MERRA2_V2) {
+    if (isEarthTrainingDataset(normalized)) {
       marsSnapshotRef.current = currentDraft;
       const restore = resolveEarthTrainingRestore(earthSnapshotRef.current);
       setTrainingDataset(normalized);
@@ -711,8 +751,9 @@ export default function ModelTrainingPage() {
       setSelectedUploadedModelId(restore ? restore.selectedUploadedModelId : '');
       setModelArchitecture(restore ? restore.modelArchitecture : EARTH_MODEL_ARCHITECTURE);
       setUseSphere(false);
-      setWindow(EARTH_WINDOW);
-      setHorizon(EARTH_HORIZON);
+      const earthProfile = getEarthTrainingProfile(normalized);
+      setWindow(earthProfile.window);
+      setHorizon(earthProfile.horizon);
       setTransferEnabled(false);
       setSelectedChannels(restore ? restore.selectedChannels : [...EARTH_OPTIONAL_CHANNELS]);
       setCustomModelParams(restore ? restore.customModelParams : {});
@@ -773,8 +814,12 @@ export default function ModelTrainingPage() {
     }
     const controller = new AbortController();
     let active = true;
+    setEarthUploadedStatus(null);
     setEarthUploadedLoading(true);
-    fetchUploadedModelEarthCompatibility(selectedUploadedModelId, { signal: controller.signal })
+    fetchUploadedModelEarthCompatibility(selectedUploadedModelId, {
+      signal: controller.signal,
+      datasetId: trainingDataset,
+    })
       .then((payload) => {
         if (active) setEarthUploadedStatus(payload);
       })
@@ -783,6 +828,7 @@ export default function ModelTrainingPage() {
         if (active) {
           setEarthUploadedStatus({
             compatible: false,
+            status: 'unknown',
             reasons: [error?.message || copy.earthCompatibilityFailed],
           });
         }
@@ -794,28 +840,33 @@ export default function ModelTrainingPage() {
       active = false;
       controller.abort();
     };
-  }, [copy.earthCompatibilityFailed, earthMode, modelSource, selectedUploadedModelId]);
+  }, [copy.earthCompatibilityFailed, earthMode, modelSource, selectedUploadedModelId, trainingDataset, uploadedModels]);
 
   const earthUploadedCompatibility = useMemo(
-    () => readEarthUploadedModelCompatibility(earthUploadedStatus),
-    [earthUploadedStatus],
+    () => readEarthUploadedModelCompatibility(
+      trainingDataset === EARTH_3HOURLY_DATASET_ID
+        && (earthUploadedStatus?.dataset_id !== trainingDataset
+          || earthUploadedStatus?.package_id !== selectedUploadedModelId)
+        ? null : earthUploadedStatus),
+    [earthUploadedStatus, trainingDataset, selectedUploadedModelId],
   );
   // Earth + 上传模型的选择状态：未选/无结论/不兼容都在这里统一成一句可展示原因。
   const earthUploadedBlocker = getEarthUploadedSelectionBlocker({
     modelSource: earthMode ? modelSource : EARTH_MODEL_SOURCE_OFFICIAL,
     uploadedModelId: selectedUploadedModelId,
     compatibility: earthUploadedStatus,
+    datasetId: trainingDataset,
   });
   const earthUploadedInlineError = earthMode
     && modelSource === EARTH_MODEL_SOURCE_UPLOADED
-    && earthUploadedCompatibility.known
     && !earthUploadedCompatibility.compatible
-    ? (earthUploadedCompatibility.reason || copy.earthUploadedIncompatible)
+    ? (earthUploadedCompatibility.reason === 'earth_compatibility_unknown'
+        ? copy.earthCompatibilityUnknown : earthUploadedCompatibility.reason || copy.earthUploadedIncompatible)
     : '';
   const earthUploadedStatusLabel = earthMode && modelSource === EARTH_MODEL_SOURCE_UPLOADED
     ? (earthUploadedLoading
         ? copy.earthCompatibilityChecking
-        : (earthUploadedCompatibility.compatible ? copy.earthCompatible : copy.earthIncompatible))
+        : (!earthUploadedCompatibility.known ? copy.earthCompatibilityUnknown : earthUploadedCompatibility.compatible ? copy.earthCompatible : copy.earthIncompatible))
     : '';
   const earthUploadedStatusTone = earthUploadedCompatibility.compatible ? 'ok' : 'error';
   const earthUploadedNotice = earthMode
@@ -946,6 +997,7 @@ export default function ModelTrainingPage() {
   const startDisabled = user
     ? (modelSource === 'official' && !selectedScriptAvailable) ||
       uploadedModelStartBlocked ||
+      (earthMode && (!earthAvailability.selectable || earthUploadedLoading || Boolean(earthUploadedBlocker))) ||
       transferStartBlocked ||
       !!modelNameError ||
       !customModelName.trim() ||
@@ -1015,7 +1067,7 @@ export default function ModelTrainingPage() {
       const label = earthUploadedBlocker === 'uploaded_model_required'
         ? copy.inspectorMissingUploadedModel
         : earthUploadedBlocker === 'earth_compatibility_unknown'
-          ? copy.earthCompatibilityChecking
+          ? (earthUploadedLoading ? copy.earthCompatibilityChecking : copy.earthCompatibilityUnknown)
           : earthUploadedBlocker;
       blockers.push({ code: 'earth-uploaded', label });
     }
@@ -1023,11 +1075,13 @@ export default function ModelTrainingPage() {
     return { canTrain: blockers.length === 0, blockers };
   }, [
     copy.earthCompatibilityChecking,
+    copy.earthCompatibilityUnknown,
     copy.earthUnavailableFallback,
     earthAvailability.reason,
     earthAvailability.selectable,
     earthMode,
     earthUploadedBlocker,
+    earthUploadedLoading,
     copy.inspectorCustomParamsInvalid,
     copy.inspectorLoginRequired,
     copy.inspectorMissingName,
@@ -1473,6 +1527,50 @@ export default function ModelTrainingPage() {
     }
   };
 
+  const handleRenameUploadedModel = async (modelId, displayName) => {
+    if (!modelId || isProcessing) return false;
+    try {
+      setIsProcessing(true);
+      const updated = await renameUserModel(modelId, displayName);
+      // Preserve the schema reference so editing the name does not reset the
+      // custom parameter values already entered for this experiment.
+      setUploadedModels((items) => items.map((item) => item.id === modelId
+        ? { ...item, display_name: updated.display_name, updated_at: updated.updated_at }
+        : item));
+      setEarthUploadedStatus((current) => current?.package_id === modelId
+        ? { ...current, display_name: updated.display_name }
+        : current);
+      showToast(copy.renameUploadedModelSuccess, 'success');
+      return true;
+    } catch (error) {
+      showToast(error.message, 'error');
+      return false;
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDownloadUploadedModel = async (modelId) => {
+    if (!modelId || isProcessing) return;
+    try {
+      setIsProcessing(true);
+      const blob = await downloadUserModel(modelId);
+      const model = uploadedModels.find((item) => item.id === modelId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = model?.original_filename?.split(/[\\/]/).pop() || 'model.py';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      showToast(error.message, 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleDeleteUploadedModel = async (modelId) => {
     if (!modelId || isProcessing) return;
     try {
@@ -1546,6 +1644,7 @@ export default function ModelTrainingPage() {
    * 新建实验 / 返回实验目录：清空命名、标签与迁移选择，保留默认模型与数据集参数。
    */
   const handleCreateExperiment = () => {
+    const defaults = normalizeTrainingDefaults(settings.trainingDefaults);
     changeView('config');
     restoreTransferStructureSnapshot();
     transferStructureSnapshotRef.current = null;
@@ -1553,11 +1652,22 @@ export default function ModelTrainingPage() {
     setCustomModelName('');
     setModelNameError('');
     setNewTaskTagIds([]);
-    setTransferEnabled(false);
+    setTransferEnabled(earthMode ? false : defaults.transferEnabled);
     setTransferSourceType('task');
     setTransferSourceTaskId('');
-    setTransferFreezeMode('none');
-    setFinetuneLearningRate(0.0001);
+    setTransferFreezeMode(defaults.transferFreezeMode);
+    setFinetuneLearningRate(defaults.finetuneLearningRate);
+    setEpochs(defaults.epochs);
+    setBatchSize(defaults.batchSize);
+    setLearningRate(defaults.learningRate);
+    setTrainRatio(defaults.trainRatio);
+    setValidationRatio(defaults.validationRatio);
+    setTestRatio(defaults.testRatio);
+    const activeEarthProfile = earthMode ? getEarthTrainingProfile(trainingDataset) : null;
+    setWindow(activeEarthProfile ? activeEarthProfile.window : defaults.window);
+    setHorizon(activeEarthProfile ? activeEarthProfile.horizon : defaults.horizon);
+    setEarlyStoppingPatience(defaults.earlyStoppingPatience);
+    setSeed(defaults.seed);
     setSelectedUploadedModelId((current) => current);
     setModelArchitecture('predrnnv2');
     setUseSphere(false);
@@ -1599,6 +1709,12 @@ export default function ModelTrainingPage() {
       return;
     }
 
+    const splitRatios = normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio);
+    if (!splitRatios.valid) {
+      showToast(isZh ? '训练集、验证集、测试集比例之和必须为 100%' : 'Train, validation and test ratios must total 100%', 'error');
+      return;
+    }
+
     // Earth 与火星走两条独立的提交路径：Earth 不发送迁移字段，也不经过火星的
     // 通道与窗口规范化，服务端会独立复核同一套 Earth 契约。选择上传模型时只发送
     // 模型 ID 与自定义参数值；模型版本、内容哈希与数据快照都由服务端固定。
@@ -1613,7 +1729,7 @@ export default function ModelTrainingPage() {
           showToast(copy.selectValidUploadedModel, 'error');
           return;
         }
-        if (!earthUploadedCompatibility.compatible) {
+        if (earthUploadedLoading || earthUploadedBlocker) {
           showToast(
             earthUploadedCompatibility.reason || copy.earthUploadedIncompatible,
             'error',
@@ -1630,6 +1746,7 @@ export default function ModelTrainingPage() {
       try {
         setIsProcessing(true);
         const earthHyperparameters = buildEarthTrainingHyperparameters({
+          datasetId: trainingDataset,
           selectedChannels,
           epochs,
           batchSize,
@@ -1651,7 +1768,7 @@ export default function ModelTrainingPage() {
             modelSource: uploadedEarth ? 'uploaded' : 'official',
             uploadedModelId: uploadedEarth ? selectedUploadedModelId : null,
             tagIds: newTaskTagIds,
-            datasetId: TRAINING_DATASET_EARTH_MERRA2_V2,
+            datasetId: trainingDataset,
           }
         );
         setTasks((previous) => {
@@ -1664,7 +1781,15 @@ export default function ModelTrainingPage() {
         changeView('monitor');
         await loadTasks();
       } catch (error) {
-        alert(`${t('modelTraining.startError')}${error?.message || ''}`);
+        const category = classifyEarthTrainingError(error);
+        const detail = category === 'dataset_unavailable'
+          ? copy.earthTrainingErrorDataset
+          : category === 'configuration_unsupported'
+            ? copy.earthTrainingErrorConfig
+            : category === 'checkpoint_incompatible'
+              ? copy.earthTrainingErrorCheckpoint
+              : (error?.message || '');
+        alert(`${t('modelTraining.startError')}${detail ? ` ${detail}` : ''}`);
       } finally {
         setIsProcessing(false);
       }
@@ -1721,6 +1846,9 @@ export default function ModelTrainingPage() {
           freezeMode: transferFreezeMode,
           finetuneLearningRate,
         },
+        trainRatio: splitRatios.train_ratio,
+        validationRatio: splitRatios.validation_ratio,
+        testRatio: splitRatios.test_ratio,
       });
       const hyperparameters =
         modelSource === 'uploaded'
@@ -1769,6 +1897,19 @@ export default function ModelTrainingPage() {
       await loadTasks();
     } catch (error) {
       alert(t('modelTraining.stopError') + error.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCancelTask = async (taskId) => {
+    if (isProcessing) return;
+    try {
+      setIsProcessing(true);
+      await cancelTrainingTask(taskId);
+      await loadTasks();
+    } catch (error) {
+      alert((isZh ? '取消排队出错: ' : 'Cancel queue error: ') + error.message);
     } finally {
       setIsProcessing(false);
     }
@@ -1911,6 +2052,9 @@ export default function ModelTrainingPage() {
     setEpochs(config.epochs);
     setBatchSize(config.batchSize);
     setLearningRate(config.learningRate);
+    setTrainRatio(config.trainRatio ?? EARTH_DEFAULT_SPLIT_RATIOS.train_ratio);
+    setValidationRatio(config.validationRatio ?? EARTH_DEFAULT_SPLIT_RATIOS.validation_ratio);
+    setTestRatio(config.testRatio ?? EARTH_DEFAULT_SPLIT_RATIOS.test_ratio);
     setSeed(config.seed);
     setEarlyStoppingPatience(config.earlyStoppingPatience);
     // 复制配置不把原任务当成迁移学习来源。
@@ -1965,6 +2109,9 @@ export default function ModelTrainingPage() {
         epochs,
         batchSize,
         learningRate,
+        trainRatio,
+        validationRatio,
+        testRatio,
         windowValue: window_,
         horizon,
         earlyStoppingPatience,
@@ -2000,8 +2147,8 @@ export default function ModelTrainingPage() {
         architecturePickerOpen,
         advancedOpen,
         modelArchitectures: MODEL_ARCHITECTURES,
-        guideDownloadUrl: getUserModelDownloadUrl('guide'),
-        templateDownloadUrl: getUserModelDownloadUrl('template'),
+        guideDownloadUrl: getUserModelDownloadUrl(earthMode && trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1 ? 'earth-3hourly-guide' : 'guide'),
+        templateDownloadUrl: getUserModelDownloadUrl(earthMode && trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1 ? 'earth-3hourly-template' : 'template'),
         earthDatasetAvailability: earthAvailability,
         datasetCatalogError,
         earthUploadedInlineError,
@@ -2033,6 +2180,8 @@ export default function ModelTrainingPage() {
         onUploadModel: handleUploadModel,
         onRevalidateModel: handleRevalidateModel,
         onDeleteUploadedModel: handleDeleteUploadedModel,
+        onRenameUploadedModel: handleRenameUploadedModel,
+        onDownloadUploadedModel: handleDownloadUploadedModel,
         onCustomModelParamChange: handleCustomModelParamChange,
         onChannelToggle: handleChannelToggle,
         onArchitectureSelect: (architectureId) => {
@@ -2052,6 +2201,11 @@ export default function ModelTrainingPage() {
         onUploadWeight: handleUploadWeight,
         onDeleteWeight: handleDeleteWeight,
         onFoldChange: handleFoldChange,
+        onSplitRatioChange: (key, value) => {
+          if (key === 'trainRatio') setTrainRatio(value);
+          if (key === 'validationRatio') setValidationRatio(value);
+          if (key === 'testRatio') setTestRatio(value);
+        },
         onTagIdsChange: handleTagIdsChange,
         onCreateTag: handleCreateTag,
         onStart: handleStartTraining,
@@ -2091,6 +2245,7 @@ export default function ModelTrainingPage() {
         modelArchitecture: normalizedModelArchitecture,
         useSphere,
         trainingDatasetLabel: trainingDataset === TRAINING_DATASET_EARTH_MERRA2_V2 ? copy.datasetEarthMerra2V2
+          : trainingDataset === EARTH_3HOURLY_DATASET_ID ? copy.datasetEarthMerra23HourlyV1
           : trainingDataset === TRAINING_DATASET_MCD_OVERVIEW ? copy.datasetMcdOverview : copy.datasetOpenMarsMcd,
       }}
       resources={{
@@ -2134,6 +2289,7 @@ export default function ModelTrainingPage() {
       logContainerRef={logContainerRef}
       onScroll={handleScroll}
       onStop={handleStopTask}
+      onCancel={handleCancelTask}
       copy={copy}
     />
   );

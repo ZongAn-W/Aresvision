@@ -12,6 +12,18 @@ import {
 
 const FINGERPRINT = 'c'.repeat(64);
 
+test('three-hour field uses an explicit UTC timestamp without adding a date query', { concurrency: 1 }, async () => {
+  await withFetch(() => jsonResponse({ ok: true }), async (calls) => {
+    await fetchEarthField('earth_merra2_3hourly_v1', {
+      variable: 'TO3', timestamp: '2021-07-08T01:30:00Z', fingerprint: FINGERPRINT,
+    });
+    const url = new URL(calls[0].url, 'http://localhost');
+    assert.equal(url.searchParams.get('timestamp'), '2021-07-08T01:30:00Z');
+    assert.equal(url.searchParams.has('date'), false);
+    assert.equal(url.searchParams.get('expected_fingerprint'), FINGERPRINT);
+  });
+});
+
 /**
  * Swap in a fetch mock for the duration of ``run``.
  *

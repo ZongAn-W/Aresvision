@@ -50,7 +50,7 @@ test('experiment directory rows render inside a scrollable compact list', () => 
 
 test('compact loss chart is bounded by the workspace width rather than the window', () => {
   assert.match(monitorSource, /<LossEvolutionChart[\s\S]*?compact/);
-  assert.match(monitorSource, /height=\{240\}/);
+  assert.match(monitorSource, /height=\{280\}/);
   assert.doesNotMatch(monitorSource, /window\.innerWidth/);
   assert.doesNotMatch(readFileSync(new URL('../../components/LossEvolutionChart.jsx', import.meta.url), 'utf8'), /window\.innerWidth/);
 });

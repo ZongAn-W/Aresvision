@@ -1,4 +1,5 @@
 import { dayOfYear, yearProgress } from './observatoryTimelineRail.js';
+import { isValidUtcTimestamp } from '../EarthOverview/earthOverviewModel.js';
 
 const TRACK_HEIGHT = 460;
 const BASELINE = 22;
@@ -8,17 +9,29 @@ function finite(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+export function earthRailProgress(date, year) {
+  if (!isValidUtcTimestamp(date)) return yearProgress(date, year);
+  if (Number(date.slice(0, 4)) !== year) return null;
+  return (Date.parse(date) - Date.UTC(year, 0, 1)) / (Date.UTC(year + 1, 0, 1) - Date.UTC(year, 0, 1));
+}
+
+export function earthRailDay(date, year) {
+  return isValidUtcTimestamp(date) && Number(date.slice(0, 4)) === year
+    ? 1 + (Date.parse(date) - Date.UTC(year, 0, 1)) / 86_400_000 : dayOfYear(date, year);
+}
+
 /** Convert the Earth series into calendar-positioned rows without changing units. */
 export function earthRailSeries(series, year) {
-  const dates = Array.isArray(series?.dates) ? series.dates : [];
+  const dates = Array.isArray(series?.timestamps) ? series.timestamps : Array.isArray(series?.dates) ? series.dates : [];
   const values = Array.isArray(series?.values) ? series.values : [];
   return dates.flatMap((date, index) => {
     if (typeof date !== 'string' || Number(date.slice(0, 4)) !== year) return [];
     return [{
       date,
       value: finite(values[index]) ? values[index] : null,
-      progress: yearProgress(date, year),
-      day: dayOfYear(date, year),
+      progress: earthRailProgress(date, year),
+      day: earthRailDay(date, year),
+      stepDays: isValidUtcTimestamp(date) ? 1 / 8 : 1,
     }];
   }).filter((row) => row.progress !== null);
 }
@@ -44,7 +57,7 @@ export function earthRailPath(rows, domain, { baseline = BASELINE, maxOffset = M
       previous = null;
       return '';
     }
-    const contiguous = previous !== null && row.day === previous + 1;
+    const contiguous = previous !== null && row.day === previous + (row.stepDays || 1);
     const x = baseline + (high > low ? ((row.value - low) / (high - low)) : 0.5) * maxOffset;
     const y = row.progress * height;
     previous = row.day;
@@ -56,7 +69,7 @@ export function earthRailPath(rows, domain, { baseline = BASELINE, maxOffset = M
 export function nearestEarthRailDate(dates, requestedDay, year) {
   if (!Array.isArray(dates) || !dates.length || !Number.isFinite(requestedDay)) return null;
   return dates.reduce((best, date) => {
-    const day = dayOfYear(date, year);
+    const day = earthRailDay(date, year);
     if (!Number.isFinite(day)) return best;
     if (!best) return { date, day };
     const distance = Math.abs(day - requestedDay);

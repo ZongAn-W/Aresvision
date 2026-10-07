@@ -63,7 +63,7 @@ export default function DynamicModelParamsForm({
                 key={key}
                 className="experiment-expert-field"
                 data-invalid={error ? 'true' : 'false'}
-                style={{ cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1 }}
+                style={{ position: 'relative', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1 }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                   <span style={{ minWidth: 0 }}>
@@ -106,7 +106,7 @@ export default function DynamicModelParamsForm({
                   checked={checked}
                   disabled={disabled}
                   onChange={(event) => onChange(key, event.target.checked)}
-                  style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                  style={{ position: 'absolute', top: 0, left: 0, width: 1, height: 1, padding: 0, margin: 0, opacity: 0, pointerEvents: 'none' }}
                 />
               </label>
             );

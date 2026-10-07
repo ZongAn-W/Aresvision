@@ -4,6 +4,33 @@ Trusted lab users can upload a single Python file from the model training page a
 
 The platform owns data loading, normalization, batching, the training loop, metrics, checkpoints, logs, and model testing. The uploaded file only defines the PyTorch architecture and a small parameter schema.
 
+## Downloading and Renaming Uploaded Models
+
+On the training page, expand **Manage models**, select a model, and choose
+**Download source** or **Rename**. Renaming accepts a nonempty display name of
+up to 120 characters, trims surrounding whitespace, and updates that package's
+name in the list and current model summary. Save commits the change; Cancel or
+Escape closes the editor. Revalidation preserves the edited name.
+
+Both actions require authentication and are available only to the uploader:
+
+| Action | API | Result |
+| --- | --- | --- |
+| Download source | `GET /api/user-models/{model_id}/download` | Original uploaded bytes as a `.py` attachment, retaining the original basename |
+| Rename | `PATCH /api/user-models/{model_id}` with `{"display_name":"New name"}` | Updated model metadata |
+
+Other accounts receive 403; nonexistent or deleted packages receive 404.
+Downloads also return 404 when the stored source is missing. Invalid names are
+rejected with 400 or 422. Invalid or pending models may still be renamed or
+downloaded so their source can be repaired locally.
+
+Renaming changes metadata only: the package ID, version, source, content hash,
+validation result, and model identity already fixed in training tasks remain
+unchanged. The name inside `MODEL_SPEC` is not rewritten, and re-uploading the
+downloaded file follows the normal upload/version rules. Matching display names
+do not merge packages. Downloads contain architecture source; trained weights
+remain available from training task artifacts.
+
 ## Required Exports
 
 Every upload must export:
@@ -38,6 +65,46 @@ The platform passes these core config keys to `build_model(config)`:
 - `selected_channels`
 
 Any custom fields declared in `MODEL_SPEC["parameters"]` are also included in `config`.
+
+## Mars Input Channels and Checkpoints
+
+For Mars, `selected_channels` contains only user-selected auxiliary inputs, such as
+`["U", "D"]`. O3 is the fixed prediction target and the first input channel. The
+complete model input order is `["O3", *selected_channels]`: selecting no auxiliaries
+still supplies one O3 channel, and selecting U supplies `["O3", "U"]`.
+
+Both the official `demo3.py` runner and uploaded `user_model_runner.py` runner save
+the shared `aresvision_mars_forecast_checkpoint_v1` contract. The checkpoint retains
+auxiliary-only `training_contract.selected_channels`, while
+`normalization.input_channel_order` records the complete order. `input_mean`,
+`input_scale`, and `constant_channel_mask` each have one entry per input channel;
+each mean/scale entry has the training grid shape. Loading rejects reordered or
+missing channel names, incorrect counts or shapes, non-finite statistics, and
+non-positive input scales. Providing invalid saved normalization never silently
+refits it.
+
+Inference applies input statistics in that exact order, and independently uses
+`target_mean` and `target_scale` to restore predicted O3 values (with the existing
+`1e-6` scale epsilon). A constant target can retain `target_scale=0`; input scales
+must remain positive. Scaled-volume caches include checkpoint statistics so two
+tasks with the same data and channels cannot reuse each other's normalization.
+
+Older versioned checkpoints that recorded only auxiliary channel names are
+rejected. Retrain them, or migrate them separately only after verifying the
+original tensor order and all statistics; there is no automatic metadata repair.
+Legacy bare `state_dict` weights retain the existing normalization-refit path.
+These conventions apply to Mars; the Earth contract remains independent.
+
+Mars checkpoints also bind the initial training data identity. `mcd_overview`
+records the original full MCD directory; `openmars_mcd` records both OpenMARS and
+MCD directories, with source-tagged manifests. The runner retains the initial
+statistics and file identity instead of reloading them after training. Both
+prediction paths verify the saved directories, file names, sizes and modification
+times before cache/window/model access. A changed source returns HTTP 409
+`dataset_version_changed` and requires retraining. Complete identities are marked
+`verified`; historical weights without file identity stay explicitly `legacy`.
+Incomplete versioned checkpoints are rejected. See the
+[Mars dataset identity contract](dataset-registry.md#mars-数据绑定与预测校验).
 
 ## Declaring Which Dataset Feeds a Model
 

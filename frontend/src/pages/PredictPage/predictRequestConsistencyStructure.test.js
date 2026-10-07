@@ -98,10 +98,9 @@ test('loading locks every control that can change prediction request context', (
   assert.match(pageSource, /requestContextLocked/);
   assert.match(pageSource, /requestContextLocked=\{requestContextLocked\}/);
   assert.match(sidebarSource, /requestContextLocked/);
-  assert.match(sidebarSource, /OptionChips[\s\S]*disabled=\{requestContextLocked\}/);
+  assert.doesNotMatch(sidebarSource, /marsYear|availableMarsYears|setMarsYear/);
   assert.match(sidebarSource, /disabled=\{requestContextLocked \|\| trainingTasksLoading/);
   assert.match(sidebarSource, /disabled=\{requestContextLocked \|\| predictionHorizonLimit == null\}/);
-  assert.match(sidebarSource, /disabled=\{requestContextLocked \|\| isSwitchingSource\}/);
   assert.match(sidebarSource, /type="range"[\s\S]*disabled=\{requestContextLocked\}/);
   assert.match(sidebarSource, /type="checkbox"[\s\S]*disabled=\{requestContextLocked\}/);
 });

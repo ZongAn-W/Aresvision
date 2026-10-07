@@ -8,9 +8,9 @@ explicitly, so a field cannot be dropped by an untyped ``dict``.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional
+from typing import Annotated, ClassVar, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, FiniteFloat
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, FiniteFloat, model_serializer
 
 MODEL_CONFIG = ConfigDict(allow_inf_nan=False, populate_by_name=True)
 REQUEST_CONFIG = ConfigDict(allow_inf_nan=False, extra="forbid", populate_by_name=True)
@@ -27,13 +27,31 @@ OptionalReason = Optional[str]
 
 # ── shared building blocks ─────────────────────────────────────────────
 
-class EarthResearchIdentity(BaseModel):
+class _AdditiveEarthFields(BaseModel):
+    conditional_fields: ClassVar[frozenset[str]] = frozenset({
+        "frequency_hours", "time_zone", "time_aggregation", "analysis_aggregation", "timestamp_rule",
+        "source_grid_shape", "render_grid_shape", "render_method",
+    })
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_additions(self, handler):
+        result = handler(self)
+        for key in self.conditional_fields:
+            if key not in self.model_fields_set:
+                result.pop(key, None)
+        return result
+
+
+class EarthResearchIdentity(_AdditiveEarthFields):
     model_config = MODEL_CONFIG
 
     planet: Literal["earth"]
     dataset_id: str
     dataset_version: Optional[str] = None
     dataset_fingerprint: str
+    frequency_hours: Optional[int] = None
+    time_zone: Optional[str] = None
+    time_aggregation: Optional[str] = None
     dataset_schema: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("dataset_schema", "schema"),
@@ -41,7 +59,7 @@ class EarthResearchIdentity(BaseModel):
     )
 
 
-class EarthSourceMeta(BaseModel):
+class EarthSourceMeta(_AdditiveEarthFields):
     model_config = MODEL_CONFIG
 
     source: str
@@ -56,19 +74,25 @@ class EarthSourceMeta(BaseModel):
     source_sha256: Optional[str] = None
     processing: Optional[str] = None
     calendar: str
+    frequency_hours: Optional[int] = None
+    time_zone: Optional[str] = None
+    analysis_aggregation: Optional[str] = None
 
 
-class EarthTimeModel(BaseModel):
+class EarthTimeModel(_AdditiveEarthFields):
     model_config = MODEL_CONFIG
 
-    kind: Literal["iso-date"]
+    kind: Literal["iso-date", "iso-datetime"]
     calendar: str
     start: str
     end: str
     count: int
     step: int
-    step_unit: Literal["day"]
+    step_unit: Literal["day", "hour"]
     years: list[int]
+    frequency_hours: Optional[int] = None
+    time_zone: Optional[str] = None
+    timestamp_rule: Optional[str] = None
 
 
 class EarthColorRange(BaseModel):
@@ -380,6 +404,9 @@ class EarthSpatialBand(BaseModel):
 
 
 class EarthSpatialDiagnosticsResponse(EarthResearchIdentity):
+    source_grid_shape: Optional[list[int]] = None
+    render_grid_shape: Optional[list[int]] = None
+    render_method: Optional[str] = None
     year: int
     variable: VariableId
     units: str

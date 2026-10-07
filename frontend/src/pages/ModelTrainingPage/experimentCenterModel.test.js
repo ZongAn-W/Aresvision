@@ -48,7 +48,7 @@ test('阶段标识只包含配置、监控和结果三种取值', () => {
 });
 
 test('筛选标识与目录状态分组一致', () => {
-  assert.deepEqual(EXPERIMENT_STATUS_FILTERS, ['all', 'running', 'completed', 'failed']);
+  assert.deepEqual(EXPERIMENT_STATUS_FILTERS, ['all', 'queued', 'running', 'completed', 'failed', 'cancelled']);
 });
 
 test('坏的 metrics JSON 不阻塞结果页', () => {
@@ -195,7 +195,7 @@ test('目录计数按状态分组统计并合计全部', () => {
     { id: 4, status: 'failed' },
     { id: 5, status: 'completed' },
   ]);
-  assert.deepEqual(counts, { all: 5, running: 2, completed: 2, failed: 1 });
+  assert.deepEqual(counts, { all: 5, queued: 0, running: 2, completed: 2, failed: 1, cancelled: 0 });
 });
 
 test('结果阶段使用任务自身的进度而不是上一个任务的缓存', () => {

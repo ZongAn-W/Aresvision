@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,14 +29,21 @@ from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
 import numpy as np
+import xarray as xr
 
 from services.dataset_identity import build_dataset_fingerprint
-from services.earth_dataset import CHANNELS, SCHEMA, SPLITS, UNITS, load_earth_dataset
+from services.earth_dataset import (
+    CHANNELS, SCHEMA, SPLITS, UNITS, load_earth_dataset,
+    THREE_HOURLY_SCHEMA, THREE_HOURLY_DATASET_ID, THREE_HOURLY_DATASET_VERSION,
+    THREE_HOURLY_TRAINING_PROFILE, validate_earth_3hourly_dataset,
+)
+from services.netcdf_read_lock import netcdf_read_lock
 
 logger = logging.getLogger("aresvision.datasets.earth")
 
 MANIFEST_FILE_NAME = "manifest.json"
 DATA_FILE_NAME = "earth_merra2_daily.nc"
+THREE_HOURLY_DATA_FILE_NAME = "earth_merra2_3hourly.nc"
 
 GREGORIAN_CALENDARS = frozenset({"standard", "gregorian", "proleptic_gregorian"})
 
@@ -234,9 +242,10 @@ def readonly_array(values, dtype=None) -> np.ndarray:
 class VerifiedEarthRelease:
     """A verified snapshot of the fixed Earth release.
 
-    Holds the metadata plus the read-only arrays needed by the overview APIs, so
-    a request never re-opens the NetCDF file. The server never returns this
-    object over HTTP.
+    Daily releases hold fields for the existing overview and model APIs. The
+    three-hour snapshot holds coordinates and a server-only file path, with no
+    field arrays; its large volume stays on disk. The server never returns this
+    object over HTTP or includes the path in descriptor metadata.
     """
 
     metadata: dict
@@ -245,6 +254,7 @@ class VerifiedEarthRelease:
     latitude: np.ndarray
     longitude: np.ndarray
     fields: Mapping[str, np.ndarray]
+    data_path: Optional[Path] = None
 
 
 def read_earth_metadata(
@@ -431,3 +441,242 @@ def _extract_metadata(
         },
         "limitations": [str(item) for item in limitations],
     }
+
+
+def _canonical_json(value) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=True, allow_nan=False).encode("utf-8")
+
+
+def threehour_manifest_content_sha256(manifest: Mapping[str, Any]) -> str:
+    """Match the offline builder's non-self-referential fingerprint basis."""
+    return hashlib.sha256(_canonical_json({
+        key: value for key, value in manifest.items() if key != "dataset_fingerprint"
+    })).hexdigest()
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate manifest key: {key}")
+        result[key] = value
+    return result
+
+
+def _invalid_json_constant(value):
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
+def _finite_json_float(value):
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"non-finite JSON number: {value}")
+    return result
+
+
+def _assert_threehour_manifest_identity(manifest):
+    if (not isinstance(manifest, dict) or manifest.get("schema") != THREE_HOURLY_SCHEMA
+            or manifest.get("planet") != "Earth"
+            or manifest.get("dataset_id") != THREE_HOURLY_DATASET_ID
+            or manifest.get("dataset_version") != THREE_HOURLY_DATASET_VERSION
+            or manifest.get("data_file") != THREE_HOURLY_DATA_FILE_NAME):
+        raise EarthPackageError(REASON_INVALID_MANIFEST, "wrong three-hour release identity or filename")
+    if (not _SHA256_PATTERN.fullmatch(str(manifest.get("data_sha256", "")))
+            or not _SHA256_PATTERN.fullmatch(str(manifest.get("dataset_fingerprint", "")))
+            or not _SHA256_PATTERN.fullmatch(str(manifest.get("source_sha256", "")))
+            or type(manifest.get("data_bytes")) is not int or manifest["data_bytes"] < 1):
+        raise EarthPackageError(REASON_INVALID_MANIFEST, "manifest must include valid release hashes and size")
+
+
+def _iso_utc(value) -> str:
+    return np.datetime_as_string(np.datetime64(value, "s"), unit="s") + "Z"
+
+
+def _assert_threehour_manifest_matches(ds, manifest, statistics):
+    """Verify all descriptor claims and the source inventory without requiring raw files."""
+    times = ds.time.values
+    days = times.astype("datetime64[D]")
+    source = manifest.get("source")
+    files = manifest.get("source_files")
+    processing = manifest.get("processing")
+    rule = manifest.get("time_rule")
+    expected_grid = {
+        "latitude": {"start": -89.625, "end": 89.625, "step": .75, "count": 240},
+        "longitude": {"start": -179.625, "end": 179.625, "step": .75, "count": 480},
+        "latitude_bounds": [-90., 90.], "longitude_bounds": [-180., 180.],
+    }
+    checks = [
+        manifest.get("dimensions") == {name: int(size) for name, size in ds.sizes.items()},
+        manifest.get("time_start") == _iso_utc(times[0]),
+        manifest.get("time_end") == _iso_utc(times[-1]),
+        manifest.get("frequency_hours") == 3,
+        manifest.get("step_unit") == "hour", manifest.get("step") == 3,
+        manifest.get("time_zone") == "UTC", manifest.get("time_kind") == "iso-datetime",
+        manifest.get("cadence") == "3 hour mean", manifest.get("grid_shape") == [240, 480],
+        manifest.get("grid") == expected_grid,
+        manifest.get("channel_order") == list(CHANNELS),
+        manifest.get("training_profile") == THREE_HOURLY_TRAINING_PROFILE,
+        manifest.get("source_sha256") == ds.attrs.get("source_sha256"),
+        isinstance(source, dict), isinstance(files, list) and bool(files),
+        isinstance(processing, dict), isinstance(rule, dict),
+        manifest.get("build_mode") in ("smoke", "subset", "full"),
+    ]
+    if not all(checks):
+        raise EarthPackageError(REASON_MANIFEST_METADATA_MISMATCH, "three-hour manifest contract mismatch")
+    expected_days = [str(value) for value in np.unique(days)]
+    checks = [
+        source.get("date_start") == expected_days[0], source.get("date_end") == expected_days[-1],
+        source.get("daily_file_count") == len(expected_days), source.get("products") == ["slv", "rad"],
+        source.get("excluded_products") == ["chm"],
+        processing.get("temporal_method") == "mean_of_three_complete_hourly_samples",
+        processing.get("spatial_method") == "spherical_area_weighted_overlap",
+        rule.get("interval_start") == _iso_utc(ds.time_bounds.values[0, 0]),
+        rule.get("interval_end_exclusive") == _iso_utc(ds.time_bounds.values[-1, 1]),
+    ]
+    if manifest["build_mode"] == "full":
+        checks.append(expected_days[0] == "2020-01-01" and expected_days[-1] == "2021-12-31"
+                      and len(times) == 5848)
+    if manifest["build_mode"] == "smoke":
+        checks.append(7 <= len(expected_days) <= 30)
+    keys = []
+    for item in files:
+        if not isinstance(item, dict):
+            raise EarthPackageError(REASON_MANIFEST_METADATA_MISMATCH, "invalid source inventory entry")
+        product, day, relative = item.get("product"), item.get("date"), item.get("path")
+        if not isinstance(relative, str):
+            raise EarthPackageError(REASON_MANIFEST_METADATA_MISMATCH, "invalid source inventory path")
+        path = Path(relative)
+        checks.extend([
+            product in ("slv", "rad"), day in expected_days,
+            not path.is_absolute() and ".." not in path.parts and ":" not in relative
+            and "\\" not in relative and len(path.parts) == 2,
+            path.parts[0] == product if path.parts else False,
+            path.name == item.get("name"),
+            type(item.get("bytes")) is int and item["bytes"] > 0,
+            type(item.get("mtime_ns")) is int and item["mtime_ns"] >= 0,
+            bool(_SHA256_PATTERN.fullmatch(str(item.get("sha256", "")))),
+        ])
+        keys.append((day, product))
+    checks.extend([
+        len(keys) == 2 * len(expected_days), len(set(keys)) == len(keys),
+        set(keys) == {(day, product) for day in expected_days for product in ("slv", "rad")},
+        hashlib.sha256(_canonical_json(files)).hexdigest() == manifest["source_sha256"],
+    ])
+    variables = manifest.get("variables")
+    if not isinstance(variables, dict) or set(variables) != set(CHANNELS):
+        checks.append(False)
+    else:
+        for name in CHANNELS:
+            entry = variables[name]
+            checks.append(isinstance(entry, dict))
+            if isinstance(entry, dict):
+                checks.extend(entry.get(key) == value for key, value in statistics[name].items())
+    splits = manifest.get("splits")
+    if not isinstance(splits, dict) or set(splits) != set(SPLITS):
+        checks.append(False)
+    else:
+        for name, code in SPLITS.items():
+            selected = days[ds.split.values == code]
+            expected = {"start": str(selected[0]) if len(selected) else None,
+                        "end": str(selected[-1]) if len(selected) else None,
+                        "days": int(len(selected) // 8), "steps": int(len(selected))}
+            checks.append(splits.get(name) == expected)
+    if not all(checks):
+        raise EarthPackageError(REASON_MANIFEST_METADATA_MISMATCH,
+                                "three-hour source, variable statistics or split metadata mismatch")
+
+
+def read_earth_3hourly_release(package_dir: Any) -> VerifiedEarthRelease:
+    """Verify the server-configured three-hour package and return a catalog snapshot.
+
+    The builder's canonical manifest content hash defines identity. Its actual
+    raw-byte hash is retained separately for diagnostics and cache signatures.
+    Fields remain on disk: registering a complete two-year release never creates
+    a full in-memory data snapshot or opens daily training/prediction paths.
+    """
+    root = Path(package_dir).expanduser()
+    before = package_signature(root, data_file_name=THREE_HOURLY_DATA_FILE_NAME)
+    manifest_path, data_path = root / MANIFEST_FILE_NAME, root / THREE_HOURLY_DATA_FILE_NAME
+    try:
+        if not manifest_path.is_file() or not data_path.is_file():
+            raise EarthPackageError(REASON_PACKAGE_MISSING, "three-hour package files are missing")
+    except OSError as exc:
+        raise EarthPackageError(REASON_PACKAGE_UNREADABLE, str(exc)) from exc
+    try:
+        raw = manifest_path.read_bytes()
+        manifest = json.loads(raw, object_pairs_hook=_unique_json_object,
+                              parse_constant=_invalid_json_constant,
+                              parse_float=_finite_json_float)
+    except OSError as exc:
+        raise EarthPackageError(REASON_PACKAGE_UNREADABLE, str(exc)) from exc
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise EarthPackageError(REASON_INVALID_MANIFEST, str(exc)) from exc
+    _assert_threehour_manifest_identity(manifest)
+    try:
+        content_sha = threehour_manifest_content_sha256(manifest)
+    except (ValueError, RecursionError) as exc:
+        raise EarthPackageError(REASON_INVALID_MANIFEST, str(exc)) from exc
+    expected_fingerprint = build_dataset_fingerprint(
+        THREE_HOURLY_DATASET_ID, THREE_HOURLY_DATASET_VERSION, content_sha, manifest["data_sha256"])
+    if manifest["dataset_fingerprint"] != expected_fingerprint:
+        raise EarthPackageError(REASON_MANIFEST_FINGERPRINT_MISMATCH,
+                                "three-hour dataset fingerprint does not match its manifest")
+    try:
+        if data_path.stat().st_size != manifest["data_bytes"]:
+            raise EarthPackageError(REASON_MANIFEST_METADATA_MISMATCH, "NetCDF size mismatch")
+        if file_sha256(data_path) != manifest["data_sha256"]:
+            raise EarthPackageError(REASON_DATA_FINGERPRINT_MISMATCH, "NetCDF SHA-256 mismatch")
+        with netcdf_read_lock(), xr.open_dataset(data_path, engine="netcdf4", mask_and_scale=False) as ds:
+            calendar = _decode_calendar(ds)
+            statistics = validate_earth_3hourly_dataset(ds)
+            _assert_threehour_manifest_matches(ds, manifest, statistics)
+            lat, lon = readonly_array(ds.lat.values), readonly_array(ds.lon.values)
+            metadata = {
+                "dataset_fingerprint": expected_fingerprint,
+                "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+                "manifest_content_sha256": content_sha, "data_sha256": manifest["data_sha256"],
+                "manifest": manifest, "schema": THREE_HOURLY_SCHEMA,
+                "frequency_hours": 3, "step_unit": "hour", "step": 3, "grid_shape": [240, 480],
+                "training_profile": dict(THREE_HOURLY_TRAINING_PROFILE),
+                "time": {"kind": "datetime", "calendar": calendar, "time_zone": "UTC",
+                         "start": manifest["time_start"], "end": manifest["time_end"],
+                         "count": int(ds.sizes["time"]), "step": 3, "step_unit": "hour",
+                         "frequency_hours": 3, "label": "interval_center",
+                         "interval_start": manifest["time_rule"]["interval_start"],
+                         "interval_end_exclusive": manifest["time_rule"]["interval_end_exclusive"]},
+                "grid": {"shape": [240, 480], "dimension_order": ["lat", "lon"],
+                         "latitude_range": [-90., 90.], "longitude_range": [-180., 180.],
+                         "cell_bounds": {"latitude": [-90., 90.], "longitude": [-180., 180.]},
+                         "latitude_step": .75, "longitude_step": .75,
+                         "latitude_order": "ascending", "longitude_order": "ascending",
+                         "coverage": "global", "wrap_longitude": True,
+                         "latitude_values": lat.tolist(), "longitude_values": lon.tolist()},
+                "channel_order": list(CHANNELS),
+                "variables": [{"id": name, "label": VARIABLE_LABELS[name], "units": unit,
+                               "role": "target_and_input" if name == TARGET_CHANNEL else "optional_input",
+                               "missing_rate": statistics[name]["missing_rate"],
+                               "valid_mask": statistics[name]["valid_mask"]}
+                              for name, unit in zip(CHANNELS, UNITS)],
+                "splits": dict(manifest["splits"]),
+                "limitations": [str(item) for item in manifest.get("limitations", [])],
+            }
+            release = VerifiedEarthRelease(metadata=metadata, signature=before,
+                                           dates=readonly_array(ds.time.values, "datetime64[ns]"),
+                                           latitude=lat, longitude=lon, fields=MappingProxyType({}),
+                                           data_path=data_path)
+    except EarthPackageError:
+        raise
+    except OSError as exc:
+        # netCDF errors use negative errno values (e.g. -51 for an unknown
+        # format). They describe invalid content, while filesystem/permission
+        # failures remain an unreadable package; NC_EPERM is -37.
+        reason = (REASON_INVALID_DATASET
+                  if isinstance(exc.errno, int) and exc.errno < 0 and exc.errno != -37
+                  else REASON_PACKAGE_UNREADABLE)
+        raise EarthPackageError(reason, str(exc)) from exc
+    except Exception as exc:
+        raise EarthPackageError(REASON_INVALID_DATASET, str(exc)) from exc
+    if package_signature(root, data_file_name=THREE_HOURLY_DATA_FILE_NAME) != before:
+        raise EarthPackageError(REASON_PACKAGE_CHANGED, "package files changed during verification")
+    return release

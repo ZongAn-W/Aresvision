@@ -10,6 +10,12 @@
 - 已训练模型预测：[README 的预测与缓存章节](../README.md#已训练模型预测与缓存)
 - 地球训练与历史预测（已开放）：[地球训练与历史预测](earth-training.md)
 
+Earth 默认数据集读取 `/api/datasets` 的 `default_earth_dataset_id`。日频保留 7→3 和原上传契约；三小时使用 UTC、240×480、56→24，支持官方 DLinear 与[独立 v1 上传模型](earth-3hourly-uploaded-model.md)。三小时提供专用模板、自定义参数、可用/不可用/未知兼容性及原因，旧日频/Mars 结论不自动放行。任务与窗口独立，切换不迁移旧任务；数据包可用性由 descriptor 单独报告。
+
+火星数据集约定：`mcd_overview` 只表示逻辑数据集身份，训练和预测均读取 `MCD_RAW_3H_DIR` 的原始全量 MCD MY24–MY35（默认 `data/MCD_Output_global_10m_ls_lst/`）；`data/mcd_overview/*.nc` 仅是生成的 overview 产物。`openmars_mcd` 始终读取 OpenMARS + `MCD_DIR`。
+
+新火星 checkpoint 保存训练时每个输入通道的空间均值/尺度以及目标 `target_mean/target_scale`，预测和测试指标复用 checkpoint 参数；旧纯 `state_dict` 任务保持 legacy compatibility，并明确标记为重新拟合归一化。
+
 ## 1. 页面结构
 
 ```text
@@ -77,9 +83,9 @@
 | 编号 | 分区 | 内容 |
 | --- | --- | --- |
 | 01 | 模型名称 | 可编辑的实验名称（`.experiment-canvas-head`，`data-config-group="name"`）与字段级错误 |
-| 02 | 数据集 | 训练数据集把全部选项直接列成单选列表（独占分区，选项横排）：`openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v2`（第 34 节） |
-| 03 | 模型 | 模型来源胶囊（上传模型 / 官方模型）+ 上传模型卡片或官方架构选择器；选中地球数据集时改为固定的「官方 DLinear」摘要，不显示来源切换、上传卡与架构选择器 |
-| 04 | 超参数 | 侧边页签（148px）+ 右侧真实字段；页签依次是输入与预测、训练参数，再按模型来源追加专家字段页签；地球的页签为输入与预测 / 训练参数 / 训练策略 / 实验标签（无迁移学习，也不出现模型结构页签） |
+| 02 | 数据集 | 训练数据集把 Mars 与 Earth 选项直接列成单选列表（独占分区，选项横排），包括 `openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v2`、`earth_merra2_3hourly_v1`；Earth 默认入口值来自服务端 catalog |
+| 03 | 模型 | Mars 保留原来源/架构；日频 Earth 保留原官方/上传来源；三小时 Earth 开放官方 DLinear / 独立 v1 契约上传模型、dataset_id 兼容性和专用模板 |
+| 04 | 超参数 | 侧边页签（148px）+ 右侧真实字段；页签依次是输入与预测、训练参数，再按模型来源追加专家字段页签；Earth 使用各自的时间步与发布 split，无迁移学习 |
 
 四段各自是一张卡片（surface-1 + 13px 圆角 + 细描边，段间 14px 留白），卡片内左侧 38px 是编号轨道（第 30 节）。
 卡片标题已经写明「数据集」「模型」，卡内的「训练数据集」「模型来源」两个小标签已删除（第 32 节），
@@ -112,13 +118,15 @@
 | --- | --- |
 | 默认 | `modelSource` 初始值就是 `uploaded`；**登出不会改回官方模型** |
 | 账号没有上传模型 | 同一区域给出「上传 .py」、`该模型尚未选择` 说明、模板 / 说明下载，区内 inline error 解释原因 |
-| 已选择上传模型 | 紧凑卡片：截断的文件名（`title` 给出全名）、`v版本 · N 个自定义参数`、状态胶囊（可训练 / 待校验 / 不可用）；动作只有「上传模型」与次要的「管理模型」、「下载说明」、「下载模板」 |
-| 管理模型（展开） | 全部模型列表（选择）、重新校验、上传模型、删除、校验详情（第 31 节删掉了「文件格式要求」与底部「校验状态」两行） |
+| 已选择上传模型 | 紧凑卡片：截断的显示名称（缺失时回退原始文件名，`title` 给出全名）、`v版本 · N 个自定义参数`、状态胶囊（可训练 / 待校验 / 不可用）；动作只有「上传模型」与次要的「管理模型」、「下载说明」、「下载模板」 |
+| 管理模型（展开） | 全部模型列表（选择）、下载源码、重命名（名称输入 / 保存 / 取消）、重新校验、上传模型、删除、校验详情（第 31 节删掉了「文件格式要求」与底部「校验状态」两行） |
 | 校验失败 / 版本不匹配 | 区域内 `role="alert"` 的 inline error 逐条列出原因 |
 | 没有有效上传模型 | 运行条「开始实验」保持 `disabled` + `aria-disabled="true"`，就绪状态显示「配置未完成」 |
 | 自定义参数 | 继续由 `DynamicModelParamsForm` 按上传模型 `param_schema` 渲染；编辑入口只保留在配置检查器，画布上的上传卡片不再重复提供 |
 
 官方模型是次级兼容入口：切到官方模型后隐藏上传区域、显示紧凑架构选择器（当前值 + 展开模型库：搜索 + 家族筛选 + 全部 29 个架构）与 SPHERE 开关。
+
+火星与地球的上传模型使用同一套管理动作和中英文文案。下载源码与重命名通过认证接口校验上传者；下载返回原始上传的 `.py` 文件，改名只更新所选包的显示名称（1–120 个字符），不会改写源码、版本或历史训练任务快照。重新校验保留编辑后的名称。接口约定见[自定义模型接入说明](uploaded-model-training.md#downloading-and-renaming-uploaded-models)。
 
 ## 5. 配置检查器
 
@@ -215,7 +223,7 @@ const readiness = useMemo(() => {
 
 ### 失败与停止原因
 
-后端把结果写在任务 `metrics` JSON 里：失败写 `error`，CUDA 显存不足额外写 `error_code: cuda_out_of_memory`，用户停止写 `note`，训练成功但没有有效权重写 `error: Invalid model artifact…`。`getExperimentFailureMessage(task)` 逐级解析并映射到可读原因与恢复建议，非法 JSON 与非法字段安全回退；结果工作区显示原因并提供默认折叠的“查看运行日志”（复用 `TrainingContext` 的 `logs`，不新增请求）。
+后端把结果写在任务 `metrics` JSON 里：失败写 `error`，CUDA 显存不足额外写 `error_code: cuda_out_of_memory`，用户停止写 `note`，训练成功但没有有效权重写 `error: Invalid model artifact…`。`getExperimentFailureMessage(task)` 逐级解析并映射到可读原因与恢复建议，非法 JSON 与非法字段安全回退；结果工作区显示原因并提供默认折叠的“查看运行日志”（复用 `TrainingContext` 的 `logs`，不新增请求）。如果训练在创建日志文件前就失败，日志接口会把 `metrics.error` 返回为首行，避免显示无信息的日志占位文本。服务重启时，带有完整 `Model saved:` 日志且权重文件有效的运行中任务会恢复为已完成并重建指标，其余运行中任务才记录“训练被服务重启中断”。
 
 ## 11. 未开放的功能边界
 
@@ -225,7 +233,7 @@ const readiness = useMemo(() => {
 - **没有自动实验结论。**
 - **没有资源估算。** 见第 5 节。
 - **个人上传数据仍不能直接作为训练数据。** 训练数据由服务器管理。
-- **Earth 训练仍未开放。** 指定地球数据集返回 409。
+- **Earth 其他官方架构、SPHERE 和迁移学习未开放。** 日频支持原 Earth 上传契约，三小时支持独立 v1 上传契约；两者均保留官方 DLinear。
 - **没有跨实验批量重跑或多任务并行调度。**
 
 ## 12. 代码入口与验证
@@ -240,7 +248,7 @@ const readiness = useMemo(() => {
 | [ModelArchitectureSelector.jsx](../frontend/src/pages/ModelTrainingPage/ModelArchitectureSelector.jsx) | 官方架构紧凑选择器（当前值 + 搜索 + 家族筛选） |
 | [UploadedModelPanel.jsx](../frontend/src/pages/ModelTrainingPage/UploadedModelPanel.jsx) | 上传模型紧凑卡片与可展开的管理区 |
 | [ExperimentRunMonitor.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentRunMonitor.jsx) | 进度、Loss、实时日志与停止训练 |
-| [ExperimentResultPanel.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentResultPanel.jsx) | 结果指标、失败原因、折叠日志与后续动作 |
+| [ExperimentResultPanel.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentResultPanel.jsx) | 结果指标、失败原因、上传模型名称/版本/文件身份、折叠日志与后续动作 |
 | [ExperimentLogPanel.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentLogPanel.jsx) | 只读终端式日志面板，不请求日志 |
 | [experimentCenterModel.js](../frontend/src/pages/ModelTrainingPage/experimentCenterModel.js) | 阶段推导、摘要、指标解析、目录筛选、复制配置、失败原因与官方架构注册表 |
 | [experimentCenter.css](../frontend/src/pages/ModelTrainingPage/experimentCenter.css) | 控制台网格、sticky 侧栏、fixed 运行条、画布分区与响应式规则 |
@@ -971,3 +979,12 @@ npm run build
 - **单位**：地球 TO3 本身就是 DU，因此地球场与指标不做火星的 μm-atm 换算。
 - 后端契约、错误码与验证入口见 [地球训练与历史预测](earth-training.md)；本文件只描述训练页与预测页交互。
 - 验证范围：后端地球相关测试逐文件通过（契约 41、数据 19、模型 24、产物 48、runner 17、服务 10、隔离 14、预测服务 23、路由 20），既有注册表/身份/通道/总览回归逐文件通过；前端 `node --test` 680 项通过、`npm run build` 通过；真实 v2 小包经 HTTP 完成任务 27 的训练（测试集 RMSE 46.791 DU）与 2021-07-08 起点的预测（RMSE 29.139 DU），错误路径 7/7 符合预期。**未运行浏览器点击验收**。
+
+## 35. 2026-10-01 设置训练默认值
+
+偏好设置新增训练默认值分区，可保存训练轮次、批大小、学习率、输入窗口、预测步长、训练 / 验证 / 测试比例、随机种子、早停轮数，以及迁移学习开关、冻结策略和微调学习率。设置沿用 `aresvision_settings` 浏览器本地存储，适用于当前浏览器配置，不会改写已创建任务。
+
+- 新建实验读取已保存的默认值；编辑中的配置不会因偏好变更而被覆盖。「复制配置」仍从源任务回填其参数。
+- 训练集和测试集比例必须大于 0，验证集比例允许为 0，三者合计 100%；不完整或合计不正确时，设置界面提示当前比例无效，新建表单使用安全默认值，提交时再次校验。
+- 通用默认窗口 / 步长适用于火星训练；Earth 仍固定 7 天输入、3 天预测，且不开放迁移学习。
+- 设置只影响前端新实验表单的初始值。实际启动请求仍携带完整训练参数并保存在对应任务中，不新增后端设置接口、数据库表或持久化草稿。
