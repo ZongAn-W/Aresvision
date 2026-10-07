@@ -185,14 +185,21 @@ test('view state selects exactly one pair of work areas', () => {
   assert.match(cssSource, /\.experiment-center-grid\[data-view='monitor'\]/);
 });
 
-test('header has two accessible view buttons', () => {
+test('header has three accessible view buttons', () => {
   assert.match(shellSource, /role="group" aria-label=\{t\('experimentCenter\.viewLabel'\)\}/);
   assert.match(shellSource, /aria-pressed=\{view === 'config'\}/);
   assert.match(shellSource, /aria-pressed=\{view === 'monitor'\}/);
+  assert.match(shellSource, /aria-pressed=\{view === 'matrix'\}/);
   assert.doesNotMatch(shellSource, /experiment-center-stage-nav/);
 });
 
-test('page controller owns the stage derivation and wires the three workspaces', () => {
+test('header exposes the experiment matrix as a third view and keeps it mounted', () => {
+  assert.match(shellSource, /view === 'matrix'/);
+  assert.match(shellSource, /t\('experimentCenter\.matrixView'\)/);
+  assert.match(shellSource, /data-stage-workspace="matrix"[\s\S]*workspace\?\.matrix/);
+});
+
+test('page controller owns the stage derivation and wires the experiment workspaces', () => {
   assert.match(pageSource, /getExperimentStage\(\{ activeTask, isCreating \}\)/);
   assert.match(pageSource, /<ExperimentCenterShell/);
   assert.match(pageSource, /<ExperimentDirectory/);
@@ -201,6 +208,7 @@ test('page controller owns the stage derivation and wires the three workspaces',
   assert.match(pageSource, /configure: configWorkspace,/);
   assert.match(pageSource, /monitor: monitorWorkspace,/);
   assert.match(pageSource, /result: resultWorkspace,/);
+  assert.match(pageSource, /matrix: matrixWorkspace,/);
   assert.match(pageSource, /inspector=\{configInspector\}/);
   assert.match(pageSource, /runBar=\{configRunBar\}/);
   assert.match(pageSource, /runBarHeight=\{runBarHeight\}/);

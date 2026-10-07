@@ -40,6 +40,7 @@ export default function ExperimentCenterShell({
   const stageRef = useRef(null);
   const focusedStageRef = useRef(null);
   const isConfigure = view === 'config';
+  const isMatrix = view === 'matrix';
   const eyebrow = t('experimentCenter.eyebrow');
 
   // 阶段切换后把焦点移到阶段标题，键盘用户不会停在已卸载的控件上。
@@ -81,6 +82,14 @@ export default function ExperimentCenterShell({
             onClick={() => onChangeView('monitor')}
           >
             {t('experimentCenter.monitorResultsView')}
+          </button>
+          <button
+            type="button"
+            className="experiment-center-button experiment-center-view-button"
+            aria-pressed={view === 'matrix'}
+            onClick={() => onChangeView('matrix')}
+          >
+            {t('experimentCenter.matrixView')}
           </button>
         </div>
       </header>
@@ -134,6 +143,9 @@ export default function ExperimentCenterShell({
             </div>
             <div className="experiment-center-workspace" data-stage-workspace="result" hidden={view !== 'monitor' || stage !== 'result'}>
               {view === 'monitor' && stage === 'result' ? workspace?.result : null}
+            </div>
+            <div className="experiment-center-workspace" data-stage-workspace="matrix" hidden={!isMatrix}>
+              {workspace?.matrix}
             </div>
 
             {view === 'monitor' && !activeTask ? (

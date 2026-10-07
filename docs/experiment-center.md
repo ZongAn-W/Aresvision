@@ -20,14 +20,23 @@ Earth 默认数据集读取 `/api/datasets` 的 `default_earth_dataset_id`。日
 
 ```text
 #/training
-├── 页头视图按钮：配置实验 / 训练监控 · 实验结果
+├── 页头视图按钮：实验配置 / 训练监视 / 实验矩阵
 └── 控制台网格
-    ├── 视图 1「配置实验」：配置画布 + 配置检查器（目录收起）
-    └── 视图 2「训练监控 · 实验结果」：实验目录 + 画布（检查器收起；已完成任务在监控下方展示结果）
+    ├── 视图 1「实验配置」：配置画布 + 配置检查器（目录收起）
+    ├── 视图 2「训练监视」：实验目录 + 画布（检查器收起；已完成任务在监视下方展示结果）
+    └── 视图 3「实验矩阵」：可配置列的实验表格（任务轮询复用 TrainingContext）
 底部：配置视图的提交运行条（position: fixed，横跨浏览器）；监控区自身提供停止按钮
 ```
 
-阶段（configure / monitor / result）仍由任务状态推导，视图只决定哪几列可见。首次加载若已选中任务（运行中的任务优先，否则选列表最新记录）则进入监控视图；没有任务时默认配置视图。用户主动切换视图后，轮询不会覆盖选择。点「新建实验」或「复制配置」进入配置视图，选任务或成功开始训练进入监控视图。配置画布在监控视图里保持挂载（只用 `hidden` 隐藏），所以切视图不会清空正在编辑的表单。
+阶段（configure / monitor / result）仍由任务状态推导，视图只决定工作区布局。首次加载若已选中任务（运行中的任务优先，否则选列表最新记录）则进入训练监视；没有任务时默认实验配置。用户主动切换视图后，轮询不会覆盖选择。点「新建实验」或「复制配置」进入实验配置，选任务或成功开始训练进入训练监视。配置画布和实验矩阵始终保持挂载（只用 `hidden` 隐藏），所以切换视图不会清空表单，也不会丢失矩阵筛选、排序或横向滚动位置。
+
+### 实验矩阵
+
+实验矩阵直接消费 `TrainingContext` 的任务快照，不建立第二套轮询。每一行是一条训练任务记录，默认列为模型名称、标签、架构、数据集、状态、进度和开始时间；模型名称与标签列固定在左侧，表头固定在顶部，其余列通过横向滚动查看。状态实时变化时只更新任务快照，不覆盖正在编辑的名称草稿。
+
+「显示属性」面板按基本信息、训练参数、架构参数、自定义参数和评价指标分组。属性搜索、勾选、拖动及键盘方向按钮调整顺序、全部显示和恢复默认均可用；列配置以 `aresvision_experiment_matrix_columns:<user id>` 保存到当前浏览器，访客使用独立的 `guest` 键。历史任务没有保存的字段显示 `—`，不会用当前默认值补写；数值 `0` 和布尔值 `false` 保留。上传模型的 `custom_model_params` 使用 `custom:<key>` 标识，历史配置中的其他顶层扩展字段使用 `config:<key>` 标识，因此同名字段不会合并；内部路径、源码哈希、数据指纹等字段不进入属性清单。指标单元格带任务单位（Mars 为 μm-atm，Earth 为 DU），不同数据集不会计算或标记全局最优。
+
+矩阵支持名称、状态和标签筛选，适用列按数值或时间排序并把缺失值放在末尾。名称单元格可就地编辑，Enter 保存、Esc 取消，也有保存/取消按钮；沿用 255 字符、去首尾空格和账号内重名校验。排队、运行、完成、失败和取消记录都允许改显示名称，上传模型包名称仍单独显示。标签单元格复用账号私有标签选择器，支持搜索、多选、新建、批量增删和标签管理。行操作可打开训练监视或复制配置，保存后由同一任务刷新同步目录和监视视图。
 
 **监控视图里监控常驻，结果接在下面**：任务完成后 `stage` 会变成 `result`，但监控工作区（状态、进度、Loss 曲线、实时日志）不再被结果顶替，因此点「训练监控」总能同时看到运行状态与结果指标。
 
@@ -240,8 +249,10 @@ const readiness = useMemo(() => {
 
 | 文件 | 责任 |
 | --- | --- |
-| [ExperimentCenterShell.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentCenterShell.jsx) | 固定视图栏（配置实验 / 训练监控两个按钮）、控制台网格与列组合、运行条 portal 与底部空间预留 |
+| [ExperimentCenterShell.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentCenterShell.jsx) | 固定视图栏（实验配置 / 训练监视 / 实验矩阵三个按钮）、控制台网格与列组合、运行条 portal 与底部空间预留 |
 | [ExperimentDirectory.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentDirectory.jsx) | 左侧目录、状态筛选与轻量实验行 |
+| [ExperimentMatrix.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentMatrix.jsx) | 实验矩阵表格、筛选排序、名称与标签编辑、批量标签和属性面板 |
+| [experimentMatrixModel.js](../frontend/src/pages/ModelTrainingPage/experimentMatrixModel.js) | 矩阵属性定义、历史配置整理、列偏好恢复、筛选与排序 |
 | [ExperimentConfigWorkspace.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentConfigWorkspace.jsx) | 画布四个部分（模型名称 / 数据集 / 模型 / 超参数）、超参数页签（输入与预测载荷条、训练参数矩阵、专家字段） |
 | [ExperimentConfigInspector.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentConfigInspector.jsx) | 右侧简短摘要与就绪检查，纯展示 |
 | [ExperimentRunBar.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentRunBar.jsx) | fixed 运行条的状态、单行摘要与唯一主操作 |

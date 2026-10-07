@@ -93,7 +93,7 @@ import {
   readTransferSourceTaskConfig,
 } from './ModelTrainingPage/transferSourceConfig';
 import RenameModelDialog from './ModelTrainingPage/RenameModelDialog';
-import { normalizeTrainedModelName } from './ModelTrainingPage/trainedModelRename';
+import { normalizeTrainedModelName, validateTrainedModelName } from './ModelTrainingPage/trainedModelRename';
 import { useTrainingTags } from '../components/TrainingTags/useTrainingTags';
 import ExperimentCenterShell from './ModelTrainingPage/ExperimentCenterShell';
 import ExperimentDirectory from './ModelTrainingPage/ExperimentDirectory';
@@ -102,6 +102,7 @@ import ExperimentConfigInspector from './ModelTrainingPage/ExperimentConfigInspe
 import ExperimentRunBar from './ModelTrainingPage/ExperimentRunBar';
 import ExperimentRunMonitor from './ModelTrainingPage/ExperimentRunMonitor';
 import ExperimentResultPanel from './ModelTrainingPage/ExperimentResultPanel';
+import ExperimentMatrix from './ModelTrainingPage/ExperimentMatrix';
 import {
   MODEL_ARCHITECTURES,
   canUseTaskForPrediction,
@@ -1942,6 +1943,16 @@ export default function ModelTrainingPage() {
     showToast(copy.renameSuccess, 'success');
   };
 
+  const handleMatrixRenameTask = async (task, value) => {
+    const validationError = validateTrainedModelName(value, tasks, task?.id, settings.language);
+    if (validationError) throw new Error(validationError);
+    const updated = await renameTrainingModel(task.id, normalizeTrainedModelName(value));
+    setTasks((previous) => previous.map((item) => item.id === task.id ? updated : item));
+    // Keep the directory, monitor and matrix in sync with the same server snapshot.
+    await loadTasks();
+    showToast(copy.renameSuccess, 'success');
+  };
+
   const handleUploadWeight = async (file) => {
     if (!user) {
       openAuthModal('login');
@@ -2339,6 +2350,25 @@ export default function ModelTrainingPage() {
     />
   );
 
+  const matrixWorkspace = (
+    <ExperimentMatrix
+      tasks={tasks}
+      tagState={tagState}
+      tasksLoading={tasksLoading}
+      tasksError={tasksError}
+      user={user}
+      isZh={isZh}
+      locale={locale}
+      onSelectTask={handleSelectTask}
+      onCopyConfig={handleCopyConfig}
+      onRenameTask={handleMatrixRenameTask}
+      onRetryTasks={() => {
+        setTasksError(false);
+        loadTasks().catch(() => {});
+      }}
+    />
+  );
+
   return (
     <div
       className="model-training-page"
@@ -2374,6 +2404,7 @@ export default function ModelTrainingPage() {
           configure: configWorkspace,
           monitor: monitorWorkspace,
           result: resultWorkspace,
+          matrix: matrixWorkspace,
         }}
         inspector={configInspector}
         runBar={configRunBar}

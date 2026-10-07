@@ -130,6 +130,14 @@
   grid-template-columns: var(--experiment-rail-width) minmax(0, 1fr);
 }
 
+.experiment-center-grid[data-view='matrix'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.experiment-center-grid[data-view='matrix'] .experiment-center-panel {
+  min-height: calc(100dvh - 190px);
+}
+
 .experiment-center-grid[data-inspector='absent']:not([data-view='monitor']) {
   grid-template-columns: minmax(0, 1fr);
 }

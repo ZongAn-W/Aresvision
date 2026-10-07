@@ -1355,8 +1355,13 @@ class TrainingService:
             task = await session.get(ModelTrainingTask, task_id)
             if not task:
                 raise FileNotFoundError("Task not found")
-            if task.status != "completed":
-                raise ValueError("只能重命名已完成训练的模型")
+            # The display name belongs to the experiment record, so it is safe
+            # to edit it while queued/running as well as after completion.
+            # Keep the status check deliberately open for historical and
+            # cancelled records; permission is enforced by the router.
+            allowed_statuses = {"queued", "pending", "running", "completed", "failed", "cancelled"}
+            if str(task.status or "").lower() not in allowed_statuses:
+                raise ValueError("当前状态不允许重命名")
 
             existing = await session.execute(
                 select(ModelTrainingTask).where(
