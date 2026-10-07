@@ -570,6 +570,8 @@ Mars 坐标回归见 `tests/test_mars_prediction_coordinates.py`：以北高南�
 
 新增功能时同步维护中英文文案、API 数据结构和相关回归测试。数据、权重、缓存、真实 `.env` 与本地运行产物按 `.gitignore` 管理；提交前检查变更范围，并运行与修改相关的测试。
 
+后端 `tests/`、前端 `*.test.js`、验收脚本和模型模板属于项目源码，应纳入版本控制。pytest/Playwright 缓存、测试报告、覆盖率产物和临时 checkpoint 不入库；pytest 临时数据使用仓库外新建的唯一目录。`backup/` 和 `.env.parked` 只保留在本地，不作为部署或功能依赖。
+
 ## 常见问题与排查入口
 
 | 现象 | 优先检查 |
