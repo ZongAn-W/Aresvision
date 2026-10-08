@@ -38,6 +38,8 @@ from services.dataset_identity import (
     is_earth_training_task,
     resolve_dataset_id,
     require_training_dataset,
+    require_active_dataset,
+    training_task_dataset_id,
 )
 from services.dataset_registry import DatasetRegistry
 from services.earth_training_artifact import (
@@ -234,8 +236,8 @@ class TrainingService:
                     }
             try:
                 if recovered_task is not None and getattr(recovered_task, "dataset_id", None) == EARTH_DATASET_3HOURLY_ID:
-                    # Only the newly opened dataset uses this recovery path.
-                    # Historical daily queue payloads keep their existing flow.
+                    # Rebuild the active release spec from the frozen task;
+                    # retired tasks are rejected before launching a subprocess.
                     spec["earth_training_spec"] = await asyncio.to_thread(
                         self._restore_3hourly_training_spec, recovered_task
                     )
@@ -362,6 +364,8 @@ class TrainingService:
                     custom_model_params=(hyperparameters or {}).get("custom_model_params"),
                     dataset_id=resolved_dataset_id,
                     input_channel_order=canonical_channel_order((hyperparameters or {}).get("selected_channels")),
+                    window=(hyperparameters or {}).get('window', 56),
+                    horizon=(hyperparameters or {}).get('horizon', 24),
                 )
         elif model_source == "uploaded":
             model_script, raw_hypers = await self._resolve_uploaded_training_entrypoint(
@@ -633,6 +637,8 @@ class TrainingService:
         custom_model_params: Any,
         dataset_id: str = "earth_merra2_daily_v2",
         input_channel_order: list[str] | None = None,
+        window: int = 56,
+        horizon: int = 24,
     ) -> tuple[dict, list[str]]:
         """Pin one uploaded model for an Earth run.
 
@@ -690,7 +696,8 @@ class TrainingService:
         verdict = await asyncio.to_thread(
             evaluate_package_earth_compatibility, package, validator=self._earth_validator(),
             dataset_id=dataset_id,
-            earth_probe={"input_channel_order": input_channel_order, "custom_model_params": resolved_params}
+            earth_probe={"input_channel_order": input_channel_order, "custom_model_params": resolved_params,
+                         "window": window, "horizon": horizon}
             if dataset_id == EARTH_DATASET_3HOURLY_ID else None,
         )
         if not verdict.compatible:
@@ -1039,6 +1046,7 @@ class TrainingService:
         async with async_session_maker() as session:
             task = await session.get(ModelTrainingTask, task_id)
             if task:
+                require_active_dataset(training_task_dataset_id(task))
                 task.status = "running"
                 task.total_epochs = total_epochs
                 await session.commit()

@@ -63,8 +63,9 @@ test('Earth entry follows the server default while preserving a valid explicit s
     ],
   };
   assert.equal(resolveEarthDatasetId(catalog), 'earth_merra2_3hourly_v1');
-  assert.equal(resolveEarthDatasetId(catalog, 'earth_merra2_daily_v2'), 'earth_merra2_daily_v2');
-  assert.equal(resolveEarthDatasetId({ ...catalog, default_earth_dataset_id: 'openmars_mcd' }), null);
+  assert.equal(resolveEarthDatasetId(catalog, 'earth_merra2_daily_v2'), 'earth_merra2_3hourly_v1');
+  assert.equal(resolveEarthDatasetId({ ...catalog, default_earth_dataset_id: 'earth_merra2_daily_v2' }), 'earth_merra2_3hourly_v1');
+  assert.equal(resolveEarthDatasetId({ ...catalog, default_earth_dataset_id: 'openmars_mcd' }), 'earth_merra2_3hourly_v1');
   assert.equal(resolveEarthDatasetId({
     default_earth_dataset_id: 'earth_merra2_daily_v1',
     items: [{ dataset_id: 'earth_merra2_daily_v1', planet: 'earth' }],
@@ -211,14 +212,16 @@ test('series payload validation checks identity, continuity and lengths', () => 
 
 test('descriptor must be available and complete before any data request', () => {
   const descriptor = {
-    dataset_id: 'earth_merra2_daily_v2',
+    dataset_id: 'earth_merra2_3hourly_v1',
+    frequency_hours: 3,
     availability: 'available',
     capabilities: { web_overview: true },
     dataset_fingerprint: FINGERPRINT,
-    time: { start: '2020-01-01', end: '2021-12-31' },
+    time: { kind: 'datetime', start: '2020-01-01T01:30:00Z', end: '2021-12-31T22:30:00Z', frequency_hours: 3 },
     channel_order: ['TO3'],
   };
   assert.equal(canRequestEarthData(descriptor), true);
+  assert.equal(canRequestEarthData({ ...descriptor, dataset_id: 'earth_merra2_daily_v2' }), false);
   assert.equal(canRequestEarthData({ ...descriptor, availability: 'missing' }), false);
   assert.equal(canRequestEarthData({ ...descriptor, capabilities: { web_overview: false } }), false);
   assert.equal(canRequestEarthData({ ...descriptor, dataset_fingerprint: 'short' }), false);

@@ -50,8 +50,8 @@ export function normalizeTrainingDefaults(value) {
     epochs: positiveInteger(source.epochs, DEFAULT_TRAINING_DEFAULTS.epochs, { max: 1000 }),
     batchSize: positiveInteger(source.batchSize, DEFAULT_TRAINING_DEFAULTS.batchSize, { max: 64 }),
     learningRate: positiveNumber(source.learningRate, DEFAULT_TRAINING_DEFAULTS.learningRate),
-    window: positiveInteger(source.window, DEFAULT_TRAINING_DEFAULTS.window, { max: 30 }),
-    horizon: positiveInteger(source.horizon, DEFAULT_TRAINING_DEFAULTS.horizon, { max: 30 }),
+  window: positiveInteger(source.window, DEFAULT_TRAINING_DEFAULTS.window, { max: 240 }),
+  horizon: positiveInteger(source.horizon, DEFAULT_TRAINING_DEFAULTS.horizon, { max: 240 }),
     trainRatio: split[0],
     validationRatio: split[1],
     testRatio: split[2],
@@ -70,4 +70,25 @@ export function normalizeTrainingDefaults(value) {
       DEFAULT_TRAINING_DEFAULTS.finetuneLearningRate,
     ),
   };
+}
+
+/** Read valid defaults that may still update an unedited experiment draft. */
+export function getTrainingDefaultUpdates(value, { editedFields = [], excludedFields = [] } = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const normalized = normalizeTrainingDefaults(source);
+  const protectedFields = new Set([...editedFields, ...excludedFields]);
+  const ratioKeys = ['trainRatio', 'validationRatio', 'testRatio'];
+  const isNumericInput = (raw) => (typeof raw === 'number' || typeof raw === 'string')
+    && String(raw).trim() !== '' && Number.isFinite(Number(raw));
+  // A split is one configuration: never apply an incomplete edit or replace
+  // only part of a split that the user has already customized.
+  const canUpdateSplit = ratioKeys.every((key) => !protectedFields.has(key) && isNumericInput(source[key]))
+    && isValidSplit(ratioKeys.map((key) => Number(source[key])));
+
+  return Object.fromEntries(Object.entries(normalized).filter(([key, nextValue]) => {
+    if (protectedFields.has(key)) return false;
+    if (ratioKeys.includes(key)) return canUpdateSplit;
+    if (typeof nextValue === 'number') return isNumericInput(source[key]) && Number(source[key]) === nextValue;
+    return source[key] === nextValue;
+  }));
 }

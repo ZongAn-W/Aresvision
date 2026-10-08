@@ -225,9 +225,13 @@ def test_invalid_window_index_is_rejected(disk_release, index):
 
 
 @pytest.mark.parametrize('window,horizon', [(7, 3), (56, 3), (7, 24), (55, 24)])
-def test_daily_or_wrong_window_semantics_are_rejected(disk_release, window, horizon):
-    with pytest.raises(ValueError, match='window=56 and horizon=24'):
-        EarthThreeHourlyWindows.from_release(disk_release, window=window, horizon=horizon)
+def test_custom_windows_use_threehour_steps_and_exact_target_slice(disk_release, window, horizon):
+    dataset = EarthThreeHourlyWindows.from_release(disk_release, window=window, horizon=horizon, selected_channels=[])
+    inputs, targets = dataset.read_window(0, lat_slice=slice(0, 2), lon_slice=slice(0, 3))
+    assert inputs.shape == (window, 1, 2, 3)
+    assert targets.shape == (horizon, 1, 2, 3)
+    assert len(dataset) == len(dataset.dates) - window - horizon + 1
+    assert dataset.dates[window] - dataset.dates[window - 1] == np.timedelta64(3, 'h')
 
 
 @pytest.mark.parametrize('mutate', [

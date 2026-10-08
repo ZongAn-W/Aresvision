@@ -1,6 +1,10 @@
 .earth-observation-rail .mars-observation-rail__time {
-  font-size: calc(14px * var(--font-scale, 1));
-  white-space: nowrap;
+  display: grid;
+  gap: 2px;
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .earth-observation-rail .observatory-rail__year { min-width: 58px; flex-shrink: 0; }
 .earth-observation-rail .observatory-rail__year select { padding: 4px 2px; }
@@ -12,4 +16,90 @@
 .earth-observation-rail {
   grid-template-rows: 40px 120px minmax(120px, 1fr) 118px;
 }
-.earth-observation-rail .mars-observation-rail__heading { line-height: 1.25; }
+.earth-observation-rail[data-rail-frequency='3'] {
+  --earth-rail-heading-height: calc(40px * var(--font-scale, 1));
+  --earth-rail-readout-height: calc(100px + 120px * var(--font-scale, 1));
+  /* Equal slots keep both date axes aligned; the minimum preserves the footer when scrolling. */
+  grid-template-rows: var(--earth-rail-heading-height) var(--earth-rail-readout-height) minmax(120px, 1fr) 118px;
+  min-height: calc(var(--earth-rail-heading-height) + var(--earth-rail-readout-height) + 368px);
+}
+.earth-observation-rail .mars-observation-rail__heading {
+  line-height: 1.25;
+  flex-wrap: wrap;
+}
+.earth-observation-rail .mars-observation-rail__readout {
+  min-width: 0;
+  grid-auto-rows: max-content;
+}
+.earth-observation-rail .mars-observation-rail__empty {
+  inset: 8px 16px 8px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px * var(--font-scale, 1));
+  line-height: 1.4;
+  overflow-y: auto;
+}
+.earth-observation-rail .observatory-rail__actions > button {
+  flex-wrap: wrap;
+  padding: 6px !important;
+  font-size: calc(11px * var(--font-scale, 1)) !important;
+  white-space: normal !important;
+  line-height: 1.3;
+}
+.earth-observation-rail__time-controls {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 4px;
+  min-width: 0;
+}
+.earth-observation-rail__time-controls label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: calc(10px * var(--font-scale, 1));
+  line-height: 1.3;
+}
+.earth-observation-rail__time-controls input[type='date'] {
+  font-family: var(--font-body, sans-serif);
+  font-size: calc(10px * var(--font-scale, 1));
+}
+.earth-observation-rail__time-controls input::-webkit-datetime-edit {
+  padding: 0;
+}
+.earth-observation-rail__time-controls input::-webkit-calendar-picker-indicator {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+}
+.earth-observation-rail__time-controls :is(input, select) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: calc(28px * var(--font-scale, 1));
+  padding: 4px;
+  border: 1px solid var(--overview-rail-line);
+  border-radius: 6px;
+  background: var(--overview-panel-bg-strong);
+  color: var(--overview-rail-ink);
+  color-scheme: dark;
+  font-family: var(--font-mono, monospace);
+  font-size: calc(11px * var(--font-scale, 1));
+  line-height: 1.3;
+}
+.overview-shell.is-light .earth-observation-rail__time-controls :is(input, select) {
+  color-scheme: light;
+}
+.overview-shell[data-planet='earth'] :is(.overview-shell__rail, .overview-shell__rail-end) {
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.overview-shell--flow[data-planet='earth'].overview-shell--with-rail {
+  grid-template-rows: auto calc(620px + 80px * var(--font-scale, 1));
+}
+@media (max-width: 719px) {
+  .overview-shell--flow[data-planet='earth'].overview-shell--with-rail {
+    grid-template-rows: auto 360px calc(620px + 80px * var(--font-scale, 1));
+  }
+}

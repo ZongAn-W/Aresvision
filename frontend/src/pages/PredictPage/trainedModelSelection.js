@@ -1,3 +1,5 @@
+import { isEarthTask } from './earthPredictModel.js';
+
 export const TRAINING_TASK_HANDOFF_KEY = 'aresvision_predict_training_task';
 
 const ARCHITECTURE_LABELS = {
@@ -80,7 +82,7 @@ function addItem(items, label, value) {
 export function getCompletedTrainingModelOptions(tasks = []) {
   return (Array.isArray(tasks) ? tasks : [])
     .filter((task) => task?.status === 'completed' && task?.model_available === true)
-    .filter((task) => task?.is_earth_task !== true)
+    .filter((task) => !isEarthTask(task))
     .map((task) => ({
       id: Number(task.id),
       label: task.custom_model_name || `Task #${task.id}`,
@@ -123,6 +125,7 @@ export function parseTrainingTaskHandoff(raw, expectedScope) {
 
 export function buildTrainedModelParameterItems(task, { isZh = true } = {}) {
   if (!task) return [];
+  const earth = isEarthTask(task);
   const hypers = parseHyperparameters(task.hyperparameters);
   const labels = isZh
     ? {
@@ -179,8 +182,8 @@ export function buildTrainedModelParameterItems(task, { isZh = true } = {}) {
   addItem(items, labels.source, labels.defaultData);
   addItem(items, labels.modelType, modelSource === 'uploaded' ? labels.uploaded : labels.official);
   addItem(items, labels.architecture, getArchitectureLabel(hypers.model_architecture));
-  addItem(items, labels.sphere, hypers.use_sphere ? labels.on : labels.off);
-  addItem(items, labels.inputChannels, channels.length ? channels : (isZh ? '仅 O3' : 'O3 only'));
+  if (!earth) addItem(items, labels.sphere, hypers.use_sphere ? labels.on : labels.off);
+  addItem(items, labels.inputChannels, earth ? ['TO3', ...channels.filter(channel => channel !== 'TO3')] : channels.length ? channels : (isZh ? '仅 O3' : 'O3 only'));
   addItem(items, labels.window, hypers.window);
   addItem(items, labels.horizon, hypers.horizon);
   addItem(items, labels.epochs, hypers.epochs);

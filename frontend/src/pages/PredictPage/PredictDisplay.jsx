@@ -2,6 +2,7 @@ import C from '../../constants/colors';
 import { useT } from '../../i18n';
 import GlowCard from '../../components/GlowCard';
 import { FieldCanvas, LoadingBox, EmptyBox } from './PredictComponents';
+import ResearchExportButton from './ResearchExportButton';
 
 function SegmentedTabs({ items, activeId, onChange }) {
   return (
@@ -56,6 +57,15 @@ export default function PredictDisplay({
 }) {
   const t = useT();
 
+  const physicalRange = truthField && predField ? {
+    min: Math.min(truthField.minVal, predField.minVal),
+    max: Math.max(truthField.maxVal, predField.maxVal),
+  } : null;
+  if (physicalRange && physicalRange.min === physicalRange.max) {
+    const pad = Math.max(Math.abs(physicalRange.min) * .01, 1e-6);
+    physicalRange.min -= pad; physicalRange.max += pad;
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <SegmentedTabs
@@ -63,6 +73,7 @@ export default function PredictDisplay({
         activeId={viewMode}
         onChange={setViewMode}
       />
+      <ResearchExportButton sources={[results?.export_ref]} kind="triptych" step={activeHorizon} disabled={loading} />
 
       {results && results.horizon > 1 && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -109,7 +120,8 @@ export default function PredictDisplay({
                   <LoadingBox h={220} />
                 ) : fieldData ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <FieldCanvas fieldData={fieldData} colorMode={panel.mode} h={220} />
+                    <FieldCanvas fieldData={fieldData} colorMode={panel.mode} h={220}
+                      colorRange={i < 2 ? physicalRange : undefined} />
                     <button
                       onClick={() => setFullscreen3D({ fieldData, colorMode: panel.mode })}
                       style={{

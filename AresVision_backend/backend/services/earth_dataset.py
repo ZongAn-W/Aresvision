@@ -678,8 +678,9 @@ class EarthThreeHourlyWindows:
                      selected_channels=None, normalization=None):
         if split not in SPLITS:
             raise ValueError(f'Unknown split: {split}')
-        if operator.index(window) != 56 or operator.index(horizon) != 24:
-            raise ValueError('Earth three-hour training requires window=56 and horizon=24')
+        from services.earth_training_contract import earth_training_profile
+        profile = earth_training_profile(THREE_HOURLY_DATASET_ID, {'window': window, 'horizon': horizon})
+        window, horizon = profile['window'], profile['horizon']
         channels = canonical_input_channels(selected_channels)
         dates = np.asarray(release.dates, dtype='datetime64[ns]')
         codes = threehour_release_split_codes(dates, release.metadata)
@@ -690,7 +691,7 @@ class EarthThreeHourlyWindows:
                 or not np.array_equal(lon, -179.625 + np.arange(480) * .75)):
             raise ValueError('Earth three-hour training requires the global 240x480 grid')
         indices = np.flatnonzero(codes == SPLITS[split])
-        length = len(indices) - 56 - 24 + 1
+        length = len(indices) - window - horizon + 1
         if length < 1:
             raise ValueError('Not enough three-hour steps in the selected split for window + horizon')
         if normalization is None:
@@ -710,7 +711,7 @@ class EarthThreeHourlyWindows:
         dataset = cls.__new__(cls)
         dataset._release = release
         dataset.data_path = _threehour_path(release)
-        dataset.window, dataset.horizon = 56, 24
+        dataset.window, dataset.horizon = window, horizon
         dataset.length, dataset.split = length, split
         dataset._offset = int(indices[0])
         dataset.dates = dates[indices]

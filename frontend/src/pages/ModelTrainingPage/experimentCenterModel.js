@@ -11,6 +11,7 @@ import {
   TRAINING_DATASET_IDS,
   getModelStructureConfig,
   isRecurrentArchitecture,
+  isRetiredEarthDataset,
   sanitizeNonNegativeInteger,
   sanitizePositiveInteger,
   sanitizePositiveNumber,
@@ -809,8 +810,13 @@ export function getExperimentFailureMessage(task, { stoppedStatuses = ['stopped'
 }
 
 /** 「用于预测」只对已完成且有有效权重的任务开放。 */
+export function isRetiredEarthTask(task) {
+  return isRetiredEarthDataset(task?.dataset_id || parseTaskHyperparameters(task?.hyperparameters).training_dataset);
+}
+
 export function canUseTaskForPrediction(task) {
-  return Boolean(task) && String(task.status || '').toLowerCase() === 'completed' && task.model_available === true;
+  return Boolean(task) && !isRetiredEarthTask(task)
+    && String(task.status || '').toLowerCase() === 'completed' && task.model_available === true;
 }
 
 export function isKnownExperimentTaskStatus(status) {

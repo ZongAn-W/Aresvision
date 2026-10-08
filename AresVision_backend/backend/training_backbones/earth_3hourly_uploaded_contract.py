@@ -28,7 +28,9 @@ RESERVED_PARAMETERS = frozenset({
 })
 
 
-def build_config(order, params=None):
+def build_config(order, params=None, *, window=56, horizon=24):
+    from services.earth_training_contract import earth_training_profile
+    profile = earth_training_profile(DATASET_ID, {'window': window, 'horizon': horizon})
     order = list(order)
     if not order or order[0] != "TO3" or order != [c for c in CHANNELS if c in order]:
         raise ValueError("Earth three-hour channels must be unique and canonical with TO3 first")
@@ -40,7 +42,7 @@ def build_config(order, params=None):
     return {
         **params, "dataset_id": DATASET_ID, "contract_schema": CONTRACT_SCHEMA,
         "in_channels": len(order), "selected_channels": order, "target_channel": "TO3",
-        "window": 56, "horizon": 24, "height": 24, "width": 48,
+        "window": profile['window'], "horizon": profile['horizon'], "height": 24, "width": 48,
         "global_grid_shape": [240, 480], "spatial_tile_shape": [24, 48],
     }
 
@@ -49,15 +51,17 @@ def channel_orders():
     return [["TO3", *subset] for count in range(5) for subset in combinations(CHANNELS[1:], count)]
 
 
-def forward(model, inputs):
+def forward(model, inputs, *, horizon=24):
     import torch
 
     if (not isinstance(inputs, torch.Tensor) or inputs.dtype != torch.float32
-            or inputs.ndim != 5 or inputs.shape[0] < 1 or inputs.shape[1] != 56 or not 1 <= inputs.shape[2] <= 5
+            or inputs.ndim != 5 or inputs.shape[0] < 1
+            or inputs.shape[1] != getattr(model, '_aresvision_earth_window', inputs.shape[1])
+            or not 1 <= inputs.shape[1] <= 240 or not 1 <= inputs.shape[2] <= 5
             or tuple(inputs.shape[-2:]) != TILE_SHAPE or not torch.isfinite(inputs).all()):
-        raise ValueError("Earth three-hour input must be finite float32 [B,56,C,24,48]")
+        raise ValueError("Earth three-hour input must be finite float32 [B,window,C,24,48]")
     output = model(inputs)
-    expected = (inputs.shape[0], 24, 1, *TILE_SHAPE)
+    expected = (inputs.shape[0], horizon, 1, *TILE_SHAPE)
     if (not isinstance(output, torch.Tensor) or tuple(output.shape) != expected
             or output.dtype != torch.float32 or output.device != inputs.device
             or not torch.isfinite(output).all()):
@@ -65,10 +69,10 @@ def forward(model, inputs):
     return output
 
 
-def dry_run(build_model, order, params):
+def dry_run(build_model, order, params, *, window=56, horizon=24):
     import torch
 
-    model = build_model(build_config(order, params))
+    model = build_model(build_config(order, params, window=window, horizon=horizon))
     if not isinstance(model, torch.nn.Module):
         raise ValueError("build_model(config) must return torch.nn.Module")
     model.to(device="cpu", dtype=torch.float32)
@@ -76,13 +80,13 @@ def dry_run(build_model, order, params):
         raise ValueError("Earth training requires trainable model parameters")
     generator = torch.Generator().manual_seed(1107)
     for batch in (1, 2):
-        inputs = torch.randn((batch, 56, len(order), *TILE_SHAPE), generator=generator)
+        inputs = torch.randn((batch, window, len(order), *TILE_SHAPE), generator=generator)
         model.eval()
         with torch.no_grad():
-            output = forward(model, inputs)
+            output = forward(model, inputs, horizon=horizon)
         model.train()
         model.zero_grad(set_to_none=True)
-        loss = forward(model, inputs).square().mean()
+        loss = forward(model, inputs, horizon=horizon).square().mean()
         loss.backward()
         gradients = [p.grad for p in model.parameters() if p.requires_grad and p.grad is not None]
         if not gradients or any(not torch.isfinite(g).all() for g in gradients):

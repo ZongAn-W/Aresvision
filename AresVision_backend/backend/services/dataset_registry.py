@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from services.dataset_identity import (
+    ACTIVE_DATASET_IDS,
     DATASET_IDS,
     EARTH_DATASET_ID,
     EARTH_DATASET_V2_ID,
@@ -30,6 +31,7 @@ from services.dataset_identity import (
     DatasetRequestError,
     build_identity_snapshot,
     require_training_dataset,
+    require_active_dataset,
 )
 from services.earth_training_contract import earth_training_profile
 from services.earth_dataset_metadata import (
@@ -238,7 +240,7 @@ class DatasetRegistry:
 
     # ── public protocol ────────────────────────────────────────────────
     def list_datasets(self) -> list[dict]:
-        return [self.get_dataset(dataset_id) for dataset_id in REGISTERED_DATASET_IDS]
+        return [self.get_dataset(dataset_id) for dataset_id in ACTIVE_DATASET_IDS]
 
     def get_dataset(self, dataset_id: str) -> dict:
         if not isinstance(dataset_id, str) or dataset_id.strip().lower() not in REGISTERED_DATASET_IDS:
@@ -246,6 +248,7 @@ class DatasetRegistry:
                 "unknown_dataset", "Unknown dataset id", status_code=404
             )
         normalized = dataset_id.strip().lower()
+        require_active_dataset(normalized)
         if normalized in EARTH_DATASET_IDS:
             return copy.deepcopy(self._earth_descriptor(normalized))
         return copy.deepcopy(self._mars_descriptor(normalized))
@@ -279,6 +282,7 @@ class DatasetRegistry:
         """Accept a registered Earth id or a legacy Mars training id, else raise."""
         if isinstance(dataset_id, str):
             normalized = dataset_id.strip().lower()
+            require_active_dataset(normalized)
             if normalized in EARTH_DATASET_IDS:
                 return normalized
         return require_training_dataset(dataset_id)
@@ -365,6 +369,7 @@ class DatasetRegistry:
                 "unknown_dataset", "Unknown dataset id", status_code=404
             )
         normalized = dataset_id.strip().lower()
+        require_active_dataset(normalized)
         if normalized not in EARTH_DATASET_IDS:
             raise DatasetRequestError(
                 "dataset_overview_not_supported",

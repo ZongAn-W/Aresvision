@@ -1,12 +1,12 @@
 # 二维地球数据总览
 
-本文记录已实现的地球总览：同一发布身份的只读快照、三个总览接口、行星/数据集切换、全球热力图、真实时间播放、点位序列与面积加权均值。开发默认 Earth ID 为日频 v2；生产入口可由服务端 catalog 配置为三小时 v1。日频 v1 保留区域契约，三小时 v1 使用独立 UTC datetime 轴、降采样地图和后端日聚合年度分析。`cell_bounds` 和 `wrap_longitude` 以 descriptor 为准。
+当前地球总览只使用 `earth_merra2_3hourly_v1`：UTC datetime 轴、降采样地图、原生点位序列、面积加权均值和三小时源日聚合年度分析。观测档首次打开或刷新默认显示三维球体，不因三小时频率切换到二维；二维地图可在“显示”面板手动选择，也是 WebGL 不可用时的自动回退视图。开发与生产默认一致，日频 v1/v2 的总览和分析接口返回 409 `dataset_retired`，下文日频协议及交付记录均为历史资料。详见[停用约定](earth-dataset-retirement.md)及下方“三小时 UTC 总览”；`cell_bounds` 和 `wrap_longitude` 以 descriptor 为准。
 
 实施方案见 [二维地球总览实施方案](plans/2026-09-23-earth-overview-2d.md)；第一阶段（数据集注册与训练任务身份）见 [数据集注册表](dataset-registry.md)；数据包协议见 [地球小数据包](earth-compact-dataset.md)。
 
 用户已确认的[火星 / 地球共用分析工作台](plans/2026-09-23-earth-shared-analysis-workbench.md)首期范围**已经实现**：三维地球、年度分析、极区统计与图表 AI 解读见[共用分析工作台](earth-analysis-workbench.md)。本文仍是二维基础层的协议文档；页面现在默认挂载“行星观测台”布局（四个区域见下方交付说明），`EarthOverviewScene` 作为兼容保留的二维实现留在仓库中，二维地图与时间轴组件被观测台直接复用。
 
-文档最近核对日期：**2026-10-07**；v2/v1 日频协议保持兼容，三小时协议见下方“3 小时 UTC 总览”。本次读取配置目录时，`earth_merra2_daily_v2` 为 `available`，`earth_merra2_3hourly_v1` 为 `missing/package_missing`；入口接线不代表三小时包当前存在。
+文档最近核对日期：**2026-10-08**；日频入口已关闭，三小时数据状态以当前 catalog 的 `availability` 为准。缺失发布不回退到日频。
 
 > **当前界面（2026-09-26）**
 >
@@ -19,7 +19,7 @@
 | 总览“地球 / 火星”切换（默认地球） | 已实现 |
 | 地球数据集元信息、可用状态、日期/UTC 时间与变量选择 | 已实现 |
 | 全球经纬度底图上的全球热力图与真实单元边界 | 已实现 |
-| 日频逐日或三小时 UTC 起点选择、对应步长播放/暂停 | 已实现 |
+| 三小时 UTC 时间选择与播放/暂停 | 已实现；日频选择已移除 |
 | 五个变量：`TO3`、`U10M`、`V10M`、`T2M`、`SWGDN`（原始单位） | 已实现 |
 | 点击有效网格查看当前值与对应频率的完整点位时间序列 | 已实现 |
 | 全球单元面积加权均值；三小时年度图按 UTC 每日八样本聚合 | 已实现 |
@@ -28,15 +28,15 @@
 | 三维全球球体、行星观测台（顶部条件栏 + 全幅画布 + 时间轨道 + 底部分析区）、`observe`/`analyze` 两档视图、年度分析、极区统计、图表 AI 解读 | 已实现，见 [共用分析工作台](earth-analysis-workbench.md) |
 | 地球昼夜变化 | 未实现；日频无日内采样，三小时仅表示当前未接入分析，不宣称无日内数据 |
 | 风场粒子、派生风速 | 未实现 |
-| 地球训练、地球预测 | 日频网页与三小时后端已实现，见[训练与回测](earth-training.md) |
+| 地球训练、地球预测 | 三小时网页与后端已实现，日频已停用，见[训练与回测](earth-training.md) |
 | 自选多边形区域、重网格、平滑/插值、臭氧单位换算、导出、PFI | 未实现 |
 | Earth/Mars 数值叠加与跨星球比较 | 未实现（首期不做） |
 
-Earth 时间轴由所选数据集身份决定：`earth_merra2_daily_v2` 保留日频 ISO date 与日步长；`earth_merra2_3hourly_v1` 使用带 `Z` 的 UTC ISO datetime、3 小时步长、0.75°×0.75°、240×480 网格，变量为 TO3、U10M、V10M、T2M、SWGDN。数据集切换会清理上一身份的场、时间、点位和年度缓存，不把旧日频任务或结果解释为三小时数据。
+Earth 只使用 `earth_merra2_3hourly_v1` 的带 `Z` UTC ISO datetime、3 小时步长、0.75°×0.75°、240×480 网格，变量为 TO3、U10M、V10M、T2M、SWGDN。数据集切换会清理上一身份的场、时间、点位和年度缓存，不把旧日频任务或结果解释为三小时数据。
 
-v2 的“全球平均”固定指全球 5° 单元的球面面积加权均值；v1 仍是 ±60°/±120° 覆盖区的抽样点加权均值。两种聚合通过 `aggregation` 字段区分。
+三小时“全球平均”使用全球单元球面面积权重。归档日频 v2 的 5° 全球单元均值与 v1 的区域抽样点均值仅是历史协议。
 
-## 只读发布快照
+## 日频只读发布快照（历史实现）
 
 总览不直接打开 NetCDF，而是复用第一步的注册表：
 
@@ -64,19 +64,21 @@ GET /api/datasets/earth_merra2_3hourly_v1/overview/point-series
 
 context 和场/序列响应都声明 `frequency_hours=3`、`step_unit=hour`、`step=3`、`time_zone=UTC`。前端数据集切换时取消旧请求并清空场、时间、点位和年度缓存；Canvas 只创建一个栅格节点，不为 115,200 个原始格点创建 SVG/React 节点。缺包、指纹变化和时间戳错误沿用结构化 `dataset_unavailable`、`dataset_version_changed`、`invalid_timestamp`/`timestamp_out_of_range`。
 
+三小时观测轨左侧读数区直接提供 UTC 日期与时间控件，不重复显示完整时间戳；右侧时间戳按日期与 UTC 时间分行。控件宽度受轨道约束，两侧读数区按文字缩放使用相同高度，保持曲线起止位置对齐；较矮视口下两侧轨道同步纵向滚动，窄屏为两轨预留足够高度。
+
 年度研究接口仍返回日序列，三小时发布由后端逐块读取每天 8 个连续样本，统计定义为 `utc_daily_mean_of_8_three_hour_means`。不完整 UTC 日或缺测会返回 `incomplete_daily_aggregate`，不会将部分日均值伪装成完整日数据；三小时字段的日内变化分析尚未开放，能力说明会明确区分“未实现”和日频数据没有日内采样。
 
-URL 前缀统一为 `/api/datasets/{dataset_id}/overview`，支持 `earth_merra2_daily_v2`、保留的 `earth_merra2_daily_v1` 和 `earth_merra2_3hourly_v1`。公开只读，与第一步目录权限一致，不使用火星上传来源参数，也不接受任何磁盘路径。
+URL 前缀统一为 `/api/datasets/{dataset_id}/overview`，仅支持 `earth_merra2_3hourly_v1`；两个日频 ID 返回 409 `dataset_retired`。公开只读，与目录权限一致，不使用火星上传来源参数，也不接受任何磁盘路径。
 
 **所有请求必须传 `expected_fingerprint=<64位小写SHA>`**，值取自当前数据集元信息。这样一次页面会话不会把不同版本的数据拼接展示。
 
 | 接口 | 必传参数 | 可选参数 |
 | --- | --- | --- |
-| `GET .../field` | 日频用 `date=YYYY-MM-DD`；三小时用 UTC `timestamp`、`variable`、`expected_fingerprint` | 三小时可选 `render_stride=8` |
+| `GET .../field` | UTC `timestamp`、`variable`、`expected_fingerprint` | `render_stride=8` |
 | `GET .../regional-series` | `variable`、`expected_fingerprint` | `start`、`end` |
 | `GET .../point-series` | `lat`、`lon`、`variable`、`expected_fingerprint` | `start`、`end` |
 
-变量严格匹配 `TO3`/`U10M`/`V10M`/`T2M`/`SWGDN`；不接受 `wind`、`O3`、`temperature` 等别名，以免与火星字段混用。日频日期只接受完整 ISO date；三小时只接受发布轴上的 UTC ISO datetime。
+变量严格匹配 `TO3`/`U10M`/`V10M`/`T2M`/`SWGDN`；不接受 `wind`、`O3`、`temperature` 等别名，以免与火星字段混用。时间只接受发布轴上的 UTC ISO datetime。
 
 ### 公共响应字段
 
@@ -174,7 +176,7 @@ unproject(x, y)     -> { lon: x - 180, lat: 90 - y }
 - v2 数据格覆盖经度 [−180, 180]、纬度 [−90, 90]，包括两极和经度接缝；地图使用 manifest 的真实 cell bounds。v1 仍只覆盖 [−120,120]×[−60,60]。
 - v2 网格坐标是单元中心，按真实单元覆盖范围绘制完整 5° 单元；内部边界由已验证的规则网格中心中点重建，外边界取 field 的 coverage（来源于 NetCDF cell bounds）。v1 兼容路径按中心中点划格并裁到声明覆盖端点，不把旧抽样值解释成面积平均。
 - 不补首尾重复列，不做经度环绕插值。
-- 绘制顺序：无数据纹理 → 服务端返回的日频或三小时显示栅格 → 真实海岸线与经纬网 → 区域边界与选中点。三小时显示栅格默认 60×120；Canvas 只创建一个栅格节点，海岸线设 `pointer-events: none`，不遮挡点击。
+- 绘制顺序：无数据纹理 → 服务端返回的三小时显示栅格 → 真实海岸线与经纬网 → 区域边界与选中点。显示栅格默认 60×120；Canvas 只创建一个栅格节点，海岸线设 `pointer-events: none`，不遮挡点击。
 - 点击用 `getScreenCTM().inverse()` 与 `DOMPoint` 换算回 viewBox 坐标，不按含 letterbox 的 DOM 尺寸线性映射。**点击处理挂在 svg 上**，因此区域外点击也能给出提示，而不是被无数据图层吞掉。
 - 区域外点击只显示“区域外无数据”，**不发点位请求、不移动上一个有效点**；覆盖边界上的点允许选择。
 - 点位选择先前端快速吸附到最近采样点，再以接口返回的 `grid_point` 为最终位置；不做插值。
@@ -194,7 +196,7 @@ unproject(x, y)     -> { lon: x - 180, lat: 90 - y }
 
 ### 日期与播放
 
-- 日频状态使用 ISO 日期；三小时状态使用带 `Z` 的 UTC ISO datetime，全部按 UTC 运算，不使用 `toLocaleDateString`，支持 3 小时中心标签。
+- 当前时间状态使用带 `Z` 的 UTC ISO datetime，全部按 UTC 运算，不使用 `toLocaleDateString`，支持 3 小时中心标签；日频日期分支仅保留兼容代码。
 - 日期输入 `min`/`max` 来自元数据；非法或越界值显示错误，不静默夹取。
 - 滑块以 `0..count-1` 为索引，标签始终显示真实日期（不是 Ls 0..360）。
 - 前/后一天与日期选择都会暂停播放；到首尾时对应按钮禁用。
@@ -235,7 +237,7 @@ point identity         = [dataset_id, fingerprint, variable, requested_lat, requ
 
 ## 能力声明
 
-`GET /api/datasets/earth_merra2_daily_v2` 返回全球 v2；`earth_merra2_daily_v1` 仍返回旧区域发布：
+以下为归档日频响应记录；当前 `GET /api/datasets/earth_merra2_daily_v2` 和 `earth_merra2_daily_v1` 均返回 409 `dataset_retired`：
 
 ```json
 "capabilities": {"metadata": true, "web_overview": true, "training": false, "trained_prediction": false}
@@ -270,11 +272,11 @@ npm run build
 
 ## 当前边界
 
-- 地球已开放三维日数据分析工作台，观测档展示球体与时间/点位轨，分析档展示左侧条件与主题组合看板，保留单项分析入口；协议与控件位置见[共用分析工作台](earth-analysis-workbench.md)。
-- 地球仍**没有**：昼夜变化（日平均数据不可支持）、风场粒子、派生风速、自选多边形区域、重网格、平滑/插值、臭氧单位换算、导出、PFI、Earth/Mars 数值叠加或跨星球比较。
-- 日频 `earth_merra2_daily_v2` 的官方 DLinear 与兼容上传模型训练、7→3 历史预测保持兼容；三小时 `earth_merra2_3hourly_v1` 的官方 DLinear 56→24 训练、总览及有参考真值历史预测使用 UTC 时间轴。当前配置目录的三小时包缺失时，相关入口不可读取数据。无参考真值的未来外推、Earth/Mars 混合比较和不兼容窗口的三小时上传模型未开放；完整 240×480 预测场由预测 API 返回，浏览器下载、JSON 解析和内存成本高于总览降采样地图。
-- v2 区域均值按球面单元面积加权；v1 区域均值仍是覆盖区域抽样点加权。
-- 数据仍是日平均，不保留逐小时变化；v2 使用 5° 全球单元，v1 的区域网格限制仅适用于 v1。
+- 地球已开放三小时数据分析工作台，观测档展示球体与时间/点位轨，分析档展示左侧条件与主题组合看板，保留单项分析入口；协议与控件位置见[共用分析工作台](earth-analysis-workbench.md)。
+- 地球总览仍**没有**：昼夜分析（已有三小时采样，分析未接入）、风场粒子、派生风速、自选多边形区域、重网格、平滑/插值、臭氧单位换算、总览导出、PFI、Earth/Mars 数值叠加或跨星球比较。
+- 三小时 `earth_merra2_3hourly_v1` 的官方 DLinear / 独立契约上传模型 56→24 训练、总览及有参考真值历史预测使用 UTC 时间轴。日频运行入口已停用；三小时包缺失时不回退。无参考真值的未来外推、Earth/Mars 混合比较和不兼容窗口的上传模型未开放；完整 240×480 预测场由预测 API 返回，浏览器下载、JSON 解析和内存成本高于总览降采样地图。
+- 全球和区域均值按球面单元面积加权。
+- 数据源为三小时区间均值，年度图按每天八个源样本聚合，不使用独立日频发布。
 - 二维实现（`EarthOverviewScene` 及其组件）作为兼容层保留，页面**不再挂载**它：`EarthMap2D` 被观测台直接复用，`EarthTimeline` 与 `EarthSeriesPanel` 仅供兼容二维场景使用，二维地图仍可从“显示”面板进入并在 WebGL 不可用时自动降级；`DetailPanel`、`SidebarMenu` 同样不再由页面渲染，分析主图由 `AnalysisDock` 承担，Earth 点位结果在观测档右侧曲线展示。
 
 ## v1 历史验证记录

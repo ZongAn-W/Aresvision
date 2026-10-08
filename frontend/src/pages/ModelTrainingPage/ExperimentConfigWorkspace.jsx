@@ -5,7 +5,6 @@ import DynamicModelParamsForm from './DynamicModelParamsForm';
 import ModelArchitectureSelector from './ModelArchitectureSelector';
 import { TagPicker } from '../../components/TrainingTags/TagControls';
 import {
-  TRAINING_DATASET_EARTH_MERRA2_V2,
   TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1,
   TRAINING_DATASET_MCD_OVERVIEW,
   TRAINING_DATASET_OPENMARS_MCD,
@@ -231,20 +230,20 @@ export default function ExperimentConfigWorkspace({
   const parameterFields = [
     {
       key: 'windowValue',
-      label: copy.windowLabel,
+      label: isEarth ? `${copy.windowLabel} (${isZh ? '三小时步' : '3-hour steps'})` : copy.windowLabel,
       code: copy.codeWindow,
       step: '1',
       min: '1',
-      max: '30',
+      max: isEarth ? '240' : '30',
       locked: true,
     },
     {
       key: 'horizon',
-      label: copy.horizonLabel,
+      label: isEarth ? `${copy.horizonLabel} (${isZh ? '三小时步' : '3-hour steps'})` : copy.horizonLabel,
       code: copy.codeHorizon,
       step: '1',
       min: '1',
-      max: '30',
+      max: isEarth ? '240' : '30',
       locked: true,
     },
     {
@@ -286,7 +285,6 @@ export default function ExperimentConfigWorkspace({
   const datasetOptions = [
     { value: TRAINING_DATASET_OPENMARS_MCD, label: copy.datasetOpenMarsMcd },
     { value: TRAINING_DATASET_MCD_OVERVIEW, label: copy.datasetMcdOverview },
-    { value: TRAINING_DATASET_EARTH_MERRA2_V2, label: copy.datasetEarthMerra2V2 },
     { value: TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1, label: copy.datasetEarthMerra23HourlyV1 },
   ];
   return (
@@ -355,7 +353,7 @@ export default function ExperimentConfigWorkspace({
             <div className="experiment-earth-contract" data-earth-training-contract="true">
               <span>{earthProfile.frequencyHours === 3 ? 'UTC · 3-hourly' : 'UTC · daily'}</span>
               <span>{`${earthProfile.gridShape[0]}×${earthProfile.gridShape[1]}`}</span>
-              <span>{`${earthProfile.window} → ${earthProfile.horizon} steps`}</span>
+              <span>{`${windowValue} → ${horizon} steps`}</span>
               <span>TO3 · DU</span>
               {earthDatasetAvailability?.selectable === false ? (
                 <strong data-earth-unavailable="true">{earthDatasetAvailability.reason || copy.earthUnavailableFallback}</strong>
@@ -547,6 +545,22 @@ export default function ExperimentConfigWorkspace({
             {activeTab === 'payload' ? (
               <div data-config-group="payload">
                 <h4 className="experiment-expert-heading">{copy.sectionPayload}</h4>
+                {isEarth ? <>
+                  <div className="experiment-param-grid">
+                    {parameterFields.filter((field) => ['windowValue', 'horizon'].includes(field.key)).map((field) => (
+                      <label className="experiment-param-cell" key={field.key} data-parameter={field.key}>
+                        <span className="experiment-param-label">{field.label}</span>
+                        <input type="number" value={values[field.key]} min={field.min} max={field.max} step="1"
+                          aria-label={field.label} onChange={(event) => onFoldChange(field.key, event.target.value)} />
+                      </label>
+                    ))}
+                  </div>
+                  <p className="experiment-expert-note" data-earth-window-duration="true">
+                    {isZh
+                      ? `输入 ${Number(windowValue) * 3 / 24} 天 → 输出 ${Number(horizon) * 3 / 24} 天；每步 3 小时，改变窗口后需重新训练。`
+                      : `Input ${Number(windowValue) * 3 / 24} days → output ${Number(horizon) * 3 / 24} days; each step is 3 hours. Changing windows requires training a new model.`}
+                  </p>
+                </> : null}
                 <div className="experiment-payload-bar" role="group" aria-label={t('modelTraining.inputChannels')}>
                   <span className="experiment-payload-lock" data-payload-base="true">
                     <span>{isEarth ? copy.earthBaseInput : copy.inspectorBaseInput}</span>
@@ -581,7 +595,7 @@ export default function ExperimentConfigWorkspace({
               <div data-config-group="training">
                 <h4 className="experiment-expert-heading">{copy.sectionTraining}</h4>
                 <div className="experiment-param-grid">
-                  {parameterFields.map((field) => (
+                  {parameterFields.filter((field) => !isEarth || !['windowValue', 'horizon'].includes(field.key)).map((field) => (
                     <label className="experiment-param-cell" key={field.key} data-parameter={field.key}>
                       <span className="experiment-param-label">
                         {field.label}

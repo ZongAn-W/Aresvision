@@ -22,9 +22,9 @@ function stripComments(source) {
     .join('\n');
 }
 
-test('训练页把旧日频和三小时 Earth 数据集列为独立选项', () => {
-  assert.match(workspaceSource, /TRAINING_DATASET_EARTH_MERRA2_V2/);
-  assert.match(workspaceSource, /datasetEarthMerra2V2/);
+test('训练页只提供三小时 Earth 数据集选项', () => {
+  assert.doesNotMatch(workspaceSource, /TRAINING_DATASET_EARTH_MERRA2_V2/);
+  assert.doesNotMatch(workspaceSource, /datasetEarthMerra2V2/);
   assert.match(workspaceSource, /TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1/);
   assert.match(workspaceSource, /datasetEarthMerra23HourlyV1/);
   assert.match(workspaceSource, /data-training-dataset-option=\{option\.value\}/);
@@ -39,8 +39,8 @@ test('切换数据集走 Earth 专用换挡逻辑，而不是原始 setter', () 
   assert.match(pageSource, /captureTrainingDraft\(/);
   assert.match(pageSource, /resolveMarsTrainingRestore\(marsSnapshotRef\.current\)/);
   // Earth 生效时切到规范通道顺序与 profile 窗口；有 Earth 草稿时优先恢复草稿通道。
-  assert.match(pageSource, /setWindow\(earthProfile\.window\)/);
-  assert.match(pageSource, /setHorizon\(earthProfile\.horizon\)/);
+  assert.match(pageSource, /setWindow\(restore \? restore\.windowValue : trainingDefaults\.window\)/);
+  assert.match(pageSource, /setHorizon\(restore \? restore\.horizon : trainingDefaults\.horizon\)/);
   assert.match(pageSource, /datasetId: trainingDataset/);
   assert.match(
     pageSource,
@@ -88,7 +88,7 @@ test('Earth 模式隐藏火星专属控件（模型来源切换、SPHERE、迁�
   assert.match(workspaceSource, /disabled readOnly/);
 });
 
-test('predict 页面接入 Earth 模式而不是扩展火星模式', () => {
+test('predict 页面共用行星和分析方式选择，Earth 数据仍走独立接口', () => {
   const predictSource = readFileSync(new URL('../PredictPage.jsx', import.meta.url), 'utf8');
   assert.match(predictSource, /PREDICT_MODEL_MODE_EARTH/);
   assert.match(predictSource, /<EarthPredictPanel/);
@@ -97,6 +97,7 @@ test('predict 页面接入 Earth 模式而不是扩展火星模式', () => {
   // 结果身份包含起点，切换任务/起点会清空旧结果。
   assert.match(predictSource, /buildEarthPredictKey\(/);
   assert.match(predictSource, /setEarthResult\(null\)/);
-  // 地球模式隐藏火星侧栏与火星场图。
-  assert.match(predictSource, /isEarthMode \? '1fr' : '300px 1fr'/);
+  assert.match(predictSource, /<PredictModeSelector/);
+  assert.match(predictSource, /<EarthCompareWorkspace/);
+  assert.match(predictSource, /planet=\{isEarthMode \? 'earth' : 'mars'\}/);
 });

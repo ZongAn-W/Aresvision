@@ -15,6 +15,7 @@ const FULL_VISIBILITY = {
 };
 
 export function getPredictAnalysisVisibility(modelMode = 'system') {
+  if (modelMode === 'earth_compare') return Object.fromEntries(Object.keys(FULL_VISIBILITY).map(key => [key, false]));
   if (modelMode === 'trained_compare') {
     return {
       ...FULL_VISIBILITY,
@@ -37,6 +38,7 @@ export function getPredictAnalysisVisibility(modelMode = 'system') {
     return {
       ...FULL_VISIBILITY,
       predictionFields: false,
+      metrics: false,
       errorDistribution: false,
       permutationImportance: false,
       inputVariables: false,

@@ -218,8 +218,13 @@ test('Earth task selection only offers completed Earth tasks with weights', () =
     { id: 5, status: 'completed', model_available: false, dataset_id: 'earth_merra2_daily_v2' },
   ];
   const options = getEarthTrainingModelOptions(tasks);
-  assert.deepEqual(options.map((option) => option.id), [1, 4]);
-  assert.equal(options[0].label, 'Earth A');
+  assert.deepEqual(options.map((option) => option.id), []);
+  const active = getEarthTrainingModelOptions([...tasks,
+    { ...tasks[0], id: 6, dataset_id: 'earth_merra2_3hourly_v1' },
+    { ...tasks[0], id: 7, dataset_id: 'earth_merra2_3hourly_v1', model_available: false },
+  ]);
+  assert.deepEqual(active.map((option) => option.id), [6]);
+  assert.equal(active[0].label, 'Earth A');
   assert.equal(getEarthTrainingModelOptions(null).length, 0);
 
   assert.equal(isEarthTask(tasks[0]), true);

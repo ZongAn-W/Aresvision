@@ -2,7 +2,7 @@ import C from '../../constants/colors';
 import { useT } from '../../i18n';
 import GlowCard from '../../components/GlowCard';
 import { fmtNum } from '../../utils/fmt';
-import { ozoneLabel } from '../../utils/units';
+import { ozoneLabel, convertOzone } from '../../utils/units';
 import { METRIC_META } from './PredictComponents';
 import { useSettings } from '../../contexts/SettingsContext';
 import { getMetricAggregationLabel, getSplitLabel } from './predictionMetricMeta';
@@ -43,7 +43,8 @@ export default function PredictMetrics({
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 16 }}>
         {METRIC_META.map((m) => {
-          const val = metrics?.overall?.[m.key];
+          const raw = metrics?.overall?.[m.key];
+          const val = raw == null ? null : ['rmse', 'mae'].includes(m.key) ? convertOzone(raw, ozoneUnit) : raw;
           const unit = m.key === 'rmse' || m.key === 'mae' ? ozoneLabel(ozoneUnit) : m.unit;
 
           return (

@@ -37,7 +37,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from services.dataset_registry import DatasetRegistry  # noqa: E402
-from services.dataset_identity import DatasetRequestError  # noqa: E402
+from services.dataset_identity import DatasetRequestError, EARTH_DATASET_3HOURLY_ID  # noqa: E402
 from services.earth_dataset import (  # noqa: E402
     EarthOzoneWindows, EarthThreeHourlyWindows, build_threehour_training_cache,
 )
@@ -106,7 +106,7 @@ def _build_loaders(
     hyperparameters = normalize_earth_training_hyperparameters(
         spec["hyperparameters"], dataset_id=binding["dataset_id"]
     )
-    profile = earth_training_profile(binding["dataset_id"])
+    profile = earth_training_profile(binding["dataset_id"], hyperparameters)
     release = registry.get_earth_snapshot(binding["dataset_id"])
     assert_release_matches_binding(release, binding)
 
@@ -114,7 +114,7 @@ def _build_loaders(
     # Fit statistics on the published training period, then build each split
     # independently so no input or target window can cross a manifest boundary.
     normalization = normalization_from_release(release, ["TO3", *selected])
-    window_type = EarthThreeHourlyWindows if profile["window"] == 56 else EarthOzoneWindows
+    window_type = EarthThreeHourlyWindows if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else EarthOzoneWindows
     splits = {
         name: window_type.from_release(
             release,
@@ -242,8 +242,8 @@ def _evaluate_split(
     """Return DU metrics plus the mean normalized MSE for a whole partition."""
     model.eval()
     dataset_id = (getattr(getattr(dataset, "_release", None), "metadata", {}) or {}).get("dataset_id")
-    accumulator = ErrorAccumulator(dataset_id=dataset_id)
     horizon = getattr(dataset, "horizon", EARTH_HORIZON)
+    accumulator = ErrorAccumulator(dataset_id=dataset_id, horizon=horizon)
     total_loss = 0.0
     total_loss_elements = 0
     with torch.no_grad():
@@ -293,7 +293,7 @@ def run_training(
     hyperparameters = normalize_earth_training_hyperparameters(
         spec["hyperparameters"], dataset_id=binding["dataset_id"]
     )
-    profile = earth_training_profile(binding["dataset_id"])
+    profile = earth_training_profile(binding["dataset_id"], hyperparameters)
     if spec.get("training_profile") is not None and spec["training_profile"] != profile:
         raise EarthTrainingError("Training spec profile disagrees with the dataset")
     epochs = hyperparameters["epochs"]
@@ -338,6 +338,7 @@ def run_training(
         linear_hidden_layers=hidden_layers,
         uploaded_model=uploaded_reference if model_source == MODEL_SOURCE_UPLOADED else None,
         dataset_id=binding["dataset_id"],
+        window=profile['window'], horizon=profile['horizon'],
     )
     try:
         model, model_build_config, model_warnings = build_earth_model_for_plan(plan)
@@ -504,6 +505,7 @@ def run_training(
         validation_window_count=prepared["counts"]["validation"],
         test_window_count=prepared["counts"]["test"],
         dataset_id=binding["dataset_id"],
+        horizon=profile['horizon'],
     )
     run = {
         "task_id": task_id,
@@ -524,7 +526,7 @@ def run_training(
         "device": str(resolved_device),
         "duration_seconds": round(time.time() - start_time, 3),
     }
-    if profile["window"] == 56:
+    if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
         run["memory_strategy"] = "normalized_memmap_spatial_tiles"
         run["spatial_tile_shape"] = list(THREE_HOUR_TILE_SHAPE)
         run["batch_unit"] = "spatial_tile"

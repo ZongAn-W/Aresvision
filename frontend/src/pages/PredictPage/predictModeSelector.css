@@ -1,0 +1,11 @@
+.predict-mode-selector { display: flex; gap: 24px; flex-wrap: wrap; margin: 0 0 24px; }
+.predict-mode-selector fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.predict-mode-selector legend { margin-bottom: 8px; color: var(--text-60); font-size: calc(12px * var(--font-scale, 1)); }
+.predict-mode-selector [role="group"] { display: flex; gap: 6px; padding: 5px; background: var(--bg-muted); border: 1px solid var(--border); border-radius: 14px; }
+.predict-mode-selector button { border: 1px solid transparent; border-radius: 10px; padding: 10px 18px; min-height: 44px; background: transparent; color: var(--text-60); font: inherit; font-size: calc(13px * var(--font-scale, 1)); cursor: pointer; }
+.predict-mode-selector button[aria-pressed="true"] { background: rgba(74,158,255,.15); border-color: rgba(74,158,255,.4); color: #4a9eff; font-weight: 700; }
+.predict-mode-selector button:focus-visible { outline: 2px solid #4a9eff; outline-offset: 2px; }
+.predict-mode-selector fieldset:disabled { opacity: .65; }
+.predict-mode-selector fieldset:disabled button { cursor: wait; }
+.predict-workspace { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; }
+@media (max-width: 900px) { .predict-workspace { grid-template-columns: minmax(0, 1fr); } }

@@ -110,7 +110,74 @@ def test_http_context_preserves_utc_datetimes_and_publishes_complete_origins(thr
     assert len(body["metrics"]["splits"]["test"]["by_lead"]) == 24
 
 
-def test_http_run_returns_24_full_fields_and_hour_metrics(threehour_app):
+def test_earth_comparison_reads_verified_test_metrics_and_exports_without_inference(threehour_app, monkeypatch):
+    from routers import research_export
+    import services.earth_prediction_service as service
+    from services.research_export_sources import EXPORT_SOURCES
+    from services.research_figure import prepare_figure
+    from schemas.research_export import ResearchExportRequest
+
+    ids = [seed_task(threehour_app)[0] for _ in range(2)]
+    monkeypatch.setattr(service, "earth_forward_for_model", lambda *a, **k: pytest.fail("Comparison reran inference"))
+    response = threehour_app["client"].post("/api/earth/predict/training-models/compare", json={"task_ids": ids})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["metric_source"] == "verified_checkpoint_test_metrics"
+    assert [item["task_id"] for item in body["items"]] == ids
+    refs = []
+    for item in body["items"]:
+        assert item["metrics"]["overall"] == {"rmse": 1.0, "mae": 1.0}
+        assert len(item["metrics"]["per_step"]) == 24
+        assert item["metrics"]["split_meta"]["window_count"] == 1
+        refs.append(item["metrics"]["export_ref"])
+    request = ResearchExportRequest(kind="step_curves", metric="rmse", sources=refs,
+                                    options={"format": "svg", "language": "en", "unit": "um-atm"})
+    figure = prepare_figure([EXPORT_SOURCES.get(ref, 1) for ref in refs], request)
+    assert figure["unit"] == "DU"
+    assert len(figure["curves"]) == 2
+    assert figure["curves"][0]["y"].tolist() == [1.0] * 24
+    threehour_app["app"].include_router(research_export.router, prefix="/api")
+    exported = threehour_app["client"].post("/api/predict/research-export/download", json=request.model_dump())
+    assert exported.status_code == 200, exported.text
+    # A reference cannot be relabelled as another task's metrics.
+    refs[0]["task_id"] = ids[1]
+    assert threehour_app["client"].post("/api/predict/research-export/download", json={**request.model_dump(), "sources": refs}).status_code == 409
+
+
+def test_earth_comparison_enforces_access_identity_and_selection(threehour_app):
+    first, _ = seed_task(threehour_app)
+    private, _ = seed_task(threehour_app, user_id=2)
+    changed, _ = seed_task(threehour_app, fingerprint="c" * 64)
+    client = threehour_app["client"]
+    endpoint = "/api/earth/predict/training-models/compare"
+    assert client.post(endpoint, json={"task_ids": [first]}).status_code == 422
+    assert client.post(endpoint, json={"task_ids": [first, first]}).status_code == 422
+    assert client.post(endpoint, json={"task_ids": [first, True]}).status_code == 422
+    assert client.post(endpoint, json={"task_ids": [first, private]}).status_code == 403
+    assert client.post(endpoint, json={"task_ids": [first, changed]}).status_code == 409
+    mars, _ = seed_task(threehour_app, dataset_id="openmars_mcd")
+    assert client.post(endpoint, json={"task_ids": [first, mars]}).status_code == 409
+
+
+def test_earth_comparison_rejects_different_test_windows(threehour_app, monkeypatch):
+    import services.earth_prediction_service as service
+    first, _ = seed_task(threehour_app)
+    second, _ = seed_task(threehour_app)
+    original = service._load_checkpoint
+
+    def altered_test_count(task):
+        checkpoint = original(task)
+        if task.id == second:
+            checkpoint.metrics["splits"]["test"]["window_count"] += 1
+        return checkpoint
+
+    monkeypatch.setattr(service, "_load_checkpoint", altered_test_count)
+    response = threehour_app["client"].post("/api/earth/predict/training-models/compare", json={"task_ids": [first, second]})
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "earth_comparison_incompatible"
+
+
+def test_http_run_returns_24_full_fields_and_hour_metrics(threehour_app, monkeypatch):
     # Only this route test serializes all global fields; other tests exercise the
     # public errors/context without retaining multiple large JSON responses.
     task_id, _ = seed_task(threehour_app)
@@ -139,6 +206,37 @@ def test_http_run_returns_24_full_fields_and_hour_metrics(threehour_app):
     assert [row["lead_hours"] for row in body["metrics"]["by_lead"]] == list(range(3, 73, 3))
     assert [row["horizon_hours"] for row in body["metrics"]["by_horizon"]] == [24, 48, 72]
     assert all("lead_day" not in row for row in body["metrics"]["by_lead"])
+    # Export the already returned synthetic result; prohibit additional inference.
+    from routers import research_export, earth_predict
+    from io import BytesIO
+    from zipfile import ZipFile
+    from scipy.io import loadmat
+    import numpy as np
+    threehour_app["app"].include_router(research_export.router, prefix="/api")
+    monkeypatch.setattr(earth_predict, "run_earth_prediction", lambda *args: pytest.fail("Export reran inference"))
+    payload = {"sources": [body["export_ref"]], "kind": "triptych", "step": 23, "bundle": True,
+               "options": {"format": "pdf", "language": "en", "unit": "um-atm", "height_mm": 60}}
+    exported = threehour_app["client"].post("/api/predict/research-export/download", json=payload)
+    assert exported.status_code == 200, exported.text[:500] if exported.status_code != 200 else ""
+    with ZipFile(BytesIO(exported.content)) as archive:
+        mat = loadmat(BytesIO(archive.read("figure.mat")), simplify_cells=True)["figure_data"]
+        assert mat["unit"] == "DU"  # Earth must never use Mars conversions.
+        np.testing.assert_array_equal(mat["reference"], body["reference"][23]["field"])
+        np.testing.assert_array_equal(mat["latitude"], body["grid"]["latitude"])
+        np.testing.assert_allclose(mat["residual"], mat["prediction"] - mat["reference"], atol=1e-5)
+        assert mat["target_time"] == body["target_timestamps"][23]
+    payload["sources"][0]["origin"] = "2020-01-22T01:30:00Z"
+    assert threehour_app["client"].post("/api/predict/research-export/download", json=payload).status_code == 409
+    payload["sources"][0]["origin"] = body["forecast_origin"]
+    threehour_app["current"]["user"].id = 2
+    assert threehour_app["client"].post("/api/predict/research-export/download", json=payload).status_code == 403
+    threehour_app["current"]["user"].id = 1
+    from services.dataset_identity import DatasetRequestError
+    import services.earth_prediction_service as earth_service
+    def changed_release(*args):
+        raise DatasetRequestError("dataset_version_changed", "Synthetic release changed", status_code=409)
+    monkeypatch.setattr(earth_service, "build_prediction_context", changed_release)
+    assert threehour_app["client"].post("/api/predict/research-export/download", json=payload).status_code == 409
 
 
 @pytest.mark.parametrize("origin,code", [

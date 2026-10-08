@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import Popper from '@mui/material/Popper';
+import ClickAwayListener from '@mui/material/ClickAwayListener';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
@@ -74,10 +76,56 @@ function NameCell({ task, tasks, isZh, onSave }) {
   </div>;
 }
 
-function TagsCell({ task, tagState, isZh }) {
+function TagEditorPopover({ anchorRef, tagState, ids, setIds, error, isZh, onCancel, onSave }) {
+  const [popover, setPopover] = useState(null);
+  const popperRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!popover) return undefined;
+    popover.querySelector('input[type="search"]')?.focus({ preventScroll: true });
+    const observer = new ResizeObserver(() => popperRef.current?.update());
+    observer.observe(popover);
+    return () => observer.disconnect();
+  }, [popover]);
+
+  // The body portal escapes sticky-cell stacking and scroll clipping; Popper handles viewport edges.
+  return <Popper open anchorEl={anchorRef.current} placement="bottom-start" popperRef={popperRef}
+    popperOptions={{ strategy: 'fixed' }} sx={{ zIndex: 9800 }}
+    modifiers={[
+      { name: 'offset', options: { offset: [0, 8] } },
+      { name: 'flip', options: { rootBoundary: 'viewport', padding: 12 } },
+      { name: 'preventOverflow', options: { rootBoundary: 'viewport', altAxis: true, tether: false, padding: 12 } },
+    ]}>
+    <ClickAwayListener mouseEvent="onMouseDown" onClickAway={(event) => { if (!anchorRef.current?.contains(event.target)) onCancel(); }}>
+      <div ref={setPopover} className="experiment-matrix-tag-popover" role="dialog"
+        aria-label={isZh ? '编辑实验标签' : 'Edit experiment tags'} onClick={stopRowEvent}
+        onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); onCancel(); anchorRef.current?.focus({ preventScroll: true }); } }}>
+      <TagPicker
+        tags={tagState.tags}
+        value={ids.filter((id) => tagState.tags.some((tag) => tag.id === id))}
+        onChange={setIds}
+        onCreate={(name) => tagState.mutate(() => createTrainingTag(name))}
+        disabled={tagState.busy || tagState.loading}
+        isZh={isZh}
+        label={isZh ? '选择标签' : 'Choose tags'}
+      />
+      <div className="experiment-matrix-popover-actions">
+        <button type="button" className="experiment-matrix-text-button" onClick={onCancel}>{isZh ? '取消' : 'Cancel'}</button>
+        <button type="button" className="experiment-matrix-text-button primary" disabled={tagState.busy} onClick={onSave}>{isZh ? '保存' : 'Save'}</button>
+      </div>
+      {error ? <div role="alert" className="experiment-matrix-cell-error">{error}</div> : null}
+      </div>
+    </ClickAwayListener>
+  </Popper>;
+}
+
+function TagsCell({ task, tagState, isZh, active }) {
   const [open, setOpen] = useState(false);
   const [ids, setIds] = useState((task.tags || []).map((tag) => tag.id));
   const [error, setError] = useState('');
+  const anchorRef = useRef(null);
+  const cancel = useCallback(() => { setOpen(false); setError(''); }, []);
+  useEffect(() => { if (!active) cancel(); }, [active, cancel]);
   useEffect(() => { if (!open) setIds((task.tags || []).map((tag) => tag.id)); }, [task.tags, open]);
   const save = async () => {
     setError('');
@@ -85,12 +133,8 @@ function TagsCell({ task, tagState, isZh }) {
     catch (saveError) { setError(saveError.message); }
   };
   return <div className="experiment-matrix-tags-cell" onClick={stopRowEvent}>
-    <div className="experiment-matrix-tags-line"><TagChips tags={task.tags || []} /><button type="button" className="experiment-matrix-icon-button" title={isZh ? '编辑标签' : 'Edit tags'} aria-label={isZh ? '编辑标签' : 'Edit tags'} onClick={() => setOpen((value) => !value)}><EditRoundedIcon fontSize="small" /></button></div>
-    {open ? <div className="experiment-matrix-tag-popover">
-      <TagPicker tags={tagState.tags} value={ids.filter((id) => tagState.tags.some((tag) => tag.id === id))} onChange={setIds} onCreate={(name) => tagState.mutate(() => createTrainingTag(name))} disabled={tagState.busy || tagState.loading} isZh={isZh} label={isZh ? '选择标签' : 'Choose tags'} />
-      <div className="experiment-matrix-popover-actions"><button type="button" className="experiment-matrix-text-button" onClick={() => setOpen(false)}>{isZh ? '取消' : 'Cancel'}</button><button type="button" className="experiment-matrix-text-button primary" disabled={tagState.busy} onClick={save}>{isZh ? '保存' : 'Save'}</button></div>
-      {error ? <div role="alert" className="experiment-matrix-cell-error">{error}</div> : null}
-    </div> : null}
+    <div className="experiment-matrix-tags-line"><TagChips tags={task.tags || []} /><button ref={anchorRef} type="button" className="experiment-matrix-icon-button" title={isZh ? '编辑标签' : 'Edit tags'} aria-label={isZh ? '编辑标签' : 'Edit tags'} aria-expanded={open} onClick={() => setOpen((value) => !value)}><EditRoundedIcon fontSize="small" /></button></div>
+    {open && active ? <TagEditorPopover anchorRef={anchorRef} tagState={tagState} ids={ids} setIds={setIds} error={error} isZh={isZh} onCancel={cancel} onSave={save} /> : null}
   </div>;
 }
 
@@ -128,7 +172,7 @@ function PropertyPanel({ definitions, columns, setColumns, isZh, onClose }) {
 }
 
 export default function ExperimentMatrix({
-  tasks = [], tagState, tasksLoading = false, tasksError = false, user,
+  tasks = [], tagState, tasksLoading = false, tasksError = false, user, active = true,
   isZh = true, locale = 'zh-CN', onSelectTask, onCopyConfig, onRenameTask, onRetryTasks,
 }) {
   const definitions = useMemo(() => getMatrixPropertyDefinitions(tasks), [tasks]);
@@ -220,7 +264,6 @@ export default function ExperimentMatrix({
       </div>
       <button type="button" className="experiment-matrix-properties-button" aria-expanded={showProperties} onClick={() => setShowProperties((value) => !value)}><SettingsRoundedIcon fontSize="small" />{isZh ? '显示属性' : 'Visible properties'}</button>
     </div>
-    {sorted.length ? <div className="experiment-matrix-selection-toolbar"><button type="button" className="experiment-matrix-text-button" onClick={selectAll}>{selectedVisible.length === sorted.length ? (isZh ? '清空选择' : 'Clear selection') : (isZh ? '全选当前筛选结果' : 'Select filtered')}</button></div> : null}
     {selectedVisible.length ? <div className="experiment-matrix-bulk" role="group" aria-label={isZh ? '批量标签操作' : 'Bulk tag actions'}><span>{isZh ? `已选 ${selectedVisible.length} 条` : `${selectedVisible.length} selected`}</span><button type="button" className="experiment-matrix-text-button" onClick={selectAll}>{isZh ? '全选当前筛选结果' : 'Select filtered'}</button><TagPicker tags={tagState?.tags || []} value={bulkTagIds} onChange={setBulkTagIds} isZh={isZh} disabled={tagState?.loading || tagState?.busy} label={isZh ? '选择批量标签' : 'Choose bulk tags'} /><button type="button" className="experiment-matrix-text-button" disabled={tagState?.busy || !bulkTagIds.length} onClick={() => bulkTags('add')}>{isZh ? '添加标签' : 'Add tags'}</button><button type="button" className="experiment-matrix-text-button" disabled={tagState?.busy || !bulkTagIds.length} onClick={() => bulkTags('remove')}>{isZh ? '移除标签' : 'Remove tags'}</button></div> : null}
     <div className="experiment-matrix-layout">
       <div ref={scrollRef} className="experiment-matrix-scroll" tabIndex={0} aria-label={isZh ? '实验矩阵表格' : 'Experiment matrix table'}>
@@ -228,15 +271,15 @@ export default function ExperimentMatrix({
         {state === 'error' ? <div className="experiment-matrix-state" role="alert"><span>{isZh ? '实验矩阵加载失败。' : 'Could not load the experiment matrix.'}</span><button type="button" className="experiment-matrix-text-button" onClick={onRetryTasks}>{isZh ? '重试' : 'Retry'}</button></div> : null}
         {state === 'empty' ? <div className="experiment-matrix-state" role="status">{isZh ? '暂无训练实验。' : 'No training experiments yet.'}</div> : null}
         {state === 'no-match' ? <div className="experiment-matrix-state" role="status">{isZh ? '没有匹配的实验，请调整筛选条件。' : 'No matching experiments. Adjust the filters.'}</div> : null}
-        {state === 'ready' ? <table className="experiment-matrix-table" style={{ width: `${tableMinWidth}px`, minWidth: `${tableMinWidth}px` }}><thead><tr><th className="experiment-matrix-select-col"><input type="checkbox" checked={Boolean(sorted.length && selectedVisible.length === sorted.length)} onChange={selectAll} aria-label={isZh ? '全选当前筛选结果' : 'Select all filtered experiments'} /></th>{columns.map((key) => { const definition = definitionMap.get(key); if (!definition) return null; return <th key={key} className={`experiment-matrix-th experiment-matrix-col-${definition.key.replace(/[:_]/g, '-')}`} aria-sort={sort.key === key ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}><button type="button" onClick={() => changeSort(key)}>{isZh ? definition.label : definition.labelEn}<span aria-hidden="true">{sort.key === key ? (sort.direction === 'asc' ? ' ↑' : ' ↓') : ''}</span></button></th>; })}<th className="experiment-matrix-actions-col">{isZh ? '操作' : 'Actions'}</th></tr></thead><tbody>{sorted.map((task) => <tr key={task.id} tabIndex={0} onClick={() => onSelectTask?.(task.id)} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelectTask?.(task.id); } }}>
+        {state === 'ready' ? <table className="experiment-matrix-table" style={{ width: `calc(${tableMinWidth - 230}px + var(--matrix-name-width))`, minWidth: `calc(${tableMinWidth - 230}px + var(--matrix-name-width))` }}><colgroup><col style={{ width: 42 }} />{columns.map((key) => <col key={key} style={{ width: key === 'model_name' ? 'var(--matrix-name-width)' : key === 'tags' ? 190 : 150 }} />)}<col style={{ width: 88 }} /></colgroup><thead><tr><th className="experiment-matrix-select-col"><input type="checkbox" checked={Boolean(sorted.length && selectedVisible.length === sorted.length)} onChange={selectAll} aria-label={isZh ? '全选当前筛选结果' : 'Select all filtered experiments'} /></th>{columns.map((key) => { const definition = definitionMap.get(key); if (!definition) return null; return <th key={key} className={`experiment-matrix-th experiment-matrix-col-${definition.key.replace(/[:_]/g, '-')}`} aria-sort={sort.key === key ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}><button type="button" onClick={() => changeSort(key)}>{isZh ? definition.label : definition.labelEn}<span aria-hidden="true">{sort.key === key ? (sort.direction === 'asc' ? ' ↑' : ' ↓') : ''}</span></button></th>; })}<th className="experiment-matrix-actions-col">{isZh ? '操作' : 'Actions'}</th></tr></thead><tbody>{sorted.map((task) => <tr key={task.id} tabIndex={0} onClick={() => onSelectTask?.(task.id)} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelectTask?.(task.id); } }}>
           <td className="experiment-matrix-select-col"><input type="checkbox" checked={selectedVisible.includes(task.id)} onClick={stopRowEvent} onChange={(event) => setSelected((current) => event.target.checked ? [...new Set([...current, task.id])] : current.filter((id) => id !== task.id))} aria-label={isZh ? `选择实验 ${task.custom_model_name || task.id}` : `Select experiment ${task.custom_model_name || task.id}`} /></td>
-          {columns.map((key) => { const definition = definitionMap.get(key); if (!definition) return null; const value = getMatrixValue(task, key); return <td key={key} className={`experiment-matrix-td experiment-matrix-col-${definition.key.replace(/[:_]/g, '-')}`}>{key === 'model_name' ? <NameCell task={task} tasks={tasks} isZh={isZh} onSave={onRenameTask} /> : key === 'tags' ? <TagsCell task={task} tagState={tagState} isZh={isZh} /> : <span title={formatMatrixValue(value, definition, task, locale)}>{formatMatrixValue(value, definition, task, locale)}</span>}</td>; })}
+          {columns.map((key) => { const definition = definitionMap.get(key); if (!definition) return null; const value = getMatrixValue(task, key); return <td key={key} className={`experiment-matrix-td experiment-matrix-col-${definition.key.replace(/[:_]/g, '-')}`}>{key === 'model_name' ? <NameCell task={task} tasks={tasks} isZh={isZh} onSave={onRenameTask} /> : key === 'tags' ? <TagsCell task={task} tagState={tagState} isZh={isZh} active={active} /> : <span title={formatMatrixValue(value, definition, task, locale)}>{formatMatrixValue(value, definition, task, locale)}</span>}</td>; })}
           <td className="experiment-matrix-actions-col"><div className="experiment-matrix-row-actions" onClick={stopRowEvent}><button type="button" className="experiment-matrix-icon-button" title={isZh ? '查看详情' : 'View details'} aria-label={isZh ? '查看详情' : 'View details'} onClick={() => onSelectTask?.(task.id)}><OpenInNewRoundedIcon fontSize="small" /></button><button type="button" className="experiment-matrix-icon-button" title={isZh ? '复制配置' : 'Copy configuration'} aria-label={isZh ? '复制配置' : 'Copy configuration'} onClick={() => onCopyConfig?.(task)}><ContentCopyRoundedIcon fontSize="small" /></button></div></td>
         </tr>)}</tbody></table> : null}
       </div>
       {showProperties ? <PropertyPanel definitions={definitions} columns={columns} setColumns={setColumns} isZh={isZh} onClose={() => setShowProperties(false)} /> : null}
     </div>
-    <div className="experiment-matrix-footer"><span>{isZh ? `显示 ${sorted.length} / ${tasks.length} 条实验` : `Showing ${sorted.length} / ${tasks.length} experiments`}</span><button type="button" className="experiment-matrix-text-button" disabled={tagState?.scope == null || tagState?.busy} onClick={() => setTagManagerOpen(true)}>{isZh ? '管理标签' : 'Manage tags'}</button></div>
+    <div className="experiment-matrix-footer"><span>{isZh ? `显示 ${sorted.length} / ${tasks.length} 条实验` : `Showing ${sorted.length} / ${tasks.length} experiments`}</span><div className="experiment-matrix-footer-actions">{sorted.length ? <button type="button" className="experiment-matrix-text-button" onClick={selectAll}>{selectedVisible.length === sorted.length ? (isZh ? '清空选择' : 'Clear selection') : (isZh ? '全选当前筛选结果' : 'Select filtered')}</button> : null}<button type="button" className="experiment-matrix-text-button" disabled={tagState?.scope == null || tagState?.busy} onClick={() => setTagManagerOpen(true)}>{isZh ? '管理标签' : 'Manage tags'}</button></div></div>
     {tagManagerOpen ? <TagManager state={tagState} isZh={isZh} onClose={() => setTagManagerOpen(false)} /> : null}
   </div>;
 }

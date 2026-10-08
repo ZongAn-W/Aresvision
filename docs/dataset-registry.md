@@ -1,10 +1,10 @@
 # 服务器数据集注册表与训练任务身份
 
-本文记录“数据集注册与训练任务身份兼容”第一阶段的已实现行为：只读数据集目录 API、Earth 小包发布校验、训练任务身份列与旧任务迁移、新训练请求的严格校验，以及当前仍未开放的能力边界。
+当前公开目录仅列出 `openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1`。日频 v1/v2 的身份保留用于识别历史记录，但目录详情、数据快照、总览/分析、训练与历史预测均返回 409 `dataset_retired`。三小时是开发与生产唯一默认 Earth ID，缺包不回退；详见[日频停用约定](earth-dataset-retirement.md)。下文日频注册、读取、兼容接口和验证数量均记录历史实现。
 
-实施方案见 [数据集注册与训练任务身份实施方案](plans/2026-09-23-dataset-registry-and-task-identity.md)。文档最近核对日期：**2026-10-07**；三小时注册、分块校验、官方 DLinear / 独立契约上传模型 56→24 训练与 UTC datetime 历史回测已实现，总览及训练/预测前端已接入，旧日频与上传契约保留。开发默认仍为日频 v2；当前配置目录只读检查日频与三小时 descriptor 均 `available`。完整包可用不等同于真实数据训练/预测验收，分阶段记录见文末及[三小时专题](earth-merra2-3hourly.md)。
+实施方案见 [数据集注册与训练任务身份实施方案](plans/2026-09-23-dataset-registry-and-task-identity.md)。文档最近核对日期：**2026-10-08**；三小时注册、分块校验、官方 DLinear / 独立契约上传模型 56→24 训练与 UTC datetime 历史回测已实现，日频运行入口已停用。完整包可用不等同于真实模型精度验收，历史验证见文末及[三小时专题](earth-merra2-3hourly.md)。
 
-[二维地球数据总览实施方案](plans/2026-09-23-earth-overview-2d.md) 对应阶段已实现；当前总览行为见 [二维地球数据总览](earth-overview.md)，默认 v2 全球数据契约见 [地球小数据包](earth-compact-dataset.md)。
+[二维地球数据总览实施方案](plans/2026-09-23-earth-overview-2d.md) 对应阶段已实现；当前总览行为见 [二维地球数据总览](earth-overview.md)，活动全球发布见[三小时数据契约](earth-merra2-3hourly.md)，归档日频契约见 [地球小数据包](earth-compact-dataset.md)。
 
 [DLinear 地球训练接入实施方案](plans/2026-09-23-earth-dlinear-training.md)（2026-09-27 修订版）规定 Earth 训练与历史预测能力、任务身份与 checkpoint 绑定、通道/归一化协议及跨场景隔离；**该方案已实施**，实现契约见 [地球训练与历史预测](earth-training.md)。
 
@@ -13,22 +13,22 @@
 | 能力 | 状态 |
 | --- | --- |
 | `GET /api/datasets` 与 `GET /api/datasets/{dataset_id}` | 已实现，公开只读 |
-| 固定注册 `openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v1`、`earth_merra2_daily_v2`、`earth_merra2_3hourly_v1` | 已实现，原四项顺序不变 |
+| 活动目录 `openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1` | 已实现；日频 ID 仅保留历史身份 |
 | Earth 小包（manifest + NetCDF）发布指纹与内容一致性校验 | 已实现 |
 | `GET /api/datasets/{dataset_id}/overview/*` 三个地球总览接口 | 已实现，见 [二维地球数据总览](earth-overview.md) |
 | 训练任务五个身份列、旧任务幂等回填 | 已实现 |
-| 新训练请求严格校验数据集与 profile；未知 ID 和不支持的模型配置在创建任务前拒绝 | 已实现；日频 7→3，三小时官方/独立契约上传模型 56→24 |
-| 地球总览页面（三维全球球体、逐日播放、点位与区域曲线） | 已实现，见 [共用分析工作台](earth-analysis-workbench.md) |
+| 新训练请求严格校验数据集与 profile；未知 ID 和不支持的模型配置在创建任务前拒绝 | 已实现；三小时官方/独立契约上传模型 56→24，日频已停用 |
+| 地球总览页面（三维全球球体、三小时播放、点位与区域曲线） | 已实现，见 [共用分析工作台](earth-analysis-workbench.md) |
 | `GET /api/analysis/earth/overview/*` 四个地球分析接口（`context`、`research-suite`、`spatial-diagnostics`、`polar-dynamics`）与 `POST .../insight` | 已实现，见 [共用分析工作台](earth-analysis-workbench.md) |
 | 地球年度分析、极区统计（`\|latitude\| >= 60°`）与图表 AI 解读 | 已实现 |
-| 地球昼夜变化 | 未实现且当前数据不可支持：日平均没有日内采样 |
+| 地球昼夜变化 | 三小时已有日内采样，分析尚未接入 |
 | 风场粒子、派生风速 | 未实现 |
-| Earth 训练（官方 DLinear、可选 Earth 通道、单文件 checkpoint 与完成前严格重载） | 日频网页与三小时后端已实现，见 [地球训练与历史预测](earth-training.md) |
-| 地球历史回测 API（日频日期 / 三小时 UTC datetime、可选起点、预测/参考/残差与指标） | 已实现，日频 7→3，三小时 56→24，见 [地球训练与历史预测](earth-training.md) |
+| Earth 训练（官方 DLinear、可选 Earth 通道、单文件 checkpoint 与完成前严格重载） | 三小时网页与后端已实现，见 [地球训练与历史预测](earth-training.md) |
+| 地球历史回测 API（三小时 UTC datetime、可选起点、预测/参考/残差与指标） | 已实现，56→24；日频任务已停用，见 [地球训练与历史预测](earth-training.md) |
 | 持久性基线、Earth/Mars 混合比较、无真值外推 | 未实现 |
 | 用户上传数据注册、在线下载、数据集管理后台 | 未实现 |
 
-**日频地球总览、训练与历史预测入口保持既有接线。** `capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=true` 表示训练入口已接通，`trained_prediction=true` 表示历史回测入口已接通；三者都是**入口接线**，数据是否可用仍由 `availability` 单独表达。三小时为 `metadata/training/trained_prediction/web_overview=true`，official DLinear 与符合独立契约的 uploaded 模型使用 56→24 profile；旧日频/Mars 上传结论不能证明三小时兼容。日频日期工具仍拒绝三小时请求，总览按 dataset_id 进入 UTC timestamp 分支，历史回测 API 按任务身份选择 datetime 分支。缺包时目录仍返回 200，创建训练的数据请求返回 503；已绑定三小时任务回测时的缺失或损坏发布返回 409 `dataset_version_changed`，权限无法验证仍返回 503。日频分析接口的 `capabilities.diurnal=false` 表示日平均数据没有日内采样。
+`capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=true` 表示训练入口已接通，`trained_prediction=true` 表示历史回测入口已接通；数据是否可用仍由 `availability` 单独表达。三小时为 `metadata/training/trained_prediction/web_overview=true`，official DLinear 与符合独立契约的 uploaded 模型使用 56→24 profile；旧日频/Mars 上传结论不能证明三小时兼容。总览和历史回测使用 UTC timestamp；日频请求在读取归档包或 checkpoint 前拒绝。缺包时目录仍返回 200，创建训练的数据请求返回 503；已绑定三小时任务回测时的缺失或损坏发布返回 409 `dataset_version_changed`，权限无法验证仍返回 503。
 
 ## 注册身份：ID、版本与指纹分开
 
@@ -37,7 +37,7 @@
 | `openmars_mcd` | `mars` | `null` | `null` | 现有服务器目录尚无不可变发布版本 |
 | `mcd_overview` | `mars` | `null` | `null` | 同上，与前一来源区分 |
 | `earth_merra2_daily_v1` | `earth` | `v1` | `aresvision_earth_daily_v1` | 保留原 31×49 区域抽样包，原始文件和哈希不变 |
-| `earth_merra2_daily_v2` | `earth` | `v2` | `aresvision_earth_daily_v1` | 开发默认全球 36×72、5° 单元，源小时场重新处理 |
+| `earth_merra2_daily_v2` | `earth` | `v2` | `aresvision_earth_daily_v1` | 归档全球 36×72、5° 单元，运行接口已停用 |
 | `earth_merra2_3hourly_v1` | `earth` | `v1` | `aresvision_earth_3hourly_v1` | 独立全球 240×480、0.75° 单元，三小时 UTC 中心标签，分块校验 |
 
 - `schema` 是文件格式协议名，不是数据集 ID，也不是数据版本。
@@ -55,7 +55,7 @@ earth_merra2_daily.nc   c21c4ddcb03a69d2eb504f746c86b3a15cf33a06929044f50da768bd
 dataset_fingerprint     74ce14752cb83932b29b458d9c19a61804861c270e6fec33f55316778ad64d31
 ```
 
-默认 v2 固定发布 SHA：manifest 为 `935ca37bd3064772a370db6873b605e12b85c031281c2b34d8fbc49ab11f0702`，NetCDF 为 `d280a17cb291e1568ccedd1638cb2fadcc5cb8d89bb8ed0d4d51987e8e181396`。v2 的覆盖判断同时核对两轴实际 cell bounds、中心、连续性和全球范围；归一化摘要与训练日重算值一致后才可用。
+归档 v2 固定发布 SHA：manifest 为 `935ca37bd3064772a370db6873b605e12b85c031281c2b34d8fbc49ab11f0702`，NetCDF 为 `d280a17cb291e1568ccedd1638cb2fadcc5cb8d89bb8ed0d4d51987e8e181396`。原 v2 校验核对两轴实际 cell bounds、中心、连续性、全球范围及训练日归一化摘要；该协议仅用于历史追溯。
 
 对两个旧日频 ID，把数据和 manifest 一起替换也不构成原发布：原固定 expected SHA 始终保持。三小时发布由服务器配置目录中的 manifest 定义，校验自报 NetCDF SHA、canonical fingerprint 与实际科学契约，不固定为开发 smoke 的哈希；服务器替换为另一个自洽包会产生另一个 fingerprint。客户端无法指定发布目录或覆盖身份。
 
@@ -65,16 +65,17 @@ dataset_fingerprint     74ce14752cb83932b29b458d9c19a61804861c270e6fec33f5531677
 
 ```text
 GET /api/datasets
-200 {"items": [DatasetDescriptor, ...], "default_earth_dataset_id": "earth_merra2_daily_v2"}
+200 {"items": [DatasetDescriptor, ...], "default_earth_dataset_id": "earth_merra2_3hourly_v1"}
 
 GET /api/datasets/{dataset_id}
 200 DatasetDescriptor
+409 {"detail": {"code": "dataset_retired", "message": "Daily Earth datasets are retired; use earth_merra2_3hourly_v1 and train a new model"}}
 404 {"detail": {"code": "unknown_dataset", "message": "Unknown dataset id"}}
 ```
 
-列表稳定按 `openmars_mcd`、`mcd_overview`、`earth_merra2_daily_v1`、`earth_merra2_daily_v2`、`earth_merra2_3hourly_v1` 顺序返回。已注册但文件缺失仍返回 200 和明确状态；缺失或损坏的新包不改变旧包状态，也不从列表消失。只有无效的查询 ID 才返回 404。
+列表稳定按 `openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1` 顺序返回。活动发布文件缺失仍返回 200 和明确状态，不从列表消失，也不回退旧包。日频详情返回 409 `dataset_retired`；无效查询 ID 返回 404。
 
-`default_earth_dataset_id` 由 `ARESVISION_DEFAULT_EARTH_DATASET_ID` 配置，只接受 Earth 入口 ID `earth_merra2_daily_v2` 或 `earth_merra2_3hourly_v1`；未设置时为 `earth_merra2_daily_v2`。开发 `.env.example` 保持日频值，生产部署示例 `.env.production.example` 将默认值设为三小时 ID。Earth 首页/入口通过该 catalog 字段选择默认数据集；显式选择仍以所选 ID 为准。这个配置只控制新入口，不会改写旧任务、checkpoint、时间轴或窗口，也不会把日频任务迁移到三小时。将变量改回 `earth_merra2_daily_v2` 并重启可回滚入口默认值。三小时包缺失时列表照常返回；当前完整包 descriptor 为 `available`，应用启动本身不依赖该包。
+`default_earth_dataset_id` 由 `ARESVISION_DEFAULT_EARTH_DATASET_ID` 配置，只接受 `earth_merra2_3hourly_v1`，未设置时也使用该值。开发与生产模板一致，旧日频值会在启动时拒绝。Earth 页面通过该 catalog 字段选择数据集；不会改写旧任务、checkpoint、时间轴或窗口，也不会自动迁移日频模型。三小时包缺失时列表照常返回不可用原因，应用启动本身不依赖该包。
 
 `DatasetDescriptor` 字段：
 
@@ -88,16 +89,16 @@ GET /api/datasets/{dataset_id}
 | `availability_reason` | 稳定错误码或 null，不返回底层异常文本 |
 | `manifest_sha256`、`data_sha256`、`dataset_fingerprint` | 验证通过的 64 位小写十六进制 SHA 或 null |
 | `capabilities` | `{metadata, training, web_overview, trained_prediction}`，表示入口是否适配，与文件是否齐备分别说明 |
-| `time` | 日频 `kind=date`；三小时 `kind=datetime`，ISO UTC Z 标签、间隔、时间边界和样本数；Mars 仍为 `mars_ls` |
-| `frequency_hours`、`step_unit`、`step`、`grid_shape` | Earth 顶层便捷字段；日频为 24 / day / 1 / 实际网格，三小时为 3 / hour / 3 / `[240,480]` |
-| `training_profile` | 日频保留 7→3 与兼容上传模型，三小时官方/独立契约上传模型 56→24、TO3 DU、三小时间隔和独立 implementation_id；可用性同时检查 availability |
+| `time` | 三小时 `kind=datetime`，ISO UTC Z 标签、间隔、时间边界和样本数；Mars 为 `mars_ls` |
+| `frequency_hours`、`step_unit`、`step`、`grid_shape` | Earth 顶层便捷字段：3 / hour / 3 / `[240,480]` |
+| `training_profile` | 三小时官方/独立契约上传模型 56→24、TO3 DU、三小时间隔和独立 implementation_id；可用性同时检查 availability |
 | `grid` | Earth 含 shape、维度顺序、范围、`cell_bounds`、步长、顺序、覆盖类型、是否循环及完整坐标数组；未验证的 Mars 为 null |
 | `variables` | Earth 变量列表（`id`/`label`/`units`/`role`）；未核实 Mars 文件变量时为空列表 |
 | `channel_order` | Earth 固定五通道；Mars 为空列表 |
 | `splits` | Earth manifest 划分；Mars 为 null |
 | `limitations` | string[]，数据边界说明 |
 
-保留的 v1 验证成功示例（v2 使用独立 ID/哈希、36×72、±90°/±180°、`coverage=global`、`wrap_longitude=true`；这是历史验证响应示例，availability 以当前 descriptor 为准）：
+归档 v1 验证成功响应（历史示例，当前请求返回 409；原 v2 使用独立 ID/哈希、36×72、±90°/±180°、`coverage=global`、`wrap_longitude=true`）：
 
 ```json
 {
@@ -281,7 +282,7 @@ Mars 前端二维热力图按真实轴计算单元位置和刻度，保证北纬
 | 两处有效且相同 | 接受 |
 | 两处有效但不同 | 400 `dataset_id_conflict` |
 | 显式空字符串、非字符串、未知 ID | 400 `invalid_dataset_id` / `unknown_dataset` |
-| 日频 Earth ID | 独立日频训练路径，固定 7→3；按包可用性及 official/uploaded 配置校验 |
+| 日频 Earth ID | 409 `dataset_retired`；创建任务前拒绝，不改为三小时或火星 |
 | 三小时 Earth ID | 独立 official/uploaded 56→24 路径；上传模型须通过具体 dataset_id 的独立 spec 和实际参数 dry-run，未知或失败返回稳定错误码 |
 | 两处均为 null/未提供 | 默认 `openmars_mcd` |
 
@@ -311,7 +312,7 @@ Pydantic 对字段类型的基本校验错误仍使用 422；上表中 400/409 �
 | `ARESVISION_EARTH_MERRA2_DIR` | 覆盖已注册 Earth 小包目录，默认 `data/earth/merra2_daily_v2` |
 | `ARESVISION_EARTH_MERRA2_V1_DIR` | 独立指定旧兼容包目录，默认 `data/earth/merra2_daily_v1` |
 | `ARESVISION_EARTH_MERRA2_3HOURLY_DIR` | 独立三小时发布目录，默认 `data/earth/merra2_3hourly_v1`，不替换日频配置 |
-| `ARESVISION_DEFAULT_EARTH_DATASET_ID` | 新 Earth 入口默认 ID；开发缺省 `earth_merra2_daily_v2`，生产示例为 `earth_merra2_3hourly_v1` |
+| `ARESVISION_DEFAULT_EARTH_DATASET_ID` | 开发/生产均为 `earth_merra2_3hourly_v1`；旧日频值须修改或移除，否则启动明确报错 |
 
 日频 v1/v2 与三小时身份均不按请求互相映射。
 
@@ -343,9 +344,9 @@ foreach ($datasetTest in $datasetTests) {
 
 ## 当前边界
 
-- 训练/总览入口含两个 Mars 身份及 `earth_merra2_daily_v2`、`earth_merra2_3hourly_v1`；Earth 默认入口由 catalog 的 `default_earth_dataset_id` 决定，开发配置默认日频 v2，生产示例默认三小时 v1。
-- 地球已开放**二维日数据总览**（见 [二维地球数据总览](earth-overview.md)）：区域热力图、逐日播放、点位曲线与覆盖区域加权均值；**没有**三维地球、风场粒子、派生风速、自选多边形区域、重网格、平滑/插值、臭氧单位换算、导出、PFI 或 Earth Copilot。
-- `earth_merra2_daily_v2` 为日频旧任务/旧 checkpoint 兼容身份（7→3，原有兼容上传模型仍按旧契约读取预测）；`earth_merra2_3hourly_v1` 为 3 小时 UTC、0.75°×0.75°、240×480、TO3/U10M/V10M/T2M/SWGDN 的独立发布，官方 DLinear 与独立契约上传模型固定 56→24，训练、总览和有真值历史回测入口已接通。当前 descriptor 查询日频与三小时均 `available`；包状态独立于 capabilities。无参考真值外推和 Earth/Mars 混合比较未开放；高分辨率预测返回完整场，浏览器传输/JSON 解析存在性能限制。Earth 在火星推理、比较、PFI、`action=test` 与迁移来源路径一律 409，不回退到火星数据。契约与错误码见 [地球训练与历史预测](earth-training.md)。
+- 训练/总览入口含两个 Mars 身份及 `earth_merra2_3hourly_v1`；Earth 默认入口由 catalog 的 `default_earth_dataset_id` 决定，开发与生产均为三小时 v1。
+- 地球已开放三维工作台与二维总览（见 [地球数据总览](earth-overview.md)）：三小时播放、点位曲线、面积加权均值和日聚合年度分析；风场粒子、派生风速、自选多边形区域、重网格、平滑/插值、臭氧单位换算、总览导出、PFI 和 Earth Copilot 尚未开放。
+- 日频 v1/v2 仅保留历史任务/产物识别，运行入口返回 409 `dataset_retired`。`earth_merra2_3hourly_v1` 为 3 小时 UTC、0.75°×0.75°、240×480、TO3/U10M/V10M/T2M/SWGDN 的独立发布，官方 DLinear 与独立契约上传模型固定 56→24，训练、总览和有真值历史回测入口已接通。包状态独立于 capabilities。无参考真值外推和 Earth/Mars 混合比较未开放；高分辨率预测返回完整场，浏览器传输/JSON 解析存在性能限制。Earth 在火星推理、比较、PFI、`action=test` 与迁移来源路径一律 409，不回退到火星数据。契约与错误码见 [地球训练与历史预测](earth-training.md)。
 - `web_overview=true` 只表示入口已适配，与数据是否齐备分开：缺包时数据接口返回 503，前端同时要求 `availability=available`。
 - manifest 中“读取器尚未接注册表”一类构建期说明会被过滤；`limitations` 只保留物理数据限制与当前应用能力说明。
 - Mars 身份不伪造版本；`openmars_mcd` 与 `mcd_overview` 何时成为不可变发布版本属于另一个数据发布任务。

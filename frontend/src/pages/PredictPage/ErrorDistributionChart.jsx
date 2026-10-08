@@ -2,9 +2,15 @@ import React from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../constants/colors';
 import { useT } from '../../i18n';
+import { useSettings } from '../../contexts/SettingsContext';
+import { convertOzone, ozoneLabel } from '../../utils/units';
+import ResearchExportButton from './ResearchExportButton';
+import { currentStepScatter } from './researchExportModel';
 
 export default function ErrorDistributionChart({ 
   data, 
+  predictionResult,
+  step = 0,
   loading,
   isLight,
   plotTextColor,
@@ -12,6 +18,11 @@ export default function ErrorDistributionChart({
   plotGridColor
 }) {
   const t = useT();
+  const { settings } = useSettings();
+  const unit = settings.units.ozone;
+  const unitLabel = ozoneLabel(unit);
+  const zh = settings.language !== 'en';
+  const scatter = currentStepScatter(predictionResult, step, unit) || { trues: [], preds: [] };
   if (!data && !loading) return null;
 
   if (loading || !data) {
@@ -52,24 +63,23 @@ export default function ErrorDistributionChart({
 
   const getCenters = (edges) => edges.slice(0, -1).map((e, i) => (e + edges[i+1]) / 2);
 
-  // --- Card 1 Data: Density Scatter Plot ---
+  // Ordinary scatter of every current-step cell; no fabricated density.
   const scatterTrace = {
-    x: data.scatter.trues,
-    y: data.scatter.preds,
+    x: scatter.trues,
+    y: scatter.preds,
     mode: 'markers',
     type: 'scatter',
     marker: {
-      color: data.scatter.density,
-      colorscale: 'Viridis',
+      color: '#0072BD',
       size: 3,
       opacity: 0.8,
       showscale: false
     },
-    name: t('ai.errorDistribution.density')
+    name: zh ? '当前预测步格点' : 'Current-step grid cells'
   };
 
-  const minVal = Math.min(...data.scatter.trues, ...data.scatter.preds);
-  const maxVal = Math.max(...data.scatter.trues, ...data.scatter.preds);
+  const minVal = [...scatter.trues, ...scatter.preds].reduce((value, next) => Math.min(value, next), Infinity);
+  const maxVal = [...scatter.trues, ...scatter.preds].reduce((value, next) => Math.max(value, next), -Infinity);
   const baselineTrace = {
     x: [minVal, maxVal],
     y: [minVal, maxVal],
@@ -82,7 +92,7 @@ export default function ErrorDistributionChart({
 
   // --- Card 2 Data: Dual-Histogram Overlay ---
   const trueHist = {
-    x: getCenters(data.hist_trues.bin_edges),
+    x: getCenters(data.hist_trues.bin_edges).map((v) => convertOzone(v, unit)),
     y: data.hist_trues.counts,
     type: 'bar',
     name: t('ai.errorDistribution.trueLabel'),
@@ -90,7 +100,7 @@ export default function ErrorDistributionChart({
     opacity: 0.8
   };
   const predHist = {
-    x: getCenters(data.hist_preds.bin_edges),
+    x: getCenters(data.hist_preds.bin_edges).map((v) => convertOzone(v, unit)),
     y: data.hist_preds.counts,
     type: 'bar',
     name: t('ai.errorDistribution.predLabel'),
@@ -100,7 +110,7 @@ export default function ErrorDistributionChart({
 
   // --- Card 3 Data: Error Histogram ---
   const errorHist = {
-    x: getCenters(data.hist_errors.bin_edges),
+    x: getCenters(data.hist_errors.bin_edges).map((v) => convertOzone(v, unit)),
     y: data.hist_errors.counts,
     type: 'bar',
     name: t('ai.errorDistribution.error'),
@@ -125,13 +135,15 @@ export default function ErrorDistributionChart({
         {/* Density Scatter Plot */}
         <div className={`${cardBg} border ${cardBorder} ${cardShadow} p-4 rounded-xl flex flex-col backdrop-blur-md relative overflow-hidden group`}>
           <h3 className={`${headerColor} font-semibold text-xs mb-1 tracking-widest uppercase`}>{t('ai.errorDistribution.trueVsPred')}</h3>
+          <p style={{ fontSize: 11 }}>{zh ? `当前预测步 ${step + 1} · 普通散点` : `Forecast step ${step + 1} · ordinary scatter`}</p>
+          <ResearchExportButton sources={[predictionResult?.export_ref]} kind="scatter" step={step} disabled={loading} />
         <div className="flex-1 w-full min-h-[250px] relative z-10">
           <Plot
             data={[scatterTrace, baselineTrace]}
             layout={{ 
               ...baseLayout, 
-              xaxis: { ...baseLayout.xaxis, title: { text: t('ai.errorDistribution.trueOzone'), font: { size: 11 } } },
-              yaxis: { ...baseLayout.yaxis, title: { text: t('ai.errorDistribution.predOzone'), font: { size: 11 } } },
+              xaxis: { ...baseLayout.xaxis, range: Number.isFinite(minVal) ? [minVal, maxVal] : undefined, title: { text: `${zh ? '参考' : 'Reference'} (${unitLabel})`, font: { size: 11 } } },
+              yaxis: { ...baseLayout.yaxis, scaleanchor: 'x', scaleratio: 1, range: Number.isFinite(minVal) ? [minVal, maxVal] : undefined, title: { text: `${zh ? '预测' : 'Prediction'} (${unitLabel})`, font: { size: 11 } } },
               showlegend: false
             }}
             useResizeHandler
@@ -144,12 +156,14 @@ export default function ErrorDistributionChart({
       {/* Distribution Comparison Plot */}
       <div className={`${cardBg} border ${cardBorder} ${cardShadow} p-4 rounded-xl flex flex-col backdrop-blur-md relative overflow-hidden`}>
         <h3 className={`${headerColor} font-semibold text-xs mb-1 tracking-widest uppercase`}>{t('ai.errorDistribution.distMatch')}</h3>
+        <p style={{ fontSize: 11 }}>{zh ? `完整测试集 · ${unitLabel}` : `Full test set · ${unitLabel}`}</p>
         <div className="flex-1 w-full min-h-[250px] relative z-10">
           <Plot
             data={[trueHist, predHist]}
             layout={{ 
               ...baseLayout, 
               barmode: 'overlay',
+              xaxis: { ...baseLayout.xaxis, title: unitLabel },
               legend: { orientation: 'h', y: 1.15, x: 0.5, xanchor: 'center', font: { size: 10 } }
             }}
             useResizeHandler
@@ -165,13 +179,14 @@ export default function ErrorDistributionChart({
           <h3 className={`${headerColor} font-semibold text-xs tracking-widest uppercase`}>{t('ai.errorDistribution.errorHist')}</h3>
           <div className="flex flex-col text-right">
             <span className={`${isLight ? 'text-emerald-600 bg-emerald-50' : 'text-emerald-400 bg-emerald-400/10'} font-mono text-xs font-bold px-1.5 py-0.5 rounded backdrop-blur border ${isLight ? 'border-emerald-200' : 'border-emerald-400/20'}`}>
-              RMSE: {data.rmse.toFixed(3)}
+              RMSE: {convertOzone(data.rmse, unit).toFixed(3)} {unitLabel}
             </span>
             <span className={`${isLight ? 'text-sky-600 bg-sky-50' : 'text-sky-400 bg-sky-400/10'} font-mono text-xs font-bold mt-1 px-1.5 py-0.5 rounded backdrop-blur border ${isLight ? 'border-sky-200' : 'border-sky-400/20'}`}>
-              MAE: {data.mae.toFixed(3)}
+              MAE: {convertOzone(data.mae, unit).toFixed(3)} {unitLabel}
             </span>
           </div>
         </div>
+        <p style={{ fontSize: 11 }}>{zh ? '完整测试集；残差 = 预测 − 参考' : 'Full test set; residual = prediction - reference'}</p>
         <div className="flex-1 w-full min-h-[250px] relative z-10">
           <Plot
             data={[errorHist]}
@@ -179,7 +194,7 @@ export default function ErrorDistributionChart({
               ...baseLayout, 
               shapes: [zeroErrorLine],
               showlegend: false,
-              xaxis: { ...baseLayout.xaxis, title: { text: t('ai.errorDistribution.errorLabel'), font: { size: 11 } } }
+              xaxis: { ...baseLayout.xaxis, title: { text: `${zh ? '预测减参考' : 'Prediction - reference'} (${unitLabel})`, font: { size: 11 } } }
             }}
             useResizeHandler
             className="w-full h-full"

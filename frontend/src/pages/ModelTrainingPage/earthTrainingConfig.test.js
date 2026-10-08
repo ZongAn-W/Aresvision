@@ -30,9 +30,9 @@ import { sanitizeTrainingDataset } from './trainingParamSanitizers.js';
 
 const AVAILABLE_DESCRIPTOR = {
   dataset_id: EARTH_DATASET_ID,
-  display_name: 'MERRA-2 daily global 5 degree compact v2',
+  display_name: 'MERRA-2 three-hourly global 0.75 degree v1',
   planet: 'earth',
-  dataset_version: 'v2',
+  dataset_version: 'v1',
   dataset_fingerprint: 'f'.repeat(64),
   availability: 'available',
   availability_reason: null,
@@ -42,16 +42,16 @@ const AVAILABLE_DESCRIPTOR = {
     validation: { start: '2021-01-01', end: '2021-06-30', days: 181 },
     test: { start: '2021-07-01', end: '2021-12-31', days: 184 },
   },
-  training_profile: { window: EARTH_WINDOW, horizon: EARTH_HORIZON, grid_shape: [36, 72] },
+  training_profile: { window: EARTH_WINDOW, horizon: EARTH_HORIZON, grid_shape: [240, 480] },
 };
 
 test('Earth payload fixes the dataset, window/horizon and channel order', () => {
   const payload = buildEarthTrainingHyperparameters({ selectedChannels: ['SWGDN', 'U10M'] });
-  assert.equal(payload.training_dataset, 'earth_merra2_daily_v2');
+  assert.equal(payload.training_dataset, 'earth_merra2_3hourly_v1');
   assert.equal(payload.model_architecture, 'dlinear');
   assert.equal(payload.model_source, 'official');
-  assert.equal(payload.window, 7);
-  assert.equal(payload.horizon, 3);
+  assert.equal(payload.window, 56);
+  assert.equal(payload.horizon, 24);
   assert.equal(payload.use_sphere, false);
   assert.equal(payload.transfer_learning, false);
   // 请求顺序不影响模型通道顺序：规范顺序固定为 U10M、V10M、T2M、SWGDN。
@@ -107,7 +107,13 @@ test('Earth payload preserves the ozone-only selection instead of restoring defa
   assert.deepEqual(payload.selected_channels, []);
 });
 
-test('Earth payload omits custom split ratios and keeps the fixed 7-to-3 contract', () => {
+test('Earth payload accepts settings-provided custom windows', () => {
+  const payload = buildEarthTrainingHyperparameters({ datasetId: EARTH_3HOURLY_DATASET_ID, windowValue: 16, horizon: 8 });
+  assert.equal(payload.window, 16);
+  assert.equal(payload.horizon, 8);
+});
+
+test('Earth payload omits custom split ratios and keeps the fixed 56-to-24 contract', () => {
   const payload = buildEarthTrainingHyperparameters({
     trainRatio: 0.6,
     validationRatio: 0.25,
@@ -117,8 +123,8 @@ test('Earth payload omits custom split ratios and keeps the fixed 7-to-3 contrac
   assert.equal(Object.hasOwn(payload, 'train_ratio'), false);
   assert.equal(Object.hasOwn(payload, 'validation_ratio'), false);
   assert.equal(Object.hasOwn(payload, 'test_ratio'), false);
-  assert.equal(payload.window, 7);
-  assert.equal(payload.horizon, 3);
+  assert.equal(payload.window, 56);
+  assert.equal(payload.horizon, 24);
 });
 
 test('Earth payload never carries server identity or Mars-only fields', () => {
@@ -169,7 +175,7 @@ test('Earth channel order keeps TO3 first', () => {
 test('dataset availability separates wiring from data state', () => {
   const available = readEarthDatasetAvailability(AVAILABLE_DESCRIPTOR);
   assert.equal(available.selectable, true);
-  assert.equal(available.datasetVersion, 'v2');
+  assert.equal(available.datasetVersion, 'v1');
   assert.equal(available.fingerprint, 'f'.repeat(64));
 
   const missing = readEarthDatasetAvailability({ ...AVAILABLE_DESCRIPTOR, availability: 'missing', availability_reason: 'package_missing' });
@@ -188,7 +194,7 @@ test('dataset availability separates wiring from data state', () => {
 test('split sample counts follow the published days instead of hard-coded numbers', () => {
   const rows = describeEarthSplitSamples(AVAILABLE_DESCRIPTOR.splits);
   assert.deepEqual(rows.map((row) => row.name), ['train', 'validation', 'test']);
-  assert.deepEqual(rows.map((row) => row.windows), [357, 172, 175]);
+  assert.deepEqual(rows.map((row) => row.windows), [2849, 1369, 1393]);
   assert.deepEqual(describeEarthSplitSamples(null), []);
 });
 
@@ -369,14 +375,15 @@ test('the Earth uploaded gate blocks missing, unverified and incompatible models
   assert.equal(
     getEarthUploadedSelectionBlocker({
       modelSource: 'uploaded', uploadedModelId: 'm1',
-      compatibility: { compatible: false, reasons: ['grid mismatch'] },
+      compatibility: { dataset_id: EARTH_DATASET_ID, compatible: false, reasons: ['grid mismatch'] },
     }),
     'grid mismatch',
   );
   assert.equal(
     getEarthUploadedSelectionBlocker({
       modelSource: 'uploaded', uploadedModelId: 'm1',
-      compatibility: { compatible: true, reasons: [] },
+      compatibility: { dataset_id: EARTH_DATASET_ID, status: 'available', compatible: true, reasons: [],
+        datasets: { earth_merra2_3hourly_v1: { schema: 'aresvision_earth_3hourly_uploaded_model_v1' } } },
     }),
     null,
   );
@@ -387,4 +394,13 @@ test('the shared sanitizer keeps Earth out of Mars requests unless Earth is allo
   assert.equal(sanitizeTrainingDataset(EARTH_DATASET_ID, { allowEarth: true }), EARTH_DATASET_ID);
   assert.equal(isEarthTrainingDataset(EARTH_DATASET_ID), true);
   assert.equal(isEarthTrainingDataset('openmars_mcd'), false);
+});
+
+test('retired daily descriptors, payloads and saved drafts cannot start training', () => {
+  for (const datasetId of ['earth_merra2_daily_v1', 'earth_merra2_daily_v2']) {
+    assert.equal(isEarthTrainingDataset(datasetId), false);
+    assert.throws(() => buildEarthTrainingHyperparameters({ datasetId }), /dataset_retired/);
+    assert.equal(readEarthDatasetAvailability({ ...AVAILABLE_DESCRIPTOR, dataset_id: datasetId }).selectable, false);
+    assert.equal(resolveEarthTrainingRestore({ trainingDataset: datasetId, modelSource: 'uploaded' }), null);
+  }
 });

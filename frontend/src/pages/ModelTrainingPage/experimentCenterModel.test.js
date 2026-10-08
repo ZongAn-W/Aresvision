@@ -6,6 +6,7 @@ import {
   buildExperimentCopyName,
   buildExperimentSummary,
   canUseTaskForPrediction,
+  isRetiredEarthTask,
   cloneExperimentConfigValue,
   countExperimentStatuses,
   filterExperimentTasks,
@@ -21,6 +22,16 @@ import {
   resolveActiveTaskProgress,
   readExperimentConfigDataset,
 } from './experimentCenterModel.js';
+
+test('daily tasks retain their identity but cannot be used for prediction', () => {
+  for (const datasetId of ['earth_merra2_daily_v1', 'earth_merra2_daily_v2']) {
+    const task = { dataset_id: datasetId, status: 'completed', model_available: true };
+    assert.equal(isRetiredEarthTask(task), true);
+    assert.equal(canUseTaskForPrediction(task), false);
+    assert.equal(isRetiredEarthTask({ hyperparameters: JSON.stringify({ training_dataset: datasetId }) }), true);
+  }
+  assert.equal(canUseTaskForPrediction({ dataset_id: 'earth_merra2_3hourly_v1', status: 'completed', model_available: true }), true);
+});
 
 test('没有活动任务时进入配置阶段', () => {
   assert.equal(getExperimentStage({ activeTask: null, isCreating: false }), 'configure');

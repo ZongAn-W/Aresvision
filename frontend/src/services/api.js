@@ -4,6 +4,7 @@
  */
 
 import { endAuthenticatedPredictionSession } from '../stores/authPredictionSession.js';
+import { researchExportErrorMessage } from './researchExportErrors.js';
 
 const BASE = '/api';
 
@@ -770,6 +771,23 @@ export async function fetchUserModels() {
 
 export function getUserModelDownloadUrl(kind) {
   return `${BASE}/user-models/downloads/${encodeURIComponent(kind)}`;
+}
+
+export async function researchExportCapabilities({ signal } = {}) {
+  const res = await authedFetch(`${BASE}/predict/research-export/capabilities`, { signal });
+  if (!res.ok) await throwResponseError(res);
+  return res.json();
+}
+
+export async function requestResearchExport(payload, { preview = false, signal, language = 'zh' } = {}) {
+  const res = await authedFetch(`${BASE}/predict/research-export/${preview ? 'preview' : 'download'}`, {
+    method: 'POST', body: JSON.stringify(payload), signal,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(researchExportErrorMessage(body?.detail, res.status, language));
+  }
+  return res.blob();
 }
 
 export async function renameUserModel(modelId, displayName) {

@@ -7,6 +7,7 @@ import {
   EXPERIMENT_METRIC_KEYS,
   buildExperimentSummary,
   canUseTaskForPrediction,
+  isRetiredEarthTask,
   formatExperimentMetricValue,
   getExperimentArchitectureLabel,
   getExperimentFailureMessage,
@@ -114,7 +115,9 @@ export default function ExperimentResultPanel({
     : baselineLabel;
   const lossHistory = progress?.loss_history || { train: [], val: [] };
   const hasLossHistory = Array.isArray(lossHistory.train) && lossHistory.train.length > 0;
-  const modelAvailable = canUseTaskForPrediction(activeTask);
+  const modelAvailable = activeTask.status === 'completed' && activeTask.model_available === true;
+  const predictionAvailable = canUseTaskForPrediction(activeTask);
+  const retiredDataset = isRetiredEarthTask(activeTask);
 
   const metrics = EXPERIMENT_METRIC_KEYS
     .filter((key) => summary.metrics[key] !== undefined)
@@ -150,6 +153,11 @@ export default function ExperimentResultPanel({
       </div>
 
       {/* 失败、停止与缺少权重的任务：显示 metrics 里的真实原因与恢复建议。 */}
+      {retiredDataset ? (
+        <div className="experiment-result-note" data-tone="warning" role="status">
+          {t('predict.earthDatasetRetired')}
+        </div>
+      ) : null}
       {!modelAvailable ? (
         <div
           className="experiment-result-note"
@@ -247,7 +255,7 @@ export default function ExperimentResultPanel({
 
       <div className="experiment-center-action-row">
         <div className="experiment-center-actions">
-          {modelAvailable ? (
+          {predictionAvailable ? (
             <button
               type="button"
               className="experiment-center-button experiment-center-button-primary"
@@ -259,13 +267,13 @@ export default function ExperimentResultPanel({
           <button
             type="button"
             className="experiment-center-button"
-            disabled={!modelAvailable}
-            title={modelAvailable ? undefined : copy.compareUnavailableToast}
+            disabled={!predictionAvailable}
+            title={predictionAvailable ? undefined : copy.compareUnavailableToast}
             onClick={() => onCompare(activeTask)}
           >
             {copy.goCompare}
           </button>
-          <button type="button" className="experiment-center-button" onClick={() => onCopyConfig(activeTask)}>
+          <button type="button" className="experiment-center-button" disabled={retiredDataset} onClick={() => onCopyConfig(activeTask)}>
             {copy.copyConfig}
           </button>
         </div>

@@ -136,9 +136,10 @@ export function buildEarthFieldPayload({ response, dayIndex, kind, colormap, col
  *
  * 预测/参考共用色阶才能直接比高低；残差用对称区间才能看出偏差方向。
  */
-export function resolveEarthColorRanges(response) {
+export function resolveEarthColorRanges(response, dayIndex = null) {
   const collect = (kind) => {
-    const days = Array.isArray(response?.[kind]) ? response[kind] : [];
+    const allDays = Array.isArray(response?.[kind]) ? response[kind] : [];
+    const days = Number.isInteger(dayIndex) ? allDays.slice(dayIndex, dayIndex + 1) : allDays;
     const mins = days.map((day) => Number(day?.minVal)).filter(Number.isFinite);
     const maxs = days.map((day) => Number(day?.maxVal)).filter(Number.isFinite);
     if (mins.length === 0 || maxs.length === 0) return null;
@@ -154,11 +155,15 @@ export function resolveEarthColorRanges(response) {
   const residualMagnitude = residual
     ? Math.max(Math.abs(residual.min), Math.abs(residual.max))
     : 0;
+  if (physical && physical.min === physical.max) {
+    const pad = Math.max(Math.abs(physical.min) * .01, 1e-6);
+    physical.min -= pad; physical.max += pad;
+  }
   return {
     physical,
     residual: residualMagnitude > 0
       ? { min: -residualMagnitude, max: residualMagnitude }
-      : residual,
+      : residual ? { min: -1, max: 1 } : null,
   };
 }
 
@@ -214,6 +219,8 @@ export function pickDefaultOrigin(origins, today = null) {
 }
 
 const EARTH_ERROR_MESSAGES = {
+  dataset_retired: 'earthDatasetRetired',
+  earth_comparison_incompatible: 'earthComparisonIncompatible',
   earth_prediction_origin_out_of_range: 'earthOriginOutOfRange',
   invalid_earth_prediction_origin: 'earthOriginInvalid',
   dataset_version_changed: 'earthDatasetChanged',
@@ -250,7 +257,8 @@ export function isEarthTask(task) {
  */
 export function getEarthTrainingModelOptions(tasks = []) {
   return (Array.isArray(tasks) ? tasks : [])
-    .filter((task) => task?.status === 'completed' && task?.model_available === true && isEarthTask(task))
+    .filter((task) => task?.status === 'completed' && task?.model_available === true
+      && task.dataset_id === EARTH_3HOURLY_DATASET_ID)
     .map((task) => {
       const base = task.custom_model_name || `Task #${task.id}`;
       const identity = readEarthTaskModelIdentity(task);

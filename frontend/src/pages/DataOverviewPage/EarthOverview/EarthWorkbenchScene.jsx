@@ -172,7 +172,7 @@ function EarthWorkbenchSceneContent({
     setLatInput(''); setLonInput(''); setInputError('');
     setShowAnomaly(false); setShowWindVectors(false); setShowContours(false);
     setShowTerminator(false); setBandId('global');
-    setViewMode(threeHourly ? '2d' : '3d');
+    setViewMode('3d');
     onSelectedCardChange?.('');
   }, [datasetId]);
 

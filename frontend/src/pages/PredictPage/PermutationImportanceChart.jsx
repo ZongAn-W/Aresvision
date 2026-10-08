@@ -2,6 +2,8 @@ import Plot from 'react-plotly.js';
 import C from '../../constants/colors';
 import { useT } from '../../i18n';
 import GlowCard from '../../components/GlowCard';
+import ResearchExportButton from './ResearchExportButton';
+import { useSettings } from '../../contexts/SettingsContext';
 
 export default function PermutationImportanceChart({
   data,
@@ -11,6 +13,7 @@ export default function PermutationImportanceChart({
   plotText60
 }) {
   const t = useT();
+  const { settings } = useSettings();
 
   const chartData = data?.items || [];
   const names = chartData.map(d => t(`predict.variables.${d.name}`) || d.name);
@@ -44,6 +47,12 @@ export default function PermutationImportanceChart({
           </div>
         )}
       </div>
+      <ResearchExportButton sources={[data?.export_ref]} kind="pfi" disabled={loading} />
+      <p style={{ fontSize: 12, color: C.ice60 }}>
+        {settings.language === 'en'
+          ? `Sampled test set (up to 40 windows${data?.sampling?.sample_size != null ? `; n=${data.sampling.sample_size}` : '; historical sample count unavailable'}); independent of the current prediction window. ΔR² may be negative.`
+          : `抽样测试集（最多 40 个窗口${data?.sampling?.sample_size != null ? `；n=${data.sampling.sample_size}` : '；历史缓存未记录样本数'}）；独立于当前预测窗口，ΔR² 可为负。`}
+      </p>
 
       {loading ? (
         <div style={{ height: 300, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, background: 'rgba(255,255,255,0.01)', borderRadius: 12 }}>
@@ -61,7 +70,7 @@ export default function PermutationImportanceChart({
               paper_bgcolor: 'rgba(0,0,0,0)',
               plot_bgcolor: 'rgba(0,0,0,0)',
               xaxis: {
-                title: { text: t('predict.pfi.xaxisTitle'), font: { size: 10, color: plotTextColor } },
+                title: { text: 'ΔR²', font: { size: 10, color: plotTextColor } },
                 tickfont: { size: 9, color: plotText60 },
                 gridcolor: plotGridColor,
                 zeroline: true,

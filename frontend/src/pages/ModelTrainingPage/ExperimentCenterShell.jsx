@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useT } from '../../i18n';
 import { useAuth } from '../../contexts/AuthContext';
@@ -39,9 +39,26 @@ export default function ExperimentCenterShell({
   const { user } = useAuth();
   const stageRef = useRef(null);
   const focusedStageRef = useRef(null);
+  const panelRef = useRef(null);
+  const headerRef = useRef(null);
   const isConfigure = view === 'config';
   const isMatrix = view === 'matrix';
   const eyebrow = t('experimentCenter.eyebrow');
+
+  useLayoutEffect(() => {
+    if (!isMatrix) return undefined;
+    const resize = () => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      const top = Math.max(0, panel.getBoundingClientRect().top);
+      panel.style.setProperty('--experiment-matrix-height', `${Math.max(180, window.innerHeight - top - 12)}px`);
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    if (headerRef.current) observer.observe(headerRef.current);
+    window.addEventListener('resize', resize);
+    return () => { observer.disconnect(); window.removeEventListener('resize', resize); };
+  }, [isMatrix]);
 
   // 阶段切换后把焦点移到阶段标题，键盘用户不会停在已卸载的控件上。
   useEffect(() => {
@@ -56,7 +73,7 @@ export default function ExperimentCenterShell({
 
   return (
     <div className="experiment-center">
-      <header className="experiment-center-header">
+      <header ref={headerRef} className="experiment-center-header">
         <div style={{ minWidth: 0 }}>
           {eyebrow && eyebrow !== 'experimentCenter.eyebrow' ? (
             <div className="experiment-center-eyebrow">{eyebrow}</div>
@@ -112,11 +129,12 @@ export default function ExperimentCenterShell({
           ) : null}
 
           <section
+            ref={panelRef}
             className="glass-card experiment-center-panel experiment-center-canvas"
             data-stage-panel={isConfigure ? 'configure' : stage}
             aria-live="off"
           >
-            <div className="experiment-center-panel-header" hidden={isConfigure || !activeTask}>
+            <div className="experiment-center-panel-header" hidden={isConfigure || isMatrix || !activeTask}>
               <div style={{ minWidth: 0 }}>
                 <h2 className="experiment-center-panel-title" tabIndex={-1} ref={stageRef} data-stage-heading={stage}>
                   {t(stage === 'result' ? 'experimentCenter.stageResult' : 'experimentCenter.stageMonitor')}

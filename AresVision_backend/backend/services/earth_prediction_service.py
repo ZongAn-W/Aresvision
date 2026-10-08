@@ -20,7 +20,10 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import torch
 
-from services.dataset_identity import DatasetRequestError, is_earth_training_task, EARTH_DATASET_3HOURLY_ID
+from services.dataset_identity import (
+    DatasetRequestError, is_earth_training_task, EARTH_DATASET_3HOURLY_ID,
+    require_active_dataset, training_task_dataset_id,
+)
 from services.dataset_registry import DatasetRegistry
 from services.earth_dataset import (
     TARGET_CHANNEL,
@@ -132,6 +135,7 @@ def _require_completed_earth_task(task: Any) -> None:
             "Earth historical prediction requires an Earth training task",
             status_code=409,
         )
+    require_active_dataset(training_task_dataset_id(task))
     status = getattr(task, "status", None)
     if status != "completed":
         raise DatasetRequestError(
@@ -244,7 +248,7 @@ def _validate_checkpoint_split_ranges(checkpoint: Any, release: Any) -> None:
             last = np.datetime64(expected["date_end"].removesuffix("Z"), "ns")
             if (str(first.astype("datetime64[D]")) != current["start"]
                     or str(last.astype("datetime64[D]")) != current["end"]
-                    or expected["window_count"] != current["steps"] - 79):
+                    or expected["window_count"] != current["steps"] - contract['window'] - contract['horizon'] + 1):
                 raise DatasetRequestError("dataset_version_changed", "The Earth release split changed", status_code=409)
         return
     if contract.get("split_policy") != "published_manifest_splits":
@@ -283,7 +287,8 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
     release = _sync_release(registry, checkpoint.dataset_binding)
     _validate_checkpoint_split_ranges(checkpoint, release)
     contract = checkpoint.training_contract
-    origins = threehour_available_origin_range(release, strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED) if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else available_origin_range(
+    origins = threehour_available_origin_range(release, window=contract['window'], horizon=contract['horizon'],
+        strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED) if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else available_origin_range(
         release,
         window=int(contract.get("window", EARTH_WINDOW)),
         horizon=int(contract.get("horizon", EARTH_HORIZON)),
@@ -540,14 +545,14 @@ def _threehour_checkpoint_sha(task):
                                   "The Earth checkpoint cannot be read", status_code=409) from exc
 
 
-def _read_threehour_forecast_block(release, index, order, normalization):
-    """Read one 80-step span, keeping compressed global chunks out of the tile loop."""
+def _read_threehour_forecast_block(release, index, order, normalization, *, window=56, horizon=24):
+    """Read the task's input/reference span outside the tile loop."""
     mean, scale = validate_normalization(normalization, order)
-    inputs = np.empty((56, len(order), 240, 480), dtype="float32")
-    reference = np.empty((24, 240, 480), dtype="float32")
+    inputs = np.empty((window, len(order), 240, 480), dtype="float32")
+    reference = np.empty((horizon, 240, 480), dtype="float32")
     try:
         path = _threehour_path(release)
-        first, forecast, stop = index - 55, index + 1, index + 25
+        first, forecast, stop = index - window + 1, index + 1, index + horizon + 1
         with netcdf_read_lock(), xr.open_dataset(path, engine="netcdf4", mask_and_scale=False) as ds:
             if (not np.array_equal(ds.time.isel(time=slice(first, stop)).values, release.dates[first:stop])
                     or not np.array_equal(ds.lat.values, release.latitude)
@@ -593,10 +598,12 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
                                   "The checkpoint changed during loading", status_code=409)
     release = _sync_release(registry, checkpoint.dataset_binding)
     _validate_checkpoint_split_ranges(checkpoint, release)
+    window, horizon = checkpoint.training_contract['window'], checkpoint.training_contract['horizon']
     try:
-        index = threehour_origin_index(release, origin, strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED)
-        timestamps = threehour_forecast_timestamps(release, origin)
-        split_name = threehour_origin_split(release, origin)
+        index = threehour_origin_index(release, origin, window=window, horizon=horizon,
+            strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED)
+        timestamps = threehour_forecast_timestamps(release, origin, window=window, horizon=horizon)
+        split_name = threehour_origin_split(release, origin, window=window, horizon=horizon)
     except EarthArtifactError as exc:
         raise DatasetRequestError(exc.code, str(exc), status_code=422 if exc.code in (
             ORIGIN_INVALID, ORIGIN_OUT_OF_RANGE) else 409) from exc
@@ -614,7 +621,8 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
     if cached is not None:
         return _serialize_threehour_result(cached)
     order = checkpoint.training_contract["input_channel_order"]
-    inputs, reference = _read_threehour_forecast_block(release, index, order, checkpoint.normalization)
+    inputs, reference = _read_threehour_forecast_block(release, index, order, checkpoint.normalization,
+                                                     window=window, horizon=horizon)
     try:
         model, warnings = build_earth_model_from_checkpoint(checkpoint)
         resolved_device = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -627,7 +635,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
                     tile = np.ascontiguousarray(inputs[None, :, :, lat:lat + 24, lon:lon + 48])
                     output = earth_forward_for_model(
                         model, torch.from_numpy(tile).to(resolved_device), model_source=checkpoint.model_source,
-                        horizon=24, height=24, width=48,
+                        horizon=horizon, height=24, width=48,
                     )
                     with np.errstate(over="ignore", invalid="ignore"):
                         prediction[:, lat:lat + 24, lon:lon + 48] = output[0, :, 0].cpu().numpy() * scale + mean
@@ -640,7 +648,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
             residual = prediction - reference
         if not np.isfinite(residual).all():
             raise EarthArtifactError("The Earth model produced non-finite residuals")
-        accumulator = ErrorAccumulator(dataset_id=EARTH_DATASET_3HOURLY_ID)
+        accumulator = ErrorAccumulator(dataset_id=EARTH_DATASET_3HOURLY_ID, horizon=horizon)
         accumulator.update(prediction[None, :, None], reference[None, :, None])
         metrics = {**accumulator.result(), "unit": "DU", "target": "TO3",
                    "aggregation": "user_forecast_origin_lead_grid_uniform", "reference_available": True}
@@ -653,13 +661,13 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
         "dataset_id": EARTH_DATASET_3HOURLY_ID,
         "dataset_version": checkpoint.dataset_binding["dataset_version"],
         "dataset_fingerprint": checkpoint.dataset_binding["dataset_fingerprint"],
-        "target": "TO3", "target_unit": "DU", "window": 56, "horizon": 24,
+        "target": "TO3", "target_unit": "DU", "window": window, "horizon": horizon,
         "frequency_hours": 3, "step_unit": "hour", "step": 3, "time_zone": "UTC",
         "timestamp_rule": "interval_center", "forecast_origin": normalized_origin,
         "origin_split": split_name, "input_channel_order": list(order),
         "input_units": checkpoint.training_contract["input_units"],
-        "input_dates": [iso(value) for value in release.dates[index - 55:index + 1]],
-        "input_timestamps": [iso(value) for value in release.dates[index - 55:index + 1]],
+        "input_dates": [iso(value) for value in release.dates[index - window + 1:index + 1]],
+        "input_timestamps": [iso(value) for value in release.dates[index - window + 1:index + 1]],
         "target_dates": timestamps, "target_timestamps": timestamps,
         "model_architecture": identity.get("model_architecture"), "model_source": identity.get("model_source"),
         "model": identity, "warnings": list(warnings), "metrics": metrics, "cache_key": key,
@@ -677,6 +685,59 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
     return _serialize_threehour_result(result)
 
 
+def compare_earth_test_metrics(tasks: list[Any], registry: DatasetRegistry) -> dict:
+    """Compare verified, persisted full-test metrics without rerunning inference."""
+    if len(tasks) < 2 or len({task.id for task in tasks}) != len(tasks):
+        raise DatasetRequestError("invalid_earth_comparison", "Select at least two distinct Earth tasks", status_code=422)
+    items, guards, signature = [], [], None
+    for task in tasks:
+        _require_completed_earth_task(task)
+        sha = _threehour_checkpoint_sha(task)
+        checkpoint = _load_checkpoint(task)
+        release = _sync_release(registry, checkpoint.dataset_binding)
+        _validate_checkpoint_split_ranges(checkpoint, release)
+        contract = checkpoint.training_contract
+        test = checkpoint.metrics["splits"]["test"]
+        current = {
+            "dataset_id": checkpoint.dataset_binding["dataset_id"],
+            "version": checkpoint.dataset_binding["dataset_version"],
+            "fingerprint": checkpoint.dataset_binding["dataset_fingerprint"],
+            "window": contract["window"], "horizon": contract["horizon"],
+            "target": contract["target"], "unit": checkpoint.metrics["unit"],
+            "aggregation": checkpoint.metrics["aggregation"],
+            "test_range": contract["split_ranges"]["test"],
+            "window_count": test["window_count"],
+        }
+        if signature is not None and current != signature:
+            raise DatasetRequestError("earth_comparison_incompatible",
+                                      "Models must use the same dataset release, test windows and metric policy", status_code=409)
+        signature = current
+        identity = checkpoint.model_identity()
+        raw = getattr(task, "hyperparameters", None) or {}
+        hypers = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        metrics = {
+            "overall": dict(test["overall"]),
+            "per_step": [{"step": row["lead_step"], **row} for row in test["by_lead"]],
+            "by_horizon": test["by_horizon"], "unit": "DU",
+            "aggregation": checkpoint.metrics["aggregation"],
+            "split_meta": {"source": "published_manifest_splits", "test_range": current["test_range"],
+                           "window_count": test["window_count"]},
+        }
+        items.append({"task_id": task.id, "model_name": task.custom_model_name or f"Task #{task.id}",
+                      "planet": "earth", "dataset_id": current["dataset_id"],
+                      "window": contract['window'], "horizon": contract['horizon'],
+                      "dataset_version": current["version"], "dataset_fingerprint": current["fingerprint"],
+                      "model_source": checkpoint.model_source, "architecture": identity.get("model_architecture"),
+                      "selected_channels": list(contract["input_channel_order"]), "hyperparameters": hypers,
+                      "model": identity, "metrics": metrics})
+        guards.append((task, sha, checkpoint.dataset_binding))
+    for task, sha, binding in guards:
+        _sync_release(registry, binding)
+        if _threehour_checkpoint_sha(task) != sha:
+            raise DatasetRequestError("invalid_earth_training_artifact", "The checkpoint changed during comparison", status_code=409)
+    return {"planet": "earth", "metric_source": "verified_checkpoint_test_metrics", "items": items}
+
+
 def _field_list(values: np.ndarray) -> list[dict]:
     """Serialize ``[horizon, lat, lon]`` into finite per-day field payloads."""
     fields = []
@@ -692,6 +753,7 @@ def _field_list(values: np.ndarray) -> list[dict]:
 
 
 __all__ = [
+    "compare_earth_test_metrics",
     "EarthPredictionContext",
     "ORIGIN_INVALID",
     "ORIGIN_OUT_OF_RANGE",

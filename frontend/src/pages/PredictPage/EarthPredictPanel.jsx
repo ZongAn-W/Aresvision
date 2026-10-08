@@ -17,6 +17,7 @@ import {
   resolveEarthColorRanges,
 } from './earthPredictModel';
 import './earthPredictPanel.css';
+import ResearchExportButton from './ResearchExportButton';
 
 const EARTH_COLORMAP = 'inferno';
 const EARTH_RESIDUAL_COLORMAP = 'rdbu';
@@ -45,13 +46,14 @@ export default function EarthPredictPanel({
   taskOptions,
   selectedTaskId,
   onSelectTask,
+  showTaskSelector = true,
 }) {
   const [kindViews] = useState({ prediction: 'physical', reference: 'physical', residual: 'residual' });
-  const ranges = useMemo(() => resolveEarthColorRanges(result), [result]);
   const cadence = useMemo(() => getEarthCadence(context || result), [context, result]);
   const isThreeHourly = cadence.threeHourly;
 
   const dayIndex = Number.isInteger(selectedDay) ? selectedDay : 0;
+  const ranges = useMemo(() => resolveEarthColorRanges(result, dayIndex), [result, dayIndex]);
   const activeDates = earthTimestampList(result);
 
   useEffect(() => {
@@ -98,9 +100,11 @@ export default function EarthPredictPanel({
         </div>
         <span className="earth-predict-unit" data-earth-unit={EARTH_TARGET_UNIT}>{EARTH_TARGET_UNIT}</span>
       </header>
+      <ResearchExportButton sources={[result?.task_id === Number(selectedTaskId) && result?.forecast_origin === origin ? result.export_ref : null]}
+        kind="triptych" step={dayIndex} disabled={loading || contextLoading} />
 
       <div className="earth-predict-controls">
-        <label className="earth-predict-field">
+        {showTaskSelector ? <label className="earth-predict-field">
           <span>{copy.taskLabel}</span>
           <select
             value={selectedTaskId || ''}
@@ -112,7 +116,7 @@ export default function EarthPredictPanel({
               <option key={option.id} value={option.id}>{`#${option.id} ${option.label}`}</option>
             ))}
           </select>
-        </label>
+        </label> : null}
 
         <label className="earth-predict-field">
           <span>{copy.originLabel}</span>
@@ -211,7 +215,7 @@ export default function EarthPredictPanel({
           </div>
 
           <p className="earth-predict-origin-line" data-earth-origin-line="true">
-            {copy.originLine(result.forecast_origin, (result.input_timestamps || result.input_dates || [])[0], (result.input_timestamps || result.input_dates || []).slice(-1)[0], isThreeHourly)}
+            {copy.originLine(result.forecast_origin, (result.input_timestamps || result.input_dates || [])[0], (result.input_timestamps || result.input_dates || []).slice(-1)[0], isThreeHourly, result.window, result.horizon)}
             {result.origin_split ? ` · ${copy.originSplit(result.origin_split)}` : ''}
           </p>
 
@@ -276,7 +280,7 @@ export default function EarthPredictPanel({
           </table>
           {isThreeHourly && metrics?.by_horizon?.length ? (
             <div className="earth-predict-horizons" data-earth-horizon-metrics="true">
-              {[24, 48, 72].map((hours) => (
+              {metrics.by_horizon.map(({ horizon_hours: hours }) => (
                 <div className="earth-predict-metric" key={hours} data-earth-horizon={hours}>
                   <span>{`+${hours}h`}</span>
                   <b>{`RMSE ${formatValue(readEarthHorizonMetric(metrics, hours, 'rmse'))}`}</b>

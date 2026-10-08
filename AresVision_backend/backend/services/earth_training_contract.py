@@ -11,7 +11,7 @@ This module is the single authority for:
 * dataset-selected profiles for the retained daily and new three-hour releases;
 * the canonical input channel order (``TO3`` first, then the four optional
   auxiliary variables in a fixed order);
-* fixed daily ``7 -> 3`` and three-hour ``56 -> 24`` window/horizon pairs;
+* retained daily windows and configurable three-hour windows (default 56 -> 24);
 * strict parameter validation with stable :class:`DatasetRequestError` codes.
 
 It must stay dependency-light: the HTTP layer, the training service and the
@@ -65,6 +65,8 @@ EARTH_HORIZON = 3
 EARTH_GRID_SHAPE = (36, 72)
 EARTH_3HOURLY_WINDOW = 56
 EARTH_3HOURLY_HORIZON = 24
+EARTH_3HOURLY_WINDOW_BOUNDS = (1, 240)
+EARTH_3HOURLY_HORIZON_BOUNDS = (1, 240)
 EARTH_3HOURLY_GRID_SHAPE = (240, 480)
 
 EARTH_METRICS_SCHEMA = "earth_training_metrics_v1"
@@ -139,7 +141,7 @@ def _profile_dataset_id(dataset_id: Any = None, hyperparameters: Optional[Mappin
     return explicit or inferred or EARTH_DATASET_V2_ID
 
 
-def earth_training_profile(dataset_id: Any = None) -> dict:
+def earth_training_profile(dataset_id: Any = None, hyperparameters: Optional[Mapping[str, Any]] = None) -> dict:
     """Return a fresh profile, preserving the exact historical daily default."""
     resolved_id = _profile_dataset_id(dataset_id)
     profile = {
@@ -170,7 +172,13 @@ def earth_training_profile(dataset_id: Any = None) -> dict:
             "step_unit": "hour", "step": 3, "frequency_hours": 3,
             "grid_shape": list(EARTH_3HOURLY_GRID_SHAPE),
             "implementation_id": EARTH_3HOURLY_IMPLEMENTATION_ID,
+            "window_bounds": list(EARTH_3HOURLY_WINDOW_BOUNDS),
+            "horizon_bounds": list(EARTH_3HOURLY_HORIZON_BOUNDS),
+            "configurable_windows": True,
         })
+        for key in ("window", "horizon"):
+            profile[key] = _strict_int(key, (hyperparameters or {}).get(key),
+                                       *profile[f"{key}_bounds"], profile[key])
     return profile
 
 
@@ -345,6 +353,7 @@ def normalize_earth_training_hyperparameters(
             status_code=409,
         )
 
+    profile = earth_training_profile(resolved_dataset_id, hypers)
     for key, expected in (("window", profile["window"]), ("horizon", profile["horizon"])):
         value = hypers.get(key)
         if value is None:
@@ -563,7 +572,7 @@ def build_earth_training_spec(
             "dataset_snapshot": copy.deepcopy(dataset_binding.get("dataset_snapshot")),
         },
         "hyperparameters": normalized,
-        "training_profile": earth_training_profile(dataset_id),
+        "training_profile": earth_training_profile(dataset_id, normalized),
     }
     if uploaded_model is not None:
         spec["uploaded_model"] = {

@@ -11,14 +11,14 @@
 
 import {
   TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1,
-  TRAINING_DATASET_EARTH_MERRA2_V2,
+  isRetiredEarthDataset,
   sanitizeNonNegativeInteger,
   sanitizePositiveInteger,
   sanitizePositiveNumber,
 } from './trainingParamSanitizers.js';
 
-export const EARTH_DATASET_ID = TRAINING_DATASET_EARTH_MERRA2_V2;
 export const EARTH_3HOURLY_DATASET_ID = TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1;
+export const EARTH_DATASET_ID = EARTH_3HOURLY_DATASET_ID;
 export const EARTH_3HOURLY_UPLOAD_SCHEMA = 'aresvision_earth_3hourly_uploaded_model_v1';
 export const EARTH_MODEL_ARCHITECTURE = 'dlinear';
 /** 上传模型的架构标记；真正的代码由服务端固定的模型引用决定。 */
@@ -28,8 +28,8 @@ export const EARTH_MODEL_SOURCE_OFFICIAL = 'official';
 export const EARTH_MODEL_SOURCE_UPLOADED = 'uploaded';
 export const EARTH_MODEL_SOURCES = [EARTH_MODEL_SOURCE_OFFICIAL, EARTH_MODEL_SOURCE_UPLOADED];
 export const EARTH_MODEL_SOURCE = EARTH_MODEL_SOURCE_OFFICIAL;
-export const EARTH_WINDOW = 7;
-export const EARTH_HORIZON = 3;
+export const EARTH_WINDOW = 56;
+export const EARTH_HORIZON = 24;
 export const EARTH_3HOURLY_WINDOW = 56;
 export const EARTH_3HOURLY_HORIZON = 24;
 export const EARTH_3HOURLY_FREQUENCY_HOURS = 3;
@@ -44,16 +44,6 @@ export const EARTH_TARGET_CHANNEL = 'TO3';
 export const EARTH_TARGET_UNIT = 'DU';
 
 export const EARTH_DATASET_PROFILES = Object.freeze({
-  [EARTH_DATASET_ID]: Object.freeze({
-    datasetId: EARTH_DATASET_ID,
-    frequencyHours: 24,
-    stepUnit: 'day',
-    step: 1,
-    window: EARTH_WINDOW,
-    horizon: EARTH_HORIZON,
-    gridShape: EARTH_DAILY_GRID_SHAPE,
-    modelSources: EARTH_MODEL_SOURCES,
-  }),
   [EARTH_3HOURLY_DATASET_ID]: Object.freeze({
     datasetId: EARTH_3HOURLY_DATASET_ID,
     frequencyHours: EARTH_3HOURLY_FREQUENCY_HOURS,
@@ -67,6 +57,7 @@ export const EARTH_DATASET_PROFILES = Object.freeze({
 });
 
 export function getEarthTrainingProfile(datasetId = EARTH_DATASET_ID) {
+  if (isRetiredEarthDataset(datasetId)) throw new Error('dataset_retired');
   const profile = EARTH_DATASET_PROFILES[String(datasetId || '').toLowerCase()]
     || EARTH_DATASET_PROFILES[EARTH_DATASET_ID];
   return {
@@ -93,6 +84,8 @@ export const EARTH_CHANNEL_META = {
 };
 
 export const EARTH_PARAM_BOUNDS = {
+  window: { min: 1, max: 240, fallback: 56 },
+  horizon: { min: 1, max: 240, fallback: 24 },
   epochs: { min: 1, max: 1000, fallback: 10 },
   batch_size: { min: 1, max: 64, fallback: 8 },
   seed: { min: 0, max: 2147483647, fallback: 11 },
@@ -148,6 +141,8 @@ export function getEarthChannelOptions() {
 export function buildEarthTrainingHyperparameters({
   datasetId = EARTH_DATASET_ID,
   selectedChannels = EARTH_OPTIONAL_CHANNELS,
+  windowValue,
+  horizon,
   epochs,
   batchSize,
   learningRate,
@@ -172,8 +167,8 @@ export function buildEarthTrainingHyperparameters({
     training_dataset: profile.datasetId,
     model_architecture: uploaded ? EARTH_UPLOADED_ARCHITECTURE : EARTH_MODEL_ARCHITECTURE,
     model_source: requestedSource,
-    window: profile.window,
-    horizon: profile.horizon,
+    window: sanitizePositiveInteger(windowValue, profile.window, EARTH_PARAM_BOUNDS.window.min, EARTH_PARAM_BOUNDS.window.max),
+    horizon: sanitizePositiveInteger(horizon, profile.horizon, EARTH_PARAM_BOUNDS.horizon.min, EARTH_PARAM_BOUNDS.horizon.max),
     use_sphere: false,
     transfer_learning: false,
     selected_channels: normalizeEarthSelectedChannels(selectedChannels),
@@ -229,11 +224,14 @@ export function readEarthUploadedModelCompatibility(compatibility) {
     gridShape: Array.isArray(compatibility.grid_shape) ? compatibility.grid_shape : (Array.isArray(contracts.grid_shape) ? contracts.grid_shape : null),
     window: Number.isFinite(Number(compatibility.window ?? contracts.window)) ? Number(compatibility.window ?? contracts.window) : null,
     horizon: Number.isFinite(Number(compatibility.horizon ?? contracts.horizon)) ? Number(compatibility.horizon ?? contracts.horizon) : null,
+    windows: Array.isArray(contracts.window) ? contracts.window : null,
+    horizons: Array.isArray(contracts.horizon) ? contracts.horizon : null,
   };
 }
 
 /** 当前选中的上传模型是否可用于 Earth 训练；返回阻塞原因。 */
-export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId, compatibility, datasetId = EARTH_DATASET_ID } = {}) {
+export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId, compatibility, datasetId = EARTH_DATASET_ID,
+  windowValue, horizon } = {}) {
   if (modelSource !== EARTH_MODEL_SOURCE_UPLOADED) return null;
   const profile = getEarthTrainingProfile(datasetId);
   if (!profile.modelSources.includes(EARTH_MODEL_SOURCE_UPLOADED)) return 'dataset_training_configuration_not_supported';
@@ -249,8 +247,12 @@ export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId,
   if (verdict.dataset && verdict.dataset !== profile.datasetId) mismatches.push('checkpoint_dataset_incompatible');
   if (verdict.frequencyHours !== null && verdict.frequencyHours !== profile.frequencyHours) mismatches.push('checkpoint_frequency_incompatible');
   if (verdict.gridShape && JSON.stringify(verdict.gridShape) !== JSON.stringify(profile.gridShape)) mismatches.push('checkpoint_grid_incompatible');
-  if (verdict.window !== null && verdict.window !== profile.window) mismatches.push('checkpoint_window_incompatible');
-  if (verdict.horizon !== null && verdict.horizon !== profile.horizon) mismatches.push('checkpoint_horizon_incompatible');
+  const requestedWindow = windowValue === undefined ? profile.window : Number(windowValue);
+  const requestedHorizon = horizon === undefined ? profile.horizon : Number(horizon);
+  if (verdict.windows ? !verdict.windows.includes(requestedWindow)
+    : verdict.window !== null && verdict.window !== requestedWindow) mismatches.push('checkpoint_window_incompatible');
+  if (verdict.horizons ? !verdict.horizons.includes(requestedHorizon)
+    : verdict.horizon !== null && verdict.horizon !== requestedHorizon) mismatches.push('checkpoint_horizon_incompatible');
   if (mismatches.length) return mismatches[0];
   return null;
 }
@@ -266,13 +268,14 @@ export function readEarthDatasetAvailability(descriptor) {
     return { present: false, selectable: false, reason: 'catalog_missing' };
   }
   const available = descriptor.availability === 'available';
-  const wired = descriptor.capabilities?.training !== false;
+  const wired = !isRetiredEarthDataset(descriptor.dataset_id) && descriptor.capabilities?.training !== false;
   return {
     present: true,
     datasetId: descriptor.dataset_id || null,
     selectable: available && wired,
     availability: descriptor.availability,
-    reason: descriptor.availability_reason || (wired ? null : 'training_not_wired'),
+    reason: isRetiredEarthDataset(descriptor.dataset_id) ? 'dataset_retired'
+      : descriptor.availability_reason || (wired ? null : 'training_not_wired'),
     datasetVersion: descriptor.dataset_version || null,
     fingerprint: descriptor.dataset_fingerprint || null,
     splits: descriptor.splits || null,
@@ -287,7 +290,7 @@ export function readEarthDatasetAvailability(descriptor) {
   };
 }
 
-/** 日期划分与 7→3 样本数；样本数只从真实天数推算，不硬编码。 */
+/** Published three-hour split counts, including descriptors without explicit steps. */
 export function describeEarthSplitSamples(splits, window = EARTH_WINDOW, horizon = EARTH_HORIZON) {
   if (!splits || typeof splits !== 'object') return [];
   return ['train', 'validation', 'test']
@@ -297,7 +300,7 @@ export function describeEarthSplitSamples(splits, window = EARTH_WINDOW, horizon
       const hasExplicitSteps = Number.isFinite(Number(splits[name].steps));
       const steps = hasExplicitSteps ? Number(splits[name].steps) : (declaredDays * 24 / 3);
       const days = hasExplicitSteps ? steps / 8 : declaredDays;
-      const sampleUnits = hasExplicitSteps ? steps : days;
+      const sampleUnits = steps;
       return {
         name,
         start: splits[name].start,
@@ -344,7 +347,7 @@ export function classifyEarthTrainingError(errorOrCode) {
   const code = String(errorOrCode?.code || errorOrCode?.error_code || errorOrCode || '').toLowerCase();
   if (/(dataset|package|data).*?(unavailable|missing|invalid|changed)/.test(code)
     || code === 'catalog_missing') return 'dataset_unavailable';
-  if (/(configuration|config|not_supported|unsupported)/.test(code)) return 'configuration_unsupported';
+  if (code === 'dataset_retired' || /(configuration|config|not_supported|unsupported)/.test(code)) return 'configuration_unsupported';
   if (/(checkpoint|artifact|model).*?(incompat|invalid|mismatch|damaged)/.test(code)
     || code.includes('earth_compatibility')) return 'checkpoint_incompatible';
   return 'training_failed';
@@ -401,7 +404,7 @@ export function applyEarthTrainingDefaults({ datasetId = EARTH_DATASET_ID, store
 
 /** 从火星切到 Earth 时恢复的 Earth 草稿；没有草稿则回到 Earth 默认值。 */
 export function resolveEarthTrainingRestore(snapshot) {
-  if (!snapshot) return null;
+  if (!snapshot || isRetiredEarthDataset(snapshot.trainingDataset)) return null;
   const modelSource = EARTH_MODEL_SOURCES.includes(snapshot.modelSource)
     ? snapshot.modelSource
     : EARTH_MODEL_SOURCE_OFFICIAL;
@@ -413,8 +416,8 @@ export function resolveEarthTrainingRestore(snapshot) {
       ? EARTH_UPLOADED_ARCHITECTURE
       : EARTH_MODEL_ARCHITECTURE,
     useSphere: false,
-    windowValue: EARTH_WINDOW,
-    horizon: EARTH_HORIZON,
+    windowValue: sanitizePositiveInteger(snapshot.windowValue, EARTH_WINDOW, 1, 240),
+    horizon: sanitizePositiveInteger(snapshot.horizon, EARTH_HORIZON, 1, 240),
     transferEnabled: false,
     selectedChannels: normalizeEarthSelectedChannels(snapshot.selectedChannels),
     customModelParams: snapshot.customModelParams && typeof snapshot.customModelParams === 'object'

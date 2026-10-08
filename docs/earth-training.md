@@ -1,8 +1,8 @@
 # 地球 MERRA-2 DLinear 训练与历史预测
 
-本文记录 `earth_merra2_daily_v2`（含保留的 v1 兼容身份）的网页训练与历史日期预测，以及 `earth_merra2_3hourly_v1` 的官方 DLinear / 独立契约上传模型 56→24 训练与 UTC datetime 历史回测。地球使用独立的数据准备、训练与推理路径，不进入火星 MY/Ls、通道或旧权重加载逻辑。下文日频接口与上传契约保持原义；三小时细节见[三小时数据构建、训练与历史回测](earth-merra2-3hourly.md)及[专用上传契约](earth-3hourly-uploaded-model.md)。
+当前地球训练与历史回测只使用 `earth_merra2_3hourly_v1`，支持官方 DLinear / 独立契约上传模型按任务配置窗口（默认 56→24）和 UTC datetime。日频 v1/v2 的总览、训练与预测已停用，返回 409 `dataset_retired`；旧记录和产物保留，须重新训练三小时模型。下文日频固定契约、示例和验收记录均为历史资料。停用规则见[日频数据集停用](earth-dataset-retirement.md)，当前活动契约见[三小时专题](earth-merra2-3hourly.md)及[专用上传契约](earth-3hourly-uploaded-model.md)。
 
-两个 Earth ID 是不同的时间轴和 checkpoint 契约，不互相转换。`earth_merra2_daily_v2` 为日频旧任务兼容入口，保留 7→3、已有 checkpoint 与满足原 Earth 兼容条件的上传模型；旧任务只读预测，不自动迁移。`earth_merra2_3hourly_v1` 为 UTC 三小时入口，网格 0.75°×0.75°、240×480，字段为 TO3（DU）、U10M/V10M（m s-1）、T2M（K）、SWGDN（W m-2），官方 DLinear 和通过三小时独立校验的上传模型支持 56→24。两种 profile 的任务身份、时间轴、窗口、数据 fingerprint 和 checkpoint schema 分开校验；预测缓存身份也包含 dataset ID/version/fingerprint，不能跨数据集复用。
+日频与三小时具有不同时间轴和 checkpoint 契约，不互相转换。日频旧任务仅用于追溯，不能继续预测或复制配置。活动三小时网格为 0.75°×0.75°、240×480，字段为 TO3（DU）、U10M/V10M（m s-1）、T2M（K）、SWGDN（W m-2）；预测缓存按数据身份、任务和时间窗隔离。
 
 - 数据包、网格与源处理见[地球 MERRA-2 数据包](earth-compact-dataset.md)
 - 数据集身份、发布指纹与目录接口见[服务器数据集注册表](dataset-registry.md)
@@ -12,30 +12,32 @@
 
 | 能力 | 状态 |
 | --- | --- |
-| 训练页选择 `earth_merra2_daily_v2` / `earth_merra2_daily_v1` | 已开放 |
-| 官方 DLinear，固定过去 7 天 → 未来 3 天，目标 TO3 | 已开放 |
-| **用户上传模型（须通过 Earth 兼容校验）作为日频 Earth 训练的模型来源** | 已开放 |
-| 三小时官方 DLinear 后端训练，固定 56→24、240×480、TO3 DU | 已实现；按需读窗与空间块，完成前严格重载 |
+| 日频 v1/v2 总览、训练和历史预测 | 已停用，返回 409 `dataset_retired` |
+| 官方 DLinear，过去 56 步 → 后续 24 步，目标 TO3 | 已开放，三小时数据 |
+| 日频上传模型及旧 checkpoint | 仅保留历史产物，不能启动训练或预测 |
+| 三小时官方 DLinear 后端训练，默认 56→24、窗口可配置为 1–240 个三小时时间步、240×480、TO3 DU | 已实现；按需读窗与空间块，完成前严格重载 |
 | 三小时历史回测 API，56 输入步与 24 个预测/参考/残差场 | 已实现；UTC datetime、总体/逐步/累计 24/48/72 小时 DU 指标 |
 | 三小时数据总览 | 已开放 UTC 时间轴、降采样地图、原生点位及后端日聚合；见[总览协议](earth-overview.md#三小时-utc-总览) |
-| 三小时训练/预测前端选项与预测展示 | 已开放；训练显示 UTC/240×480/56→24，预测按 UTC 起点展示 24 个 lead、场和指标 |
+| 三小时训练/预测前端选项与预测展示 | 已开放；训练显示 UTC/240×480 及当前窗口，预测按 UTC 起点展示任务对应 lead、场和指标 |
 | 三小时用户上传模型 | 已开放独立 v1 契约、隔离 dry-run、训练/验证/测试、严格重载与历史回测；见[专用模板说明](earth-3hourly-uploaded-model.md) |
 | TO3 必选 + U10M / V10M / T2M / SWGDN 四个可选输入（允许只用 TO3） | 已开放 |
 | 训练期归一化（只拟合 train 划分），验证/测试/预测复用 | 已开放 |
 | 单文件 checkpoint（权重 + 模型配置 + 数据身份 + 归一化 + 指标） | 已开放 |
 | 训练完成前 CPU 严格重载校验 | 已开放；三小时完成门禁由父进程调度有超时的独立进程 |
-| 保存 DU 单位的验证集与测试集总体 / 逐日 RMSE、MAE | 已开放 |
+| 保存 DU 单位的验证集与测试集总体 / 逐步 / 累计时段 RMSE、MAE | 已开放 |
+| 地球多模型完整测试集比较 | 已开放；读取严格验证 checkpoint 的 RMSE/MAE，要求发布身份与测试窗口一致，复用排名、柱状图、24 步曲线、参数矩阵与科研曲线导出；不重新推理 |
+| 地球误差分布与 PFI 分析 | 未开放；不会调用火星接口 |
 | 预测页按**历史预测起点**回测随后 3 天的预测场 / 参考场 / 残差场（DU）与指标 | 已开放 |
 | 预测上下文与结果显示所用模型身份（官方 DLinear 或上传模型名称/版本/内容指纹） | 已开放 |
-| 服务端返回可选起点范围、三天真实日期与真实经纬网格 | 已开放 |
+| 服务端返回 UTC 可选起点、24 个目标时间戳与真实经纬网格 | 已开放 |
 | 训练任务的启动、进度、日志、停止、历史、重命名、标签 | 复用现有机制，已开放 |
 | 无参考真值的未来日期外推 | 未开放（数据集只到 2021-12-31） |
 | Earth / Mars 混合比较、持久性基线 | 未开放 |
 | SPHERE、迁移学习、地球其他**官方**架构 | 未开放（返回 409） |
 | 地球上传模型的 Ls / MOLA 地形等火星辅助输入 | 不开放（校验期即拒绝并给出原因） |
-| Earth 预测结果的持久化缓存 | 未实现；三小时有独立进程内 LRU，日频保持每次重新推理 |
+| Earth 预测结果的持久化缓存 | 未实现；三小时有独立进程内 LRU |
 
-## 日频固定契约
+## 日频固定契约（历史资料，已停用）
 
 | 项目 | 值 |
 | --- | --- |
@@ -104,7 +106,7 @@ Earth 只使用发布 manifest 固定的 `train` / `validation` / `test` 日期�
 
 ### 三小时官方 DLinear
 
-同一训练接口选择 `dataset_id=earth_merra2_3hourly_v1` 后，服务端 profile 固定为三小时 UTC、56 输入步、24 输出步、240×480 全球网格。TO3 必选，四个辅助输入及通道顺序沿用日频规则；目标仅 TO3，单位 DU。上传模型不参与三小时执行，返回 409 `dataset_training_configuration_not_supported`，不调用日频上传兼容门或降级模型。
+同一训练接口选择 `dataset_id=earth_merra2_3hourly_v1` 后，服务端 profile 固定为三小时 UTC、56 输入步、24 输出步、240×480 全球网格。TO3 必选，四个辅助输入及通道顺序固定；目标仅 TO3，单位 DU。支持官方 DLinear 及独立 v1 契约上传模型，创建任务前校验兼容性与实际参数，不调用日频上传兼容门或降级模型。
 
 完整两年发布的连续 split 各自独立切窗，train/validation/test 分别有 2928/1448/1472 步、2849/1369/1393 个窗口。归一化只扫描 train，逐通道最多 8 步，以 float64 合并统计量；选中通道的缺失显式拒绝。分块生成 normalized float32 磁盘内存映射后按需读取窗口与 24×48 空间块，避免压缩整场反复解压；每个窗口 100 块，`batch_size` 以块为单位，checkpoint 仍绑定完整 240×480 网格。缓存通过 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认位于 Git checkout 外的工作区父级，完整五通道约 12.55 GiB，并在训练结束或中断后保留。
 
@@ -112,7 +114,7 @@ Earth 只使用发布 manifest 固定的 `train` / `validation` / `test` 日期�
 
 实际 smoke 使用合成 30 天/240 步、完整网格，测试专用连续 split 各 10 天、各 1 个时间窗口；五通道 CPU 训练 1 epoch，最终内存映射版本严格重载通过（1 passed，16.02 秒），归一化只拟合前 10 天。真实数据仅有已验证 7 天包（56 步），不足完整 80 步窗口；未执行真实全两年构建或训练。smoke 与后续分文件测试命令见[三小时训练验证](earth-merra2-3hourly.md#官方-dlinear-后端训练)。
 
-### 用用户上传模型训练日频 Earth
+### 用用户上传模型训练日频 Earth（历史资料，已停用）
 
 把 `model_source` 设为 `uploaded` 并在顶层传 `uploaded_model_id`。自定义参数值放在 `hyperparameters.custom_model_params`，服务端按该上传包自己的 `MODEL_SPEC.parameters` 逐项校验（类型、范围、未知键）。
 
@@ -179,7 +181,7 @@ Earth 只使用发布 manifest 固定的 `train` / `validation` / `test` 日期�
 
 日频 checkpoint 继续使用单文件 `aresvision_earth_forecast_checkpoint_v1`，三小时使用独立的 `aresvision_earth_forecast_checkpoint_3hourly_v1`；均包含 `model_state_dict`、`model_config`、`dataset_binding`、`training_contract`、`normalization`、`run`、`metrics`，只保存张量与 `weights_only=True` 可读的普通类型。加载校验 dataset_id 与时间契约，不能跨日频/三小时绑定。
 
-## 日频历史预测
+## 日频历史预测（历史资料，已停用）
 
 ### `GET /api/earth/predict/context?training_task_id=<id>`（需认证）
 
@@ -289,14 +291,14 @@ context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/st
 
 ## 前端
 
-- 训练页「数据集」分区包含两个火星身份和两个 Earth 发布 ID；默认 Earth 入口读取 catalog 的 `default_earth_dataset_id`。日频为 7/3；三小时显示 UTC、240×480 和 56/24，允许官方 DLinear 或独立契约上传模型，并提供专用模板、自定义参数和 dataset_id 兼容性状态。Earth 与火星草稿隔离，任务各用自己的时间轴与窗口。
+- 训练页「数据集」分区包含两个火星身份和一个三小时 Earth 发布 ID；默认 Earth 入口读取 catalog 的 `default_earth_dataset_id`。Earth 显示 UTC、240×480 和 56/24，允许官方 DLinear 或独立契约上传模型，并提供专用模板、自定义参数和 dataset_id 兼容性状态。Earth 与火星草稿隔离；旧日频草稿不恢复，旧任务不能复制配置或运行预测。
 - Earth 的「模型」分区提供**官方 DLinear / 用户上传模型**两个来源。选官方时只显示固定架构说明；选上传时复用同一套上传卡片（上传、模板/说明下载、重新校验、删除、自定义参数入口），选中后向 `GET /api/user-models/{id}/earth-compatibility` 取回服务端 Earth 兼容性结论：**未取到结论一律按不可用处理**，不兼容时在区内显示具体原因并禁用「开始实验」，检查器同步列出阻塞项。
 - Earth + 上传模型的请求只发送模型 ID 与自定义参数值；版本、内容哈希与数据快照由服务端固定，前端不生成也不接受。
-- 地球数据集分区显示当前发布的频率、网格、变量、单位与窗口契约；发布日期划分和发布指纹仍由服务端在创建任务时校验并绑定。数据不可用时会在就绪检查里给出阻塞原因并禁用「开始实验」，三小时任务固定展示 56→24 和 240×480。
-- 预测页「地球历史预测」按已完成任务的数据集身份选择日频日期或 UTC 三小时起点，使用相应 checkpoint 和窗口；展示预测/参考/残差场（DU）、逐步与按天/时段指标。地球任务不进入 Earth/Mars 混合比较、火星推理或迁移学习。窗口不兼容的三小时上传模型在任务创建前被拒绝；日频上传模型只按原 Earth 兼容协议处理。
+- 地球数据集分区显示当前发布的频率、网格、变量、单位与窗口契约；发布日期划分和发布指纹仍由服务端在创建任务时校验并绑定。数据不可用时会在就绪检查里给出阻塞原因并禁用「开始实验」，新实验默认使用设置中的窗口（默认 56→24），范围为 1–240 个三小时时间步，任务按保存的窗口运行，网格仍为 240×480。
+- 预测页「地球历史预测」仅提供已完成且权重有效的三小时任务，选择 UTC 起点并使用绑定 checkpoint 和窗口；展示预测/参考/残差场（DU）、逐步与时段指标。地球任务不进入 Earth/Mars 混合比较、火星推理或迁移学习。窗口不兼容的上传模型在任务创建前拒绝；旧日频任务仅用于追溯。
 - 生产站点使用 `frontend/dist`，前端源码修改后必须在 `frontend/` 执行 `npm run build`。
 
-## 验证入口
+## 日频历史验证入口（当前不能运行）
 
 后端从 `AresVision_backend/backend/` 执行，使用 `AresVision` conda 环境，并为 Windows NetCDF 测试指定新的纯英文临时目录：
 
@@ -323,11 +325,12 @@ conda run -n AresVision python scripts\audit\earth-training-acceptance.py
 
 > 本机 `.env` 若保留了 `.env.example` 的占位 `TRAINING_PYTHON_PATH="C:\Path\To\Your\Environment\python.exe"`，训练子进程会以 `FileNotFoundError: [WinError 2]` 失败。请把该值改为真实解释器路径，或删除该行让 `config.TRAINING_PYTHON_PATH` 回退到当前解释器。
 
-## 后续阶段
+## 日频后续设计（历史资料）
 
 第四步及以后可直接读取 `aresvision_earth_forecast_checkpoint_v1`，用保存的 `model_config` / `input_channel_order` / `normalization` / grid / splits 重建模型。未来比较身份至少包含 `planet`、`dataset_id`、`version`、`fingerprint`、`target`、`horizon`、测试起点集合与指标 aggregation；持久性基线与无参考真值外推须复用同样窗口、目标日期与单位。
 ## 发布 split 与窗口边界
 
-Earth 训练以发布 manifest 的连续区间为唯一 split 边界。train、validation 和 test 分别在自己的区间内独立生成窗口：日频 7→3 日，三小时 56→24 步，均不得跨越发布边界。三小时上传模型历史回测也要求完整 80 步在同一 split 内。日频与既有三小时官方模型历史范围保留，可从完整发布时间轴读取 origin 之前的输入和 origin 之后的参考值；所有分支返回 `origin_split`，不改变训练 split、归一化范围或重新按比例切分窗口。
+Earth 训练以发布 manifest 的连续区间为唯一 split 边界。train、validation 和 test 分别在自己的区间内独立生成任务配置的三小时窗口（默认 56→24），不得跨越发布边界。上传模型历史回测也要求完整 80 步在同一 split 内；三小时官方模型保留原范围，可从完整发布时间轴读取 origin 之前的输入和 origin 之后的参考值。回测返回 `origin_split`，不改变训练 split、归一化范围或重新按比例切分窗口；日频任务不能回测。
 
 Earth 请求中的 `train_ratio`、`validation_ratio`、`test_ratio` 仅作为历史兼容字段；服务端仍拒绝非默认值并返回 `422 invalid_earth_training_parameters`。新 checkpoint 保存 `split_policy=published_manifest_splits`、每个 split 的 `date_start`、`date_end` 和 `window_count`，预测时会校验这些范围及数据集 fingerprint。旧 checkpoint 没有该元数据时保持兼容读取，但新训练不会产生此类 artifact。
+

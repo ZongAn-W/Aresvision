@@ -135,7 +135,16 @@
 }
 
 .experiment-center-grid[data-view='matrix'] .experiment-center-panel {
-  min-height: calc(100dvh - 190px);
+  height: var(--experiment-matrix-height, calc(100dvh - 190px));
+  min-height: 0;
+  overflow: hidden;
+}
+
+.experiment-center-workspace[data-stage-workspace='matrix'] {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .experiment-center-grid[data-inspector='absent']:not([data-view='monitor']) {

@@ -294,10 +294,12 @@ def _evaluate_three_hour_package(package, raw, validator, *, earth_probe=None):
                 "uploaded_model_contract_invalid" if declared or result.errors else "uploaded_model_not_earth_3hourly_compatible"),
             declares_earth=declared, datasets=result.datasets, **identity,
         )
+    declared_horizons = (result.datasets.get(EARTH_3HOURLY_FEED_KEY) or {}).get('horizon', [24])
+    probe_horizon = (earth_probe or {}).get('horizon', 24 if 24 in declared_horizons else declared_horizons[0])
     proven = (result.ok is True and block.get("compatible") is True and block.get("status") == "available"
               and block.get("dataset_id") == EARTH_3HOURLY_FEED_KEY
               and block.get("contract_schema") == CONTRACT_SCHEMA
-              and block.get("output_shape") == [2, 24, 1, 24, 48])
+              and block.get("output_shape") == [2, probe_horizon, 1, 24, 48])
     return EarthCompatibility(
         proven, list(block.get("errors") or []), warnings=list(result.warnings),
         declares_earth=EARTH_3HOURLY_FEED_KEY in result.datasets, datasets=result.datasets,

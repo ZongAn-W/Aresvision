@@ -6,7 +6,7 @@ three-hour release, along with the real grid, DU fields and ordered lead metrics
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Optional
+from typing import Annotated, Any, ClassVar, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
@@ -190,7 +190,16 @@ class EarthPredictRequest(BaseModel):
     forecast_origin: str = Field(..., min_length=8, max_length=40)
 
 
+class EarthCompareRequest(BaseModel):
+    model_config = MODEL_CONFIG
+
+    task_ids: list[Annotated[int, Field(strict=True, ge=1)]] = Field(..., min_length=2, max_length=32)
+
+
+
+
 class EarthPredictResponse(_ConditionalTemporalFields):
+    export_ref: Optional[dict[str, Any]] = None
     model_config = MODEL_CONFIG
 
     conditional_fields = frozenset({
@@ -234,6 +243,7 @@ class EarthPredictResponse(_ConditionalTemporalFields):
 
 
 __all__ = [
+    "EarthCompareRequest",
     "EarthLeadMetric",
     "EarthHorizonMetric",
     "EarthPredictContextResponse",

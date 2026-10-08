@@ -59,13 +59,12 @@ EARTH_MERRA2_3HOURLY_DIR = Path(os.getenv(
 )).expanduser()
 
 EARTH_DEFAULT_DATASET_IDS = frozenset({
-    "earth_merra2_daily_v2",
     "earth_merra2_3hourly_v1",
 })
 
 
 def resolve_default_earth_dataset_id(value: Optional[str]) -> str:
-    dataset_id = (value or "earth_merra2_daily_v2").strip().lower()
+    dataset_id = (value or "earth_merra2_3hourly_v1").strip().lower()
     if dataset_id not in EARTH_DEFAULT_DATASET_IDS:
         raise ValueError(
             "ARESVISION_DEFAULT_EARTH_DATASET_ID must name a supported Earth entry dataset"

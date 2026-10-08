@@ -488,14 +488,21 @@ class UserModelValidator:
                 code = "invalid_earth_training_parameters"
                 raise ValueError("; ".join(parameter_errors))
             orders = [earth_probe["input_channel_order"]] if earth_probe else channel_orders()
+            feed = datasets[EARTH_3HOURLY_FEED_KEY]
+            window = (earth_probe or {}).get('window', 56 if 56 in feed['window'] else feed['window'][0])
+            horizon = (earth_probe or {}).get('horizon', 24 if 24 in feed['horizon'] else feed['horizon'][0])
+            if window not in feed['window'] or horizon not in feed['horizon']:
+                code = 'uploaded_model_contract_invalid'
+                raise ValueError(f'Model does not declare window={window}, horizon={horizon}')
             for order in orders:
-                shape = dry_run(module.build_model, order, params)
+                shape = dry_run(module.build_model, order, params, window=window, horizon=horizon)
         except Exception as exc:
             errors = [f"Earth three-hour dry-run failed: {exc}"]
         verdict = {
             "compatible": not errors, "status": "unavailable" if errors else "available",
             "code": code if errors else None, "errors": errors, "output_shape": shape,
             "contract_schema": CONTRACT_SCHEMA, "dataset_id": EARTH_3HOURLY_FEED_KEY,
+            "window": locals().get('window'), "horizon": locals().get('horizon'),
         }
         # The legacy verdict is independent of the three-hour run.
         legacy = None
@@ -661,7 +668,9 @@ class UserModelValidator:
         try:
             params = {name: schema["default"] for name, schema in param_schema.items()}
             for order in channel_orders():
-                shape = dry_run(build_model, order, params)
+                shape = dry_run(build_model, order, params,
+                    window=56 if 56 in feed['window'] else feed['window'][0],
+                    horizon=24 if 24 in feed['horizon'] else feed['horizon'][0])
             return True, [], shape
         except Exception as exc:  # noqa: BLE001 - stable upload verdict
             return False, [f"Earth three-hourly dry-run failed: {exc}"], None

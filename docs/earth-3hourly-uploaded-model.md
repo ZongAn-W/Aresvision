@@ -11,14 +11,14 @@
 | 项目 | 实际契约 |
 | --- | --- |
 | 调用 | `model(x)`，不传额外参数；返回单个 `torch.Tensor` |
-| 输入 | `[B,56,C,24,48]`，BTCHW；C 为 1 到 5 |
+| 输入 | `[B,window,C,24,48]`，BTCHW；`window` 为任务配置的 1–240 个三小时时间步，C 为 1 到 5 |
 | 通道轴 | 轴 2；顺序为 TO3，然后按 U10M、V10M、T2M、SWGDN 顺序保留所选变量 |
-| 输出 | `[B,24,1,24,48]`，轴 2 仅 TO3；24 个 lead 对应 +3…+72 小时 |
+| 输出 | `[B,horizon,1,24,48]`，轴 2 仅 TO3；`horizon` 为任务配置的 1–240 个三小时时间步 |
 | 数值 | 输入和输出均为有限 float32；是按训练集统计量标准化后的数值，输出按保存的 TO3 统计量还原为 DU |
 | 设备 | dry-run 在 CPU 执行；runner 将模型和输入移到所选 CPU/CUDA 设备，输出必须与输入同设备，模型不得自行固定设备 |
 | 训练 | 必须有可训练参数；前向和 backward 必须成功并产生有限梯度 |
 | 缺失 | 选中输入及 TO3 目标存在缺失时拒绝窗口/任务，不填零、不插值 |
-| split | 沿用 manifest 固定分区；训练、验证、测试窗口及上传模型历史回测的完整 80 步不能跨 split |
+| split | 沿用 manifest 固定分区；训练、验证、测试窗口及上传模型历史回测不能跨 split，窗口长度由任务配置决定 |
 | normalization | 仅训练 split 拟合人口均值/标准差，ddof=0、epsilon=1e-6；预测严格使用 checkpoint 保存值 |
 
 `build_model(config)` 必须返回 `torch.nn.Module`。服务器传入：`dataset_id`、`contract_schema`、`window=56`、`horizon=24`、`height=24`、`width=48`、`global_grid_shape=[240,480]`、`spatial_tile_shape=[24,48]`、`in_channels`、`selected_channels`（含 TO3）、`target_channel='TO3'`，以及校验后的自定义参数。参数 schema 沿用通用 int/float/bool/select 形式，但不得覆盖以上字段、dataset identity、路径、设备或 normalization。
@@ -39,7 +39,7 @@
 | `uploaded_model_contract_invalid` | spec、保留参数、保存配置或执行契约不合法 |
 | `uploaded_model_compatibility_unknown` | 无有效结论、隔离进程超时或异常退出 |
 | `uploaded_model_earth_3hourly_dry_run_failed` | 构建、输出类型/形状/有限性或梯度校验失败 |
-| `invalid_earth_training_parameters` | 请求参数未通过 schema 或固定窗口校验 |
+| `invalid_earth_training_parameters` | 请求参数未通过 schema 或窗口范围与形状校验 |
 | `uploaded_model_missing` / `uploaded_model_tampered` | 源码缺失或摘要不匹配 |
 | `uploaded_model_invalid` | 上传包整体校验失败，不能进入训练 |
 | `earth_prediction_origin_out_of_range` | 没有完整输入/真值或完整窗口跨 split |
@@ -53,3 +53,4 @@
 重载核对任务与数据集身份、嵌入源码摘要、声明、参数 schema 和 build config，再以 `strict=True` 加载 state dict。runner 在发布前检查重载与前向一致性；任务完成门禁另调度 30 秒超时的独立 CPU 进程复查权重及前向，超时或失败不能标记 completed。原源码文件不可用时使用摘要匹配的嵌入副本，并在预测 context 报告原文件状态。日频及 Mars checkpoint 不能通过三小时 schema/identity 检查。
 
 实现与验收范围见 [三小时专题](earth-merra2-3hourly.md)。合成数据训练、回测 smoke 仅证明代码链路；完整真实包的只读检查不等同于真实数据训练、模型精度或真实任务历史回测验收。
+

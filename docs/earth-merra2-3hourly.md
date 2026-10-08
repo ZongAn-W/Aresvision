@@ -1,6 +1,6 @@
 # Earth MERRA-2 三小时数据构建、注册、训练与历史回测
 
-`earth_merra2_3hourly_v1` 已接入数据集目录、分块校验、官方 DLinear / 独立契约上传模型 56→24 训练和历史回测 API；独立离线构建器生成其数据包。三小时数据总览已开放 UTC 时间选择、播放、地图、原生点位与明确日聚合的年度分析；训练/预测前端已支持 56→24 配置、UTC 起点和 24 个 lead 展示。原来的 Earth 日频发布、任务、checkpoint、上传模型和接口保留 date-only 时间轴与 7→3 日频语义。
+`earth_merra2_3hourly_v1` 是地球唯一活动数据集，已接入目录、分块校验、官方 DLinear / 独立契约上传模型 56→24 训练与历史回测 API。总览提供 UTC 时间选择、播放、地图、原生点位与三小时源日聚合的年度分析；预测展示 UTC 起点和 24 个 lead。自 2026-10-08 起日频 v1/v2 运行接口均返回 409 `dataset_retired`，旧任务及产物仅归档、不自动迁移；详见[停用约定](earth-dataset-retirement.md)。下文涉及日频可用性和兼容回归的阶段记录为历史验证。
 
 ## 数据契约
 
@@ -94,7 +94,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 
 `GET /api/datasets` 保留原四个身份并追加新 ID，`GET /api/datasets/earth_merra2_3hourly_v1` 返回独立描述符。完整两年包摘要：5848 步，`2020-01-01T01:30:00Z` 至 `2021-12-31T22:30:00Z`，指纹 `c4f4e9127e48fc3bb18bd71c5bdc792ee9192b52e5fe44ed51193ba8524d6697`。经校验的 7 天 smoke 详情仍可作为构建器回归夹具参考：
 
-默认 Earth 数据集由 `ARESVISION_DEFAULT_EARTH_DATASET_ID` 决定，并作为 `default_earth_dataset_id` 与 catalog 一起返回。开发配置保持 `earth_merra2_daily_v2`；部署灰度配置见 `AresVision_backend/backend/.env.production.example`，将新入口默认设为三小时 ID。该变量只影响新 Earth 入口，旧日频任务仍使用任务记录的 dataset identity、日期轴、7→3 窗口和 checkpoint；将部署变量改回 `earth_merra2_daily_v2` 并重启即可回滚。缺失包时 catalog 仍返回 `missing/package_missing`，但当前本地完整包已验证为 `available`。
+开发与生产默认 Earth 数据集均为 `earth_merra2_3hourly_v1`，作为 `default_earth_dataset_id` 返回。`ARESVISION_DEFAULT_EARTH_DATASET_ID` 只接受该值，旧日频配置须修改或移除；不能通过设为日频恢复入口。缺失三小时包时 catalog 仍返回 `missing/package_missing`，界面不回退到旧包。完整发布的数据验证与模型精度验收仍是不同范围。
 
 ```json
 {
@@ -124,7 +124,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 
 实际响应还包含完整坐标、五变量/单位/缺失率、时间边界、发布 split 和三个 SHA/fingerprint 字段。`manifest_sha256` 是原文件字节摘要，`manifest_content_sha256` 是排除 fingerprint 后的 canonical 内容摘要；fingerprint 使用后者，与构建器原记录一致。新包由服务器目录及其 manifest 定义，没有复用或替换日频固定哈希；格式化 manifest 可改变字节摘要而不改变产品 fingerprint。
 
-首次查询校验 manifest、NetCDF 完整 SHA、无重复/无缺步的三小时 UTC 轴、精确全球中心与边界、变量及单位、NaN/掩码对应关系、逐项统计与来源清单；扫描每变量最多 8 步，缓存元信息及只读坐标，完整体积留在磁盘。文件签名变化重新校验，未变化的缺失/损坏结果也缓存。全量包独立验证还直接读取首/中/末日期源文件，405 个目标单元样本全部通过，最大绝对误差为 `2.65e-5`。包不存在返回 `missing/package_missing`，哈希或契约不符返回 `invalid` 及稳定原因；读取权限问题返回 `unverified/package_unreadable`。注册详情与列表仍返回 200，旧日频状态独立。
+首次查询或后台预热校验 manifest、NetCDF 完整 SHA、无重复/无缺步的三小时 UTC 轴、精确全球中心与边界、变量及单位、NaN/掩码对应关系、逐项统计与来源清单；扫描每变量最多 8 步，缓存元信息及只读坐标，完整体积留在磁盘。文件签名变化重新校验，未变化的缺失/损坏结果也缓存。全量包独立验证还直接读取首/中/末日期源文件，405 个目标单元样本全部通过，最大绝对误差为 `2.65e-5`。包不存在返回 `missing/package_missing`，哈希或契约不符返回 `invalid` 及稳定原因；读取权限问题返回 `unverified/package_unreadable`。活动注册详情与列表仍返回 200，日频详情返回 409 `dataset_retired`。
 
 新训练与历史回测按任务身份进入独立的 56→24 分支；日频日期工具仍拒绝三小时身份，总览按数据集选择 timestamp 分支，避免落入 7→3、date-only 或 Mars 路径。`trained_prediction=true` 表示后端入口已接线，不表示 7 天 smoke 有足够窗口或已经存在正式 checkpoint。身份伪造沿用顶层 Schema 422、嵌套参数解析 400 `client_identity_not_allowed` 的分工，也拒绝 `fingerprint` / `snapshot` 别名。旧训练 JSON、数据库和 checkpoint 不迁移、不重写。
 
@@ -138,7 +138,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 
 复用服务器 registry、固定 manifest split、仅训练期 normalization、缺失拒绝、任务调度和训练/评估循环。上传代码不控制路径、版本、fingerprint、snapshot 或 normalization。队列保存冻结源码引用，重启恢复同一版本。上传 checkpoint 仍用独立三小时 artifact schema，另保存上传 implementation `aresvision_earth_3hourly_uploaded_runner_v1`、契约 schema、块尺寸、实际 build config 和源码摘要；重载核对它们并严格加载权重。任务完成前使用 30 秒超时的独立 CPU 进程重载并检查前向一致性，失败不能 completed。日频和 Mars checkpoint 不能冒充三小时产物。
 
-上传模型历史回测要求完整 56+24 步在同一固定 split 内；context 只返回满足条件的起点，跨 split 返回 `earth_prediction_origin_out_of_range`。完整两年包共有 2849+1369+1393=5611 个此类起点。日频和既有官方 DLinear 历史范围保留。
+上传模型历史回测要求完整 56+24 步在同一固定 split 内；context 只返回满足条件的起点，跨 split 返回 `earth_prediction_origin_out_of_range`。完整两年包共有 2849+1369+1393=5611 个此类起点。三小时官方 DLinear 保留原历史范围；日频任务不能回测。
 
 ## 官方 DLinear 后端训练
 
@@ -242,13 +242,25 @@ foreach ($earthTrainingTest in $earthTrainingTests) {
 {"training_task_id": 123, "forecast_origin": "2021-07-08T01:30:00Z"}
 ```
 
-此起点的 56 个 `input_timestamps` 从 `2021-07-01T04:30:00Z` 到起点；24 个 `target_timestamps` 从 `2021-07-08T04:30:00Z` 到 `2021-07-11T01:30:00Z`，相邻差严格 3 小时。响应同时给出 `input_dates` / `target_dates` 兼容别名，其内容也是完整 UTC datetime；旧日频响应仍只使用原来的日期字段。
+此起点的 56 个 `input_timestamps` 从 `2021-07-01T04:30:00Z` 到起点；24 个 `target_timestamps` 从 `2021-07-08T04:30:00Z` 到 `2021-07-11T01:30:00Z`，相邻差严格 3 小时。响应同时给出 `input_dates` / `target_dates` 兼容别名，其内容也是完整 UTC datetime；日频日期字段仅保留历史协议，当前日频预测请求返回 409。
 
 `prediction`、`reference`、`residual` 各有 24 个 `{field, minVal, maxVal, valid_cells}`，每个 `field` 为 `[240][480]`，整体形状各为 `[24,240,480]`，单位均为 DU；`residual = prediction − reference`。真实纬度从南到北，真实经度从西到东，三种场与 `grid.latitude` / `grid.longitude` 一致。选中通道或参考 TO3 的缺测显式报错，不补零。`origin_split` 标记起点所属发布分区；既有官方模型历史回测可跨发布 split 读取完整历史和参考，与旧日频语义一致。三小时上传模型要求完整 80 步落在同一 split 内；所有训练窗口均不得跨 split。
 
 `metrics.aggregation=user_forecast_origin_lead_grid_uniform`，含 `overall{rmse,mae}`、24 行 `by_lead[{lead_step,lead_hours,rmse,mae}]` 和三行 `by_horizon[{horizon_hours,lead_steps,rmse,mae}]`。后者的 24/48/72 小时分别累计前 8/16/24 步的全部格点误差，RMSE 合并平方误差后开方，MAE 合并绝对误差；并非仅取第 8/16/24 步，也不平均各步 RMSE。
 
 推理只读取一个 80 步跨度，每通道最多 8 个全网格步分块读取；只保留本次 56 步输入和 24 步参考，模型按 24×48 空间块执行，不物化两年数据或全部滑窗。响应仍包含完整全球数组。
+
+### 地球多模型测试集比较
+
+预测页先选择「地球 / 火星」，再选择「单模型 / 多模型」。地球单模型保留 UTC 历史回测；多模型复用模型选择、标签筛选、综合排名、总体柱状图、逐步曲线与参数矩阵。
+
+`POST /api/earth/predict/training-models/compare` 接受 `{"task_ids":[123,124]}`，要求 2–32 个不同的正整数任务 ID。认证与任务访问规则沿用单模型，日频任务仍返回 `dataset_retired`。服务逐个严格加载 checkpoint、复核当前数据发布及保存的 split 范围，读取训练完成时保存的 test 指标；不训练、不重新推理、不读 Mars 数据。
+
+仅当 dataset ID/版本/fingerprint、window/horizon、target/unit/aggregation、测试分区起止与实际窗口数量均一致时可比较；不一致返回 409 `earth_comparison_incompatible`。返回 `metric_source=verified_checkpoint_test_metrics`，每个 `items[]` 带任务、模型与数据身份，以及 `metrics.overall`、24 行 `metrics.per_step`、累计 24/48/72 小时指标、`split_meta` 与 `export_ref`。RMSE/MAE 始终为 DU，按测试集所有起点 × 提前量 × 格点等权汇总；不与单次回测指标混用。页面曲线横轴为提前小时，科研导出横轴保留 step，元数据记录 3 小时频率。Earth 没有 SSIM/R²、误差分布或 PFI 时不显示相应选项。
+
+训练页「用于预测」与「去模型比较」分别跳转 `mode=earth` / `mode=earth_compare`；旧 `earth`、`trained`、`trained_compare` 链接继续有效。行星、分析方式或账号切换会取消过期请求，Earth 比较结果不进入 Mars 缓存。
+
+验证入口为 `tests/test_earth_3hourly_prediction_routes.py` 的 comparison 回归，涵盖指标来源、无重新推理、权限、发布身份与测试窗口一致性、DU 科研曲线导出。2026-10-08 已运行三小时路由与科研导出回归、前端测试及生产构建；浏览器合成 API 检查四种入口、任务隔离、DU 不重复换算、3–72 小时曲线与 390px 布局。后端 health、生产前端与数据代理均返回 200。测试使用合成发布及图表数据，不代表真实训练精度验收。
 
 ### 身份、缓存与错误码
 

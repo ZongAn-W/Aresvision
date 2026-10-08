@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useSettings } from '../../../contexts/SettingsContext';
 import { datesInYear, daysInYear, monthTicks, seriesValueAt } from './observatoryTimelineRail.js';
 import { earthRailDay, earthRailProgress, earthRailPath, earthRailSeries, nearestEarthRailDate, TRACK_HEIGHT } from './earthObservationRail.js';
@@ -58,6 +58,7 @@ export default function EarthObservationRail({
   frequencyHours = 24,
 }) {
   const { settings } = useSettings();
+  const railRef = useRef(null);
   const isZh = settings?.language !== 'en';
   const source = pointSide ? pointSeries : series;
   const rows = useMemo(() => earthRailSeries(source, year), [source, year]);
@@ -92,9 +93,23 @@ export default function EarthObservationRail({
     else seek(sliderValue + delta);
   };
 
+  useEffect(() => {
+    const host = railRef.current?.parentElement;
+    const shell = host?.closest('.overview-shell');
+    if (!host || !shell) return undefined;
+    const syncScroll = () => {
+      for (const peer of shell.querySelectorAll('.overview-shell__rail, .overview-shell__rail-end')) {
+        if (peer !== host && peer.scrollTop !== host.scrollTop) peer.scrollTop = host.scrollTop;
+      }
+    };
+    host.addEventListener('scroll', syncScroll, { passive: true });
+    return () => host.removeEventListener('scroll', syncScroll);
+  }, []);
+
   return (
-    <aside className={`observatory-rail mars-observation-rail earth-observation-rail${pointSide ? ' mars-observation-rail--point' : ''}`}
+    <aside ref={railRef} className={`observatory-rail mars-observation-rail earth-observation-rail${pointSide ? ' mars-observation-rail--point' : ''}`}
       data-rail-year={year ?? ''} data-rail-date={requestedDate || ''} data-rail-curve={path ? 'ready' : 'none'}
+      data-rail-frequency={frequencyHours}
       aria-label={title}>
       <div className="mars-observation-rail__heading">
         <strong>{title}</strong>
@@ -108,16 +123,17 @@ export default function EarthObservationRail({
           </label> : <span>{year ?? '--'}</span>)}
       </div>
       <div className="observatory-rail__readout mars-observation-rail__readout">
-        <div className="mars-observation-rail__time">{formatDate(requestedDate, isZh)}</div>
-        {threeHourly && !pointSide ? <div style={{ display: 'grid', gap: 4 }}>
+        {threeHourly && !pointSide ? <div className="earth-observation-rail__time-controls">
           <label><span>{isZh ? 'UTC 日期' : 'UTC date'}</span><input type="date" value={requestedDate?.slice(0, 10) || ''}
             min={axis[0]?.slice(0, 10)} max={axis.at(-1)?.slice(0, 10)} disabled={railDisabled}
             onChange={(event) => { const next = `${event.target.value}T${requestedDate?.slice(11, 19) || '01:30:00'}Z`; if (axis.includes(next)) onDateChange?.(next); }} /></label>
-          <label><span>{isZh ? 'UTC 时间 · 3 小时' : 'UTC time · 3 hours'}</span><select value={requestedDate?.slice(11, 16) || '01:30'} disabled={railDisabled}
+          <label><span>{isZh ? 'UTC 时间' : 'UTC time'}</span><select value={requestedDate?.slice(11, 16) || '01:30'} disabled={railDisabled}
             onChange={(event) => { const next = `${requestedDate.slice(0, 10)}T${event.target.value}:00Z`; if (axis.includes(next)) onDateChange?.(next); }}>
             {Array.from({ length: 8 }, (_, i) => `${String(1 + 3 * i).padStart(2, '0')}:30`).map((value) => <option key={value} value={value}>{value}</option>)}
           </select></label>
-        </div> : null}
+        </div> : <div className="mars-observation-rail__time">
+          {threeHourly ? <><span>{requestedDate?.slice(0, 10) || '--'}</span><span>{requestedDate?.slice(11, 16) || '--'} UTC</span></> : formatDate(requestedDate, isZh)}
+        </div>}
         <span className="mars-observation-rail__label" title={variableLabel || ''}>{variableLabel || (isZh ? '全球均值' : 'Global mean')}</span>
         <strong data-rail-value={Number.isFinite(currentValue) ? currentValue : ''}>{formatValue(currentValue)} <small>{units}</small></strong>
         <span className="mars-observation-rail__label" title={pointSide ? coordinate : (isZh ? 'MERRA-2 · 面积加权全球均值' : 'MERRA-2 · area-weighted global mean')}>

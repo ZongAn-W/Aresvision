@@ -123,7 +123,7 @@ def test_chunked_spatial_and_batch_metrics_match_full_array():
             assert [row[key] for row in actual[group]] == pytest.approx([row[key] for row in expected[group]], rel=1e-12)
 
 
-@pytest.mark.parametrize("shape", [(1, 3, 1, 2, 2), (1, 24, 2, 2, 2)])
+@pytest.mark.parametrize("shape", [(1, 0, 1, 2, 2), (1, 24, 2, 2, 2), (1, 241, 1, 2, 2)])
 def test_threehour_metrics_reject_wrong_horizon_or_target_channels(shape):
     with pytest.raises(EarthArtifactError):
         compute_earth_metrics(np.zeros(shape), np.zeros(shape), dataset_id=DATASET_ID)

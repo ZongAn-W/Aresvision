@@ -8,7 +8,7 @@ import { fmtNum } from '../../utils/fmt';
 import { useSettings } from '../../contexts/SettingsContext';
 import { buildTrainedModelParameterItems } from './trainedModelSelection';
 import { buildCompareModelSummary, getCompareSelectionState } from './CompareTrainingModels/compareTrainingModelsData';
-import { PREDICT_MODEL_MODE_COMPARE, PREDICT_MODEL_MODE_EARTH, PREDICT_MODEL_MODE_TRAINED } from './predictModelModes';
+import { PREDICT_MODEL_MODE_COMPARE, PREDICT_MODEL_MODE_TRAINED } from './predictModelModes';
 import { clampPredictionHorizon } from './predictionHorizon';
 import { useTrainingTags } from '../../components/TrainingTags/useTrainingTags';
 import { TagChips, TagFilter } from '../../components/TrainingTags/TagControls';
@@ -25,37 +25,6 @@ function SectionTitle({ title, subtitle, accent = C.ice }) {
           {subtitle}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function OptionChips({ items, activeValue, onChange, disabled = false }) {
-  return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      {items.map((item) => {
-        const active = activeValue === item.value;
-        return (
-          <button
-            key={item.value}
-            onClick={() => !disabled && onChange(item.value)}
-            disabled={disabled}
-            style={{
-              padding: '9px 14px',
-              borderRadius: 999,
-              border: `1px solid ${active ? item.borderColor || C.mars : C.border}`,
-              background: active ? (item.background || 'rgba(199,91,57,0.12)') : C.bgMuted,
-              color: active ? (item.color || C.mars) : C.ice60,
-              fontSize: 'calc(12px * var(--font-scale, 1))',
-              fontWeight: active ? 700 : 600,
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              opacity: disabled ? 0.72 : 1,
-              transition: 'all 0.36s ease',
-            }}
-          >
-            {item.label}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -265,7 +234,6 @@ function TrainedModelDropdown({
 
 function ModelSourceControl({
   modelMode,
-  setModelMode,
   trainingModelOptions,
   selectedTrainingTaskId,
   setSelectedTrainingTaskId,
@@ -308,42 +276,15 @@ function ModelSourceControl({
   const selectedCompareOptions = trainingModelOptions.filter(option => selectedCompareTrainingTaskIds.includes(option.id));
   const hiddenSelectedCount = selectedCompareOptions.filter(option => !filteredCompareOptions.some(visible => visible.id === option.id)).length;
   const compareSelection = getCompareSelectionState(selectedCompareTrainingTaskIds);
-  const modeItems = [
-    {
-      value: PREDICT_MODEL_MODE_TRAINED,
-      label: isZh ? '单训练模型分析' : 'Single trained model',
-      borderColor: C.blue,
-      background: 'rgba(74,158,255,0.12)',
-      color: C.blue,
-    },
-    {
-      value: PREDICT_MODEL_MODE_COMPARE,
-      label: isZh ? '多训练模型对比' : 'Compare trained models',
-      borderColor: C.green,
-      background: 'rgba(74,207,172,0.12)',
-      color: C.green,
-    },
-    {
-      // 地球历史预测：日期起点 + DU，独立于火星 MY/Ls 分析。
-      value: PREDICT_MODEL_MODE_EARTH,
-      label: isZh ? '地球历史预测' : 'Earth forecast',
-      borderColor: C.orange ?? C.mars,
-      background: 'rgba(241,154,120,0.12)',
-      color: C.orange ?? C.mars,
-    },
-  ];
+
 
   return (
     <GlowCard style={{ padding: 20 }}>
       <SectionTitle
-        title={isZh ? '模型来源' : 'Model source'}
+        title={isZh ? '模型选择' : 'Models'}
         subtitle={
           modelMode === PREDICT_MODEL_MODE_COMPARE
             ? (isZh ? '选择多个已完成训练任务，比较完整测试集表现。' : 'Compare completed training tasks across the full test set.')
-            : modelMode === PREDICT_MODEL_MODE_EARTH
-            ? (isZh
-                ? '选择已完成的地球任务与历史预测起点，查看未来 3 天逐日 TO3 场（DU）。'
-                : 'Pick a completed Earth task and a historical forecast origin to view 3 daily TO3 fields in DU.')
             : modelMode === PREDICT_MODEL_MODE_TRAINED
             ? (isZh ? '使用训练页面已完成任务的模型权重进行预测。' : 'Use weights produced by a completed training task.')
             : ''
@@ -351,12 +292,6 @@ function ModelSourceControl({
         accent={modelMode === PREDICT_MODEL_MODE_COMPARE ? C.green : C.blue}
       />
 
-      <OptionChips
-        items={modeItems}
-        activeValue={modelMode}
-        onChange={setModelMode}
-        disabled={requestContextLocked}
-      />
       <TagFilter tags={tagState.tags} {...tagFilter} onChange={setTagFilter} isZh={isZh} disabled={tagState.loading || requestContextLocked} />
       {tagState.error && <div role="alert" className="training-tag-toolbar" style={{ color: C.mars }}>
         {tagState.error}<button className="training-tag-button" onClick={() => tagState.refresh().catch(() => {})}>{isZh ? '重试标签' : 'Retry tags'}</button>
@@ -565,7 +500,7 @@ function ModelSourceControl({
 
           <div style={{ color: compareSelection.canCompare ? C.ice50 : C.mars, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.55 }}>
             {compareSelection.canCompare
-              ? (isZh ? '点击“开始对比”后将基于完整测试集计算指标。' : 'Start comparison to compute full test-set metrics.')
+              ? (isZh ? '点击“开始对比”查看完整测试集指标。' : 'Start comparison to view full test-set metrics.')
               : (isZh ? '至少选择 2 个模型才允许开始对比。' : 'Select at least 2 models to start comparison.')}
           </div>
         </div>
@@ -609,12 +544,12 @@ function ModelHyperparams({ t, isZh }) {
 }
 
 export default function PredictSidebar({
+  planet = 'mars',
   isLight,
   loading,
   requestContextLocked = false,
   error,
   modelMode,
-  setModelMode,
   trainingModelOptions = [],
   selectedTrainingTaskId,
   setSelectedTrainingTaskId,
@@ -646,7 +581,6 @@ export default function PredictSidebar({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <ModelSourceControl
         modelMode={modelMode}
-        setModelMode={setModelMode}
         trainingModelOptions={trainingModelOptions}
         selectedTrainingTaskId={selectedTrainingTaskId}
         setSelectedTrainingTaskId={setSelectedTrainingTaskId}
@@ -659,10 +593,10 @@ export default function PredictSidebar({
         isZh={isZh}
       />
 
-      <GlowCard style={{ padding: 20 }}>
+      {planet !== 'earth' || isCompareMode ? <GlowCard style={{ padding: 20 }}>
         <SectionTitle
           title={t('predict.sidebar.predictionControl')}
-          subtitle={isCompareMode
+          subtitle={planet === 'earth' ? (isZh ? '完整测试集 · 24 步 / 72 小时 · DU' : 'Full test set · 24 steps / 72 hours · DU') : isCompareMode
             ? (isZh ? '选择对比使用的测试集预测步长。' : 'Choose the test-set horizon used for comparison.')
             : (isZh ? '选择预测步长并发起本次推演。' : 'Choose the prediction horizon and run the next inference.')}
           accent={isCompareMode ? C.green : C.mars}
@@ -678,6 +612,7 @@ export default function PredictSidebar({
             max={predictionHorizonLimit}
             step="1"
             value={predStep}
+            readOnly={planet === 'earth'}
             disabled={requestContextLocked || predictionHorizonLimit == null}
             aria-label={t('predict.horizon')}
             onChange={(event) => {
@@ -727,9 +662,9 @@ export default function PredictSidebar({
             {error}
           </div>
         ) : null}
-      </GlowCard>
+      </GlowCard> : null}
 
-      {!isCompareMode ? (
+      {!isCompareMode && planet !== 'earth' ? (
       <GlowCard style={{ padding: 20 }}>
         <SectionTitle
           title={t('predict.sidebar.parameters')}

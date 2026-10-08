@@ -68,6 +68,7 @@ from routers import datasets as datasets_router_module
 from routers import earth_overview as earth_overview_router_module
 from routers import earth_analysis as earth_analysis_router_module
 from routers import earth_predict as earth_predict_router_module
+from routers import research_export as research_export_router_module
 
 # ─── 日志配置 ───
 logging.basicConfig(
@@ -305,12 +306,11 @@ async def lifespan(app: FastAPI):
     # 同步处理器通过它把 Copilot 协程调度回事件循环（AI 解读端点使用）
     app.state.event_loop = asyncio.get_running_loop()
 
-    # 后台预热已注册的 Earth 发布：注册表构造不读文件，首次查询才会校验
-    # manifest 与 NetCDF 的 SHA-256（全球 v2 包约 29 MB，约半秒）。
-    # 放在后台线程里，既不阻塞启动，也让用户第一次切到地球时不必等校验。
+    # Verify the active Earth release in the background; retired daily packages
+    # are never warmed or used as a fallback.
     async def _prewarm_earth_release() -> None:
         registry = app.state.dataset_registry
-        for dataset_id in ("earth_merra2_daily_v2", "earth_merra2_daily_v1"):
+        for dataset_id in (app.state.default_earth_dataset_id,):
             try:
                 descriptor = await asyncio.to_thread(registry.get_dataset, dataset_id)
             except Exception:  # pragma: no cover - 预热失败只记录，不影响服务
@@ -427,6 +427,7 @@ app.include_router(datasets_router_module.router,         prefix=API_PREFIX)
 app.include_router(earth_overview_router_module.router,   prefix=API_PREFIX)
 app.include_router(earth_analysis_router_module.router,   prefix=API_PREFIX)
 app.include_router(earth_predict_router_module.router,    prefix=API_PREFIX)
+app.include_router(research_export_router_module.router,  prefix=API_PREFIX)
 
 
 # ─── 健康检查 ───

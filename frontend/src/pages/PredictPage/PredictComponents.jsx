@@ -16,7 +16,7 @@ export function fmtVal(v) {
 
 // ─── Canvas 场热力图（带坐标轴 + Colorbar） ───
 
-export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240 }) {
+export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240, colorRange }) {
   const canvasRef = useRef(null);
   const t = useT();
   const { settings } = useSettings();
@@ -68,7 +68,7 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240 }) {
     const nLon = field[0].length; // 72
 
     // 计算色阶范围
-    let dMin = minVal, dMax = maxVal;
+    let dMin = colorRange?.min ?? minVal, dMax = colorRange?.max ?? maxVal;
     let absMax = 0;
     if (colorMode === 'rdbu') {
       for (let li = 0; li < nLat; li++)
@@ -188,7 +188,7 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240 }) {
     ctx.fillText(colorMode === 'rdbu' ? ozoneDeltaLabel(ozoneUnit) : ozoneLabel(ozoneUnit), 0, 0);
     ctx.restore();
 
-  }, [fieldData, colorMode, h, colormapName, ozoneUnit, theme, fontScale]);
+  }, [fieldData, colorMode, h, colormapName, ozoneUnit, theme, fontScale, colorRange?.min, colorRange?.max]);
 
   return (
     <div style={isLight ? { borderRadius: 10, overflow: 'hidden', background: 'transparent' } : {}}>

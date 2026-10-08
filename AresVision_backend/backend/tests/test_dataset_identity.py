@@ -23,7 +23,7 @@ from services.dataset_identity import (  # noqa: E402
     (None, {"training_dataset": "mcd_overview"}, "mcd_overview"),
     ("mcd_overview", {}, "mcd_overview"),
     (" MCD_OVERVIEW ", {"training_dataset": "mcd_overview"}, "mcd_overview"),
-    ("earth_merra2_daily_v1", {}, "earth_merra2_daily_v1"),
+    ("earth_merra2_3hourly_v1", {}, "earth_merra2_3hourly_v1"),
 ])
 def test_resolve_dataset_id(top, hypers, expected):
     assert resolve_dataset_id(top, hypers) == expected

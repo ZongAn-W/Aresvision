@@ -162,6 +162,11 @@ def normalize_earth_3hourly_feed(feed: Any) -> dict[str, Any]:
 
     for key, value in FEED.items():
         actual = feed.get(key)
+        if key in ('window', 'horizon'):
+            values = _normalize_positive_ints(actual, f'{EARTH_3HOURLY_FEED_KEY}.{key}')
+            if len(values) != len(set(values)) or any(v > 240 for v in values):
+                raise DatasetCapabilityError(f'{key} must contain unique integers between 1 and 240')
+            continue
         if not exact(actual, value):
             raise DatasetCapabilityError(
                 f"MODEL_SPEC.datasets.{EARTH_3HOURLY_FEED_KEY}.{key} must equal {value!r}"

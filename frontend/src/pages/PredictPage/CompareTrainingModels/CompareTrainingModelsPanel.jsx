@@ -13,6 +13,10 @@ import {
   sortCompareItems,
 } from './compareTrainingModelsData';
 import { getMetricAggregationLabel, getSplitLabel } from '../predictionMetricMeta';
+import ResearchExportButton from '../ResearchExportButton';
+import { useSettings } from '../../../contexts/SettingsContext';
+import { ozoneLabel, convertOzone } from '../../../utils/units';
+import { convertCompareMetrics } from '../researchExportModel';
 
 const GOOD_METRICS = new Set(['r2', 'ssim']);
 
@@ -27,10 +31,10 @@ function withAlpha(color, alpha) {
   return color;
 }
 
-function MetricTabs({ activeMetric, setActiveMetric }) {
+function MetricTabs({ activeMetric, setActiveMetric, metrics = METRIC_META }) {
   return (
     <div style={{ display: 'flex', gap: 6, padding: 4, borderRadius: 14, background: C.bgMuted, border: `1px solid ${C.border}`, flexWrap: 'wrap' }}>
-      {METRIC_META.map((metric) => {
+      {metrics.map((metric) => {
         const active = activeMetric === metric.key;
         return (
           <button
@@ -89,16 +93,15 @@ function EmptyState({ isZh, selectedCount }) {
   );
 }
 
-function SummaryTable({ items, precision, isZh }) {
+function SummaryTable({ items, precision, isZh, unit, metrics, planet }) {
   const [sortMetric, setSortMetric] = useState('rmse');
   const [direction, setDirection] = useState('asc');
   const sorted = useMemo(() => sortCompareItems(items, { metric: sortMetric, direction }), [direction, items, sortMetric]);
   const columns = [
     { key: 'model', label: isZh ? '模型名' : 'Model' },
-    { key: 'rmse', label: 'RMSE' },
-    { key: 'mae', label: 'MAE' },
-    { key: 'ssim', label: 'SSIM' },
-    { key: 'r2', label: 'R²' },
+    { key: 'rmse', label: `RMSE (${unit})` },
+    { key: 'mae', label: `MAE (${unit})` },
+    ...metrics.filter(metric => ['ssim', 'r2'].includes(metric.key)).map(metric => ({ key: metric.key, label: metric.name })),
     { key: 'architecture', label: isZh ? '架构' : 'Architecture' },
     { key: 'channels', label: isZh ? '输入通道' : 'Channels' },
     { key: 'window', label: 'Window' },
@@ -124,12 +127,12 @@ function SummaryTable({ items, precision, isZh }) {
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
             {isZh
-              ? '整体指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；默认按 RMSE 升序，支持切换 RMSE / MAE / SSIM / R² 排序。'
-              : 'Overall metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; default sorting is RMSE ascending, with RMSE, MAE, SSIM, and R² available.'}
+              ? '整体指标使用完整测试集；默认按 RMSE 升序，支持按已提供的指标排序。'
+              : 'Overall metrics summarize the full test set. Sort by RMSE ascending or another available metric.'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {METRIC_META.map((metric) => (
+          {metrics.map((metric) => (
             <button
               key={metric.key}
               type="button"
@@ -184,13 +187,13 @@ function SummaryTable({ items, precision, isZh }) {
                       </div>
                     )}
                   </td>
-                  {['rmse', 'mae', 'ssim', 'r2'].map((metric) => (
+                  {metrics.map(({ key: metric }) => (
                     <td key={metric} style={{ padding: '12px', color: GOOD_METRICS.has(metric) ? C.green : C.mars, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
                       {overall[metric] == null ? '--' : fmtNum(overall[metric], precision)}
                     </td>
                   ))}
                   <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700 }}>{item.architecture || '--'}</td>
-                  <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700 }}>{(item.selected_channels || []).join(' / ') || 'O3 only'}</td>
+                  <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700 }}>{(item.selected_channels || []).join(' / ') || (planet === 'earth' ? 'TO3' : 'O3 only')}</td>
                   <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{hypers.window ?? '--'}</td>
                   <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{hypers.horizon ?? '--'}</td>
                   <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{normalizeCompareDataSource(hypers._effective_data_source || hypers._data_source)}</td>
@@ -204,7 +207,7 @@ function SummaryTable({ items, precision, isZh }) {
   );
 }
 
-function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor }) {
+function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor, unit, metrics }) {
   const [activeMetric, setActiveMetric] = useState('rmse');
   const metricMeta = METRIC_META.find((metric) => metric.key === activeMetric) || METRIC_META[0];
   const sorted = useMemo(() => sortCompareItems(items, { metric: activeMetric }), [activeMetric, items]);
@@ -218,10 +221,10 @@ function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor }) {
             {isZh ? '多模型指标柱状图' : 'Metric comparison'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
-            {isZh ? '整体指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；切换指标查看模型间差距，RMSE/MAE 越低越好，SSIM/R² 越高越好。' : 'Overall metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; switch metrics to inspect gaps. Lower RMSE/MAE is better and higher SSIM/R² is better.'}
+            {isZh ? '整体指标使用完整测试集；切换已提供的指标查看模型差距。RMSE/MAE 越低越好，SSIM/R² 越高越好。' : 'Overall metrics summarize the full test set; switch available metrics to inspect gaps. Lower RMSE/MAE is better and higher SSIM/R² is better.'}
           </div>
         </div>
-        <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} />
+        <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} metrics={metrics} />
       </div>
 
       <Plot
@@ -246,7 +249,7 @@ function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor }) {
           paper_bgcolor: 'rgba(0,0,0,0)',
           plot_bgcolor: 'rgba(0,0,0,0)',
           font: { color: plotTextColor, family: 'var(--font-body)' },
-          xaxis: { title: metricMeta.name, gridcolor: plotGridColor, zerolinecolor: plotGridColor },
+          xaxis: { title: metricMeta.name + (['rmse', 'mae'].includes(activeMetric) ? ` (${unit})` : ''), gridcolor: plotGridColor, zerolinecolor: plotGridColor },
           yaxis: { type: 'category', automargin: true, autorange: 'reversed' },
           showlegend: false,
         }}
@@ -257,7 +260,7 @@ function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor }) {
   );
 }
 
-function ParameterMatrix({ items, isZh }) {
+function ParameterMatrix({ items, isZh, planet }) {
   const rows = useMemo(() => buildCompareParameterRows(items), [items]);
   const columns = [
     { key: 'modelName', label: isZh ? '模型名' : 'Model' },
@@ -265,7 +268,7 @@ function ParameterMatrix({ items, isZh }) {
     { key: 'modelSource', label: isZh ? '模型来源' : 'Source' },
     { key: 'architecture', label: isZh ? '架构' : 'Architecture' },
     { key: 'selectedChannels', label: isZh ? '输入通道' : 'Channels' },
-    { key: 'useSphere', label: 'SPHERE' },
+    ...(planet === 'earth' ? [] : [{ key: 'useSphere', label: 'SPHERE' }]),
     { key: 'window', label: 'Window' },
     { key: 'horizon', label: 'Horizon' },
     { key: 'epochs', label: isZh ? '轮次' : 'Epochs' },
@@ -312,7 +315,7 @@ function ParameterMatrix({ items, isZh }) {
   );
 }
 
-function StepCurves({ items, isZh, plotTextColor, plotGridColor }) {
+function StepCurves({ items, isZh, plotTextColor, plotGridColor, unit, metrics, planet }) {
   const [activeMetric, setActiveMetric] = useState('rmse');
   const metricMeta = METRIC_META.find((metric) => metric.key === activeMetric) || METRIC_META[0];
   const traces = useMemo(() => buildStepCurveTraces(items, activeMetric), [activeMetric, items]);
@@ -322,23 +325,26 @@ function StepCurves({ items, isZh, plotTextColor, plotGridColor }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div>
           <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-            {isZh ? 'Step 1 / 2 / 3 逐步性能' : 'Step-by-step performance'}
+            {isZh ? '逐步性能' : 'Step-by-step performance'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
-            {isZh ? '逐步指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；查看预测步长增加时各模型如何变化。' : 'Per-step metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; inspect how each model changes as the forecast step increases.'}
+            {isZh ? '逐步指标使用完整测试集，查看提前量增加时各模型如何变化。' : 'Per-step metrics summarize the full test set; inspect how each model changes as the lead increases.'}
           </div>
         </div>
-        <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} />
+        <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} metrics={metrics} />
       </div>
 
+      <ResearchExportButton sources={items.map((item) => item.metrics?.export_ref)}
+        sourceLabels={items.map((item) => item.model_name || `Task #${item.task_id}`)} kind="step_curves" metric={activeMetric} />
+
       <Plot
-        data={traces.map((trace) => ({
+        data={traces.map((trace, index) => ({
           type: 'scatter',
           mode: 'lines+markers',
-          x: trace.x.map((step) => `Step ${step}`),
+          x: trace.x.map((step) => planet === 'earth' ? step * 3 : step),
           y: trace.y,
           name: trace.name,
-          line: { width: 2 },
+          line: { width: 2, dash: ['solid', 'dash', 'dashdot', 'dot'][index % 4] },
           marker: { size: 7 },
           hovertemplate: `<b>${trace.name}</b><br>%{x}<br>${metricMeta.name}: <b>%{y:.4f}</b><extra></extra>`,
         }))}
@@ -349,8 +355,8 @@ function StepCurves({ items, isZh, plotTextColor, plotGridColor }) {
           paper_bgcolor: 'rgba(0,0,0,0)',
           plot_bgcolor: 'rgba(0,0,0,0)',
           font: { color: plotTextColor, family: 'var(--font-body)' },
-          xaxis: { title: isZh ? '预测步' : 'Forecast step', gridcolor: plotGridColor },
-          yaxis: { title: metricMeta.name, gridcolor: plotGridColor, zerolinecolor: plotGridColor },
+          xaxis: { title: planet === 'earth' ? (isZh ? '提前量（小时）' : 'Lead (hours)') : (isZh ? '预测步' : 'Forecast step'), gridcolor: plotGridColor },
+          yaxis: { title: metricMeta.name + (['rmse', 'mae'].includes(activeMetric) ? ` (${unit})` : ''), gridcolor: plotGridColor, zerolinecolor: plotGridColor },
           legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 10 } },
         }}
         config={{ displayModeBar: false, responsive: true }}
@@ -407,7 +413,7 @@ function LazyDiagnosticCard({ title, description, buttonText, loading, data, onL
   );
 }
 
-function ErrorDistributionCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor }) {
+function ErrorDistributionCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor, unit }) {
   const traces = useMemo(() => buildErrorHistogramTraces(data?.items || []), [data]);
 
   return (
@@ -437,7 +443,7 @@ function ErrorDistributionCompare({ data, loading, onLoad, isZh, plotTextColor, 
           paper_bgcolor: 'rgba(0,0,0,0)',
           plot_bgcolor: 'rgba(0,0,0,0)',
           font: { color: plotTextColor, family: 'var(--font-body)' },
-          xaxis: { title: isZh ? '预测误差' : 'Prediction error', gridcolor: plotGridColor, zerolinecolor: plotGridColor },
+          xaxis: { title: `${isZh ? '预测减参考' : 'Prediction - reference'} (${unit})`, gridcolor: plotGridColor, zerolinecolor: plotGridColor },
           yaxis: { title: isZh ? '数量' : 'Count', gridcolor: plotGridColor },
           legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 10 } },
         }}
@@ -454,7 +460,7 @@ function PfiCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor 
   return (
     <LazyDiagnosticCard
       title={isZh ? 'PFI 特征重要性矩阵' : 'PFI importance matrix'}
-      description={isZh ? '行是模型，列是特征，颜色和数值表示完整测试集置换重要性。' : 'Rows are models and columns are features; color and value show full test-set permutation importance.'}
+      description={isZh ? '行是模型，列是特征；ΔR² 来自各模型最多 40 个抽样测试窗口，保留负值。' : 'Rows are models and columns are features; ΔR² uses up to 40 sampled test windows per model, retaining negative values.'}
       buttonText={isZh ? '加载 PFI 对比' : 'Load PFI'}
       loading={loading}
       data={data}
@@ -501,6 +507,7 @@ function PfiCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor 
 }
 
 export default function CompareTrainingModelsPanel({
+  planet = 'mars',
   data,
   loading,
   errorDistributionData,
@@ -515,44 +522,57 @@ export default function CompareTrainingModelsPanel({
   plotTextColor,
   plotGridColor,
 }) {
-  const items = Array.isArray(data?.items) ? data.items : [];
+  const { settings } = useSettings();
+  const earth = planet === 'earth';
+  const unit = earth ? 'DU' : ozoneLabel(settings.units.ozone);
+  const rawItems = Array.isArray(data?.items) ? data.items : [];
+  const items = earth ? rawItems : convertCompareMetrics(rawItems, settings.units.ozone);
+  const metrics = METRIC_META.filter(metric => items.some(item => Number.isFinite(item.metrics?.overall?.[metric.key])));
+  const convertedErrors = errorDistributionData ? { ...errorDistributionData, items: errorDistributionData.items?.map((item) => ({
+    ...item, distribution: { ...item.distribution, hist_errors: { ...item.distribution?.hist_errors,
+      bin_edges: item.distribution?.hist_errors?.bin_edges?.map((v) => convertOzone(v, settings.units.ozone)),
+    } },
+  })) } : null;
 
   if (loading) return <LoadingState isZh={isZh} />;
   if (!items.length) return <EmptyState isZh={isZh} selectedCount={selectedCount} />;
 
   return (
     <div style={{ display: 'grid', gap: 20 }}>
-      <SummaryTable items={items} precision={precision} isZh={isZh} />
-      <MetricBars
+      <SummaryTable items={items} precision={precision} isZh={isZh} unit={unit} metrics={metrics} planet={planet} />
+      <MetricBars metrics={metrics}
+        unit={unit}
         items={items}
         precision={precision}
         isZh={isZh}
         plotTextColor={plotTextColor}
         plotGridColor={plotGridColor}
       />
-      <StepCurves
+      <StepCurves metrics={metrics} planet={planet}
+        unit={unit}
         items={items}
         isZh={isZh}
         plotTextColor={plotTextColor}
         plotGridColor={plotGridColor}
       />
-      <ErrorDistributionCompare
-        data={errorDistributionData}
+      {!earth ? <ErrorDistributionCompare
+        unit={unit}
+        data={convertedErrors}
         loading={errorDistributionLoading}
         onLoad={onLoadErrorDistribution}
         isZh={isZh}
         plotTextColor={plotTextColor}
         plotGridColor={plotGridColor}
-      />
-      <PfiCompare
+      /> : null}
+      {!earth ? <PfiCompare
         data={pfiData}
         loading={pfiLoading}
         onLoad={onLoadPfi}
         isZh={isZh}
         plotTextColor={plotTextColor}
         plotGridColor={plotGridColor}
-      />
-      <ParameterMatrix items={items} isZh={isZh} />
+      /> : null}
+      <ParameterMatrix items={items} isZh={isZh} planet={planet} />
     </div>
   );
 }

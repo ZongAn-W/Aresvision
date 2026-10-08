@@ -94,8 +94,10 @@ test('result panel does not create a second poller, websocket or log request', (
 });
 
 test('prediction entry is only offered when the backend reports usable weights', () => {
-  assert.match(resultSource, /const modelAvailable = canUseTaskForPrediction\(activeTask\)/);
-  assert.match(resultSource, /modelAvailable \? \([\s\S]*?copy\.useForPrediction/);
+  assert.match(resultSource, /const predictionAvailable = canUseTaskForPrediction\(activeTask\)/);
+  assert.match(resultSource, /predictionAvailable \? \([\s\S]*?copy\.useForPrediction/);
+  assert.match(resultSource, /const retiredDataset = isRetiredEarthTask\(activeTask\)/);
+  assert.match(resultSource, /disabled=\{retiredDataset\}/);
   assert.match(resultSource, /copy\.modelUnavailableTitle/);
   assert.match(resultSource, /copy\.notCompletedReason/);
 });
@@ -108,7 +110,7 @@ test('prediction handoff keeps using the existing session handoff contract', () 
 });
 
 test('comparison navigation explicitly requests the compare mode', () => {
-  assert.match(pageSource, /navigateToPredict\(\{ mode: PREDICT_MODEL_MODE_COMPARE \}\)/);
+  assert.match(pageSource, /navigateToPredict\(\{ mode: isEarthTrainingDataset\(task\.dataset_id\)\s*\? PREDICT_MODEL_MODE_EARTH_COMPARE : PREDICT_MODEL_MODE_COMPARE \}\)/);
   assert.match(pageSource, /canUseTaskForPrediction\(task\)/);
   assert.match(modesSource, /export function readPredictModeFromHash/);
   assert.match(modesSource, /export function buildPredictHash/);

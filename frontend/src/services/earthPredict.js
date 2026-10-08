@@ -90,3 +90,9 @@ export function runEarthPrediction({ trainingTaskId, forecastOrigin }, { signal 
     signal,
   });
 }
+
+export function compareEarthModels(taskIds, { signal } = {}) {
+  return request(`${EARTH_PREDICT_PATH}/training-models/compare`, {
+    method: 'POST', body: { task_ids: taskIds }, signal,
+  });
+}
