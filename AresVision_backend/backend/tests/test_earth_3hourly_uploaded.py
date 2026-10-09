@@ -408,7 +408,8 @@ def test_task_creation_and_restart_pin_source_and_custom_parameters(service_envi
             user_model_service=user_models)
     task = asyncio.run(scenario())
     assert task.status == "queued" and task.uploaded_model_id == package.id
-    queued = service._queue_specs[task.id]["earth_training_spec"]
+    plan = asyncio.run(service._prepare_training_execution(task, dataset_registry=registry))
+    queued = plan["earth_training_spec"]
     assert queued["uploaded_model"]["custom_model_params"] == {"bias": False}
     monkeypatch.setattr(service, "_default_dataset_registry", lambda: registry)
     restored = service._restore_3hourly_training_spec(task)
@@ -427,7 +428,8 @@ def test_reserved_custom_parameters_are_rejected_before_a_task(service_environme
         asyncio.run(service.start_training(user_id=1, custom_model_name="rejected upload", model_script="ignored.py",
             model_source="uploaded", uploaded_model_id=package.id, dataset_id=DATASET_ID, dataset_registry=registry,
             hyperparameters={"custom_model_params": {"data_dir": "injected"}}, user_model_service=Packages()))
-    assert error.value.code == "invalid_earth_training_parameters" and service._queue_specs == {}
+    assert error.value.code == "invalid_earth_training_parameters"
+    assert asyncio.run(service.get_all_tasks()) == []
 
 
 def test_actual_custom_parameters_must_pass_isolated_training_probe(service_environment, tmp_path):
@@ -445,7 +447,6 @@ def test_actual_custom_parameters_must_pass_isolated_training_probe(service_envi
             model_source="uploaded", uploaded_model_id=package.id, dataset_id=DATASET_ID, dataset_registry=registry,
             hyperparameters={"custom_model_params": {"bias": False}}, user_model_service=Packages()))
     assert error.value.code == "uploaded_model_earth_3hourly_dry_run_failed"
-    assert service._queue_specs == {}
     assert asyncio.run(service.get_all_tasks()) == []
 
 
@@ -552,7 +553,8 @@ def test_parent_completion_checks_uploaded_identity_and_strict_reload(
         dataset_id=DATASET_ID, dataset_registry=uploaded_smoke.registry,
         hyperparameters={**{name + "_ratio": 1/3 for name in ("train", "validation", "test")},
                              "epochs": 1, "selected_channels": ["U10M"]}, user_model_service=Packages()))
-    spec = service._queue_specs[task.id]["earth_training_spec"]
+    plan = asyncio.run(service._prepare_training_execution(task, dataset_registry=uploaded_smoke.registry))
+    spec = plan["earth_training_spec"]
     output = tmp_path / "new-parent-checkpoint.pth"
     def popen(*args, **kwargs):
         payload = copy.deepcopy(load_earth_training_artifact(uploaded_smoke.output).payload)

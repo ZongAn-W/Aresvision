@@ -44,6 +44,8 @@ Earth 结果页默认显示完整测试集六项指标，并独立显示验证�
 
 Earth 服务重启恢复要求严格校验并重建 checkpoint，任务指标恢复自产物；新任务的预期指标版本由服务器保存，不能用日志标记绕过完整指标门禁。下文日志解析恢复说明仅适用于原有 Mars 路径。
 
+排队任务的正常执行与重启恢复统一从持久化记录准备，不再依赖内存启动配方。Mars 迁移任务在启动前重新解析任务/上传权重来源并复核状态、文件与当前权限；管理员权限被撤销、来源被删除或失效时，任务会在启动子进程前失败，失败原因写入任务 `metrics`，后续任务继续按 FIFO 调度。Mars 上传模型还核对固定包版本、路径和源码摘要，Earth 继续使用冻结划分与嵌入源码。具体恢复约定见[训练队列](specs/2026-10-04-training-queue-design.md)。
+
 矩阵支持名称、状态和标签筛选，适用列按数值或时间排序并把缺失值放在末尾。名称单元格可就地编辑，Enter 保存、Esc 取消，也有保存/取消按钮；沿用 255 字符、去首尾空格和账号内重名校验。排队、运行、完成、失败和取消记录都允许改显示名称，上传模型包名称仍单独显示。标签单元格复用账号私有标签选择器，支持搜索、多选、新建、批量增删和标签管理。标签编辑面板复用 MUI Popper，通过 portal 挂到 `body` 并使用视口固定定位，脱离固定单元格的层叠上下文和表格滚动裁切；靠近边缘时翻转或平移，尺寸随视口约束，搜索结果、新建标签或错误信息改变尺寸后重新定位。标签选项独立滚动，取消 / 保存操作区保持可见。Esc 取消并返回编辑按钮焦点，点击外部或切换离开矩阵视图会关闭浮层。行操作可打开训练监视或复制配置，保存后由同一任务刷新同步目录和监视视图。
 
 矩阵浏览器回归使用[隔离夹具脚本](../scripts/audit/experiment-matrix/browser-check.js)，在已构建的前端服务上运行：从仓库根目录执行 `npx --yes --package @playwright/cli playwright-cli open http://127.0.0.1:5173/#/training --headed`，再执行 `npx --yes --package @playwright/cli playwright-cli run-code --filename scripts/audit/experiment-matrix/browser-check.js`。夹具拦截浏览器 API 与 WebSocket，以 36 行、18 列和 40 个标签检查宽屏、窄屏、短横屏、边缘定位、滚动、保存 / 取消和权限失败；不写数据库，不启动训练，保存断言仅验证前端请求契约与刷新。结束后执行 `npx --yes --package @playwright/cli playwright-cli close` 清理隔离浏览器会话。截图输出到忽略目录 `output/playwright/`。

@@ -215,7 +215,7 @@ def test_queued_task_completion_uses_strict_threehour_checkpoint(
             model_script="client-ignored.py", dataset_id=DATASET_ID, dataset_registry=registry,
             hyperparameters=smoke_checkpoint[3]["hyperparameters"],
         )
-        plan = service._queue_specs.pop(task.id)
+        plan = await service._prepare_training_execution(task, dataset_registry=registry)
         await service._run_training_subprocess(task.id, **plan)
         return await service.get_task(task.id)
 

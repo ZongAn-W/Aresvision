@@ -90,12 +90,13 @@ def test_start_queues_56_to_24_with_only_the_server_data_path(service_environmen
     assert hypers["training_dataset"] == EARTH_DATASET_3HOURLY_ID
     assert hypers["_earth_metrics_schema"] == "earth_training_metrics_3hourly_v2"
     assert "data_path" not in hypers
-    spec = service._queue_specs[task.id]["earth_training_spec"]
+    plan = asyncio.run(service._prepare_training_execution(task, dataset_registry=registry))
+    spec = plan["earth_training_spec"]
     assert spec["data_path"] == str(registry.data_path)
     assert spec["training_profile"]["frequency_hours"] == 3
     assert spec["training_profile"]["grid_shape"] == [240, 480]
     assert spec["dataset_binding"]["dataset_snapshot"] == task.dataset_snapshot
-    assert registry.lookups == [(EARTH_DATASET_3HOURLY_ID, "a" * 64)]
+    assert registry.lookups == [(EARTH_DATASET_3HOURLY_ID, "a" * 64)] * 2
 
 
 @pytest.mark.parametrize("source,upload_id,hypers", [
@@ -103,8 +104,8 @@ def test_start_queues_56_to_24_with_only_the_server_data_path(service_environmen
     ("official", None, {"model_source": "uploaded"}),
     ("unknown", None, {}),
 ])
-def test_unsupported_models_stop_before_package_database_or_user_code(monkeypatch, source, upload_id, hypers):
-    import services.training_service as module
+def test_unsupported_models_stop_before_package_database_or_user_code(service_environment, monkeypatch, source, upload_id, hypers):
+    module, _ = service_environment
 
     class ForbiddenRegistry:
         def build_training_binding(self, *_):
@@ -113,35 +114,37 @@ def test_unsupported_models_stop_before_package_database_or_user_code(monkeypatc
     def forbidden_session():
         pytest.fail("unsupported requests must not open a database session")
 
-    monkeypatch.setattr(module, "async_session_maker", forbidden_session)
     service = module.TrainingService()
-    with pytest.raises(DatasetRequestError) as error:
-        asyncio.run(service.start_training(
-            user_id=1, custom_model_name="rejected", model_script="demo3.py",
-            hyperparameters=hypers, model_source=source, uploaded_model_id=upload_id,
-            dataset_id=EARTH_DATASET_3HOURLY_ID, dataset_registry=ForbiddenRegistry(),
-        ))
+    with monkeypatch.context() as admission_patch:
+        admission_patch.setattr(module, "async_session_maker", forbidden_session)
+        with pytest.raises(DatasetRequestError) as error:
+            asyncio.run(service.start_training(
+                user_id=1, custom_model_name="rejected", model_script="demo3.py",
+                hyperparameters=hypers, model_source=source, uploaded_model_id=upload_id,
+                dataset_id=EARTH_DATASET_3HOURLY_ID, dataset_registry=ForbiddenRegistry(),
+            ))
     assert (error.value.status_code, error.value.code) == (409, "dataset_training_configuration_not_supported")
-    assert service._queue_specs == {}
+    assert asyncio.run(service.get_all_tasks()) == []
 
 
-def test_missing_new_package_does_not_open_database_or_queue(tmp_path, monkeypatch):
-    import services.training_service as module
+def test_missing_new_package_does_not_open_database_or_queue(service_environment, tmp_path, monkeypatch):
+    module, _ = service_environment
 
     def forbidden_session():
         pytest.fail("missing package requests must not open a database session")
 
-    monkeypatch.setattr(module, "async_session_maker", forbidden_session)
     registry = DatasetRegistry(tmp_path / "daily", earth_3hourly_package_dir=tmp_path / "new")
     service = module.TrainingService()
-    with pytest.raises(DatasetRequestError) as error:
-        asyncio.run(service.start_training(
-            user_id=1, custom_model_name="missing", model_script="demo3.py", hyperparameters={},
-            dataset_id=EARTH_DATASET_3HOURLY_ID, dataset_registry=registry,
-        ))
+    with monkeypatch.context() as admission_patch:
+        admission_patch.setattr(module, "async_session_maker", forbidden_session)
+        with pytest.raises(DatasetRequestError) as error:
+            asyncio.run(service.start_training(
+                user_id=1, custom_model_name="missing", model_script="demo3.py", hyperparameters={},
+                dataset_id=EARTH_DATASET_3HOURLY_ID, dataset_registry=registry,
+            ))
     assert (error.value.status_code, error.value.code) == (503, "dataset_unavailable")
     assert error.value.availability_reason == "package_missing"
-    assert service._queue_specs == {}
+    assert asyncio.run(service.get_all_tasks()) == []
 
 
 def test_default_registry_uses_the_independent_threehour_environment_path(tmp_path, monkeypatch):

@@ -250,7 +250,8 @@ def test_queue_restart_keeps_fixed_split_and_rejects_corruption(service_environm
     task = asyncio.run(service.start_training(user_id=1, custom_model_name="custom queue", model_script="ignored.py",
         hyperparameters={"train_ratio": .6, "validation_ratio": .25, "test_ratio": .15},
         dataset_id=DATASET_ID, dataset_registry=registry))
-    original = service._queue_specs[task.id]["earth_training_spec"]
+    plan = asyncio.run(service._prepare_training_execution(task, dataset_registry=registry))
+    original = plan["earth_training_spec"]
     monkeypatch.setattr(service, "_default_dataset_registry", lambda: registry)
     restored = service._restore_3hourly_training_spec(task)
     assert restored["task_split"] == original["task_split"]
@@ -412,7 +413,7 @@ def test_exit_zero_cannot_complete_after_frozen_task_metadata_is_lost(service_en
     async def scenario():
         task = await service.start_training(user_id=1, custom_model_name="split completion " + mutation,
             model_script="ignored.py", hyperparameters={}, dataset_id=DATASET_ID, dataset_registry=registry)
-        plan = service._queue_specs.pop(task.id)
+        plan = await service._prepare_training_execution(task, dataset_registry=registry)
         async with module.async_session_maker() as session:
             row = await session.get(module.ModelTrainingTask, task.id)
             raw = json.loads(row.hyperparameters)

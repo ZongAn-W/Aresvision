@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import hashlib
 import asyncio
 import logging
 import traceback
@@ -30,7 +31,7 @@ from config import (
     USER_UPLOADS_DIR,
 )
 from database.engine import async_session_maker
-from database.models import ModelTrainingTask, PredictionAnalysisCache, TrainingTaskTag
+from database.models import ModelTrainingTask, PredictionAnalysisCache, TrainingTaskTag, User
 from services.data_service import DataService
 from services.dataset_identity import (
     DatasetRequestError,
@@ -127,7 +128,6 @@ class TrainingService:
         self._scheduler_started = False
         self._scheduler_task: asyncio.Task | None = None
         self._queue_event: asyncio.Event | None = None
-        self._queue_specs: dict[int, dict[str, Any]] = {}
 
     async def start(self) -> None:
         if self._scheduler_started:
@@ -212,8 +212,6 @@ class TrainingService:
     async def _scheduler_loop(self) -> None:
         while self._scheduler_started:
             task_id = None
-            spec = None
-            recovered_task = None
             async with async_session_maker() as session:
                 result = await session.execute(
                     select(ModelTrainingTask)
@@ -223,11 +221,13 @@ class TrainingService:
                 )
                 task = result.scalars().first()
                 if task is not None:
-                    task.status = "running"
-                    task.start_time = datetime.now(timezone.utc)
-                    task.queue_position = None
-                    task_id = task.id
-                    spec = self._queue_specs.pop(task_id, None)
+                    claim = await session.execute(
+                        update(ModelTrainingTask)
+                        .where(ModelTrainingTask.id == task.id, ModelTrainingTask.status == "queued")
+                        .values(status="running", start_time=datetime.now(timezone.utc), queue_position=None)
+                    )
+                    if claim.rowcount:
+                        task_id = task.id
                     await session.commit()
                     await self._recalculate_queue_positions(session)
                     await session.commit()
@@ -238,49 +238,144 @@ class TrainingService:
                 except asyncio.TimeoutError:
                     pass
                 continue
-            if spec is None:
-                async with async_session_maker() as session:
-                    row = await session.get(ModelTrainingTask, task_id)
-                    recovered_task = row
-                    spec = {
-                        "script_name": row.model_script,
-                        "hyperparameters": json.loads(row.hyperparameters or "{}"),
-                        "log_file": Path(row.log_file_path),
-                        "output_path": Path(row.output_model_path),
-                        "env_overrides": {},
-                        "temp_data_root": None,
-                        "earth_training_spec": None,
-                    }
-            try:
-                if recovered_task is not None and getattr(recovered_task, "dataset_id", None) == EARTH_DATASET_3HOURLY_ID:
-                    # Rebuild the active release spec from the frozen task;
-                    # retired tasks are rejected before launching a subprocess.
-                    spec["earth_training_spec"] = await asyncio.to_thread(
-                        self._restore_3hourly_training_spec, recovered_task
-                    )
-                await self._run_training_subprocess(task_id, **spec)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("Queued training task %s failed", task_id)
-                async with async_session_maker() as session:
-                    row = await session.get(ModelTrainingTask, task_id)
-                    if row is not None and row.status == "running":
-                        row.status = "failed"
-                        row.end_time = datetime.now(timezone.utc)
-                        row.metrics = json.dumps({"error": str(exc)})
-                        await session.commit()
+            await self._execute_training_task(task_id)
+
+    async def _execute_training_task(
+        self, task_id: int, *, dataset_registry: DatasetRegistry | None = None,
+        training_weight_service: Any | None = None, user_model_service: Any | None = None,
+    ) -> None:
+        """Launch fresh and recovered tasks from the same persisted facts."""
+        try:
+            async with async_session_maker() as session:
+                task = await session.get(ModelTrainingTask, task_id)
+                if task is None or task.status != "running":
+                    return
+            spec = await self._prepare_training_execution(
+                task, dataset_registry=dataset_registry,
+                training_weight_service=training_weight_service, user_model_service=user_model_service,
+            )
+            await self._run_training_subprocess(task_id, **spec)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Training task %s could not be prepared for execution", task_id)
+            async with async_session_maker() as session:
+                row = await session.get(ModelTrainingTask, task_id)
+                if row is not None and row.status == "running":
+                    row.status = "failed"
+                    row.end_time = datetime.now(timezone.utc)
+                    row.metrics = json.dumps({
+                        "error_code": getattr(exc, "code", "training_execution_preparation_failed"),
+                        "error": str(exc),
+                    })
+                    await session.commit()
+
+    async def _prepare_training_execution(
+        self,
+        task: Any,
+        *,
+        dataset_registry: DatasetRegistry | None = None,
+        training_weight_service: Any | None = None,
+        user_model_service: Any | None = None,
+        is_admin: bool | None = None,
+    ) -> dict[str, Any]:
+        """Own runner selection, dependency checks and restart-safe launch details.
+
+        This also validates admission after the task id has been allocated. No
+        launch details are cached in memory: actual execution rechecks the saved
+        task and its dependencies, including current transfer-source permission.
+        """
+        try:
+            hyperparameters = json.loads(task.hyperparameters)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Training task hyperparameters are damaged") from exc
+        if not isinstance(hyperparameters, dict):
+            raise ValueError("Training task hyperparameters must be an object")
+        dataset_id = resolve_dataset_id(getattr(task, "dataset_id", None), hyperparameters)
+        require_active_dataset(dataset_id)
+        _normalize_training_data_source(hyperparameters.get("_data_source"))
+        earth = is_earth_dataset_id(dataset_id)
+        model_source = getattr(task, "model_source", None) or hyperparameters.get("model_source", "official")
+        if model_source not in ("official", "uploaded"):
+            raise ValueError("Training task model source is invalid")
+        if hyperparameters.get("model_source", model_source) != model_source:
+            raise ValueError("Training task model source does not match its saved parameters")
+        expected_script = EARTH_TRAINING_SCRIPT if earth else (
+            "__user_model_runner__" if model_source == "uploaded" else UNIFIED_TRAINING_SCRIPT
+        )
+        if task.model_script != expected_script:
+            raise ValueError("Training task runner does not match its dataset and model source")
+        runner_path = (
+            Path(__file__).parent.parent / "training_backbones" / "user_model_runner.py"
+            if expected_script == "__user_model_runner__" else MODELS_DIR.joinpath(expected_script)
+        )
+        if not runner_path.exists():
+            raise FileNotFoundError(f"Training runner {expected_script} is missing")
+        for name in ("log_file_path", "output_model_path"):
+            if not isinstance(getattr(task, name, None), str) or not getattr(task, name).strip():
+                raise ValueError(f"Training task {name} is missing")
+
+        earth_spec = None
+        env_overrides = {}
+        if earth:
+            earth_spec = await asyncio.to_thread(
+                self._restore_3hourly_training_spec, task, dataset_registry
+            )
+        else:
+            require_training_dataset(dataset_id)
+            if model_source == "uploaded":
+                if user_model_service is None:
+                    from services.user_model_service import UserModelService
+                    user_model_service = UserModelService(sessionmaker=async_session_maker)
+                package = await user_model_service.get_package_for_user(
+                    task.uploaded_model_id, task.user_id
+                )
+                if (package.validation_status != "valid"
+                        or package.version != task.uploaded_model_version
+                        or package.id != hyperparameters.get("_uploaded_model_id")
+                        or package.version != hyperparameters.get("_uploaded_model_version")):
+                    raise ValueError("Training task uploaded model no longer matches its frozen reference")
+                source_path = Path(package.storage_path)
+                if source_path != Path(hyperparameters.get("_uploaded_model_path") or ""):
+                    raise ValueError("Training task uploaded model path does not match its frozen reference")
+                source_hash = await asyncio.to_thread(
+                    lambda: hashlib.sha256(source_path.read_bytes()).hexdigest()
+                )
+                expected_hash = hyperparameters.get("_uploaded_model_content_hash", package.content_hash)
+                if source_hash != package.content_hash or source_hash != expected_hash:
+                    raise ValueError("Training task uploaded model source has changed")
+            if (hyperparameters.get("transfer_learning")
+                    and hyperparameters.get("transfer_source_type") == "upload"
+                    and training_weight_service is None):
+                from services.training_weight_service import TrainingWeightService
+                training_weight_service = TrainingWeightService(sessionmaker=async_session_maker)
+            env_overrides = await self._resolve_transfer_source(
+                user_id=task.user_id, hyperparameters=hyperparameters,
+                training_weight_service=training_weight_service, is_admin=is_admin,
+            )
+        return {
+            "script_name": expected_script,
+            "hyperparameters": hyperparameters,
+            "log_file": Path(task.log_file_path),
+            "output_path": Path(task.output_model_path),
+            "env_overrides": env_overrides,
+            "temp_data_root": None,
+            "earth_training_spec": earth_spec,
+        }
 
     async def cancel_training(self, task_id: int) -> bool:
         async with async_session_maker() as session:
             task = await session.get(ModelTrainingTask, task_id)
             if task is None or task.status != "queued":
                 return False
-            task.status = "cancelled"
-            task.end_time = datetime.now(timezone.utc)
-            task.queue_position = None
-            task.metrics = json.dumps({"note": "Cancelled while queued"})
-            self._queue_specs.pop(task_id, None)
+            cancelled = await session.execute(
+                update(ModelTrainingTask)
+                .where(ModelTrainingTask.id == task_id, ModelTrainingTask.status == "queued")
+                .values(status="cancelled", end_time=datetime.now(timezone.utc),
+                        queue_position=None, metrics=json.dumps({"note": "Cancelled while queued"}))
+            )
+            if not cancelled.rowcount:
+                return False
             await self._recalculate_queue_positions(session)
             await session.commit()
         self._wake_scheduler()
@@ -429,6 +524,7 @@ class TrainingService:
             preserved_keys.extend([
                 "_uploaded_model_id",
                 "_uploaded_model_version",
+                "_uploaded_model_content_hash",
                 "_uploaded_model_name",
                 "_uploaded_model_filename",
                 "_uploaded_model_path",
@@ -476,19 +572,13 @@ class TrainingService:
             payload_hypers["custom_model_params"] = dict(earth_reference.custom_model_params)
             if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
                 payload_hypers["_earth_uploaded_reference"] = earth_reference.checkpoint_reference()
-        if earth_training:
-            # Earth has no transfer source; the parameter contract already rejects it.
-            transfer_env_overrides = {}
-        else:
-            transfer_env_overrides = await self._resolve_transfer_source(
+        if not earth_training:
+            await self._resolve_transfer_source(
                 user_id=user_id,
                 is_admin=is_admin,
                 hyperparameters=payload_hypers,
                 training_weight_service=training_weight_service,
             )
-        # The internal spec is built after the task id exists; the CLI payload is
-        # never used to pass identity fields to the Earth subprocess.
-        earth_training_spec = None
 
         async with async_session_maker() as session:
             # Recheck in the same transaction that writes the task and its associations.
@@ -522,48 +612,20 @@ class TrainingService:
             task.output_model_path = str(output_path)
             await add_task_tag_links(session, [task_id], [tag.id for tag in tags])
 
-            env_overrides: dict[str, str] = dict(transfer_env_overrides)
-            temp_data_root: Path | None = None
-
-            if earth_training:
-                # Built only now: the spec carries the real task id and the
-                # server-generated binding, and travels through the environment
-                # rather than the command line. Only the documented Earth
-                # parameters are forwarded - internal service fields (``_``
-                # prefixed) must never reach the runner.
-                earth_training_spec = build_earth_training_spec(
-                    task_id=task_id,
-                    task_split=earth_task_split,
-                    dataset_binding=dataset_binding,
-                    hyperparameters={
-                        key: value
-                        for key, value in payload_hypers.items()
-                        if not key.startswith("_")
-                    },
-                    uploaded_model=(
-                        earth_reference.checkpoint_reference()
-                        if earth_reference is not None
-                        else None
-                    ),
+            # Validate through the same preparation used at actual execution.
+            # Only task facts are committed; no environment or plan survives
+            # solely in this process's memory.
+            await self._prepare_training_execution(
+                task, dataset_registry=registry,
+                training_weight_service=training_weight_service,
+                user_model_service=user_model_service, is_admin=is_admin,
+            )
+            if earth_reference is not None:
+                logger.info(
+                    "Earth task %s pinned uploaded model %s v%s (%s…)",
+                    task_id, earth_reference.package_id,
+                    earth_reference.version, earth_reference.content_hash[:12],
                 )
-                if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
-                    # This path originates in the verified server registry and
-                    # travels only through the internal subprocess environment.
-                    # It is never accepted as a client hyperparameter or exposed
-                    # in the public identity snapshot.
-                    earth_training_spec["data_path"] = str(Path(registry.get_earth_snapshot(
-                        resolved_dataset_id, expected_fingerprint=dataset_binding["dataset_fingerprint"]
-                    ).data_path).resolve())
-                if earth_reference is not None:
-                    # The child never reads the user's current upload; it gets the
-                    # pinned source through this server-side channel only.
-                    logger.info(
-                        "Earth task %s pinned uploaded model %s v%s (%s…)",
-                        task_id,
-                        earth_reference.package_id,
-                        earth_reference.version,
-                        earth_reference.content_hash[:12],
-                    )
 
             await session.commit()
             logger.info(
@@ -574,17 +636,6 @@ class TrainingService:
                 payload_hypers.get("_effective_data_source", source),
             )
 
-            if not hasattr(self, "_queue_specs"):
-                self._queue_specs = {}
-            self._queue_specs[task_id] = {
-                "script_name": model_script,
-                "hyperparameters": payload_hypers,
-                "log_file": log_file,
-                "output_path": output_path,
-                "env_overrides": env_overrides,
-                "temp_data_root": temp_data_root,
-                "earth_training_spec": earth_training_spec,
-            }
             if getattr(self, "_scheduler_started", False):
                 await self._recalculate_queue_positions(session)
                 await session.commit()
@@ -592,7 +643,11 @@ class TrainingService:
             else:
                 task.status = "running"
                 await session.commit()
-                asyncio.create_task(self._run_training_subprocess(task_id, **self._queue_specs.pop(task_id)))
+                asyncio.create_task(self._execute_training_task(
+                    task_id, dataset_registry=registry,
+                    training_weight_service=training_weight_service,
+                    user_model_service=user_model_service,
+                ))
 
             return task
 
@@ -604,8 +659,10 @@ class TrainingService:
             earth_3hourly_package_dir=EARTH_MERRA2_3HOURLY_DIR,
         )
 
-    def _restore_3hourly_training_spec(self, task: Any) -> dict:
-        """Rebuild a queued server spec from its frozen task identity after restart."""
+    def _restore_3hourly_training_spec(
+        self, task: Any, dataset_registry: DatasetRegistry | None = None,
+    ) -> dict:
+        """Build the Earth runner spec from frozen task facts at every launch."""
         raw_hypers = json.loads(task.hyperparameters or "{}")
         from services.earth_task_split import required_task_split
         from services.training_split import TrainingSplitError
@@ -633,7 +690,7 @@ class TrainingService:
                 "A queued three-hourly task must retain its verified dataset identity",
                 status_code=409,
             )
-        release = self._default_dataset_registry().get_earth_snapshot(
+        release = (dataset_registry or self._default_dataset_registry()).get_earth_snapshot(
             EARTH_DATASET_3HOURLY_ID, expected_fingerprint=binding["dataset_fingerprint"],
         )
         reference = raw_hypers.get("_earth_uploaded_reference")
@@ -669,6 +726,7 @@ class TrainingService:
         uploaded_only_keys = {
             "_uploaded_model_id",
             "_uploaded_model_version",
+            "_uploaded_model_content_hash",
             "_uploaded_model_name",
             "_uploaded_model_filename",
             "_uploaded_model_path",
@@ -816,6 +874,7 @@ class TrainingService:
         payload["model_source"] = "uploaded"
         payload["_uploaded_model_id"] = getattr(package, "id", uploaded_model_id)
         payload["_uploaded_model_version"] = getattr(package, "version", None)
+        payload["_uploaded_model_content_hash"] = getattr(package, "content_hash", None)
         payload["_uploaded_model_name"] = getattr(package, "display_name", None)
         payload["_uploaded_model_filename"] = getattr(package, "original_filename", None)
         payload["_uploaded_model_path"] = getattr(package, "storage_path", None)
@@ -828,7 +887,7 @@ class TrainingService:
         user_id: int | None,
         hyperparameters: dict,
         training_weight_service: Any | None,
-        is_admin: bool = False,
+        is_admin: bool | None = False,
     ) -> dict[str, str]:
         if not hyperparameters.get("transfer_learning"):
             return {}
@@ -846,7 +905,7 @@ class TrainingService:
             if getattr(record, "status", None) != "ready":
                 raise ValueError("Uploaded transfer weight must be ready before training")
             weight_path = Path(getattr(record, "storage_path", "") or "")
-            if not weight_path.exists():
+            if not is_valid_model_weight_file(weight_path):
                 raise FileNotFoundError("Uploaded transfer weight file is missing")
             return {"ARESVISION_TRANSFER_WEIGHT_PATH": str(weight_path)}
 
@@ -856,10 +915,13 @@ class TrainingService:
 
         async with async_session_maker() as session:
             source_task = await session.get(ModelTrainingTask, source_task_id)
+            if is_admin is None:
+                owner = await session.get(User, user_id) if user_id is not None else None
+                is_admin = bool(owner is not None and owner.is_active and owner.role == "admin")
 
         if source_task is None:
             raise ValueError("Transfer source task not found")
-        if not is_admin and user_id is not None and getattr(source_task, "user_id", None) not in (None, user_id):
+        if not is_admin and getattr(source_task, "user_id", None) not in (None, user_id):
             raise PermissionError("No permission to access this transfer source task")
         if getattr(source_task, "status", None) != "completed":
             raise ValueError("Transfer source task must be completed")
@@ -1498,7 +1560,6 @@ class TrainingService:
                 return False
 
             queued = task.status == "queued"
-            getattr(self, "_queue_specs", {}).pop(task_id, None)
 
             if task.status == "running":
                 await self.stop_training(task_id)
