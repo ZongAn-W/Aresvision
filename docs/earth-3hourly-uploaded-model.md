@@ -4,7 +4,9 @@
 
 ## 数据与调用
 
-服务端 registry 固定提供 UTC 三小时数据、56 步输入、24 步目标和 240×480 全球网格。目标始终为 TO3（DU），辅助变量可选 U10M/V10M（`m s-1`）、T2M（K）、SWGDN（`W m-2`）。`input_channels/input_units/auxiliary_inputs` 声明的是支持的通道全集，训练请求可选任意辅助变量子集。
+官方与上传模型共用反归一化 TO3 的六项评价指标及 v2 保存/完成门禁：MSE（DU²）、RMSE/MAE（DU）、R²（无量纲）、MAPE/SMAPE（%）。总体、每步和累计时段保持预测起点 × 提前步 × 格点等权；旧三小时 v1 checkpoint 保持只读兼容、缺项不补写。公式、单位和验证入口见[地球评价指标](earth-evaluation-metrics.md)。
+
+服务端 registry 提供 UTC 三小时数据，任务配置输入/输出窗口（默认 56→24）和 240×480 全球网格。目标始终为 TO3（DU），辅助变量可选 U10M/V10M（`m s-1`）、T2M（K）、SWGDN（`W m-2`）。`input_channels/input_units/auxiliary_inputs` 声明的是支持的通道全集，训练请求可选任意辅助变量子集。
 
 **全球网格不是单次模型调用的空间尺寸。** 训练和预测沿用服务端 24×48 不重叠空间分块，共 100 块，再拼成全球输出。块间没有 halo、坐标、经纬度、时间 embedding 或额外位置输入；需要跨块空间上下文的模型不适用本版本。
 
@@ -15,13 +17,15 @@
 | 通道轴 | 轴 2；顺序为 TO3，然后按 U10M、V10M、T2M、SWGDN 顺序保留所选变量 |
 | 输出 | `[B,horizon,1,24,48]`，轴 2 仅 TO3；`horizon` 为任务配置的 1–240 个三小时时间步 |
 | 数值 | 输入和输出均为有限 float32；是按训练集统计量标准化后的数值，输出按保存的 TO3 统计量还原为 DU |
-| 设备 | dry-run 在 CPU 执行；runner 将模型和输入移到所选 CPU/CUDA 设备，输出必须与输入同设备，模型不得自行固定设备 |
+| 模型初始化 | dry-run、实际训练构建和 checkpoint 重建共用 CPU float32 初始化，转换模型浮点参数/缓冲区；runner 再迁移到所选 CPU/CUDA 设备 |
+| 设备 | 输出必须与输入同设备，模型不得自行固定设备 |
+| eval 批次 | 同一样本的预测不能依赖 batch 大小、其他样本、排列顺序或重复调用状态，eval 不能修改参数或缓冲区；训练模式可使用正常 BatchNorm，eval 使用其固定运行统计量 |
 | 训练 | 必须有可训练参数；前向和 backward 必须成功并产生有限梯度 |
 | 缺失 | 选中输入及 TO3 目标存在缺失时拒绝窗口/任务，不填零、不插值 |
-| split | 沿用 manifest 固定分区；训练、验证、测试窗口及上传模型历史回测不能跨 split，窗口长度由任务配置决定 |
-| normalization | 仅训练 split 拟合人口均值/标准差，ddof=0、epsilon=1e-6；预测严格使用 checkpoint 保存值 |
+| split | 新任务按完整原始 UTC 时间轴和请求比例连续划分；训练、验证、测试窗口及上传历史回测均不能跨任务分区；旧任务沿用 manifest |
+| normalization | 仅当前任务 train 区间拟合人口均值/标准差，ddof=0、epsilon=1e-6；预测严格使用 checkpoint 保存值 |
 
-`build_model(config)` 必须返回 `torch.nn.Module`。服务器传入：`dataset_id`、`contract_schema`、`window=56`、`horizon=24`、`height=24`、`width=48`、`global_grid_shape=[240,480]`、`spatial_tile_shape=[24,48]`、`in_channels`、`selected_channels`（含 TO3）、`target_channel='TO3'`，以及校验后的自定义参数。参数 schema 沿用通用 int/float/bool/select 形式，但不得覆盖以上字段、dataset identity、路径、设备或 normalization。
+`build_model(config)` 必须返回 `torch.nn.Module`。服务器传入：`dataset_id`、`contract_schema`、任务 `window/horizon`（默认 56/24）、`height=24`、`width=48`、`global_grid_shape=[240,480]`、`spatial_tile_shape=[24,48]`、`in_channels`、`selected_channels`（含 TO3）、`target_channel='TO3'`，以及校验后的自定义参数。参数 schema 沿用通用 int/float/bool/select 形式，但不得覆盖以上字段、dataset identity、路径、设备或 normalization。
 
 禁止在 spec 或参数中指定数据目录、dataset version、fingerprint、snapshot。数据绑定由服务器创建；上传代码只处理给定张量。
 
@@ -29,7 +33,7 @@
 
 上传沿用仓库的单文件大小、UTF-8、AST 导入/调用检查和隔离进程超时边界。该检查不是操作系统级不可信代码沙箱，部署时仍需遵循既有任务执行权限边界。
 
-上传 dry-run 检查全部 16 种通道组合、B=1/2、eval 前向、train 前向及 backward。创建任务前再次在隔离进程中检查实际所选通道和自定义参数。CPU dry-run 通过不代表任意 GPU 资源预算或模型收敛已验收。
+上传 dry-run 检查全部 16 种通道组合、B=1/2、eval 前向、train 前向及 backward。在 backward 前后均用固定的不同样本核对单独与合批、交换顺序、更换其他成员和重复调用的输出，覆盖 B=2/3/默认8，采用 float32 容差 `rtol=1e-5, atol=1e-5`。创建任务时还覆盖实际请求 batch size；重载时使用保存的 batch 配置。探针拒绝 eval 修改参数或缓冲区，并在结束时恢复原值与各模块模式。依赖 batch 均值、`BatchNorm(track_running_stats=False)`、首次调用校准或 eval 计数缓冲区的模型会被拒绝。创建任务前再次在隔离进程中检查实际所选通道和自定义参数。成功报告保存 `eval_batch_policy=earth_eval_sample_independent_v1`；旧报告没有该证据时显示 unknown，需要重新校验。有限探针不能证明任意源码对全部输入都独立，CPU dry-run 通过也不代表任意 GPU 资源预算或模型收敛已验收。
 
 兼容性接口 `GET /api/user-models/{id}/earth-compatibility?dataset_id=earth_merra2_3hourly_v1` 返回具体数据集的 `status`、`compatible`、`code` 和 `reasons`：`available` 可用，`unavailable` 明确不兼容，`unknown` 未获得有效执行结论。未知、超时、失败均不能创建训练任务。日频的原接口默认值保留。
 
@@ -44,13 +48,17 @@
 | `uploaded_model_invalid` | 上传包整体校验失败，不能进入训练 |
 | `earth_prediction_origin_out_of_range` | 没有完整输入/真值或完整窗口跨 split |
 
-返回形状不符、tuple/dict 输出、float64、NaN/Inf、错误设备或无梯度不会被自动转换或补齐。运行阶段也检查有限 float32 和输出形状。
+模型工厂返回 double/half 浮点参数时，服务器在上述三处统一转为 float32；这不改变输出检查。返回形状不符、tuple/dict 输出、float64 输出、NaN/Inf、错误设备或无梯度仍拒绝。运行阶段也检查有限 float32 和输出形状。
 
 ## 任务与 Checkpoint
 
-任务固定包 ID、版本、源码 SHA-256、自定义参数及服务器数据身份，重启队列后仍使用同一份源码。三小时 checkpoint schema 为 `aresvision_earth_forecast_checkpoint_3hourly_v1`；上传模型 implementation 为 `aresvision_earth_3hourly_uploaded_runner_v1`，同时保存独立模型契约版本、全球网格、空间块、通道/单位、步长、固定 split 和 normalization。
+任务固定包 ID、版本、源码 SHA-256、自定义参数及服务器数据身份，重启队列后仍使用同一份源码。三小时 checkpoint schema 为 `aresvision_earth_forecast_checkpoint_3hourly_v1`；上传模型 implementation 为 `aresvision_earth_3hourly_uploaded_runner_v1`，同时保存独立模型契约版本、全球网格、空间块、通道/单位、步长、任务划分策略/请求比例/实际索引与 UTC 边界/步数及窗口数和 normalization；新策略缺失或不一致时拒绝，旧任务不迁移。
 
-重载核对任务与数据集身份、嵌入源码摘要、声明、参数 schema 和 build config，再以 `strict=True` 加载 state dict。runner 在发布前检查重载与前向一致性；任务完成门禁另调度 30 秒超时的独立 CPU 进程复查权重及前向，超时或失败不能标记 completed。原源码文件不可用时使用摘要匹配的嵌入副本，并在预测 context 报告原文件状态。日频及 Mars checkpoint 不能通过三小时 schema/identity 检查。
+重载核对任务与数据集身份、嵌入源码摘要、声明、参数 schema 和 build config，再以 `strict=True` 加载 state dict，并对加载实际权重后的模型重复 eval 批次一致性检查。旧 checkpoint 不改写，但实际模型违反此检查时拒绝发布、诊断或回测。runner 在发布前检查重载与前向一致性；任务完成门禁另调度 30 秒超时的独立 CPU 进程复查权重及前向，超时或失败不能标记 completed。原源码文件不可用时使用摘要匹配的嵌入副本，并在预测 context 报告原文件状态。日频及 Mars checkpoint 不能通过三小时 schema/identity 检查。
 
 实现与验收范围见 [三小时专题](earth-merra2-3hourly.md)。合成数据训练、回测 smoke 仅证明代码链路；完整真实包的只读检查不等同于真实数据训练、模型精度或真实任务历史回测验收。
 
+
+## 任务级比例
+
+上传模型和官方 DLinear 共用[任务级划分策略](earth-task-splits.md)。请求比例均为有限数值、大于 0 且总和为 1，默认 0.7/0.2/0.1；每区至少 window+horizon 步。数据身份仍绑定原发布，normalization 与缓存绑定任务实际 train 区间和完整策略。队列重启复用固定划分；多模型比较要求相同 test UTC 范围及窗口口径。

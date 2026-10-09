@@ -17,9 +17,12 @@ test('result panel shows the experiment name, status and weight availability', (
   assert.match(resultSource, /copy\.weightsUnavailable/);
 });
 
-test('result panel renders every supported metric only when a value exists', () => {
+test('result panel renders Earth missing metrics explicitly and keeps Mars filtering', () => {
   assert.match(resultSource, /EXPERIMENT_METRIC_KEYS/);
-  assert.match(resultSource, /\.filter\(\(key\) => summary\.metrics\[key\] !== undefined\)/);
+  assert.match(resultSource, /\.filter\(\(key\) => earth \|\| summary\.metrics\[key\] !== undefined\)/);
+  assert.match(resultSource, /experimentCenter\.metricNotProvided/);
+  assert.match(resultSource, /experimentCenter\.fullTestMetrics/);
+  assert.match(resultSource, /readExperimentMetrics\(activeTask\.metrics, 'validation'\)/);
   ['metricRmse', 'metricMae', 'metricMse', 'metricR2', 'metricMape', 'metricSmape']
     .forEach((key) => assert.match(resultSource, new RegExp(`experimentCenter\\.${key}`), `${key} should be rendered`));
   assert.match(resultSource, /formatExperimentMetricValue\(summary\.metrics\[key\]\)/);

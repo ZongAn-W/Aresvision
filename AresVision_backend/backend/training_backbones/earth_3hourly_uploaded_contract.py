@@ -26,6 +26,19 @@ RESERVED_PARAMETERS = frozenset({
     "in_channels", "height", "width", "selected_channels", "target_channel",
     "global_grid_shape", "device", "normalization", "contract_schema", "implementation_id",
 })
+EVAL_BATCH_POLICY = "earth_eval_sample_independent_v1"
+
+
+def prepare_model(model, *, window):
+    """Use the same floating-point/device setup for admission and reconstruction."""
+    import torch
+
+    if not isinstance(model, torch.nn.Module):
+        raise ValueError("build_model(config) must return torch.nn.Module")
+    model.to(device="cpu", dtype=torch.float32)
+    model._aresvision_earth_3hourly_contract = CONTRACT_SCHEMA
+    model._aresvision_earth_window = window
+    return model
 
 
 def build_config(order, params=None, *, window=56, horizon=24):
@@ -69,18 +82,70 @@ def forward(model, inputs, *, horizon=24):
     return output
 
 
-def dry_run(build_model, order, params, *, window=56, horizon=24):
+def validate_eval_batch_independence(model, *, window, channels, horizon, batch_size=8):
+    """Reject eval outputs that depend on batch neighbours, order or call state."""
     import torch
 
-    model = build_model(build_config(order, params, window=window, horizon=horizon))
-    if not isinstance(model, torch.nn.Module):
-        raise ValueError("build_model(config) must return torch.nn.Module")
-    model.to(device="cpu", dtype=torch.float32)
+    if type(batch_size) is not int or not 1 <= batch_size <= 64:
+        raise ValueError("Earth eval batch size must be an integer between 1 and 64")
+    generator = torch.Generator().manual_seed(1107)
+    modes = [(module, module.training) for module in model.modules()]
+    registries = [(module, group, dict(getattr(module, group)))
+                  for module in model.modules() for group in ("_parameters", "_buffers")]
+    state = [(module, group, name, value, value.detach().clone())
+             for module, group, entries in registries for name, value in entries.items() if value is not None]
+
+    def probe(inputs):
+        output = forward(model, inputs, horizon=horizon).clone()
+        if (any(getattr(module, group).keys() != entries.keys()
+                or any(getattr(module, group)[name] is not value for name, value in entries.items())
+                for module, group, entries in registries)
+                or any(not torch.equal(value, saved) for _, _, _, value, saved in state)):
+            raise ValueError("Earth eval must not mutate model parameters or buffers")
+        return output
+
+    model.eval()
+    try:
+        with torch.no_grad():
+            for batch in sorted({2, 3, batch_size}):
+                inputs = torch.randn((batch, window, channels, *TILE_SHAPE), generator=generator, dtype=torch.float32)
+                inputs[1:] = inputs[1:] * 0.5 + 2.0
+                together = probe(inputs)
+                separate = torch.cat([probe(sample[None]) for sample in inputs])
+                reordered = probe(inputs.flip(0)).flip(0)
+                changed = inputs.clone()
+                changed[1:] = changed[1:] * -2.0 - 3.0
+                changed_output = probe(changed)
+                repeated = probe(inputs)
+                comparisons = ((together, separate), (together, reordered),
+                               (together[:1], changed_output[:1]), (together, repeated))
+                if any(not torch.allclose(left, right, rtol=1e-5, atol=1e-5) for left, right in comparisons):
+                    raise ValueError("Earth eval predictions must be sample-independent across batch size, "
+                                     "neighbours, order and repeated calls")
+    finally:
+        with torch.no_grad():
+            for module, group, name, value, saved in state:
+                if value.shape == saved.shape and value.dtype == saved.dtype and value.device == saved.device:
+                    value.copy_(saved)
+                else:
+                    value.data = saved
+            for module, group, entries in registries:
+                getattr(module, group).clear()
+                getattr(module, group).update(entries)
+        for module, training in modes:
+            module.training = training
+
+
+def dry_run(build_model, order, params, *, window=56, horizon=24, batch_size=8):
+    import torch
+
+    model = prepare_model(build_model(build_config(order, params, window=window, horizon=horizon)), window=window)
     if not any(p.requires_grad for p in model.parameters()):
         raise ValueError("Earth training requires trainable model parameters")
+    validate_eval_batch_independence(model, window=window, channels=len(order), horizon=horizon, batch_size=batch_size)
     generator = torch.Generator().manual_seed(1107)
     for batch in (1, 2):
-        inputs = torch.randn((batch, window, len(order), *TILE_SHAPE), generator=generator)
+        inputs = torch.randn((batch, window, len(order), *TILE_SHAPE), generator=generator, dtype=torch.float32)
         model.eval()
         with torch.no_grad():
             output = forward(model, inputs, horizon=horizon)
@@ -91,4 +156,5 @@ def dry_run(build_model, order, params, *, window=56, horizon=24):
         gradients = [p.grad for p in model.parameters() if p.requires_grad and p.grad is not None]
         if not gradients or any(not torch.isfinite(g).all() for g in gradients):
             raise ValueError("Earth model must produce finite training gradients")
+    validate_eval_batch_independence(model, window=window, channels=len(order), horizon=horizon, batch_size=batch_size)
     return list(output.shape)

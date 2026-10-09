@@ -165,8 +165,9 @@ class UserModelService:
         code = earth.get("code")
         status = "available" if compatible else ("unavailable" if earth else "unknown")
         if dataset_id == "earth_merra2_3hourly_v1" and earth:
-            from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA
+            from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, EVAL_BATCH_POLICY
             if (earth.get("contract_schema") != CONTRACT_SCHEMA or earth.get("dataset_id") != dataset_id
+                    or (earth.get("compatible") is True and earth.get("eval_batch_policy") != EVAL_BATCH_POLICY)
                     or earth.get("status") == "unknown"
                     or (earth.get("compatible") is True and (earth.get("status") != "available"
                         or earth.get("output_shape") != [2, 24, 1, 24, 48]))):
@@ -206,6 +207,7 @@ class UserModelService:
             "status": status,
             "code": code,
             "contract_schema": earth.get("contract_schema"),
+            "eval_batch_policy": earth.get("eval_batch_policy"),
             "output_shape": earth.get("output_shape"),
         }
 

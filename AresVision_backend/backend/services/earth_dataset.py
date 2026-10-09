@@ -569,7 +569,7 @@ def _utc_timestamp(value):
     return np.datetime_as_string(np.datetime64(value, 's'), unit='s') + 'Z'
 
 
-def fit_threehour_normalization(release, channels=None):
+def fit_threehour_normalization(release, channels=None, *, task_split=None):
     """Fit stable population statistics on training frames in chunks of at most 8.
 
     This scans one channel at a time and merges float64 chunk moments. It never
@@ -580,7 +580,8 @@ def fit_threehour_normalization(release, channels=None):
     from services.netcdf_read_lock import netcdf_read_lock
     selected_channels = canonical_input_channels(channels)
     dates = np.asarray(release.dates, dtype='datetime64[ns]')
-    codes = threehour_release_split_codes(dates, release.metadata)
+    from services.earth_task_split import task_split_codes
+    codes = task_split_codes(dates, release.metadata, task_split)
     indices = np.flatnonzero(codes == SPLITS['train'])
     if not len(indices):
         raise ValueError('No training timestamps are available to fit normalization')
@@ -609,6 +610,7 @@ def fit_threehour_normalization(release, channels=None):
             constants.append(bool(constant))
     _threehour_path(release)
     return {
+        **({'task_split': task_split} if task_split is not None else {}),
         'method': NORMALIZATION_METHOD, 'fit_split': 'train',
         'fit_date_start': _utc_timestamp(dates[start]), 'fit_date_end': _utc_timestamp(dates[stop - 1]),
         'fit_time_start': _utc_timestamp(dates[start]), 'fit_time_end': _utc_timestamp(dates[stop - 1]),
@@ -675,7 +677,7 @@ class EarthThreeHourlyWindows:
 
     @classmethod
     def from_release(cls, release, *, split='train', window=56, horizon=24,
-                     selected_channels=None, normalization=None):
+                     selected_channels=None, normalization=None, task_split=None):
         if split not in SPLITS:
             raise ValueError(f'Unknown split: {split}')
         from services.earth_training_contract import earth_training_profile
@@ -683,7 +685,11 @@ class EarthThreeHourlyWindows:
         window, horizon = profile['window'], profile['horizon']
         channels = canonical_input_channels(selected_channels)
         dates = np.asarray(release.dates, dtype='datetime64[ns]')
-        codes = threehour_release_split_codes(dates, release.metadata)
+        from services.earth_task_split import task_split_codes, validate_earth_task_split
+        if task_split is not None:
+            validate_earth_task_split(task_split, dates, window, horizon,
+                                      task_split.get('ratios') if isinstance(task_split, dict) else None)
+        codes = task_split_codes(dates, release.metadata, task_split)
         lat = np.asarray(release.latitude, dtype='float64')
         lon = np.asarray(release.longitude, dtype='float64')
         if (lat.shape != (240,) or lon.shape != (480,)
@@ -697,10 +703,11 @@ class EarthThreeHourlyWindows:
         if normalization is None:
             if split != 'train':
                 raise ValueError('Only the training split may fit normalization statistics')
-            normalization = fit_threehour_normalization(release, channels)
+            normalization = fit_threehour_normalization(release, channels, task_split=task_split)
         mean, scale = validate_normalization(normalization, channels)
         train_dates = dates[codes == SPLITS['train']]
-        if (not len(train_dates) or normalization.get('frequency_hours') != 3
+        if (normalization.get('task_split') != task_split
+                or not len(train_dates) or normalization.get('frequency_hours') != 3
                 or normalization.get('step_unit') != 'hour' or normalization.get('step') != 3
                 or normalization.get('time_zone') != 'UTC'
                 or normalization.get('timestamp_rule') != 'interval_center'

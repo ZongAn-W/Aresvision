@@ -53,8 +53,8 @@ def _lease_is_active(value, now):
 
 
 async def _resolve_compute(compute):
-    result = compute()
-    return await result if inspect.isawaitable(result) else result
+    from services.inference_compute import run_inference_compute
+    return await run_inference_compute(compute)
 
 
 def _canonical_json(value: Any) -> bytes:

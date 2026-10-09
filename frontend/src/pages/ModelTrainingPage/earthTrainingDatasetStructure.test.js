@@ -84,8 +84,9 @@ test('Earth 模式隐藏火星专属控件（模型来源切换、SPHERE、迁�
   assert.match(workspaceSource, /data-earth-model-block="true"/);
   // Earth 的专家页签不含迁移学习；模型结构页签也不出现（DLinear 只有线性隐藏层数）。
   assert.match(workspaceSource, /\? \['payload', 'training', \.\.\.\(isUploaded \? \['customParams'\] : \[\]\), 'strategy', 'tags'\]/);
-  assert.match(workspaceSource, /data-earth-fixed-split="true"/);
-  assert.match(workspaceSource, /disabled readOnly/);
+  assert.match(workspaceSource, /data-earth-task-split=/);
+  assert.match(workspaceSource, /data-earth-task-split-preview="true"/);
+  assert.doesNotMatch(workspaceSource, /data-earth-fixed-split/);
 });
 
 test('predict 页面共用行星和分析方式选择，Earth 数据仍走独立接口', () => {

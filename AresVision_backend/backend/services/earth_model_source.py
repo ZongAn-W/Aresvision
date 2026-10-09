@@ -225,7 +225,7 @@ def build_uploaded_earth_model(
             )
         from services.user_model_validator import UserModelValidator
         from training_backbones.earth_3hourly_uploaded_contract import (
-            CONTRACT_SCHEMA, build_config, RESERVED_PARAMETERS,
+            build_config, prepare_model, RESERVED_PARAMETERS,
         )
         schema, errors = UserModelValidator._normalize_parameters(model_spec.get("parameters", {}))
         if errors or model_spec.get("auxiliary_inputs") or any(
@@ -242,11 +242,10 @@ def build_uploaded_earth_model(
         if reference.get("build_config") and reference["build_config"] != config:
             raise EarthModelBuildError("Stored three-hour build config disagrees with verified source",
                                        code="uploaded_model_contract_invalid")
-        model = build_model(config)
-        if not isinstance(model, torch.nn.Module):
-            raise EarthModelBuildError("build_model(config) must return torch.nn.Module")
-        model._aresvision_earth_3hourly_contract = CONTRACT_SCHEMA
-        model._aresvision_earth_window = window
+        try:
+            model = prepare_model(build_model(config), window=window)
+        except (ValueError, TypeError, RuntimeError) as exc:
+            raise EarthModelBuildError(str(exc), code="uploaded_model_contract_invalid") from exc
         return model, config, ()
 
     try:

@@ -32,7 +32,7 @@ from services.dataset_identity import (
     SERVER_IDENTITY_FIELDS,
     DatasetRequestError,
 )
-from services.training_split import normalize_split_ratios, TrainingSplitError
+from services.training_split import TrainingSplitError
 
 EARTH_DATASET_IDS = (EARTH_DATASET_ID, EARTH_DATASET_V2_ID, EARTH_DATASET_3HOURLY_ID)
 
@@ -73,6 +73,7 @@ EARTH_METRICS_SCHEMA = "earth_training_metrics_v1"
 EARTH_ARTIFACT_SCHEMA = "aresvision_earth_forecast_checkpoint_v1"
 EARTH_3HOURLY_ARTIFACT_SCHEMA = "aresvision_earth_forecast_checkpoint_3hourly_v1"
 EARTH_3HOURLY_METRICS_SCHEMA = "earth_training_metrics_3hourly_v1"
+EARTH_3HOURLY_METRICS_SCHEMA_V2 = "earth_training_metrics_3hourly_v2"
 EARTH_TRAINING_SPEC_SCHEMA = "earth_training_spec_v1"
 EARTH_PROFILE_ID = "earth_daily_dlinear_v1"
 EARTH_DEFAULT_SPLIT_RATIOS = {
@@ -366,34 +367,11 @@ def normalize_earth_training_hyperparameters(
             )
 
     normalized: dict[str, Any] = {}
-    supplied_ratios = {
-        key: hypers[key]
-        for key in ("train_ratio", "validation_ratio", "test_ratio")
-        if key in hypers
-    }
-    if supplied_ratios:
-        try:
-            supplied = normalize_split_ratios(hypers)
-        except TrainingSplitError as error:
-            raise DatasetRequestError(
-                "invalid_earth_training_parameters",
-                str(error),
-                status_code=422,
-            ) from error
-        if supplied != EARTH_DEFAULT_SPLIT_RATIOS:
-            raise DatasetRequestError(
-                "invalid_earth_training_parameters",
-                "Earth training uses published manifest splits; custom train/validation/test ratios are not supported",
-                status_code=422,
-            )
     try:
-        normalized.update(normalize_split_ratios(hypers))
+        from services.earth_task_split import earth_split_ratios
+        normalized.update(earth_split_ratios(hypers))
     except TrainingSplitError as error:
-        raise DatasetRequestError(
-            "invalid_earth_training_parameters",
-            str(error),
-            status_code=422,
-        ) from error
+        raise DatasetRequestError("invalid_earth_training_parameters", str(error), status_code=422) from error
     for key, (minimum, maximum, default) in EARTH_INTEGER_PARAMS.items():
         normalized[key] = _strict_int(key, hypers.get(key), minimum, maximum, default)
     normalized["learning_rate"] = _strict_float(
@@ -535,6 +513,7 @@ def build_earth_training_spec(
     dataset_binding: Mapping[str, Any],
     hyperparameters: Mapping[str, Any],
     uploaded_model: Optional[Mapping[str, Any]] = None,
+    task_split: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Build the internal subprocess spec for one Earth training run.
 
@@ -574,6 +553,11 @@ def build_earth_training_spec(
         "hyperparameters": normalized,
         "training_profile": earth_training_profile(dataset_id, normalized),
     }
+    if task_split is not None:
+        from services.earth_task_split import timeline_from_snapshot, validate_earth_task_split
+        validate_earth_task_split(dict(task_split), timeline_from_snapshot(dataset_binding["dataset_snapshot"]),
+                                  normalized["window"], normalized["horizon"], normalized)
+        spec["task_split"] = copy.deepcopy(dict(task_split))
     if uploaded_model is not None:
         spec["uploaded_model"] = {
             key: copy.deepcopy(value)
@@ -607,6 +591,7 @@ __all__ = [
     "EARTH_ALLOWED_PARAMETER_KEYS",
     "EARTH_3HOURLY_ARTIFACT_SCHEMA",
     "EARTH_3HOURLY_METRICS_SCHEMA",
+    "EARTH_3HOURLY_METRICS_SCHEMA_V2",
     "EARTH_3HOURLY_IMPLEMENTATION_ID",
     "EARTH_3HOURLY_WINDOW",
     "EARTH_3HOURLY_HORIZON",

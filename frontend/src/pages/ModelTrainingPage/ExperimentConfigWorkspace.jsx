@@ -11,7 +11,7 @@ import {
   getModelStructureParamLabel,
   isRecurrentArchitecture,
 } from './trainingParamSanitizers';
-import { EARTH_MODEL_ARCHITECTURE, EARTH_PARAM_BOUNDS, getEarthTrainingProfile, isEarthTrainingDataset } from './earthTrainingConfig';
+import { EARTH_MODEL_ARCHITECTURE, EARTH_PARAM_BOUNDS, getEarthTrainingProfile, isEarthTrainingDataset, describeEarthTaskSplits } from './earthTrainingConfig';
 import { getExperimentArchitectureLabel } from './experimentCenterModel';
 import './experimentCenter.css';
 
@@ -214,6 +214,8 @@ export default function ExperimentConfigWorkspace({
     : {};
   const boundFor = (key, fallback) => earthBounds[key] || fallback;
 
+  const taskSplitPreview = describeEarthTaskSplits(earthDatasetAvailability?.time,
+    { trainRatio, validationRatio, testRatio }, windowValue, horizon);
   const uploadedModel = selectedUploadedModel;
   const uploadedValidationStatus = uploadedModel?.validation_status || '';
   const uploadedStatusLabel = uploadedValidationStatus === 'valid'
@@ -724,36 +726,35 @@ export default function ExperimentConfigWorkspace({
               <>
                 <h4 className="experiment-expert-heading">{copy.expertTabStrategy}</h4>
                 <p className="experiment-expert-note">{copy.expertStrategyHint}</p>
+                {isEarth ? (
+                  <div className="experiment-earth-splits" data-earth-task-split-preview="true">
+                    <p className="experiment-expert-note">{isZh
+                      ? '按完整 UTC 三小时时间轴连续划分；比例均须大于 0、合计 100%。窗口完整留在各分区内，归一化只拟合训练区间。'
+                      : 'Split the full UTC 3-hour timeline chronologically. All ratios must be positive and total 100%. Windows stay within partitions; normalization fits training only.'}</p>
+                    {taskSplitPreview.ranges.map(item => (
+                      <div className="experiment-earth-split" key={item.name} data-earth-split={item.name}>
+                        <span>{item.name}</span><b>{item.date_start} → {item.date_end}</b>
+                        <small>{item.step_count} {isZh ? '时间步' : 'time steps'} · {item.window_count} {isZh ? '窗口' : 'windows'}</small>
+                      </div>
+                    ))}
+                    {!taskSplitPreview.valid ? <p role="alert">{isZh
+                      ? '划分无效：请检查比例总和、非空验证集和各分区长度（至少输入窗口 + 输出窗口）；数据目录须提供完整时间轴。'
+                      : 'Invalid split: check ratio sum, positive validation and partition length (at least window + horizon); a complete catalog timeline is required.'}</p> : null}
+                  </div>
+                ) : null}
                 <div className="experiment-expert-fields">
-                  {isEarth ? (
-                    <>
-                      {[
-                        [isZh ? '训练集比例 (%)' : 'Train ratio (%)', 70],
-                        [isZh ? '验证集比例 (%)' : 'Validation ratio (%)', 20],
-                        [isZh ? '测试集比例 (%)' : 'Test ratio (%)', 10],
-                      ].map(([label, value]) => (
-                        <label className="experiment-expert-field" key={label} data-earth-fixed-split="true">
-                          <span>{label}</span>
-                          <input type="number" value={value} disabled readOnly aria-readonly="true" />
-                        </label>
-                      ))}
-                    </>
-                  ) : (
-                    <>
-                      <label className="experiment-expert-field">
-                        <span>{isZh ? '训练集比例 (%)' : 'Train ratio (%)'}</span>
-                        <input type="number" min="1" max="98" step="1" value={Number(trainRatio) * 100} onChange={(event) => onSplitRatioChange?.('trainRatio', Number(event.target.value) / 100)} />
-                      </label>
-                      <label className="experiment-expert-field">
-                        <span>{isZh ? '验证集比例 (%)' : 'Validation ratio (%)'}</span>
-                        <input type="number" min="0" max="98" step="1" value={Number(validationRatio) * 100} onChange={(event) => onSplitRatioChange?.('validationRatio', Number(event.target.value) / 100)} />
-                      </label>
-                      <label className="experiment-expert-field">
-                        <span>{isZh ? '测试集比例 (%)' : 'Test ratio (%)'}</span>
-                        <input type="number" min="1" max="98" step="1" value={Number(testRatio) * 100} onChange={(event) => onSplitRatioChange?.('testRatio', Number(event.target.value) / 100)} />
-                      </label>
-                    </>
-                  )}
+                  {[
+                    ['trainRatio', trainRatio, isZh ? '训练集比例 (%)' : 'Train ratio (%)'],
+                    ['validationRatio', validationRatio, isZh ? '验证集比例 (%)' : 'Validation ratio (%)'],
+                    ['testRatio', testRatio, isZh ? '测试集比例 (%)' : 'Test ratio (%)'],
+                  ].map(([key, value, label]) => (
+                    <label className="experiment-expert-field" key={key} data-earth-task-split={isEarth ? key : undefined}>
+                      <span>{label}</span>
+                      <input type="number" min={isEarth ? '0.01' : key === 'validationRatio' ? '0' : '1'} max={isEarth ? '99.99' : '98'} step={isEarth ? '0.01' : '1'}
+                        value={value === '' ? '' : Number(value) * 100}
+                        onChange={(event) => onSplitRatioChange?.(key, event.target.value === '' ? '' : Number(event.target.value) / 100)} />
+                    </label>
+                  ))}
                   <label className="experiment-expert-field">
                     <span>{copy.randomSeed}</span>
                     <input

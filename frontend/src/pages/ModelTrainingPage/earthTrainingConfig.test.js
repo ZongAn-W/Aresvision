@@ -113,16 +113,16 @@ test('Earth payload accepts settings-provided custom windows', () => {
   assert.equal(payload.horizon, 8);
 });
 
-test('Earth payload omits custom split ratios and keeps the fixed 56-to-24 contract', () => {
+test('Earth payload sends requested split ratios with the configured windows', () => {
   const payload = buildEarthTrainingHyperparameters({
     trainRatio: 0.6,
     validationRatio: 0.25,
     testRatio: 0.15,
   });
 
-  assert.equal(Object.hasOwn(payload, 'train_ratio'), false);
-  assert.equal(Object.hasOwn(payload, 'validation_ratio'), false);
-  assert.equal(Object.hasOwn(payload, 'test_ratio'), false);
+  assert.equal(payload.train_ratio, 0.6);
+  assert.equal(payload.validation_ratio, 0.25);
+  assert.equal(payload.test_ratio, 0.15);
   assert.equal(payload.window, 56);
   assert.equal(payload.horizon, 24);
 });

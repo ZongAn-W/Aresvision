@@ -165,6 +165,9 @@ def register_earth_metrics(item, task, user_id):
     metadata.update(planet="earth", scope="full_test_set", source_unit="DU", window=item['window'], horizon=item['horizon'],
                     model=item["model_name"], split_meta=result["split_meta"], aggregation=result["aggregation"],
                     metric_source="verified_checkpoint_test_metrics", frequency_hours=3)
+    for key in ("schema", "metric_units", "metric_policy"):
+        if key in result:
+            metadata[key] = result[key]
     ref = EXPORT_SOURCES.register(user_id=user_id, task_id=task.id, planet="earth", analysis="metrics",
                                   horizon=item['horizon'], origin="", variables=[], guard=task_guard(task), data=data, metadata=metadata)
     return {**result, "export_ref": ref}

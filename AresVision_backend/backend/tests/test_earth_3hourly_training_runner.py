@@ -27,6 +27,7 @@ from services.earth_training_artifact import (
     EarthArtifactError, load_earth_training_artifact,
 )
 from services.earth_training_contract import build_earth_training_spec
+from services.earth_task_split import build_earth_task_split
 from services.netcdf_read_lock import netcdf_read_lock
 from test_earth_3hourly_training_service import service_environment
 
@@ -60,7 +61,8 @@ def synthetic_training_release(tmp_path_factory):
         "schema": THREE_HOURLY_SCHEMA, "dataset_fingerprint": "b" * 64,
         "manifest_sha256": "c" * 64, "data_sha256": "d" * 64,
         "frequency_hours": 3, "step_unit": "hour", "step": 3,
-        "time": {"kind": "datetime", "time_zone": "UTC", "label": "interval_center"},
+        "time": {"kind": "datetime", "time_zone": "UTC", "label": "interval_center",
+                 "start": "2020-01-01T01:30:00Z", "end": "2020-01-30T22:30:00Z", "count": 240},
         "grid": {"shape": [240, 480]}, "grid_shape": [240, 480],
         "channel_order": list(CHANNELS), "variables": [
             {"id": channel, "units": unit} for channel, unit in zip(CHANNELS, UNITS)],
@@ -93,7 +95,10 @@ def smoke_checkpoint(synthetic_training_release, tmp_path_factory):
     binding = registry.build_training_binding(DATASET_ID)
     spec = build_earth_training_spec(
         task_id=701, dataset_binding=binding,
-        hyperparameters={"epochs": 1, "batch_size": 8, "seed": 5,
+        task_split=build_earth_task_split(synthetic_training_release.dates, 56, 24,
+                                        {name + "_ratio": 1/3 for name in ("train", "validation", "test")}),
+        hyperparameters={**{name + "_ratio": 1/3 for name in ("train", "validation", "test")},
+                         "epochs": 1, "batch_size": 8, "seed": 5,
                          "selected_channels": ["U10M", "V10M", "T2M", "SWGDN"]},
     )
     output = tmp_path_factory.mktemp("threehour_smoke_weights") / "task_701.pth"
@@ -109,7 +114,7 @@ def smoke_checkpoint(synthetic_training_release, tmp_path_factory):
 def test_smoke_training_publishes_56_to_24_checkpoint(smoke_checkpoint):
     output, result, binding, spec = smoke_checkpoint
     checkpoint = load_earth_training_artifact(output, expected_binding=binding,
-                                              expected_hyperparameters=spec["hyperparameters"], expected_task_id=701)
+                                              expected_hyperparameters={**spec["hyperparameters"], "_earth_task_split": spec["task_split"]}, expected_task_id=701)
     assert result["split_window_counts"] == {"train": 1, "validation": 1, "test": 1}
     assert checkpoint.model_config["window"] == 56
     assert checkpoint.model_config["horizon"] == 24
@@ -122,6 +127,7 @@ def test_smoke_training_publishes_56_to_24_checkpoint(smoke_checkpoint):
     assert checkpoint.run["spatial_tile_shape"] == [24, 48]
     assert checkpoint.normalization["fit_time_end"] == "2020-01-10T22:30:00Z"
     for split in checkpoint.metrics["splits"].values():
+        assert set(split["overall"]) == {"mse", "rmse", "mae", "r2", "mape", "smape"}
         assert len(split["by_lead"]) == 24
         assert [row["lead_hours"] for row in split["by_lead"]] == list(range(3, 73, 3))
         assert [row["horizon_hours"] for row in split["by_horizon"]] == [24, 48, 72]
@@ -159,7 +165,7 @@ def test_threehour_checkpoint_cannot_bind_to_daily_task(smoke_checkpoint):
         load_earth_training_artifact(output, expected_binding=daily_binding)
 
 
-@pytest.mark.parametrize("corruption", [None, "daily_schema", "fingerprint"])
+@pytest.mark.parametrize("corruption", [None, "daily_schema", "fingerprint", "legacy_metrics", "missing_r2"])
 def test_queued_task_completion_uses_strict_threehour_checkpoint(
     service_environment, synthetic_training_release, smoke_checkpoint, monkeypatch, corruption,
 ):
@@ -193,6 +199,11 @@ def test_queued_task_completion_uses_strict_threehour_checkpoint(
             payload["artifact_schema"] = "aresvision_earth_forecast_checkpoint_v1"
         elif corruption == "fingerprint":
             payload["dataset_binding"]["dataset_fingerprint"] = "e" * 64
+        elif corruption == "legacy_metrics":
+            from test_earth_metrics_v2 import legacy_payload
+            payload = legacy_payload(payload)
+        elif corruption == "missing_r2":
+            payload["metrics"]["splits"]["test"]["overall"].pop("r2")
         torch.save(payload, args[-1])
         return Process()
 
@@ -202,7 +213,7 @@ def test_queued_task_completion_uses_strict_threehour_checkpoint(
         task = await service.start_training(
             user_id=1, custom_model_name="threehour-completion",
             model_script="client-ignored.py", dataset_id=DATASET_ID, dataset_registry=registry,
-            hyperparameters={"epochs": 1, "batch_size": 8, "selected_channels": list(CHANNELS[1:])},
+            hyperparameters=smoke_checkpoint[3]["hyperparameters"],
         )
         plan = service._queue_specs.pop(task.id)
         await service._run_training_subprocess(task.id, **plan)

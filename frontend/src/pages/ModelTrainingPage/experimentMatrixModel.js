@@ -5,6 +5,7 @@ import {
   readExperimentMetrics,
 } from './experimentCenterModel.js';
 import { getModelStructureConfig } from './trainingParamSanitizers.js';
+import { earthMetricUnit } from '../../utils/earthMetricMeta.js';
 
 export const MATRIX_COLUMN_STORAGE_PREFIX = 'aresvision_experiment_matrix_columns';
 
@@ -78,6 +79,14 @@ export function getMatrixPropertyDefinitions(tasks = []) {
   const definitions = [...BASIC_COLUMNS];
   TRAINING_FIELDS.forEach(([key, label, labelEn]) => definitions.push(dynamicColumn(`training:${key}`, 'training', label, labelEn, key.includes('ratio') || key === 'learning_rate' ? 'number' : 'text')));
   ARCHITECTURE_FIELDS.forEach(([key, label, labelEn]) => definitions.push(dynamicColumn(`architecture:${key}`, 'architecture', label, labelEn, 'text')));
+  if (tasks.some(task => parseTaskHyperparameters(task?.hyperparameters)._earth_task_split)) {
+    definitions.push(dynamicColumn('split:policy', 'training', '任务划分策略', 'Task split policy'));
+    for (const [name, label, labelEn] of [['train', '训练', 'Train'], ['validation', '验证', 'Validation'], ['test', '测试', 'Test']]) {
+      for (const [key, suffix, suffixEn, type] of [['date_start', '开始 UTC', 'start UTC', 'text'], ['date_end', '结束 UTC', 'end UTC', 'text'], ['step_count', '时间步数', 'time steps', 'number'], ['window_count', '窗口数', 'windows', 'number']]) {
+        definitions.push(dynamicColumn('split:' + name + ':' + key, 'training', label + suffix, labelEn + ' ' + suffixEn, type));
+      }
+    }
+  }
   const customKeys = new Set();
   const unknownKeys = new Set();
   const architectureKeys = new Set(ARCHITECTURE_FIELDS.map(([key]) => key));
@@ -98,7 +107,10 @@ export function getMatrixPropertyDefinitions(tasks = []) {
   // while describing different things. Keep their namespaces distinct so a
   // historical task never loses one of the values during column discovery.
   [...unknownKeys].sort((a, b) => a.localeCompare(b)).forEach((key) => definitions.push(dynamicColumn(`config:${key}`, 'custom', `配置 · ${key}`, `Config · ${key}`, 'text')));
-  METRIC_FIELDS.forEach(([key, label, labelEn]) => definitions.push(dynamicColumn(`metric:${key}`, 'metrics', `${label}（任务单位）`, `${labelEn} (task unit)`, 'number')));
+  const hasEarth = tasks.some(task => String(task?.dataset_id || parseTaskHyperparameters(task?.hyperparameters).training_dataset || '').startsWith('earth_'));
+  METRIC_FIELDS.forEach(([key, label, labelEn]) => definitions.push(dynamicColumn(`metric:${key}`, 'metrics',
+    hasEarth ? `${label}（Earth 完整测试集）` : `${label}（任务单位）`,
+    hasEarth ? `${labelEn} (Earth full test set)` : `${labelEn} (task unit)`, 'number')));
   return definitions.filter((column, index, all) => all.findIndex((item) => item.key === column.key) === index);
 }
 
@@ -139,6 +151,11 @@ export function getMatrixValue(task, columnKey) {
   if (columnKey === 'start_time') return task?.start_time || null;
   if (columnKey === 'model_package') return task?.uploaded_model_name || hyperparameters._uploaded_model_name || '';
   if (columnKey === 'model_source') return String(task?.model_source || hyperparameters.model_source || '');
+  if (columnKey.startsWith('split:')) {
+    const [, name, field] = columnKey.split(':');
+    const split = hyperparameters._earth_task_split;
+    return name === 'policy' ? split?.policy : split?.ranges?.[name]?.[field];
+  }
   if (columnKey.startsWith('training:')) return hyperparameters[columnKey.slice(9)];
   if (columnKey.startsWith('architecture:')) return hyperparameters[columnKey.slice(13)];
   if (columnKey.startsWith('custom:')) return hyperparameters.custom_model_params?.[columnKey.slice(7)];
@@ -148,7 +165,10 @@ export function getMatrixValue(task, columnKey) {
 }
 
 export function formatMatrixValue(value, column, task, locale = 'zh-CN') {
-  if (value === undefined || value === null || value === '') return '—';
+  if (value === undefined || value === null || value === '') {
+    return column?.key?.startsWith('metric:') && String(task?.dataset_id || parseTaskHyperparameters(task?.hyperparameters).training_dataset || '').startsWith('earth_')
+      ? (locale.startsWith('zh') ? '未提供' : 'Not provided') : '—';
+  }
   if (column?.key === 'tags') return value;
   if (column?.type === 'date') {
     const parsed = new Date(value);
@@ -157,7 +177,8 @@ export function formatMatrixValue(value, column, task, locale = 'zh-CN') {
   if (column?.key === 'progress') return `${Number(value).toFixed(0)}%`;
   if (column?.key?.startsWith('metric:')) {
     const dataset = String(task?.dataset_id || parseTaskHyperparameters(task?.hyperparameters).training_dataset || '');
-    return `${Number.isFinite(Number(value)) ? Number(value).toFixed(4) : String(value)} ${dataset.startsWith('earth_') ? 'DU' : 'μm-atm'}`;
+    const unit = dataset.startsWith('earth_') ? earthMetricUnit(column.key.slice(7), locale.startsWith('zh')) : 'μm-atm';
+    return `${Number.isFinite(Number(value)) ? Number(value).toFixed(4) : String(value)} ${unit}`;
   }
   if (Array.isArray(value)) return value.join(', ');
   if (typeof value === 'boolean') return value ? '是' : '否';

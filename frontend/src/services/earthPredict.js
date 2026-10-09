@@ -96,3 +96,15 @@ export function compareEarthModels(taskIds, { signal } = {}) {
     method: 'POST', body: { task_ids: taskIds }, signal,
   });
 }
+
+/** Every request reaches the server so cached diagnostics still recheck artifact/data identity. */
+export function fetchEarthDiagnosticContext(trainingTaskId, { signal } = {}) {
+  const params = new URLSearchParams({ training_task_id: String(trainingTaskId) });
+  return request(`${EARTH_PREDICT_PATH}/diagnostics/context?${params.toString()}`, { signal });
+}
+
+export function runEarthDiagnostics(parameters, { signal } = {}) {
+  return request(`${EARTH_PREDICT_PATH}/diagnostics`, {
+    method: 'POST', body: parameters, signal,
+  });
+}

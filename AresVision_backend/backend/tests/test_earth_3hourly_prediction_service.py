@@ -39,6 +39,9 @@ def threehour_prediction_bundle(synthetic_training_release, tmp_path_factory):
     normalization = fit_threehour_normalization(release, order)
     model, _, _ = build_earth_model_for_plan(ModelSourcePlan("official", order, 2, dataset_id=DATASET_ID))
     metrics = compute_earth_metrics(np.ones((1, 24, 1, 2, 3)), np.zeros((1, 24, 1, 2, 3)), dataset_id=DATASET_ID)
+    # The synthetic constant prediction/truth extends uniformly over the grid.
+    for row in metrics["by_lead"]:
+        row["target_statistics"]["count"] = 240 * 480
     ranges = {
         name: {"date_start": entry["start"] + "T01:30:00Z", "date_end": entry["end"] + "T22:30:00Z", "window_count": 1}
         for name, entry in release.metadata["splits"].items()

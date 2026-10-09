@@ -270,7 +270,7 @@ def evaluate_package_earth_compatibility(
 
 
 def _evaluate_three_hour_package(package, raw, validator, *, earth_probe=None):
-    from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA
+    from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, EVAL_BATCH_POLICY
 
     identity = dict(dataset_id=EARTH_3HOURLY_FEED_KEY,
                     display_name=getattr(package, "display_name", None), version=getattr(package, "version", None))
@@ -299,6 +299,7 @@ def _evaluate_three_hour_package(package, raw, validator, *, earth_probe=None):
     proven = (result.ok is True and block.get("compatible") is True and block.get("status") == "available"
               and block.get("dataset_id") == EARTH_3HOURLY_FEED_KEY
               and block.get("contract_schema") == CONTRACT_SCHEMA
+              and block.get("eval_batch_policy") == EVAL_BATCH_POLICY
               and block.get("output_shape") == [2, probe_horizon, 1, 24, 48])
     return EarthCompatibility(
         proven, list(block.get("errors") or []), warnings=list(result.warnings),

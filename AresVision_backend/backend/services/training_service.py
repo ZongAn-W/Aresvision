@@ -48,6 +48,7 @@ from services.earth_training_artifact import (
     verify_earth_model_reload_isolated,
 )
 from services.earth_training_contract import (
+    EARTH_3HOURLY_METRICS_SCHEMA_V2,
     EARTH_TRAINING_SCRIPT,
     build_earth_training_spec,
     canonical_channel_order,
@@ -152,10 +153,26 @@ class TrainingService:
 
                 task.end_time = recovery_time
                 task.pid = None
+                earth_artifact = None
+                if saved_marker and is_earth_training_task(task):
+                    try:
+                        require_active_dataset(training_task_dataset_id(task))
+                        earth_artifact = await asyncio.to_thread(
+                            load_earth_training_artifact, output_path,
+                            {key: getattr(task, key, None) for key in (
+                                "dataset_id", "dataset_version", "dataset_fingerprint",
+                                "dataset_identity_status", "dataset_snapshot")},
+                            json.loads(task.hyperparameters or "{}"), task.id,
+                        )
+                        await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
+                    except Exception as exc:
+                        task.status = "failed"
+                        task.metrics = json.dumps({"error_code": "invalid_earth_training_artifact", "error": str(exc)})
+                        continue
                 if saved_marker:
                     task.status = "completed"
                     task.progress = 100.0
-                    parsed_metrics = self._extract_metrics_from_log(log_path)
+                    parsed_metrics = earth_artifact.metrics if earth_artifact is not None else self._extract_metrics_from_log(log_path)
                     task.metrics = json.dumps(
                         parsed_metrics or {"note": "completed after server restart"}
                     )
@@ -341,6 +358,22 @@ class TrainingService:
                 hyperparameters=hyperparameters or {}, dataset_id=resolved_dataset_id,
             )
 
+        earth_task_split = None
+        if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from services.earth_task_split import build_earth_task_split, timeline_from_snapshot
+            from services.training_split import TrainingSplitError
+            normalized = require_earth_training_configuration(
+                model_source=earth_source, uploaded_model_id=uploaded_model_id,
+                hyperparameters=hyperparameters or {}, dataset_id=resolved_dataset_id,
+            )
+            try:
+                earth_task_split = build_earth_task_split(
+                    timeline_from_snapshot(dataset_binding["dataset_snapshot"]),
+                    normalized["window"], normalized["horizon"], normalized,
+                )
+            except TrainingSplitError as exc:
+                raise DatasetRequestError("invalid_earth_training_parameters", str(exc), status_code=422) from exc
+
         source = _normalize_training_data_source(data_source)
 
         async with async_session_maker() as session:
@@ -366,6 +399,7 @@ class TrainingService:
                     input_channel_order=canonical_channel_order((hyperparameters or {}).get("selected_channels")),
                     window=(hyperparameters or {}).get('window', 56),
                     horizon=(hyperparameters or {}).get('horizon', 24),
+                    batch_size=normalized["batch_size"] if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID else 8,
                 )
         elif model_source == "uploaded":
             model_script, raw_hypers = await self._resolve_uploaded_training_entrypoint(
@@ -423,6 +457,12 @@ class TrainingService:
         payload_hypers.pop("tag_ids", None)
         payload_hypers.pop("tags", None)
         payload_hypers["_data_source"] = source
+        if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+            payload_hypers["_earth_metrics_schema"] = EARTH_3HOURLY_METRICS_SCHEMA_V2
+        if earth_task_split is not None:
+            from services.earth_task_split import EARTH_TASK_SPLIT_POLICY, TASK_SPLIT_POLICY_KEY
+            payload_hypers["_earth_task_split"] = earth_task_split
+            payload_hypers[TASK_SPLIT_POLICY_KEY] = EARTH_TASK_SPLIT_POLICY
         if earth_training and earth_reference is not None:
             # Record the pinned uploaded model identity on the task so history,
             # copy-config and prediction can all name the exact trained model. The
@@ -493,6 +533,7 @@ class TrainingService:
                 # prefixed) must never reach the runner.
                 earth_training_spec = build_earth_training_spec(
                     task_id=task_id,
+                    task_split=earth_task_split,
                     dataset_binding=dataset_binding,
                     hyperparameters={
                         key: value
@@ -566,6 +607,12 @@ class TrainingService:
     def _restore_3hourly_training_spec(self, task: Any) -> dict:
         """Rebuild a queued server spec from its frozen task identity after restart."""
         raw_hypers = json.loads(task.hyperparameters or "{}")
+        from services.earth_task_split import required_task_split
+        from services.training_split import TrainingSplitError
+        try:
+            task_split = required_task_split(raw_hypers)
+        except TrainingSplitError as exc:
+            raise DatasetRequestError("invalid_earth_training_parameters", str(exc), status_code=409) from exc
         public_hypers = {key: value for key, value in raw_hypers.items() if not key.startswith("_")}
         normalized = require_earth_training_configuration(
             model_source=raw_hypers.get("model_source", "official"),
@@ -596,7 +643,15 @@ class TrainingService:
                     or reference.get("version") != task.uploaded_model_version
                     or reference.get("content_hash") != raw_hypers.get("_uploaded_model_content_hash")):
                 raise DatasetRequestError("uploaded_model_reference_missing", "Queued task has no matching frozen model reference", status_code=409)
+        if task_split is not None:
+            from services.earth_task_split import validate_earth_task_split
+            try:
+                validate_earth_task_split(task_split, release.dates,
+                                          normalized["window"], normalized["horizon"], normalized)
+            except TrainingSplitError as exc:
+                raise DatasetRequestError("invalid_earth_training_parameters", str(exc), status_code=409) from exc
         spec = build_earth_training_spec(
+            task_split=task_split,
             task_id=task.id, dataset_binding=binding, hyperparameters=normalized,
             uploaded_model=raw_hypers.get("_earth_uploaded_reference"),
         )
@@ -639,6 +694,7 @@ class TrainingService:
         input_channel_order: list[str] | None = None,
         window: int = 56,
         horizon: int = 24,
+        batch_size: int = 8,
     ) -> tuple[dict, list[str]]:
         """Pin one uploaded model for an Earth run.
 
@@ -697,7 +753,7 @@ class TrainingService:
             evaluate_package_earth_compatibility, package, validator=self._earth_validator(),
             dataset_id=dataset_id,
             earth_probe={"input_channel_order": input_channel_order, "custom_model_params": resolved_params,
-                         "window": window, "horizon": horizon}
+                         "window": window, "horizon": horizon, "batch_size": batch_size}
             if dataset_id == EARTH_DATASET_3HOURLY_ID else None,
         )
         if not verdict.compatible:
@@ -1156,6 +1212,25 @@ class TrainingService:
             if earth_training_spec is not None and model_artifact_valid:
                 try:
                     expected_hypers = dict(earth_training_spec["hyperparameters"])
+                    if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+                        from services.earth_task_split import (
+                            TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, required_task_split,
+                        )
+                        frozen_hypers = hyperparameters
+                        async with async_session_maker() as session:
+                            frozen_task = await session.get(ModelTrainingTask, task_id)
+                            if frozen_task is not None:
+                                frozen_hypers = json.loads(frozen_task.hyperparameters or "{}")
+                        task_split = required_task_split(frozen_hypers)
+                        if task_split != earth_training_spec.get("task_split"):
+                            raise EarthArtifactError("Training spec partitions do not match the frozen task")
+                        expected_hypers.update({
+                            key: frozen_hypers[key]
+                            for key in (TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, "_earth_metrics_schema")
+                            if key in frozen_hypers
+                        })
+                    if "task_split" in earth_training_spec:
+                        expected_hypers["_earth_task_split"] = earth_training_spec["task_split"]
                     uploaded = earth_training_spec.get("uploaded_model")
                     if uploaded:
                         expected_hypers.update({
@@ -1172,6 +1247,8 @@ class TrainingService:
                         earth_training_spec["task_id"],
                     )
                     if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+                        if earth_artifact.metrics["schema"] != EARTH_3HOURLY_METRICS_SCHEMA_V2:
+                            raise EarthArtifactError("New Earth training requires the complete v2 metrics contract")
                         await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
                 except Exception as exc:  # noqa: BLE001 - reported as a task failure
                     earth_artifact_error = exc

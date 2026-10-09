@@ -18,6 +18,9 @@ import {
 } from './earthPredictModel';
 import './earthPredictPanel.css';
 import ResearchExportButton from './ResearchExportButton';
+import { EARTH_METRIC_META, earthMetricUnit } from '../../utils/earthMetricMeta.js';
+import { useSettings } from '../../contexts/SettingsContext';
+import EarthDiagnosticPanel from './EarthDiagnosticPanel.jsx';
 
 const EARTH_COLORMAP = 'inferno';
 const EARTH_RESIDUAL_COLORMAP = 'rdbu';
@@ -48,6 +51,8 @@ export default function EarthPredictPanel({
   onSelectTask,
   showTaskSelector = true,
 }) {
+  const { settings } = useSettings();
+  const isZh = settings.language !== 'en';
   const [kindViews] = useState({ prediction: 'physical', reference: 'physical', residual: 'residual' });
   const cadence = useMemo(() => getEarthCadence(context || result), [context, result]);
   const isThreeHourly = cadence.threeHourly;
@@ -248,23 +253,24 @@ export default function EarthPredictPanel({
             ))}
           </div>
 
+          <h4>{isZh ? '本次预测窗口评价指标' : 'Current forecast-window metrics'}</h4>
           <div className="earth-predict-metrics" data-earth-metrics="true">
-            {['rmse', 'mae'].map((key) => (
+            {EARTH_METRIC_META.map(({ key, zh, en }) => (
               <div className="earth-predict-metric" key={key} data-earth-metric={key}>
-                <span>{key.toUpperCase()}</span>
-                <b>{formatValue(readEarthMetric(metrics, key))}</b>
-                <small>{EARTH_TARGET_UNIT}</small>
+                <span>{isZh ? zh : en}</span>
+                <b>{readEarthMetric(metrics, key) == null ? (isZh ? '未提供' : 'Not provided') : formatValue(readEarthMetric(metrics, key))}</b>
+                <small>{earthMetricUnit(key, isZh)}</small>
               </div>
             ))}
           </div>
 
+          <div className="earth-predict-table-scroll">
           <table className="earth-predict-lead-table" data-earth-lead-table="true">
             <thead>
               <tr>
                 <th>{copy.leadHeader}</th>
                 <th>{isThreeHourly ? copy.timestampHeader : copy.dateHeader}</th>
-                <th>RMSE ({EARTH_TARGET_UNIT})</th>
-                <th>MAE ({EARTH_TARGET_UNIT})</th>
+                {EARTH_METRIC_META.map(({ key, name, zh, en }) => <th key={key} title={isZh ? zh : en}>{name} ({earthMetricUnit(key, isZh)})</th>)}
               </tr>
             </thead>
             <tbody>
@@ -272,20 +278,20 @@ export default function EarthPredictPanel({
                 <tr key={date}>
                   <td>{earthLeadLabel(index, context || result, { daySuffix: copy.daySuffix })}</td>
                   <td>{date}</td>
-                  <td>{formatValue(readEarthLeadMetric(metrics, index + 1, 'rmse'))}</td>
-                  <td>{formatValue(readEarthLeadMetric(metrics, index + 1, 'mae'))}</td>
+                  {EARTH_METRIC_META.map(({ key }) => <td key={key}>{readEarthLeadMetric(metrics, index + 1, key) == null
+                    ? (isZh ? '未提供' : 'Not provided') : formatValue(readEarthLeadMetric(metrics, index + 1, key))}</td>)}
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
           {isThreeHourly && metrics?.by_horizon?.length ? (
             <div className="earth-predict-horizons" data-earth-horizon-metrics="true">
               {metrics.by_horizon.map(({ horizon_hours: hours }) => (
                 <div className="earth-predict-metric" key={hours} data-earth-horizon={hours}>
                   <span>{`+${hours}h`}</span>
-                  <b>{`RMSE ${formatValue(readEarthHorizonMetric(metrics, hours, 'rmse'))}`}</b>
-                  <b>{`MAE ${formatValue(readEarthHorizonMetric(metrics, hours, 'mae'))}`}</b>
-                  <small>{EARTH_TARGET_UNIT}</small>
+                  {EARTH_METRIC_META.map(({ key, name }) => <b key={key}>{`${name} ${readEarthHorizonMetric(metrics, hours, key) == null
+                    ? (isZh ? '未提供' : 'Not provided') : formatValue(readEarthHorizonMetric(metrics, hours, key))} (${earthMetricUnit(key, isZh)})`}</b>)}
                 </div>
               ))}
             </div>
@@ -297,6 +303,8 @@ export default function EarthPredictPanel({
           {context ? copy.emptyReady : copy.emptyNoTask}
         </div>
       )}
+      <EarthDiagnosticPanel key={selectedTaskId || 'no-task'} taskId={selectedTaskId}
+        identity={{ ...(taskOptions.find((option) => Number(option.id) === Number(selectedTaskId))?.task || {}), ...(context || {}) }} />
     </div>
   );
 }

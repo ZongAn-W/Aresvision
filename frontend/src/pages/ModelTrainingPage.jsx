@@ -59,6 +59,8 @@ import {
   buildEarthTrainingHyperparameters,
   EARTH_DEFAULT_SPLIT_RATIOS,
   normalizeEarthSplitRatios,
+  describeEarthTaskSplits,
+  getEarthSplitDefaults,
   captureTrainingDraft,
   getEarthUploadedSelectionBlocker,
   classifyEarthTrainingError,
@@ -749,7 +751,7 @@ export default function ModelTrainingPage() {
       horizon,
       transferEnabled,
       selectedChannels,
-      customModelParams,
+      customModelParams, trainRatio, validationRatio, testRatio,
     });
     if (isEarthTrainingDataset(normalized)) {
       marsSnapshotRef.current = currentDraft;
@@ -762,6 +764,10 @@ export default function ModelTrainingPage() {
       const earthProfile = getEarthTrainingProfile(normalized);
       setWindow(restore ? restore.windowValue : trainingDefaults.window);
       setHorizon(restore ? restore.horizon : trainingDefaults.horizon);
+      const defaults = getEarthSplitDefaults(trainingDefaults);
+      setTrainRatio(restore ? restore.trainRatio : defaults.trainRatio);
+      setValidationRatio(restore ? restore.validationRatio : defaults.validationRatio);
+      setTestRatio(restore ? restore.testRatio : defaults.testRatio);
       setTransferEnabled(false);
       setSelectedChannels(restore ? restore.selectedChannels : [...EARTH_OPTIONAL_CHANNELS]);
       setCustomModelParams(restore ? restore.customModelParams : {});
@@ -772,6 +778,9 @@ export default function ModelTrainingPage() {
     const restore = resolveMarsTrainingRestore(marsSnapshotRef.current);
     marsSnapshotRef.current = null;
     setTrainingDataset(normalized);
+    setTrainRatio(restore ? restore.trainRatio : trainingDefaults.trainRatio);
+    setValidationRatio(restore ? restore.validationRatio : trainingDefaults.validationRatio);
+    setTestRatio(restore ? restore.testRatio : trainingDefaults.testRatio);
     if (normalized === TRAINING_DATASET_OPENMARS_MCD && restore) {
       setModelSource(restore.modelSource);
       setSelectedUploadedModelId(restore.selectedUploadedModelId);
@@ -794,7 +803,7 @@ export default function ModelTrainingPage() {
     trainingDataset,
     transferEnabled,
     useSphere,
-    window_,
+    window_, trainRatio, validationRatio, testRatio, trainingDefaults,
   ]);
 
   // 目录在训练页挂载时读取一次；失败只提示，不影响火星训练。
@@ -990,7 +999,7 @@ export default function ModelTrainingPage() {
     const updates = getTrainingDefaultUpdates(settings.trainingDefaults, {
       editedFields: editedTrainingDefaultFieldsRef.current,
       excludedFields: earthMode
-        ? ['window', 'horizon', 'trainRatio', 'validationRatio', 'testRatio', 'transferEnabled']
+        ? ['window', 'horizon', 'transferEnabled', ...(Number(settings.trainingDefaults?.validationRatio) === 0 ? ['trainRatio', 'validationRatio', 'testRatio'] : [])]
         : transferStructureLocked ? ['window', 'horizon', 'transferEnabled'] : [],
     });
     const setters = {
@@ -1022,6 +1031,8 @@ export default function ModelTrainingPage() {
         .map((field) => `${getModelStructureParamLabel(field.key, structureLabelLanguage)}: ${activeStructureParams[field.key] ?? field.defaultValue}`)
         .join(' / ') || getExperimentArchitectureLabel(normalizedModelArchitecture);
 
+  const earthSplitPreview = describeEarthTaskSplits(earthAvailability.time,
+    { trainRatio, validationRatio, testRatio }, window_, horizon);
   const selectedScriptAvailable = !!selectedScript;
   const uploadedModelStartBlocked =
     modelSource === 'uploaded' &&
@@ -1031,7 +1042,7 @@ export default function ModelTrainingPage() {
   const startDisabled = user
     ? (modelSource === 'official' && !selectedScriptAvailable) ||
       uploadedModelStartBlocked ||
-      (earthMode && (!earthAvailability.selectable || earthUploadedLoading || Boolean(earthUploadedBlocker))) ||
+      (earthMode && (!earthAvailability.selectable || !earthSplitPreview.valid || earthUploadedLoading || Boolean(earthUploadedBlocker))) ||
       transferStartBlocked ||
       !!modelNameError ||
       !customModelName.trim() ||
@@ -1089,6 +1100,11 @@ export default function ModelTrainingPage() {
     if (modelSource === 'official' && !selectedScriptAvailable) {
       blockers.push({ code: 'preset', label: copy.presetUnavailable });
     }
+    if (earthMode && !earthSplitPreview.valid) {
+      blockers.push({ code: 'earth-split', label: isZh
+        ? '地球比例须大于 0、合计 100%，各分区至少包含输入窗口 + 输出窗口个时间步'
+        : 'Earth ratios must be positive and total 100%; every partition needs window + horizon time steps' });
+    }
     // Earth 数据不可训练（缺包/未接线）时同样阻止提交，并给出服务端原因。
     if (earthMode && !earthAvailability.selectable) {
       blockers.push({
@@ -1113,6 +1129,7 @@ export default function ModelTrainingPage() {
     copy.earthUnavailableFallback,
     earthAvailability.reason,
     earthAvailability.selectable,
+    earthSplitPreview.valid, isZh,
     earthMode,
     earthUploadedBlocker,
     earthUploadedLoading,
@@ -1700,9 +1717,10 @@ export default function ModelTrainingPage() {
     setEpochs(defaults.epochs);
     setBatchSize(defaults.batchSize);
     setLearningRate(defaults.learningRate);
-    setTrainRatio(defaults.trainRatio);
-    setValidationRatio(defaults.validationRatio);
-    setTestRatio(defaults.testRatio);
+    const splitDefaults = earthMode ? getEarthSplitDefaults(defaults) : defaults;
+    setTrainRatio(splitDefaults.trainRatio);
+    setValidationRatio(splitDefaults.validationRatio);
+    setTestRatio(splitDefaults.testRatio);
     const activeEarthProfile = earthMode ? getEarthTrainingProfile(trainingDataset) : null;
     setWindow(defaults.window);
     setHorizon(defaults.horizon);
@@ -1749,9 +1767,9 @@ export default function ModelTrainingPage() {
       return;
     }
 
-    const splitRatios = normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio);
+    const splitRatios = normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio, { allowEmptyValidation: !earthMode });
     if (!splitRatios.valid) {
-      showToast(isZh ? '训练集、验证集、测试集比例之和必须为 100%' : 'Train, validation and test ratios must total 100%', 'error');
+      showToast(isZh ? '比例合计须为 100%，地球各分区比例须大于 0' : 'Ratios must total 100%; all Earth partitions must be positive', 'error');
       return;
     }
 
@@ -1759,7 +1777,7 @@ export default function ModelTrainingPage() {
     // 通道与窗口规范化，服务端会独立复核同一套 Earth 契约。选择上传模型时只发送
     // 模型 ID 与自定义参数值；模型版本、内容哈希与数据快照都由服务端固定。
     if (earthMode) {
-      if (!earthAvailability.selectable) {
+      if (!earthAvailability.selectable || !earthSplitPreview.valid) {
         showToast(copy.earthUnavailableTitle, 'error');
         return;
       }
@@ -1789,6 +1807,7 @@ export default function ModelTrainingPage() {
           datasetId: trainingDataset,
           windowValue: window_,
           horizon,
+          trainRatio, validationRatio, testRatio,
           selectedChannels,
           epochs,
           batchSize,
@@ -2475,7 +2494,7 @@ export default function ModelTrainingPage() {
         />
       ) : null}
 
-      {testTaskId ? <ModelTestModal taskId={testTaskId} onClose={() => setTestTaskId(null)} /> : null}
+      {testTaskId ? <ModelTestModal taskId={testTaskId} task={tasks.find((task) => Number(task.id) === Number(testTaskId))} onClose={() => setTestTaskId(null)} /> : null}
 
       {renameTask ? (
         <RenameModelDialog

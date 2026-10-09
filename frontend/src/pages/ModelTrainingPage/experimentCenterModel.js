@@ -5,6 +5,7 @@
  * 阶段、目录筛选、指标解析和摘要都从这里取值，组件只负责渲染。
  */
 
+import { isEarthMetrics } from '../../utils/earthMetricMeta.js';
 import {
   MODEL_STRUCTURE_PARAM_CONFIG,
   RECURRENT_MODEL_ARCHITECTURES,
@@ -346,12 +347,15 @@ export function filterExperimentTasks(tasks = [], {
 }
 
 /** 归一化指标对象：只保留可识别的指标键，未提供的键不出现在结果里。 */
-export function readExperimentMetrics(raw) {
-  const metrics = parseTaskMetrics(raw);
+export function readExperimentMetrics(raw, split = 'test') {
+  const parsed = parseTaskMetrics(raw);
+  const earth = isEarthMetrics(parsed);
+  const metrics = earth ? (parsed.splits?.[split]?.overall || {}) : parsed;
   const normalized = {};
   EXPERIMENT_METRIC_KEYS.forEach((key) => {
     const alias = METRIC_ALIASES[key].find((candidate) => {
       const value = metrics[candidate];
+      if (earth) return typeof value === 'number' && Number.isFinite(value);
       return value !== undefined && value !== null && !(typeof value === 'number' && Number.isNaN(value));
     });
     if (alias) normalized[key] = metrics[alias];

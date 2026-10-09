@@ -21,10 +21,11 @@ from services.earth_training_artifact import (
     verify_earth_model_reload_isolated,
 )
 from services.earth_training_contract import build_earth_training_spec
+from services.earth_task_split import build_earth_task_split
 from services.user_model_validator import UserModelValidator, UserModelValidationResult
 from services.user_model_service import UserModelService
 from training_backbones.earth_3hourly_uploaded_contract import (
-    DATASET_ID, CONTRACT_SCHEMA, FEED, channel_orders, forward,
+    DATASET_ID, CONTRACT_SCHEMA, EVAL_BATCH_POLICY, FEED, channel_orders, forward,
 )
 from training_backbones.uploaded_model_dataset_spec import normalize_dataset_declarations, DatasetCapabilityError
 from training_backbones.uploaded_model_earth_gate import evaluate_package_earth_compatibility
@@ -106,6 +107,7 @@ def test_template_passes_spawn_isolation_and_does_not_claim_daily_or_mars(tmp_pa
     assert not result.earth_ok and result.mars_ok is False
     verdict = result.report_dict()["earth_datasets"][DATASET_ID]
     assert verdict["contract_schema"] == CONTRACT_SCHEMA and verdict["status"] == "available"
+    assert verdict["eval_batch_policy"] == EVAL_BATCH_POLICY
     assert verdict["output_shape"] == [2, 24, 1, 24, 48]
     assert len(channel_orders()) == 16
 
@@ -123,6 +125,86 @@ def test_execution_must_match_declaration_and_have_gradients(tmp_path, replaceme
     assert not result.ok
     verdict = result.earth_compatibilities[DATASET_ID]
     assert verdict["code"] == "uploaded_model_earth_3hourly_dry_run_failed"
+
+
+def batch_dependent_source(kind):
+    source = TEMPLATE.read_text(encoding="utf-8")
+    if kind == "batch_norm":
+        source = source.replace('batch, time, channels, height, width = x.shape',
+            'x = self.batch_norm(x)\n        batch, time, channels, height, width = x.shape')
+        return source.replace('self.mix = nn.Conv2d',
+            'self.batch_norm = nn.BatchNorm3d(config["window"], track_running_stats=False)\n        self.mix = nn.Conv2d')
+    if kind == "batch_size":
+        return source.replace('batch, time, channels, height, width = x.shape',
+            'x = x + x.shape[0]\n        batch, time, channels, height, width = x.shape')
+    if kind in ("batch_gt_two", "batch_gt_eight"):
+        threshold = 2 if kind == "batch_gt_two" else 8
+        return source.replace('batch, time, channels, height, width = x.shape',
+            f'if x.shape[0] > {threshold}:\n            x = x - x.mean(dim=0, keepdim=True)\n        batch, time, channels, height, width = x.shape')
+    return source.replace('batch, time, channels, height, width = x.shape',
+        'x = x - x.mean(dim=0, keepdim=True)\n        batch, time, channels, height, width = x.shape')
+
+
+@pytest.mark.parametrize("kind", ["batch_mean", "batch_norm", "batch_size", "batch_gt_two"])
+def test_admission_rejects_batch_dependent_eval_models(tmp_path, kind):
+    package, validation = package_at(tmp_path, batch_dependent_source(kind))
+    assert not validation.ok
+    verdict = validation.earth_compatibilities[DATASET_ID]
+    assert verdict["code"] == "uploaded_model_earth_3hourly_dry_run_failed"
+    assert "sample-independent" in verdict["errors"][0]
+    refused = evaluate_package_earth_compatibility(package, UserModelValidator(timeout_seconds=None), dataset_id=DATASET_ID)
+    assert not refused.compatible and refused.code == verdict["code"]
+
+
+def test_standard_batch_norm_with_running_statistics_remains_compatible(tmp_path):
+    source = batch_dependent_source("batch_norm").replace('track_running_stats=False', 'track_running_stats=True')
+    _, validation = package_at(tmp_path, source)
+    assert validation.ok, validation.errors
+
+
+def test_task_admission_checks_the_configured_eval_batch_size(service_environment, tmp_path):
+    module, registry = service_environment
+    package, validation = package_at(tmp_path, batch_dependent_source("batch_gt_eight"))
+    assert validation.ok
+    class Packages:
+        async def get_package_for_user(self, *args):
+            return package
+    service = module.TrainingService()
+    service._scheduler_started = True
+    service._earth_model_validator = UserModelValidator(timeout_seconds=None)
+    with pytest.raises(DatasetRequestError, match="sample-independent") as error:
+        asyncio.run(service.start_training(user_id=1, custom_model_name="batch 12 rejected", model_script="ignored.py",
+            model_source="uploaded", uploaded_model_id=package.id, dataset_id=DATASET_ID, dataset_registry=registry,
+            hyperparameters={"batch_size": 12}, user_model_service=Packages()))
+    assert error.value.code == "uploaded_model_earth_3hourly_dry_run_failed"
+    assert asyncio.run(service.get_all_tasks()) == []
+
+
+@pytest.mark.parametrize("mutation", ["calibration", "counter", "parameter"])
+def test_eval_state_mutation_is_rejected_and_probe_restores_state(mutation):
+    from training_backbones.earth_3hourly_uploaded_contract import validate_eval_batch_independence
+    class Stateful(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+            self.register_buffer("shift", torch.zeros(()))
+            self.register_buffer("ready", torch.tensor(False))
+        def forward(self, inputs):
+            if mutation == "calibration" and not self.ready:
+                self.shift.copy_(inputs.mean())
+                self.ready.fill_(True)
+            elif mutation == "counter":
+                self.shift.add_(1)
+            elif mutation == "parameter":
+                self.weight.add_(1)
+            return inputs[:, -1:, :1] * self.weight + self.shift
+    model = Stateful()
+    before = {key: value.clone() for key, value in model.state_dict().items()}
+    with pytest.raises(ValueError, match="must not mutate"):
+        validate_eval_batch_independence(model, window=2, channels=1, horizon=1)
+    assert model.training
+    for key, value in model.state_dict().items():
+        assert torch.equal(value, before[key])
 
 
 def test_channels_not_just_boundary_counts_are_dry_run(tmp_path):
@@ -191,11 +273,14 @@ def uploaded_smoke(synthetic_training_release, tmp_path_factory):
                  "source_text": TEMPLATE.read_text(encoding="utf-8"), "param_schema": validation.param_schema,
                  "custom_model_params": {"bias": True}}
     spec = build_earth_training_spec(task_id=902, dataset_binding=binding, uploaded_model=reference,
-                                    hyperparameters={"epochs": 1, "batch_size": 8, "selected_channels": ["U10M"]})
+                                    task_split=build_earth_task_split(synthetic_training_release.dates, 56, 24,
+                                        {name + "_ratio": 1/3 for name in ("train", "validation", "test")}),
+                                    hyperparameters={**{name + "_ratio": 1/3 for name in ("train", "validation", "test")},
+                                                     "epochs": 1, "batch_size": 8, "selected_channels": ["U10M"]})
     output = root / "new-uploaded-checkpoint.pth"
     result = run_training(spec, output, registry, device="cpu", cache_root=root / "cache")
     task = SimpleNamespace(id=902, **binding, user_id=1, status="completed", output_model_path=str(output),
-                           hyperparameters=json.dumps({**spec["hyperparameters"], "_uploaded_model_id": package.id,
+                           hyperparameters=json.dumps({**spec["hyperparameters"], "_earth_task_split": spec["task_split"], "_uploaded_model_id": package.id,
                                                        "_uploaded_model_version": 1, "_uploaded_model_content_hash": package.content_hash}))
     return SimpleNamespace(task=task, registry=registry, output=output, result=result, reference=reference)
 
@@ -209,8 +294,61 @@ def test_uploaded_synthetic_training_evaluates_and_strictly_reloads(uploaded_smo
     assert checkpoint.normalization["fit_time_end"] == "2020-01-10T22:30:00Z"
     for split in ("validation", "test"):
         assert len(checkpoint.metrics["splits"][split]["by_lead"]) == 24
+        assert set(checkpoint.metrics["splits"][split]["overall"]) == {"mse", "rmse", "mae", "r2", "mape", "smape"}
+    assert checkpoint.metrics["schema"] == "earth_training_metrics_3hourly_v2"
     model, _ = build_earth_model_from_checkpoint(checkpoint)
     assert forward(model, torch.randn(2, 56, 2, 24, 48)).shape == (2, 24, 1, 24, 48)
+
+
+def test_double_factory_uses_float32_in_training_reload_and_backtest(synthetic_training_release, tmp_path, monkeypatch):
+    source = TEMPLATE.read_text(encoding="utf-8").replace(
+        'return EarthThreeHourLinear(config)', 'return EarthThreeHourLinear(config).double()')
+    package, validation = package_at(tmp_path, source)
+    assert validation.ok, validation.errors
+    reference = {"package_id": package.id, "display_name": package.display_name, "version": 1,
+                 "content_hash": package.content_hash, "source_path": package.storage_path,
+                 "source_text": source, "param_schema": validation.param_schema,
+                 "custom_model_params": {"bias": True}}
+    registry = registry_for(synthetic_training_release)
+    binding = registry.build_training_binding(DATASET_ID)
+    ratios = {name + "_ratio": 1/3 for name in ("train", "validation", "test")}
+    split = build_earth_task_split(synthetic_training_release.dates, 56, 24, ratios)
+    spec = build_earth_training_spec(task_id=1902, dataset_binding=binding, uploaded_model=reference,
+                                   task_split=split, hyperparameters={**ratios, "epochs": 1,
+                                   "batch_size": 8, "selected_channels": ["U10M"]})
+    path = tmp_path / "double-factory.pth"
+    run_training(spec, path, registry, device="cpu", cache_root=tmp_path / "cache")
+    checkpoint = load_earth_training_artifact(path)
+    assert all(t.dtype == torch.float32 for t in checkpoint.payload["model_state_dict"].values() if t.is_floating_point())
+    model, _ = build_earth_model_from_checkpoint(checkpoint)
+    assert all(p.dtype == torch.float32 for p in model.parameters())
+    inputs = torch.randn(2, 56, 2, 24, 48)
+    torch.testing.assert_close(forward(model, inputs), torch.cat([forward(model, x[None]) for x in inputs]))
+    if torch.cuda.is_available():
+        assert forward(model.to("cuda"), inputs.to("cuda")).dtype == torch.float32
+    task = SimpleNamespace(id=1902, **binding, user_id=1, status="completed", output_model_path=str(path),
+                           hyperparameters=json.dumps({**spec["hyperparameters"], "_earth_task_split": split}))
+    import services.earth_prediction_service as prediction
+    monkeypatch.setattr(prediction, "_field_list", lambda values: [{"shape": list(values.shape)}])
+    result = run_earth_prediction(task, "2020-01-27T22:30:00Z", registry, device="cpu")
+    assert result["origin_split"] == "test" and set(result["metrics"]["overall"]) == {"mse", "rmse", "mae", "r2", "mape", "smape"}
+
+
+@pytest.mark.parametrize("kind,batch_size", [("batch_mean", 8), ("batch_gt_eight", 12)])
+def test_old_batch_dependent_checkpoint_is_rejected_on_reload(uploaded_smoke, tmp_path, kind, batch_size):
+    payload = copy.deepcopy(load_earth_training_artifact(uploaded_smoke.output).payload)
+    source = batch_dependent_source(kind)
+    payload["run"]["hyperparameters"]["batch_size"] = batch_size
+    reference = payload["model_ref"]["uploaded_model"]
+    reference.update(source_text=source, content_hash=hashlib.sha256(source.encode()).hexdigest(),
+                     source_path=str(tmp_path / "unavailable.source"))
+    path = tmp_path / "batch-dependent.pth"
+    torch.save(payload, path)
+    checkpoint = load_earth_training_artifact(path)
+    with pytest.raises(EarthArtifactError, match="sample-independent"):
+        build_earth_model_from_checkpoint(checkpoint)
+    with pytest.raises(EarthArtifactError, match="sample-independent"):
+        verify_earth_model_reload_isolated(path)
 
 
 @pytest.mark.parametrize("mutation", ["daily_schema", "implementation", "source", "tile", "build", "unit", "fingerprint", "normalization"])
@@ -379,6 +517,24 @@ def test_incomplete_execution_evidence_cannot_be_available(tmp_path, status, sha
     assert not gate.compatible and gate.code == "uploaded_model_compatibility_unknown"
 
 
+def test_old_validation_report_requires_sample_independence_revalidation(tmp_path):
+    package, result = package_at(tmp_path)
+    result.earth_compatibilities[DATASET_ID].pop("eval_batch_policy")
+    package.validation_report = json.dumps(result.report_dict())
+    service = UserModelService(storage_root=tmp_path / "storage")
+    async def get_package(*args):
+        return package
+    service.get_package_for_user = get_package
+    verdict = asyncio.run(service.get_earth_compatibility(package.id, 1, dataset_id=DATASET_ID))
+    assert not verdict["compatible"] and verdict["status"] == "unknown"
+    class OldValidator:
+        def validate_file(self, *args, **kwargs):
+            return result
+    assert not evaluate_package_earth_compatibility(package, OldValidator(), dataset_id=DATASET_ID).compatible
+    current = evaluate_package_earth_compatibility(package, UserModelValidator(timeout_seconds=None), dataset_id=DATASET_ID)
+    assert current.compatible
+
+
 @pytest.mark.parametrize("corruption", [None, "weights", "package"])
 def test_parent_completion_checks_uploaded_identity_and_strict_reload(
         uploaded_smoke, service_environment, tmp_path, monkeypatch, corruption):
@@ -394,7 +550,8 @@ def test_parent_completion_checks_uploaded_identity_and_strict_reload(
     task = asyncio.run(service.start_training(user_id=1, custom_model_name="parent uploaded completion",
         model_script="ignored.py", model_source="uploaded", uploaded_model_id=package.id,
         dataset_id=DATASET_ID, dataset_registry=uploaded_smoke.registry,
-        hyperparameters={"epochs": 1, "selected_channels": ["U10M"]}, user_model_service=Packages()))
+        hyperparameters={**{name + "_ratio": 1/3 for name in ("train", "validation", "test")},
+                             "epochs": 1, "selected_channels": ["U10M"]}, user_model_service=Packages()))
     spec = service._queue_specs[task.id]["earth_training_spec"]
     output = tmp_path / "new-parent-checkpoint.pth"
     def popen(*args, **kwargs):
@@ -463,7 +620,7 @@ def test_http_upload_verdict_revalidation_and_training_errors(service_environmen
         request = {"model_script": "ignored.py", "model_name": "HTTP upload task", "model_source": "uploaded",
                    "uploaded_model_id": package["id"], "dataset_id": DATASET_ID,
                    "hyperparameters": {"epochs": 1, "custom_model_params": {"bias": False}}}
-        invalid = client.post("/api/training/start", json={**request, "hyperparameters": {"window": 7}})
+        invalid = client.post("/api/training/start", json={**request, "hyperparameters": {"validation_ratio": 0}})
         assert invalid.status_code == 422 and invalid.json()["detail"]["code"] == "invalid_earth_training_parameters"
         assert asyncio.run(service.get_all_tasks()) == []
         queued = client.post("/api/training/start", json=request)

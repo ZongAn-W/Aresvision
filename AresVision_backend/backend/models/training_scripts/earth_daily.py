@@ -111,9 +111,13 @@ def _build_loaders(
     assert_release_matches_binding(release, binding)
 
     selected = hyperparameters["selected_channels"]
-    # Fit statistics on the published training period, then build each split
-    # independently so no input or target window can cross a manifest boundary.
-    normalization = normalization_from_release(release, ["TO3", *selected])
+    # Fit on the frozen task train interval (manifest for legacy tasks), then
+    # independently build windows inside each partition.
+    task_split = spec.get("task_split")
+    if "task_split" in spec:
+        from services.earth_task_split import validate_earth_task_split
+        validate_earth_task_split(task_split, release.dates, profile["window"], profile["horizon"], hyperparameters)
+    normalization = normalization_from_release(release, ["TO3", *selected], task_split=task_split)
     window_type = EarthThreeHourlyWindows if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else EarthOzoneWindows
     splits = {
         name: window_type.from_release(
@@ -123,6 +127,7 @@ def _build_loaders(
             horizon=profile["horizon"],
             selected_channels=selected,
             normalization=normalization,
+            **({"task_split": task_split} if window_type is EarthThreeHourlyWindows else {}),
         )
         for name in ("train", "validation", "test")
     }
@@ -145,6 +150,8 @@ def _build_loaders(
         }
         for name, dataset in splits.items()
     }
+    if task_split is not None:
+        split_ranges = task_split["ranges"]
     generator = torch.Generator()
     generator.manual_seed(seed)
     wrapper = _SpatialTileDataset if window_type is EarthThreeHourlyWindows else _ArrayDataset
@@ -175,6 +182,7 @@ def _build_loaders(
         "splits": splits,
         "counts": counts,
         "split_ranges": split_ranges,
+        "task_split": task_split,
         "train_loader": train_loader,
         "validation_loader": validation_loader,
         "test_loader": test_loader,
@@ -560,6 +568,7 @@ def run_training(
             "test_ratio": hyperparameters["test_ratio"],
         },
         split_ranges=prepared["split_ranges"],
+        task_split=prepared["task_split"],
         task_id=task_id,
         model_source=model_source,
         uploaded_model=uploaded_block,

@@ -10,12 +10,16 @@
 | Earth 三联图 | 三小时原始 DU 场、真实经纬度、UTC 时间戳 | 当前所选步，保留 `origin_split`、起点与目标时间；不使用 Mars 单位换算；日频数据集已停用 |
 | Mars 参考/预测散点 | 当前步全部格点，按纬度行、经度列顺序展开 | 当前所选预测步；普通散点，无密度估计、无抽样；等比例坐标、`y=x` |
 | Mars 多模型逐步指标曲线 | 各模型已有 `metrics.per_step` | 各模型绑定的完整测试集；RMSE/MAE/R² 合并测试像素，SSIM 按现有服务聚合；不同数据集或 split 不应当作相同实验 |
-| Earth 多模型逐步指标曲线 | 严格验证 checkpoint 保存的 test `by_lead`，由比较 API 整理为 `metrics.per_step` | 相同三小时发布、测试分区与窗口数的完整测试集；RMSE/MAE 为 DU，24 步各对应 3 小时；导出不重新推理，禁止 Earth/Mars 混合曲线 |
+| Earth 多模型逐步指标曲线 | 严格验证 checkpoint 保存的 test `by_lead`，由比较 API 整理为 `metrics.per_step` | 相同三小时发布、测试分区与窗口数的完整测试集；支持 RMSE/MAE（DU）和 R²（无量纲），步数按任务 horizon，每步 3 小时；导出不重新推理，禁止 Earth/Mars 混合曲线 |
 | Mars 单模型 PFI | 已有 `items.importance`、基线 R² | 最多 40 个均匀索引抽样测试窗口；每特征一次随机置换，ΔR²=基线−置换后 R²，保留负值 |
 
 PFI 不依赖页面 Ls 起点，也不等于当前预测窗口或完整测试集逐格评价。新计算响应附 `sampling`（实际样本数、测试窗口数、抽样索引、置换方式、未固定 seed）；旧缓存缺少该信息时明确标记 `legacy_unknown`，不编造样本数。导出数据只能重画已有 PFI 值，不能复现随机置换实验。
 
+Earth 训练后诊断的散点、残差直方图和 Earth PFI 当前只在页面展示，不新增导出类型；未来开放导出时必须消费诊断结果快照，不能在导出请求中重新推理。页面诊断使用固定 test 分区的有限窗口和明确种子，完整 test 指标与抽样指标分开标注。
+
 旧误差分布 API 的 `scatter.density` 为兼容字段，全部为 1，不能作为密度估计。页面已改用当前步全部格点普通散点；误差直方图和其 RMSE/MAE 仍是完整测试集，单独标明范围。Mars 页面与导出统一采用 `1 μm-atm = 0.1 DU`，RMSE/MAE、直方图横坐标与场图读数同步转换；R²、SSIM、ΔR² 不转换。Earth 原有 DU API 契约不变。
+
+Earth 页面与比较新增 MSE/MAPE/SMAPE，但现有导出 schema 只接受 RMSE/MAE/R²/SSIM，因此新增三项不开放导出按钮。旧模型仍可导出已有 RMSE/MAE；R² 导出只纳入逐步值完整的模型，至少两项。Earth 快照元数据透传新指标 schema、逐项单位与公式策略，v1 快照无需补写字段；不自动训练或推理。完整公式及旧产物规则见[地球评价指标](earth-evaluation-metrics.md)。
 
 ## 导出面板与科研规范
 

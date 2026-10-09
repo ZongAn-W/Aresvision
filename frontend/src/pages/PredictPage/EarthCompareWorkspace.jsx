@@ -3,7 +3,7 @@ import { compareEarthModels } from '../../services/earthPredict';
 import { useT } from '../../i18n';
 import PredictSidebar from './PredictSidebar';
 import CompareTrainingModelsPanel from './CompareTrainingModels/CompareTrainingModelsPanel';
-import { getCompareSelectionState } from './CompareTrainingModels/compareTrainingModelsData';
+import { getCompareSelectionState, buildCompareModelSummary } from './CompareTrainingModels/compareTrainingModelsData';
 import { getEarthTrainingModelOptions, resolveEarthPredictErrorMessage } from './earthPredictModel';
 import { PREDICT_MODEL_MODE_COMPARE } from './predictModelModes';
 
@@ -16,6 +16,9 @@ export default function EarthCompareWorkspace({ tasks, scope, tasksLoading, isLi
   const [error, setError] = useState(null);
   const requestRef = useRef(null);
   const selection = getCompareSelectionState(ids);
+  const selectedOptions = options.filter(option => selection.ids.includes(option.id));
+  const horizons = selectedOptions.map(option => Number(buildCompareModelSummary(option.task).horizon));
+  const horizon = horizons.length && horizons.every(value => Number.isInteger(value) && value >= 1 && value <= 240 && value === horizons[0]) ? horizons[0] : null;
   const key = `${scope}:${selection.ids.join(',')}`;
   useLayoutEffect(() => {
     requestRef.current?.abort();
@@ -46,7 +49,7 @@ export default function EarthCompareWorkspace({ tasks, scope, tasksLoading, isLi
     <PredictSidebar planet="earth" isLight={isLight} modelMode={PREDICT_MODEL_MODE_COMPARE}
       trainingModelOptions={options} selectedCompareTrainingTaskIds={ids} setSelectedCompareTrainingTaskIds={setIds}
       trainingTasksLoading={tasksLoading} loading={loading} requestContextLocked={loading} error={error}
-      predStep={24} predictionHorizonLimit={Math.max(...options.map((option) => Number(option.horizon || 24)), 24)} handlePredict={run}
+      predStep={horizon ?? ''} predictionHorizonLimit={horizon} handlePredict={run}
       analysisVisibility={{ inputVariables: false, systemHyperparams: false }} precision={precision} />
     <div style={{ minWidth: 0 }}>
       <p className="earth-predict-note">{t('predict.earthCompareNote')}</p>

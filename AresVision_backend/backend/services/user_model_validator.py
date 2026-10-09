@@ -468,7 +468,7 @@ class UserModelValidator:
     @staticmethod
     def _validate_three_hour_module(module, datasets, param_schema, warnings, *, earth_probe=None):
         from training_backbones.earth_3hourly_uploaded_contract import (
-            CONTRACT_SCHEMA, RESERVED_PARAMETERS, channel_orders, dry_run,
+            CONTRACT_SCHEMA, EVAL_BATCH_POLICY, RESERVED_PARAMETERS, channel_orders, dry_run,
         )
 
         model_spec = module.MODEL_SPEC
@@ -495,13 +495,15 @@ class UserModelValidator:
                 code = 'uploaded_model_contract_invalid'
                 raise ValueError(f'Model does not declare window={window}, horizon={horizon}')
             for order in orders:
-                shape = dry_run(module.build_model, order, params, window=window, horizon=horizon)
+                shape = dry_run(module.build_model, order, params, window=window, horizon=horizon,
+                                batch_size=(earth_probe or {}).get("batch_size", 8))
         except Exception as exc:
             errors = [f"Earth three-hour dry-run failed: {exc}"]
         verdict = {
             "compatible": not errors, "status": "unavailable" if errors else "available",
             "code": code if errors else None, "errors": errors, "output_shape": shape,
             "contract_schema": CONTRACT_SCHEMA, "dataset_id": EARTH_3HOURLY_FEED_KEY,
+            "eval_batch_policy": EVAL_BATCH_POLICY if not errors else None,
             "window": locals().get('window'), "horizon": locals().get('horizon'),
         }
         # The legacy verdict is independent of the three-hour run.

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useT } from '../../i18n';
 import TrainingTaskParameters from './TrainingTaskParameters';
 import LossEvolutionChart from '../../components/LossEvolutionChart';
@@ -13,8 +13,14 @@ import {
   getExperimentFailureMessage,
   normalizeTaskChannels,
   parseTaskHyperparameters,
+  readExperimentMetrics,
 } from './experimentCenterModel';
+import { EARTH_METRIC_META, earthMetricUnit } from '../../utils/earthMetricMeta.js';
+import { useSettings } from '../../contexts/SettingsContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { getTrainingStatusMeta } from './trainingStatusMeta';
+import { fetchEarthDiagnosticContext } from '../../services/earthPredict.js';
+import { earthDiagnosticTaskAvailability, earthDiagnosticErrorText } from '../PredictPage/earthDiagnosticsModel.js';
 import './experimentCenter.css';
 
 const METRIC_LABEL_KEYS = {
@@ -88,7 +94,12 @@ export default function ExperimentResultPanel({
   onFormatValue,
 }) {
   const t = useT();
+  const { settings } = useSettings();
+  const { user } = useAuth();
+  const isZh = settings.language !== 'en';
   const [logOpen, setLogOpen] = useState(false);
+  const [testAvailability, setTestAvailability] = useState(null);
+  const [testCheckRevision, setTestCheckRevision] = useState(0);
   const summary = useMemo(() => buildExperimentSummary(activeTask), [activeTask]);
   const hyperparameters = useMemo(
     () => parseTaskHyperparameters(activeTask?.hyperparameters),
@@ -99,6 +110,25 @@ export default function ExperimentResultPanel({
     [activeTask, hyperparameters]
   );
   const failure = useMemo(() => getExperimentFailureMessage(activeTask), [activeTask]);
+  const localTestAvailability = earthDiagnosticTaskAvailability(activeTask, isZh);
+  const earthTask = summary.dataset.startsWith('earth_');
+  const diagnosticIdentity = JSON.stringify([user?.id, activeTask?.id, activeTask?.status, activeTask?.model_available,
+    activeTask?.dataset_id, activeTask?.dataset_version, activeTask?.dataset_fingerprint,
+    activeTask?.checkpoint_sha256, activeTask?.output_model_path, activeTask?.hyperparameters]);
+  useEffect(() => {
+    setTestAvailability(null);
+    if (!earthTask || !localTestAvailability.available) return;
+    const controller = new AbortController();
+    fetchEarthDiagnosticContext(activeTask.id, { signal: controller.signal })
+      .then((context) => { if (!controller.signal.aborted) setTestAvailability({
+        identity: diagnosticIdentity, available: context.available,
+        reason: context.available ? '' : earthDiagnosticErrorText(context),
+      }); })
+      .catch((error) => { if (!controller.signal.aborted) setTestAvailability({
+        identity: diagnosticIdentity, available: false, reason: earthDiagnosticErrorText(error),
+      }); });
+    return () => controller.abort();
+  }, [diagnosticIdentity, earthTask, localTestAvailability.available, testCheckRevision]);
 
   if (!activeTask) {
     return (
@@ -118,10 +148,18 @@ export default function ExperimentResultPanel({
   const modelAvailable = activeTask.status === 'completed' && activeTask.model_available === true;
   const predictionAvailable = canUseTaskForPrediction(activeTask);
   const retiredDataset = isRetiredEarthTask(activeTask);
+  const earth = summary.dataset.startsWith('earth_');
+  const testVerified = testAvailability?.identity === diagnosticIdentity ? testAvailability : null;
+  const testAvailable = localTestAvailability.available && (!earth || testVerified?.available === true);
+  const testReason = !localTestAvailability.available ? localTestAvailability.reason
+    : earth && !testVerified ? (isZh ? '正在核验任务、数据与模型产物…' : 'Checking task, data and model artifact…')
+      : testVerified?.reason || '';
 
   const metrics = EXPERIMENT_METRIC_KEYS
-    .filter((key) => summary.metrics[key] !== undefined)
-    .map((key) => ({ key, label: t(METRIC_LABEL_KEYS[key]), value: formatExperimentMetricValue(summary.metrics[key]) }));
+    .filter((key) => earth || summary.metrics[key] !== undefined)
+    .map((key) => ({ key, label: earth ? EARTH_METRIC_META.find(metric => metric.key === key)[isZh ? 'zh' : 'en'] : t(METRIC_LABEL_KEYS[key]),
+      value: summary.metrics[key] === undefined ? t('experimentCenter.metricNotProvided') : formatExperimentMetricValue(summary.metrics[key]) }));
+  const validationMetrics = earth ? readExperimentMetrics(activeTask.metrics, 'validation') : {};
 
   const datasetFingerprint = activeTask.dataset_fingerprint || '';
   const datasetVersion = activeTask.dataset_version || '';
@@ -178,20 +216,36 @@ export default function ExperimentResultPanel({
         </div>
       ) : null}
 
-      <section className="experiment-result-section" aria-labelledby="experiment-result-metrics-title">
-        <h4 className="experiment-result-section-title" id="experiment-result-metrics-title">{copy.metricsTitle}</h4>
+      <section className="experiment-result-section" data-earth-training-metrics={earth ? 'true' : undefined} aria-labelledby="experiment-result-metrics-title">
+        <h4 className="experiment-result-section-title" id="experiment-result-metrics-title">{earth ? t('experimentCenter.fullTestMetrics') : copy.metricsTitle}</h4>
         {metrics.length > 0 ? (
           <div className="experiment-result-metrics">
             {metrics.map((metric) => (
               <div className="experiment-result-metric" key={metric.key}>
                 <div className="experiment-result-metric-label">{metric.label}</div>
                 <div className="experiment-result-metric-value">{metric.value}</div>
+                {earth ? <small>{earthMetricUnit(metric.key, isZh)}</small> : null}
               </div>
             ))}
           </div>
         ) : (
           <div className="experiment-result-empty experiment-center-hint">{copy.metricsUnavailable}</div>
         )}
+        {earth ? (
+          <>
+            <h5 className="experiment-result-group-title">{t('experimentCenter.validationMetrics')}</h5>
+            <div className="experiment-result-metrics" data-earth-validation-metrics="true">
+              {EXPERIMENT_METRIC_KEYS.map((key) => (
+                <div className="experiment-result-metric" key={key}>
+                  <div className="experiment-result-metric-label">{EARTH_METRIC_META.find(metric => metric.key === key)[isZh ? 'zh' : 'en']}</div>
+                  <div className="experiment-result-metric-value">{validationMetrics[key] === undefined
+                    ? t('experimentCenter.metricNotProvided') : formatExperimentMetricValue(validationMetrics[key])}</div>
+                  <small>{earthMetricUnit(key, isZh)}</small>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
       </section>
 
       <LossEvolutionChart
@@ -289,6 +343,8 @@ export default function ExperimentResultPanel({
           <button
             type="button"
             className="experiment-center-button"
+            disabled={!testAvailable || isProcessing}
+            title={testReason || undefined}
             onClick={() => onTest(activeTask.id)}
           >
             {copy.testModel}
@@ -303,6 +359,11 @@ export default function ExperimentResultPanel({
           </button>
         </div>
       </div>
+      {testReason ? <p className="experiment-center-hint" role="status" data-model-test-unavailable="true">{testReason}</p> : null}
+      {earth && localTestAvailability.available && testVerified?.available === false ? <button
+        type="button" className="experiment-center-button" onClick={() => setTestCheckRevision((n) => n + 1)}>
+        {isZh ? '重新核验测试可用性' : 'Recheck test availability'}
+      </button> : null}
     </div>
   );
 }

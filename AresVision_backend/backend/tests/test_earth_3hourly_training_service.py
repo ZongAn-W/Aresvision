@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import numpy as np
 
 from services.dataset_identity import DatasetRequestError, EARTH_DATASET_3HOURLY_ID
 from services.dataset_registry import DatasetRegistry
@@ -14,7 +15,8 @@ from services.dataset_registry import DatasetRegistry
 def binding():
     snapshot = {
         "dataset_id": EARTH_DATASET_3HOURLY_ID, "planet": "earth",
-        "time": {"kind": "datetime", "step": 3, "step_unit": "hour", "time_zone": "UTC"},
+        "time": {"kind": "datetime", "step": 3, "step_unit": "hour", "time_zone": "UTC", "start": "2020-01-01T01:30:00Z",
+                 "end": "2021-12-31T22:30:00Z", "count": 5848},
         "grid": {"shape": [240, 480]},
     }
     return {
@@ -37,7 +39,7 @@ class ServerRegistry:
         assert dataset_id == EARTH_DATASET_3HOURLY_ID
         assert expected_fingerprint == "a" * 64
         self.lookups.append((dataset_id, expected_fingerprint))
-        return SimpleNamespace(data_path=self.data_path)
+        return SimpleNamespace(data_path=self.data_path, dates=np.datetime64("2020-01-01T01:30", "ns") + np.arange(5848) * np.timedelta64(3, "h"))
 
 
 @pytest.fixture
@@ -86,6 +88,7 @@ def test_start_queues_56_to_24_with_only_the_server_data_path(service_environmen
     assert (hypers["window"], hypers["horizon"]) == (56, 24)
     assert hypers["selected_channels"] == ["U10M", "SWGDN"]
     assert hypers["training_dataset"] == EARTH_DATASET_3HOURLY_ID
+    assert hypers["_earth_metrics_schema"] == "earth_training_metrics_3hourly_v2"
     assert "data_path" not in hypers
     spec = service._queue_specs[task.id]["earth_training_spec"]
     assert spec["data_path"] == str(registry.data_path)

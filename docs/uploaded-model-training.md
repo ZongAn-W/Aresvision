@@ -390,3 +390,7 @@ class RepeatLastFrame(nn.Module):
 def build_model(config):
     return RepeatLastFrame(config["horizon"])
 ```
+
+## Earth task partitions
+
+The active three-hour Earth feed shares `earth_raw_utc_timeline_v1` with the official DLinear. Positive train/validation/test ratios (default 0.7/0.2/0.1) allocate the entire raw UTC timeline before any windows are built. Normalization fits only the task train interval; uploaded backtests must keep their full input and target inside one task partition. Release files, manifest splits and fingerprint remain unchanged. Frozen task boundaries survive queue recovery and strict checkpoint reload; older three-hour artifacts retain manifest semantics. Comparison requires the same test time range and window definition. See [Earth task partitions](earth-task-splits.md).

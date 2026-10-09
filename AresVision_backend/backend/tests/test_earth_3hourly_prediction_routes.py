@@ -63,7 +63,7 @@ def threehour_app(threehour_prediction_bundle, tmp_path, monkeypatch):
     asyncio.run(engine.dispose())
 
 
-def seed_task(env, *, status="completed", user_id=1, dataset_id=DATASET_ID, fingerprint=None):
+def seed_task(env, *, status="completed", user_id=1, dataset_id=DATASET_ID, fingerprint=None, legacy_metrics=False):
     from database.models import ModelTrainingTask
     binding = env["bundle"].registry.build_training_binding(DATASET_ID)
     if fingerprint:
@@ -82,6 +82,9 @@ def seed_task(env, *, status="completed", user_id=1, dataset_id=DATASET_ID, fing
             session.add(row)
             await session.flush()
             payload = copy.deepcopy(env["bundle"].payload)
+            if legacy_metrics:
+                from test_earth_metrics_v2 import legacy_payload
+                payload = legacy_payload(payload)
             payload["run"]["task_id"] = row.id
             path = env["tmp"] / f"threehour_task_{row.id}.pth"
             torch.save(payload, path)
@@ -90,6 +93,20 @@ def seed_task(env, *, status="completed", user_id=1, dataset_id=DATASET_ID, fing
             return row.id, path
 
     return asyncio.run(insert())
+
+
+def test_mixed_v1_v2_comparison_preserves_missing_metrics_without_inference(threehour_app, monkeypatch):
+    import services.earth_prediction_service as service
+    ids = [seed_task(threehour_app, legacy_metrics=True)[0], seed_task(threehour_app)[0]]
+    monkeypatch.setattr(service, "earth_forward_for_model", lambda *a, **k: pytest.fail("Comparison reran inference"))
+    response = threehour_app["client"].post("/api/earth/predict/training-models/compare", json={"task_ids": ids})
+    assert response.status_code == 200, response.text
+    old, new = response.json()["items"]
+    assert old["metrics"]["overall"] == {"rmse": 1.0, "mae": 1.0}
+    assert "r2" not in old["metrics"]["per_step"][0]
+    assert "metric_policy" not in old["metrics"]
+    assert new["metrics"]["schema"] == "earth_training_metrics_3hourly_v2"
+    assert new["metrics"]["overall"]["r2"] == 0
 
 
 def test_http_context_preserves_utc_datetimes_and_publishes_complete_origins(threehour_app):
@@ -126,7 +143,9 @@ def test_earth_comparison_reads_verified_test_metrics_and_exports_without_infere
     assert [item["task_id"] for item in body["items"]] == ids
     refs = []
     for item in body["items"]:
-        assert item["metrics"]["overall"] == {"rmse": 1.0, "mae": 1.0}
+        assert item["metrics"]["overall"]["rmse"] == item["metrics"]["overall"]["mae"] == 1.0
+        assert set(item["metrics"]["overall"]) == {"mse", "rmse", "mae", "r2", "mape", "smape"}
+        assert item["metrics"]["metric_units"]["mse"] == "DU^2"
         assert len(item["metrics"]["per_step"]) == 24
         assert item["metrics"]["split_meta"]["window_count"] == 1
         refs.append(item["metrics"]["export_ref"])
@@ -136,6 +155,10 @@ def test_earth_comparison_reads_verified_test_metrics_and_exports_without_infere
     assert figure["unit"] == "DU"
     assert len(figure["curves"]) == 2
     assert figure["curves"][0]["y"].tolist() == [1.0] * 24
+    r2_figure = prepare_figure([EXPORT_SOURCES.get(ref, 1) for ref in refs],
+                              request.model_copy(update={"metric": "r2"}))
+    assert r2_figure["value_unit"] == "dimensionless"
+    assert r2_figure["curves"][0]["y"].tolist() == [0.0] * 24
     threehour_app["app"].include_router(research_export.router, prefix="/api")
     exported = threehour_app["client"].post("/api/predict/research-export/download", json=request.model_dump())
     assert exported.status_code == 200, exported.text
@@ -206,6 +229,12 @@ def test_http_run_returns_24_full_fields_and_hour_metrics(threehour_app, monkeyp
     assert [row["lead_hours"] for row in body["metrics"]["by_lead"]] == list(range(3, 73, 3))
     assert [row["horizon_hours"] for row in body["metrics"]["by_horizon"]] == [24, 48, 72]
     assert all("lead_day" not in row for row in body["metrics"]["by_lead"])
+    keys = {"mse", "rmse", "mae", "r2", "mape", "smape"}
+    assert set(body["metrics"]["overall"]) == keys
+    for row in [*body["metrics"]["by_lead"], *body["metrics"]["by_horizon"]]:
+        assert keys <= row.keys()
+    assert body["metrics"]["metric_units"]["mse"] == "DU^2"
+    assert body["metrics"]["schema"] == "earth_training_metrics_3hourly_v2"
     # Export the already returned synthetic result; prohibit additional inference.
     from routers import research_export, earth_predict
     from io import BytesIO
@@ -311,7 +340,7 @@ def test_http_unknown_task_returns_404_and_mars_task_is_409(threehour_app):
     assert response.json()["detail"]["code"] == "dataset_prediction_not_supported"
 
 
-@pytest.mark.parametrize("endpoint", ["run", "metrics", "pfi", "compare", "compare_pfi", "action_test"])
+@pytest.mark.parametrize("endpoint", ["run", "metrics", "pfi", "compare", "compare_pfi"])
 def test_threehour_tasks_are_409_on_all_mars_prediction_paths(threehour_app, endpoint):
     task_id, _ = seed_task(threehour_app)
     client = threehour_app["client"]

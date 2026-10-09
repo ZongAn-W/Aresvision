@@ -93,18 +93,16 @@ export const EARTH_PARAM_BOUNDS = {
   linear_hidden_layers: { min: 1, max: 4, fallback: 2 },
 };
 
-export function normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio) {
-  const values = [trainRatio, validationRatio, testRatio].map((value, index) => {
-    const fallback = Object.values(EARTH_DEFAULT_SPLIT_RATIOS)[index];
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  });
+export function normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio, { allowEmptyValidation = false } = {}) {
+  const values = [trainRatio, validationRatio, testRatio].map((value) =>
+    ((typeof value === 'number' || (typeof value === 'string' && value.trim() !== ''))
+      ? Number(value) : NaN));
   const total = values.reduce((sum, value) => sum + value, 0);
   return {
     train_ratio: values[0],
     validation_ratio: values[1],
     test_ratio: values[2],
-    valid: values[0] > 0 && values[1] >= 0 && values[2] > 0 && values.every((value) => value < 1) && Math.abs(total - 1) <= 1e-6,
+    valid: values[0] > 0 && (allowEmptyValidation ? values[1] >= 0 : values[1] > 0) && values[2] > 0 && values.every((value) => value < 1) && Math.abs(total - 1) <= 1e-6,
     total,
   };
 }
@@ -163,7 +161,12 @@ export function buildEarthTrainingHyperparameters({
     ? EARTH_MODEL_SOURCE_UPLOADED
     : EARTH_MODEL_SOURCE_OFFICIAL;
   const uploaded = requestedSource === EARTH_MODEL_SOURCE_UPLOADED;
+  const ratios = normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio);
+  if (!ratios.valid) throw new Error('Earth ratios must all be positive and total 100%');
   const hyperparameters = {
+    train_ratio: ratios.train_ratio,
+    validation_ratio: ratios.validation_ratio,
+    test_ratio: ratios.test_ratio,
     training_dataset: profile.datasetId,
     model_architecture: uploaded ? EARTH_UPLOADED_ARCHITECTURE : EARTH_MODEL_ARCHITECTURE,
     model_source: requestedSource,
@@ -279,6 +282,7 @@ export function readEarthDatasetAvailability(descriptor) {
     datasetVersion: descriptor.dataset_version || null,
     fingerprint: descriptor.dataset_fingerprint || null,
     splits: descriptor.splits || null,
+    time: descriptor.time || null,
     trainingProfile: descriptor.training_profile || null,
     frequencyHours: Number(descriptor.frequency_hours ?? descriptor.training_profile?.frequency_hours ?? 24),
     stepUnit: descriptor.step_unit || descriptor.training_profile?.step_unit || 'day',
@@ -368,6 +372,9 @@ export function captureTrainingDraft(values) {
     useSphere: Boolean(values.useSphere),
     windowValue: values.windowValue,
     horizon: values.horizon,
+    trainRatio: values.trainRatio,
+    validationRatio: values.validationRatio,
+    testRatio: values.testRatio,
     transferEnabled: Boolean(values.transferEnabled),
     selectedChannels: Array.isArray(values.selectedChannels) ? [...values.selectedChannels] : [],
     customModelParams: values.customModelParams && typeof values.customModelParams === 'object'
@@ -418,6 +425,9 @@ export function resolveEarthTrainingRestore(snapshot) {
     useSphere: false,
     windowValue: sanitizePositiveInteger(snapshot.windowValue, EARTH_WINDOW, 1, 240),
     horizon: sanitizePositiveInteger(snapshot.horizon, EARTH_HORIZON, 1, 240),
+    trainRatio: snapshot.trainRatio ?? 0.7,
+    validationRatio: snapshot.validationRatio ?? 0.2,
+    testRatio: snapshot.testRatio ?? 0.1,
     transferEnabled: false,
     selectedChannels: normalizeEarthSelectedChannels(snapshot.selectedChannels),
     customModelParams: snapshot.customModelParams && typeof snapshot.customModelParams === 'object'
@@ -437,10 +447,61 @@ export function resolveMarsTrainingRestore(snapshot) {
     useSphere: Boolean(snapshot.useSphere),
     windowValue: snapshot.windowValue,
     horizon: snapshot.horizon,
+    trainRatio: snapshot.trainRatio ?? 0.7,
+    validationRatio: snapshot.validationRatio ?? 0.2,
+    testRatio: snapshot.testRatio ?? 0.1,
     transferEnabled: Boolean(snapshot.transferEnabled),
     selectedChannels: Array.isArray(snapshot.selectedChannels) ? [...snapshot.selectedChannels] : [],
     customModelParams: snapshot.customModelParams && typeof snapshot.customModelParams === 'object'
       ? { ...snapshot.customModelParams }
       : {},
   };
+}
+
+/** Preview the same raw UTC allocation as earth_raw_utc_timeline_v1. */
+export function describeEarthTaskSplits(time, ratios, window, horizon) {
+  const checked = normalizeEarthSplitRatios(ratios?.trainRatio, ratios?.validationRatio, ratios?.testRatio);
+  if (!checked.valid) return { valid: false, error: 'ratios', ranges: [] };
+  const count = time?.count;
+  const first = Date.parse(time?.start);
+  const last = Date.parse(time?.end);
+  const cadence = 3 * 60 * 60 * 1000;
+  if (!Number.isInteger(count) || count < 3 || !Number.isFinite(first)
+      || first + (count - 1) * cadence !== last) return { valid: false, error: 'timeline', ranges: [] };
+  if (!Number.isInteger(Number(window)) || !Number.isInteger(Number(horizon))
+      || Number(window) < 1 || Number(horizon) < 1) return { valid: false, error: 'windows', ranges: [] };
+  const values = [checked.train_ratio, checked.validation_ratio, checked.test_ratio];
+  // Exact decimal weights keep remainder ties identical to the server Decimal allocation.
+  const decimals = values.map(value => {
+    const [mantissa, exponent = '0'] = String(value).split('e');
+    const [integer, fraction = ''] = mantissa.split('.');
+    return { digits: BigInt(integer + fraction), places: fraction.length - Number(exponent) };
+  });
+  const places = Math.max(...decimals.map(value => value.places));
+  const weights = decimals.map(value => value.digits * 10n ** BigInt(places - value.places));
+  const total = weights.reduce((sum, value) => sum + value, 0n);
+  const numerators = weights.map(value => value * BigInt(count));
+  const sizes = numerators.map(value => Number(value / total));
+  const order = [0, 1, 2].sort((a, b) => {
+    const left = numerators[a] % total, right = numerators[b] % total;
+    return left === right ? a - b : left > right ? -1 : 1;
+  });
+  order.slice(0, count - sizes.reduce((sum, value) => sum + value, 0)).forEach(index => { sizes[index] += 1; });
+  let cursor = 0;
+  const ranges = ['train', 'validation', 'test'].map((name, index) => {
+    const start = cursor;
+    cursor += sizes[index];
+    return { name, raw_start: start, raw_end: cursor, step_count: sizes[index],
+      date_start: new Date(first + start * cadence).toISOString().replace('.000Z', 'Z'),
+      date_end: new Date(first + (cursor - 1) * cadence).toISOString().replace('.000Z', 'Z'),
+      window_count: Math.max(0, sizes[index] - Number(window) - Number(horizon) + 1) };
+  });
+  return { valid: ranges.every(item => item.window_count > 0),
+    error: ranges.some(item => item.window_count === 0) ? 'short_partition' : null, ranges };
+}
+
+export function getEarthSplitDefaults(defaults) {
+  const split = normalizeEarthSplitRatios(defaults?.trainRatio, defaults?.validationRatio, defaults?.testRatio);
+  return split.valid ? { trainRatio: split.train_ratio, validationRatio: split.validation_ratio, testRatio: split.test_ratio }
+    : { trainRatio: 0.7, validationRatio: 0.2, testRatio: 0.1 };
 }

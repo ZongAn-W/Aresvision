@@ -22,7 +22,7 @@ from services.earth_training_artifact import (
 )
 from services.earth_training_contract import (
     EARTH_3HOURLY_ARTIFACT_SCHEMA, EARTH_3HOURLY_IMPLEMENTATION_ID,
-    EARTH_3HOURLY_METRICS_SCHEMA,
+    EARTH_3HOURLY_METRICS_SCHEMA_V2,
 )
 
 DATASET_ID = EARTH_DATASET_3HOURLY_ID
@@ -50,10 +50,15 @@ def _binding():
     }
 
 
-def _metrics():
+def _metrics(window_count=None):
     target = np.full((2, 24, 1, 2, 3), 280.0)
     errors = np.arange(1, 25, dtype=float)[None, :, None, None, None]
-    return compute_earth_metrics(target + errors, target, dataset_id=DATASET_ID)
+    metrics = compute_earth_metrics(target + errors, target, dataset_id=DATASET_ID)
+    if window_count is not None:
+        # Repeating the constant synthetic grid preserves every metric/moment.
+        for row in metrics["by_lead"]:
+            row["target_statistics"]["count"] = window_count * 240 * 480
+    return metrics
 
 
 def _payload(order=("TO3", "U10M")):
@@ -80,7 +85,7 @@ def _payload(order=("TO3", "U10M")):
         for name, entry in SPLITS.items()
     }
     metrics = build_metrics_block(
-        validation=_metrics(), test=_metrics(),
+        validation=_metrics(COUNTS["validation"]), test=_metrics(COUNTS["test"]),
         validation_window_count=COUNTS["validation"], test_window_count=COUNTS["test"],
         dataset_id=DATASET_ID,
     )
@@ -149,7 +154,7 @@ def test_threehour_checkpoint_roundtrip_preserves_contract_and_tile_output(tmp_p
     assert not warnings
     assert checkpoint.payload["artifact_schema"] == EARTH_3HOURLY_ARTIFACT_SCHEMA
     assert checkpoint.model_config["implementation_id"] == EARTH_3HOURLY_IMPLEMENTATION_ID
-    assert checkpoint.metrics["schema"] == EARTH_3HOURLY_METRICS_SCHEMA
+    assert checkpoint.metrics["schema"] == EARTH_3HOURLY_METRICS_SCHEMA_V2
     contract = checkpoint.training_contract
     assert (contract["window"], contract["horizon"], contract["frequency_hours"]) == (56, 24, 3)
     assert contract["step_unit"] == "hour" and contract["step"] == 3
@@ -222,9 +227,13 @@ def test_threehour_checkpoint_cannot_load_as_daily_task(tmp_path):
         load_earth_training_artifact(target, expected_hyperparameters={"training_dataset": "earth_merra2_daily_v2", "window": 7})
 
 
-def test_old_daily_checkpoint_stays_loadable_but_cannot_load_as_threehour_task(earth_global_release, tmp_path):
+def test_old_daily_checkpoint_stays_loadable_but_cannot_load_as_threehour_task(earth_global_release, tmp_path, monkeypatch):
     from services.dataset_registry import DatasetRegistry
     from services.earth_training_artifact import normalization_from_release
+    # Archived artifacts can still be read; the public daily runtime remains retired.
+    # Build this historical fixture through a test-only registry admission override.
+    import services.dataset_registry as registry_module
+    monkeypatch.setattr(registry_module, "require_active_dataset", lambda *_: None)
     registry = DatasetRegistry(earth_dataset_id="earth_merra2_daily_v2", **earth_global_release)
     binding = registry.build_training_binding("earth_merra2_daily_v2")
     release = registry.get_earth_snapshot("earth_merra2_daily_v2")

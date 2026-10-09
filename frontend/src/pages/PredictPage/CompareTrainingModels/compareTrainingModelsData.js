@@ -29,8 +29,10 @@ function formatValue(value) {
   return value == null || value === '' ? '--' : String(value);
 }
 
-function metricValue(item, metric) {
-  const value = Number(item?.metrics?.overall?.[metric]);
+export function metricValue(item, metric) {
+  const raw = item?.metrics?.overall?.[metric];
+  if (raw == null || raw === '' || typeof raw === 'boolean') return null;
+  const value = Number(raw);
   return Number.isFinite(value) ? value : null;
 }
 
@@ -62,7 +64,7 @@ export function buildCompareModelSummary(task) {
 
 export function sortCompareItems(items = [], options = {}) {
   const metric = options.metric || 'rmse';
-  const direction = options.direction || (metric === 'rmse' || metric === 'mae' ? 'asc' : 'desc');
+  const direction = options.direction || (['r2', 'ssim'].includes(metric) ? 'desc' : 'asc');
   const fallback = direction === 'asc' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
 
   return [...(Array.isArray(items) ? items : [])].sort((a, b) => {

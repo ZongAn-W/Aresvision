@@ -596,7 +596,9 @@ export default function PredictSidebar({
       {planet !== 'earth' || isCompareMode ? <GlowCard style={{ padding: 20 }}>
         <SectionTitle
           title={t('predict.sidebar.predictionControl')}
-          subtitle={planet === 'earth' ? (isZh ? '完整测试集 · 24 步 / 72 小时 · DU' : 'Full test set · 24 steps / 72 hours · DU') : isCompareMode
+          subtitle={planet === 'earth' ? (predictionHorizonLimit == null
+            ? (isZh ? '完整测试集 · 任务输出窗口' : 'Full test set · task output window')
+            : (isZh ? `完整测试集 · ${predStep} 步 / ${predStep * 3} 小时` : `Full test set · ${predStep} steps / ${predStep * 3} hours`)) : isCompareMode
             ? (isZh ? '选择对比使用的测试集预测步长。' : 'Choose the test-set horizon used for comparison.')
             : (isZh ? '选择预测步长并发起本次推演。' : 'Choose the prediction horizon and run the next inference.')}
           accent={isCompareMode ? C.green : C.mars}

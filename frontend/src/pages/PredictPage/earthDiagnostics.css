@@ -1,0 +1,31 @@
+.earth-diagnostics { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--experiment-line, rgba(148,190,214,.22)); border-radius: 12px; color: inherit; }
+.earth-diagnostics h3, .earth-diagnostics h4, .earth-diagnostics p { margin: 0; }
+.earth-diagnostics h3 { font-size: calc(17px * var(--font-scale, 1)); }
+.earth-diagnostics h4 { font-size: calc(14px * var(--font-scale, 1)); margin-top: 8px; }
+.earth-diagnostics-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.earth-diagnostics-head p, .earth-diagnostic-note, .earth-diagnostic-chart-grid p { font-size: calc(12px * var(--font-scale, 1)); line-height: 1.65; opacity: .72; overflow-wrap: anywhere; }
+.earth-diagnostic-unit { color: #79bbff; }
+.earth-diagnostic-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.earth-diagnostic-controls label { display: flex; flex-direction: column; gap: 5px; font-size: calc(12px * var(--font-scale, 1)); }
+.earth-diagnostic-controls input { width: 110px; }
+.earth-diagnostic-controls input, .earth-diagnostic-controls button { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--experiment-line, rgba(148,190,214,.3)); background: var(--experiment-surface-2, rgba(127,148,168,.08)); color: inherit; font: inherit; }
+.earth-diagnostic-controls button { cursor: pointer; font-size: calc(12px * var(--font-scale, 1)); }
+.earth-diagnostic-controls button:disabled { cursor: not-allowed; opacity: .5; }
+.earth-diagnostic-controls :focus-visible { outline: 2px solid #79bbff; outline-offset: 2px; }
+.earth-diagnostic-status { padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(127,148,168,.3); font-size: calc(12px * var(--font-scale, 1)); overflow-wrap: anywhere; }
+.earth-diagnostic-status[data-tone='error'] { color: #df7272; border-color: #df727288; }
+.earth-diagnostic-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 8px; }
+.earth-diagnostic-metrics > div { display: flex; flex-direction: column; gap: 5px; padding: 10px; border: 1px solid rgba(127,148,168,.22); border-radius: 8px; }
+.earth-diagnostic-metrics span, .earth-diagnostic-metrics small { font-size: calc(11px * var(--font-scale, 1)); opacity: .7; }
+.earth-diagnostic-metrics b { font-size: calc(17px * var(--font-scale, 1)); }
+.earth-diagnostic-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin: 0; }
+.earth-diagnostic-facts dt { font-size: calc(11px * var(--font-scale, 1)); opacity: .6; }
+.earth-diagnostic-facts dd { font-size: calc(12px * var(--font-scale, 1)); line-height: 1.5; margin: 4px 0 0; overflow-wrap: anywhere; }
+.earth-diagnostic-chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.earth-diagnostic-chart-grid figure { min-width: 0; margin: 0; border: 1px solid rgba(127,148,168,.22); border-radius: 8px; padding: 10px; }
+.earth-diagnostic-chart-grid figcaption { font-weight: 700; font-size: calc(12px * var(--font-scale, 1)); }
+.earth-diagnostic-pfi-plot { min-width: 0; }
+.earth-diagnostic-table-scroll { overflow-x: auto; }
+.earth-diagnostics table { width: 100%; min-width: 600px; border-collapse: collapse; font-size: calc(12px * var(--font-scale, 1)); }
+.earth-diagnostics th, .earth-diagnostics td { padding: 8px; text-align: left; border-bottom: 1px solid rgba(127,148,168,.22); }
+@media (max-width: 760px) { .earth-diagnostic-chart-grid { grid-template-columns: minmax(0, 1fr); } .earth-diagnostics { padding: 12px; } .earth-diagnostic-facts { grid-template-columns: minmax(0, 1fr); } }

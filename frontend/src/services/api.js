@@ -926,13 +926,20 @@ export async function deleteTrainingTask(taskId) {
   return res.json();
 }
 
-export async function performTaskAction(taskId, action) {
+export async function performTaskAction(taskId, action, { signal } = {}) {
   const res = await authedFetch(`${BASE}/training/tasks/${taskId}/action?action=${encodeURIComponent(action)}`, {
     method: 'POST',
+    signal,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || `${res.status}`);
+    const detail = err.detail;
+    const message = typeof detail === 'string' ? detail
+      : detail?.message || (detail != null ? JSON.stringify(detail) : `${res.status}`);
+    const error = new Error(message);
+    error.code = detail?.code || 'task_action_failed';
+    error.status = res.status;
+    throw error;
   }
   return res.json();
 }

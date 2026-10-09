@@ -240,7 +240,15 @@ def _validate_checkpoint_split_ranges(checkpoint: Any, release: Any) -> None:
     """Reject a checkpoint whose published split contract no longer matches."""
     contract = checkpoint.training_contract
     if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
-        # The new checkpoint validator already checked complete UTC ranges/counts.
+        from services.earth_task_split import EARTH_TASK_SPLIT_POLICY, validate_earth_task_split
+        if contract.get("split_policy") == EARTH_TASK_SPLIT_POLICY:
+            try:
+                validate_earth_task_split(contract.get("task_split"), release.dates,
+                                          contract["window"], contract["horizon"], contract["split_ratios"])
+            except ValueError as exc:
+                raise DatasetRequestError("invalid_earth_training_artifact", str(exc), status_code=409) from exc
+            return
+        # Legacy checkpoint ranges continue to describe the published manifest.
         for name in ("train", "validation", "test"):
             expected = contract["split_ranges"][name]
             current = (release.metadata.get("splits") or {})[name]
@@ -288,7 +296,7 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
     _validate_checkpoint_split_ranges(checkpoint, release)
     contract = checkpoint.training_contract
     origins = threehour_available_origin_range(release, window=contract['window'], horizon=contract['horizon'],
-        strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED) if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else available_origin_range(
+        strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED, task_split=contract.get("task_split")) if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else available_origin_range(
         release,
         window=int(contract.get("window", EARTH_WINDOW)),
         horizon=int(contract.get("horizon", EARTH_HORIZON)),
@@ -324,6 +332,9 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
             "unit": checkpoint.metrics.get("unit"),
             "aggregation": checkpoint.metrics.get("aggregation"),
             "splits": splits,
+            **{key: checkpoint.metrics[key] for key in ("metric_units", "metric_policy") if key in checkpoint.metrics},
+            "split_policy": contract.get("split_policy"),
+            "task_split": contract.get("task_split"),
             "split_ratios": contract.get("split_ratios"),
             "split_ranges": contract.get("split_ranges"),
         },
@@ -598,12 +609,13 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
                                   "The checkpoint changed during loading", status_code=409)
     release = _sync_release(registry, checkpoint.dataset_binding)
     _validate_checkpoint_split_ranges(checkpoint, release)
-    window, horizon = checkpoint.training_contract['window'], checkpoint.training_contract['horizon']
+    contract = checkpoint.training_contract
+    window, horizon = contract['window'], contract['horizon']
     try:
         index = threehour_origin_index(release, origin, window=window, horizon=horizon,
-            strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED)
+            strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED, task_split=contract.get("task_split"))
         timestamps = threehour_forecast_timestamps(release, origin, window=window, horizon=horizon)
-        split_name = threehour_origin_split(release, origin, window=window, horizon=horizon)
+        split_name = threehour_origin_split(release, origin, window=window, horizon=horizon, task_split=contract.get("task_split"))
     except EarthArtifactError as exc:
         raise DatasetRequestError(exc.code, str(exc), status_code=422 if exc.code in (
             ORIGIN_INVALID, ORIGIN_OUT_OF_RANGE) else 409) from exc
@@ -650,7 +662,11 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
             raise EarthArtifactError("The Earth model produced non-finite residuals")
         accumulator = ErrorAccumulator(dataset_id=EARTH_DATASET_3HOURLY_ID, horizon=horizon)
         accumulator.update(prediction[None, :, None], reference[None, :, None])
+        from services.earth_training_artifact import METRIC_UNITS, METRIC_POLICY
+        from services.earth_training_contract import EARTH_3HOURLY_METRICS_SCHEMA_V2
         metrics = {**accumulator.result(), "unit": "DU", "target": "TO3",
+                   "schema": EARTH_3HOURLY_METRICS_SCHEMA_V2,
+                   "metric_units": dict(METRIC_UNITS), "metric_policy": dict(METRIC_POLICY),
                    "aggregation": "user_forecast_origin_lead_grid_uniform", "reference_available": True}
     except EarthArtifactError as exc:
         raise DatasetRequestError("invalid_earth_training_artifact", str(exc), status_code=409) from exc
@@ -705,24 +721,29 @@ def compare_earth_test_metrics(tasks: list[Any], registry: DatasetRegistry) -> d
             "window": contract["window"], "horizon": contract["horizon"],
             "target": contract["target"], "unit": checkpoint.metrics["unit"],
             "aggregation": checkpoint.metrics["aggregation"],
-            "test_range": contract["split_ranges"]["test"],
+            "test_range": {key: contract["split_ranges"]["test"][key]
+                           for key in ("date_start", "date_end", "window_count")},
             "window_count": test["window_count"],
         }
         if signature is not None and current != signature:
             raise DatasetRequestError("earth_comparison_incompatible",
-                                      "Models must use the same dataset release, test windows and metric policy", status_code=409)
+                                      "Models have different test time ranges, input/output windows or metric policies; select tasks with the same test partition", status_code=409)
         signature = current
         identity = checkpoint.model_identity()
         raw = getattr(task, "hyperparameters", None) or {}
         hypers = json.loads(raw) if isinstance(raw, str) else dict(raw)
         metrics = {
+            "schema": checkpoint.metrics["schema"],
             "overall": dict(test["overall"]),
             "per_step": [{"step": row["lead_step"], **row} for row in test["by_lead"]],
             "by_horizon": test["by_horizon"], "unit": "DU",
             "aggregation": checkpoint.metrics["aggregation"],
-            "split_meta": {"source": "published_manifest_splits", "test_range": current["test_range"],
+            "split_meta": {"source": contract["split_policy"], "test_range": current["test_range"],
                            "window_count": test["window_count"]},
         }
+        for key in ("metric_units", "metric_policy"):
+            if key in checkpoint.metrics:
+                metrics[key] = checkpoint.metrics[key]
         items.append({"task_id": task.id, "model_name": task.custom_model_name or f"Task #{task.id}",
                       "planet": "earth", "dataset_id": current["dataset_id"],
                       "window": contract['window'], "horizon": contract['horizon'],

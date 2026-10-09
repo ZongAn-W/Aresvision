@@ -174,7 +174,7 @@ export function earthFieldLabel(kind, labels = {}) {
   return kind;
 }
 
-/** 误差指标按 RMSE/MAE 取用；非有限值不展示，避免出现 NaN 卡片。 */
+/** 六项指标只读取有限值，缺失项保留为空。 */
 export function readEarthMetric(metrics, key) {
   const value = metrics?.overall?.[key];
   return Number.isFinite(value) ? value : null;

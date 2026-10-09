@@ -1,5 +1,7 @@
 # 地球 MERRA-2 DLinear 训练与历史预测
 
+任务级自定义比例、整数分配、normalization、checkpoint 与旧任务兼容详见[地球任务级划分](earth-task-splits.md)；模型测试、DU 散点/残差直方图与 PFI 的范围、参数和缓存见[地球训练后诊断](earth-post-training-diagnostics.md)。
+
 当前地球训练与历史回测只使用 `earth_merra2_3hourly_v1`，支持官方 DLinear / 独立契约上传模型按任务配置窗口（默认 56→24）和 UTC datetime。日频 v1/v2 的总览、训练与预测已停用，返回 409 `dataset_retired`；旧记录和产物保留，须重新训练三小时模型。下文日频固定契约、示例和验收记录均为历史资料。停用规则见[日频数据集停用](earth-dataset-retirement.md)，当前活动契约见[三小时专题](earth-merra2-3hourly.md)及[专用上传契约](earth-3hourly-uploaded-model.md)。
 
 日频与三小时具有不同时间轴和 checkpoint 契约，不互相转换。日频旧任务仅用于追溯，不能继续预测或复制配置。活动三小时网格为 0.75°×0.75°、240×480，字段为 TO3（DU）、U10M/V10M（m s-1）、T2M（K）、SWGDN（W m-2）；预测缓存按数据身份、任务和时间窗隔离。
@@ -24,9 +26,9 @@
 | 训练期归一化（只拟合 train 划分），验证/测试/预测复用 | 已开放 |
 | 单文件 checkpoint（权重 + 模型配置 + 数据身份 + 归一化 + 指标） | 已开放 |
 | 训练完成前 CPU 严格重载校验 | 已开放；三小时完成门禁由父进程调度有超时的独立进程 |
-| 保存 DU 单位的验证集与测试集总体 / 逐步 / 累计时段 RMSE、MAE | 已开放 |
-| 地球多模型完整测试集比较 | 已开放；读取严格验证 checkpoint 的 RMSE/MAE，要求发布身份与测试窗口一致，复用排名、柱状图、24 步曲线、参数矩阵与科研曲线导出；不重新推理 |
-| 地球误差分布与 PFI 分析 | 未开放；不会调用火星接口 |
+| 保存验证集与测试集总体 / 逐步 / 累计时段六项指标 | 已开放；MSE（DU²）、RMSE/MAE（DU）、R²（无量纲）、MAPE/SMAPE（%），见[公式及兼容规则](earth-evaluation-metrics.md) |
+| 地球多模型完整测试集比较 | 已开放；读取严格验证 checkpoint 的六项 test 指标，旧产物缺项排除该项排名；要求发布身份与测试窗口一致，支持任务 horizon 曲线、参数矩阵与实际契约内的科研导出；不重新推理 |
+| 地球训练后诊断（测试入口、预测/真值散点、残差直方图、Earth PFI） | 已开放；固定任务 test 分区，流式空间块计算，页面诊断图不开放科研导出 |
 | 预测页按**历史预测起点**回测随后 3 天的预测场 / 参考场 / 残差场（DU）与指标 | 已开放 |
 | 预测上下文与结果显示所用模型身份（官方 DLinear 或上传模型名称/版本/内容指纹） | 已开放 |
 | 服务端返回 UTC 可选起点、24 个目标时间戳与真实经纬网格 | 已开放 |
@@ -98,19 +100,19 @@
 }
 ```
 
-Earth 只使用发布 manifest 固定的 `train` / `validation` / `test` 日期块；页面以只读方式显示 `70% / 20% / 10%` 兼容比例，新的 Earth 请求不发送自定义比例。checkpoint 保存每个日期块和实际窗口范围，比例字段仅保留给旧任务读取。
+新三小时任务在页面编辑 `train_ratio / validation_ratio / test_ratio`（默认 70/20/10，请求以 0–1 数值发送），按完整原始 UTC 三小时时间轴连续分配；三项均须大于 0、合计 100%。实际边界、步数与窗口数保存为独立任务配置，发布 manifest 不改写。旧三小时任务继续解释为发布日期块，日频运行入口仍停用。
 
 `model_script` 仅为兼容现有客户端保留；服务端会按数据集选择 `earth_daily.py` 并写入任务，实际执行的脚本与客户端提交值无关。
 
-严格范围（越界即 422，不静默夹取）：`epochs` 1…1000、`batch_size` 1…64、`learning_rate` (0, 1]、`seed` 0…2³²−1、`early_stopping_patience` 0…200、`linear_hidden_layers` 1…4。日频 `window`/`horizon` 必须为 7/3；三小时必须为 56/24。布尔值不能充当整数。
+严格范围（越界即 422，不静默夹取）：`epochs` 1…1000、`batch_size` 1…64、`learning_rate` (0, 1]、`seed` 0…2³²−1、`early_stopping_patience` 0…200、`linear_hidden_layers` 1…4。归档日频 `window`/`horizon` 为 7/3；活动三小时各为 1…240 的整数，默认 56/24。布尔值不能充当整数。
 
 ### 三小时官方 DLinear
 
-同一训练接口选择 `dataset_id=earth_merra2_3hourly_v1` 后，服务端 profile 固定为三小时 UTC、56 输入步、24 输出步、240×480 全球网格。TO3 必选，四个辅助输入及通道顺序固定；目标仅 TO3，单位 DU。支持官方 DLinear 及独立 v1 契约上传模型，创建任务前校验兼容性与实际参数，不调用日频上传兼容门或降级模型。
+同一训练接口选择 `dataset_id=earth_merra2_3hourly_v1` 后，服务端 profile 为三小时 UTC、任务配置的 window/horizon（默认 56→24）、240×480 全球网格。TO3 必选，四个辅助输入可选，通道顺序固定；目标仅 TO3，单位 DU。支持官方 DLinear 及独立 v1 契约上传模型，创建任务前校验兼容性、实际参数及分区长度，不调用日频上传兼容门或降级模型。
 
-完整两年发布的连续 split 各自独立切窗，train/validation/test 分别有 2928/1448/1472 步、2849/1369/1393 个窗口。归一化只扫描 train，逐通道最多 8 步，以 float64 合并统计量；选中通道的缺失显式拒绝。分块生成 normalized float32 磁盘内存映射后按需读取窗口与 24×48 空间块，避免压缩整场反复解压；每个窗口 100 块，`batch_size` 以块为单位，checkpoint 仍绑定完整 240×480 网格。缓存通过 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认位于 Git checkout 外的工作区父级，完整五通道约 12.55 GiB，并在训练结束或中断后保留。
+新任务按原始时间轴比例划分后各自独立切窗，完整两年默认 70/20/10 和 56→24 对应 4094/1169/585 步、4015/1090/506 个窗口。无新策略的旧任务仍按 manifest，分别为 2928/1448/1472 步、2849/1369/1393 个窗口。归一化只扫描当前任务 train，逐通道最多 8 步，以 float64 合并统计量；选中通道的缺失显式拒绝。分块生成 normalized float32 磁盘内存映射后按需读取窗口与 24×48 空间块，避免压缩整场反复解压；每个窗口 100 块，`batch_size` 以块为单位，checkpoint 仍绑定完整 240×480 网格。缓存检查完整任务划分与 normalization，通过 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认位于 Git checkout 外的工作区父级，完整五通道约 12.55 GiB，并在训练结束或中断后保留。
 
-三小时 checkpoint schema 为 `aresvision_earth_forecast_checkpoint_3hourly_v1`，实现 ID 为 `aresvision_gridpoint_dlinear_3hourly_v1`。保存 window/horizon、hour/step=3、UTC、区间中心规则和 90 分钟中心偏移（01:30…22:30）、完整网格、通道/单位、发布 split、训练期 normalization、SHA/fingerprint 和任务身份；日频 checkpoint 不能加载到三小时任务。验证/测试保存总体、24 个 lead step（3…72 小时）及累计前 24/48/72 小时的 DU RMSE/MAE。
+三小时 checkpoint schema 为 `aresvision_earth_forecast_checkpoint_3hourly_v1`，实现 ID 为 `aresvision_gridpoint_dlinear_3hourly_v1`。保存 window/horizon、hour/step=3、UTC、区间中心规则和 90 分钟中心偏移（01:30…22:30）、完整网格、通道/单位、独立任务分区策略与边界、训练期 normalization、发布 snapshot/SHA/fingerprint 和任务身份；日频 checkpoint 不能加载到三小时任务。验证/测试保存总体、任务 horizon 个 lead step 及累计时长的六项指标（指标 schema v2，单位与公式策略逐项保存），默认 24 步为 3…72 小时和累计前 24/48/72 小时。v1 指标 checkpoint 保持只读兼容；[评价专题](earth-evaluation-metrics.md)定义公式和门禁。
 
 实际 smoke 使用合成 30 天/240 步、完整网格，测试专用连续 split 各 10 天、各 1 个时间窗口；五通道 CPU 训练 1 epoch，最终内存映射版本严格重载通过（1 passed，16.02 秒），归一化只拟合前 10 天。真实数据仅有已验证 7 天包（56 步），不足完整 80 步窗口；未执行真实全两年构建或训练。smoke 与后续分文件测试命令见[三小时训练验证](earth-merra2-3hourly.md#官方-dlinear-后端训练)。
 
@@ -248,7 +250,7 @@ Earth 只使用发布 manifest 固定的 `train` / `validation` / `test` 日期�
 
 同一 `GET /api/earth/predict/context` 和 `POST /api/earth/predict/run` 按已完成任务的 `dataset_id=earth_merra2_3hourly_v1` 选择三小时分支。`forecast_origin` 使用明确 UTC 的 ISO datetime，例如 `2021-07-08T01:30:00Z`；输入包含起点共 56 步，目标共 24 步，从 `2021-07-08T04:30:00Z` 到 `2021-07-11T01:30:00Z`。
 
-context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/step=3；完整两年发布有 5769 个有效起点。结果返回 `input_timestamps`、`target_timestamps`，预测/参考/残差各 `[24,240,480]`、单位 DU；`input_dates` / `target_dates` 在三小时响应中为相同时间戳的兼容别名。指标为总体 RMSE/MAE、24 个 lead step（+3…+72 小时）和累计前 +24/+48/+72 小时汇总。参考场来自相同 fingerprint 的真实发布，不重新拟合 normalization。
+context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/step=3；默认 56→24 的完整两年发布有 5769 个有效起点。结果返回 `input_timestamps`、`target_timestamps`，预测/参考/残差各 `[horizon,240,480]`、单位 DU；`input_dates` / `target_dates` 在三小时响应中为相同时间戳的兼容别名。本次预测总体、每步与累计时段均返回六项指标，采用同一[物理公式](earth-evaluation-metrics.md)，并与完整测试集评价分开标注。参考场来自相同 fingerprint 的真实发布，不重新拟合 normalization。
 
 任务、checkpoint、数据发布、时间规则、窗口和网格均严格一致后才读取缓存。三小时有独立的进程内 LRU（128 MiB、至多 4 条），键包含 planet、dataset_id/version/fingerprint、task_id、规范 origin、24 个 target timestamps 和 checkpoint SHA；缓存不会持久化，也不进入 Mars 或旧日频路径。训练页与预测页已提供三小时选项、UTC 起点和 24 个 lead 展示。完整 API 示例、错误码与验证命令见[三小时历史回测 API](earth-merra2-3hourly.md#三小时历史回测-api)。
 
@@ -276,7 +278,7 @@ context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/st
 | 任务未成功完成 | 409 `earth_prediction_task_not_completed` |
 | 预测起点不在数据集内、缺少完整输入或参考时间步 | 422 `earth_prediction_origin_out_of_range` |
 | 起点格式非法 | 422 `invalid_earth_prediction_origin` |
-| Earth 任务进入火星推理 / metrics / 比较 / PFI / `action=test` | 409 `dataset_prediction_not_supported` |
+| Earth 任务进入火星推理 / metrics / 比较 / Mars PFI | 409 `dataset_prediction_not_supported` |
 | 火星迁移选择 Earth 来源任务 | 409 `dataset_transfer_not_supported` |
 | 非本人且非管理员访问任务 | 403；任务不存在 404 |
 
@@ -284,7 +286,7 @@ context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/st
 
 - `services/dataset_identity.py` 的 `is_earth_training_task()` 是轻量识别函数（优先读任务身份列，其次读合法 legacy key；损坏身份按非 Earth 处理，保持旧 Mars 行为）。
 - 火星推理的所有入口（`predict_task`、metrics/comparison/error-distribution/PFI、`get_test_results`）在**用户访问检查之后、火星数据准备与缓存访问之前**调用 `require_mars_prediction_task()`，拒绝 Earth 任务。
-- 火星 `action=test` 在构造推理数据环境之前拒绝。
+- 训练 `action=test` 按任务行星分流；Earth 使用专用诊断，Mars 保留原有推理数据环境和测试行为。
 - 火星迁移在读取来源任务后、加载权重前拒绝 Earth 来源。
 - 上传权重校验识别日频 `aresvision_earth_forecast_checkpoint_v1` 和三小时 `aresvision_earth_forecast_checkpoint_3hourly_v1`，返回明确不兼容并记录为 `invalid`，不会抽取其 `state_dict` 冒充火星权重。
 - 前端缓存键包含 `planet`、数据集 ID/版本/指纹、任务与预测起点，并带 `mode:earth` 前缀，与火星键互不命中；切换任务或起点会清空旧结果。
@@ -328,9 +330,8 @@ conda run -n AresVision python scripts\audit\earth-training-acceptance.py
 ## 日频后续设计（历史资料）
 
 第四步及以后可直接读取 `aresvision_earth_forecast_checkpoint_v1`，用保存的 `model_config` / `input_channel_order` / `normalization` / grid / splits 重建模型。未来比较身份至少包含 `planet`、`dataset_id`、`version`、`fingerprint`、`target`、`horizon`、测试起点集合与指标 aggregation；持久性基线与无参考真值外推须复用同样窗口、目标日期与单位。
-## 发布 split 与窗口边界
+## 任务分区与发布 split
 
-Earth 训练以发布 manifest 的连续区间为唯一 split 边界。train、validation 和 test 分别在自己的区间内独立生成任务配置的三小时窗口（默认 56→24），不得跨越发布边界。上传模型历史回测也要求完整 80 步在同一 split 内；三小时官方模型保留原范围，可从完整发布时间轴读取 origin 之前的输入和 origin 之后的参考值。回测返回 `origin_split`，不改变训练 split、归一化范围或重新按比例切分窗口；日频任务不能回测。
+新三小时官方/上传任务统一使用 `earth_raw_utc_timeline_v1`，比例针对完整原始时间轴，采用向下取整、最大余数（同余数按 train/validation/test）确定步数。各分区独立生成窗口，完整输入与目标不跨界；每区至少 window+horizon 步，否则创建前返回 422。normalization 仅拟合当前任务 train，并保存策略与实际边界用于缓存及严格重载。
 
-Earth 请求中的 `train_ratio`、`validation_ratio`、`test_ratio` 仅作为历史兼容字段；服务端仍拒绝非默认值并返回 `422 invalid_earth_training_parameters`。新 checkpoint 保存 `split_policy=published_manifest_splits`、每个 split 的 `date_start`、`date_end` 和 `window_count`，预测时会校验这些范围及数据集 fingerprint。旧 checkpoint 没有该元数据时保持兼容读取，但新训练不会产生此类 artifact。
-
+官方历史回测保留完整发布可选起点；上传回测要求完整输入/目标落在同一任务分区。两者 origin_split 使用任务边界。比较要求 test UTC 范围、window/horizon、实际窗口数及指标口径一致，不一致返回 409。新任务保存独立 `_earth_task_split_policy`，恢复和产物读取同时识别该标记、已有 split 及 v2 指标任务证据，缺失冻结划分时拒绝；只有真正旧任务继续使用发布 manifest，不自动迁移。详细元数据、默认两年示例和验证范围见[任务级划分专题](earth-task-splits.md)。上传模型的构建、训练和重载统一初始化 CPU float32，eval 批次一致性在准入和实际权重重载时核验，详见[上传模型契约](earth-3hourly-uploaded-model.md)。

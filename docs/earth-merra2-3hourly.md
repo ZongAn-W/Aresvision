@@ -4,6 +4,10 @@
 
 ## 数据契约
 
+2026-10-09 训练链路契约补强：新任务的冻结划分缺失时拒绝队列恢复和产物读取，保留真正 legacy manifest 行为；上传模型统一 CPU float32 构建/重载，eval 单样本、B=2/3/实际任务批次必须保持一致且不改变参数/缓冲区。旧上传校验报告需重新校验，旧 checkpoint 加载实际权重后复核。细节及兼容边界见[任务划分](earth-task-splits.md)和[上传模型契约](earth-3hourly-uploaded-model.md)。
+
+本轮分文件回归共 415 passed、2 skipped：任务划分 103、训练服务 12、runner 12、artifact 39、上传契约 93、dtype 2、六指标 110、71→9 pipeline 2、诊断集成 15、预测路由 27；跳过的是官方模型不适用的上传源码检查。训练页配置/划分/指标前端测试 36 passed，文档文件链接与 Git diff 空白检查通过。验证使用合成发布及模型，未执行真实两年训练；保留既有 NumPy/FastAPI/Pydantic 依赖提示。
+
 | 项目 | 契约 |
 | --- | --- |
 | 来源 | `raw/slv` 的 TO3、U10M、V10M、T2M；`raw/rad` 的 SWGDN；不读取 `raw/chm` |
@@ -136,9 +140,9 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 
 实际模型调用为 float32 `[B,56,C,24,48] → [B,24,1,24,48]`，C 是 TO3 加所选辅助变量的规范顺序；100 个无重叠块拼为 240×480。上传 dry-run 在有超时的隔离子进程中检查 16 个通道组合、B=1/2、eval/train 前向与 backward。创建任务前复查具体 dataset_id、实际通道与自定义参数；未知、失败或声明与执行不符不能写入训练任务。前端开放来源切换及自定义参数，显示可用/不可用/未知和原因，按数据集提供模板下载。
 
-复用服务器 registry、固定 manifest split、仅训练期 normalization、缺失拒绝、任务调度和训练/评估循环。上传代码不控制路径、版本、fingerprint、snapshot 或 normalization。队列保存冻结源码引用，重启恢复同一版本。上传 checkpoint 仍用独立三小时 artifact schema，另保存上传 implementation `aresvision_earth_3hourly_uploaded_runner_v1`、契约 schema、块尺寸、实际 build config 和源码摘要；重载核对它们并严格加载权重。任务完成前使用 30 秒超时的独立 CPU 进程重载并检查前向一致性，失败不能 completed。日频和 Mars checkpoint 不能冒充三小时产物。
+复用服务器 registry、任务级原始 UTC split、仅当前任务训练期 normalization、缺失拒绝、任务调度和训练/评估循环。上传代码不控制路径、版本、fingerprint、snapshot 或 normalization。队列保存冻结源码引用，重启恢复同一版本。上传 checkpoint 仍用独立三小时 artifact schema，另保存上传 implementation `aresvision_earth_3hourly_uploaded_runner_v1`、契约 schema、块尺寸、实际 build config 和源码摘要；重载核对它们并严格加载权重。任务完成前使用 30 秒超时的独立 CPU 进程重载并检查前向一致性，失败不能 completed。日频和 Mars checkpoint 不能冒充三小时产物。
 
-上传模型历史回测要求完整 56+24 步在同一固定 split 内；context 只返回满足条件的起点，跨 split 返回 `earth_prediction_origin_out_of_range`。完整两年包共有 2849+1369+1393=5611 个此类起点。三小时官方 DLinear 保留原历史范围；日频任务不能回测。
+上传模型历史回测要求完整 window+horizon 步在同一任务分区内；context 只返回满足条件的起点，跨分区返回 `earth_prediction_origin_out_of_range`。旧 manifest 任务在默认 56→24 下共有 2849+1369+1393=5611 个此类起点；新任务依保存的比例、实际边界与窗口计算。三小时官方 DLinear 保留完整发布历史范围；日频任务不能回测。
 
 ## 官方 DLinear 后端训练
 
@@ -153,6 +157,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
   "hyperparameters": {
     "model_architecture": "dlinear",
     "window": 56, "horizon": 24,
+    "train_ratio": 0.7, "validation_ratio": 0.2, "test_ratio": 0.1,
     "selected_channels": ["U10M", "V10M", "T2M", "SWGDN"],
     "epochs": 1, "batch_size": 8, "learning_rate": 0.001,
     "seed": 11, "linear_hidden_layers": 2
@@ -162,7 +167,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 
 TO3 始终为首个输入和唯一输出；`selected_channels=[]` 表示只用 TO3，辅助通道按 U10M、V10M、T2M、SWGDN 排序。所选通道缺失时显式拒绝；合法数值零保留，不填零、不插值。
 
-发布的 train / validation / test 各自必须连续且至少有 80 步；一个窗口占完整 56 步输入与 24 步输出，不能跨 split 边界。完整两年无缺失发布的样本数按 `steps - 56 - 24 + 1` 计算：
+新训练任务使用[任务级原始 UTC 划分](earth-task-splits.md)，默认 70/20/10，可配置且每项大于 0。先按完整原始时间步分配，再在每区内部生成窗口；各区至少 window+horizon 步，窗口数为 steps-window-horizon+1。发布 manifest、NetCDF split 标记及 fingerprint 保持不变。下表仅描述发布分区与无新策略的旧任务，不能作为新任务默认划分：
 
 | split | UTC 日期块 | 时间步数 | 时间窗口数 |
 | --- | --- | --- | --- |
@@ -170,13 +175,13 @@ TO3 始终为首个输入和唯一输出；`selected_channels=[]` 表示只用 T
 | validation | 2021-01-01…2021-06-30 | 1448 | 1369 |
 | test | 2021-07-01…2021-12-31 | 1472 | 1393 |
 
-归一化只拟合完整 train 区间，每次读取一个通道最多 8 个全网格时间步，以 float64 合并均值/总体方差，保存通道顺序、均值、scale、常量通道标记、拟合 UTC 起止与步数。validation / test 复用统计量。训练先以最多 8 步、一个通道的分块读取生成 normalized float32 `.npy` 内存映射，再由 `EarthThreeHourlyWindows` 读取所需 56→24 窗口及 24×48 空间块；每个时间窗口恰好 100 块，`batch_size` 表示空间块数量。缓存避免压缩 NetCDF 整场 chunk 被每个小块反复解压，不复制全部滑窗或将两年体积读入内存。模型共享各网格点的时间权重，checkpoint 的网格仍为完整 240×480。
+归一化只拟合当前任务完整 train 区间（旧任务使用 manifest train），每次读取一个通道最多 8 个全网格时间步，以 float64 合并均值/总体方差，保存通道顺序、均值、scale、常量通道标记、拟合 UTC 起止与步数。validation / test 复用统计量。训练先以最多 8 步、一个通道的分块读取生成 normalized float32 `.npy` 内存映射，再由 `EarthThreeHourlyWindows` 读取所需 56→24 窗口及 24×48 空间块；每个时间窗口恰好 100 块，`batch_size` 表示空间块数量。缓存避免压缩 NetCDF 整场 chunk 被每个小块反复解压，不复制全部滑窗或将两年体积读入内存。模型共享各网格点的时间权重，checkpoint 的网格仍为完整 240×480。
 
-缓存目录由 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认在 Git checkout 的工作区父目录 `earth_training_cache/`；每次训练生成独立目录，检查 fingerprint、通道和 normalization 后以只读映射使用。完整两年五通道缓存约 12.55 GiB，TO3-only 约 2.51 GiB；默认 batch=8 的窗口/目标张量约 10.7 MiB，另有模型 activation 与系统文件页缓存。完成及中断的缓存均保留，不删除源包或旧缓存。
+缓存目录由 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认在 Git checkout 的工作区父目录 `earth_training_cache/`；每次训练生成独立目录，检查 fingerprint、通道和含任务策略/实际边界的 normalization 后以只读映射使用。完整两年五通道缓存约 12.55 GiB，TO3-only 约 2.51 GiB；默认 batch=8 的窗口/目标张量约 10.7 MiB，另有模型 activation 与系统文件页缓存。完成及中断的缓存均保留，不删除源包或旧缓存。
 
-三小时 checkpoint 使用独立 schema `aresvision_earth_forecast_checkpoint_3hourly_v1` 和实现 ID `aresvision_gridpoint_dlinear_3hourly_v1`；保存权重/完整网格模型配置、通道顺序及单位、window=56、horizon=24、hour/step=3、UTC、`timestamp_rule=interval_center`、三小时平均与 90 分钟中心偏移（01:30…22:30）、发布 split/窗口范围、归一化、数据版本/SHA/fingerprint 和任务身份。日频 checkpoint 不能绑定三小时任务，反向也拒绝，旧日频 schema 与加载行为保留。产物原子保存前严格重载，父进程验证成功后任务才 completed。
+三小时 checkpoint 使用独立 schema `aresvision_earth_forecast_checkpoint_3hourly_v1` 和实现 ID `aresvision_gridpoint_dlinear_3hourly_v1`；保存权重/完整网格模型配置、通道顺序及单位、任务 window/horizon（默认 56/24）、hour/step=3、UTC、`timestamp_rule=interval_center`、三小时平均与 90 分钟中心偏移（01:30…22:30）、独立任务划分策略、比例、原始索引/UTC/步数/窗口范围（旧策略保留发布分区）、归一化、数据版本/SHA/fingerprint 和任务身份。日频 checkpoint 不能绑定三小时任务，反向也拒绝，旧日频 schema 与加载行为保留。产物原子保存前严格重载，父进程验证成功后任务才 completed。
 
-指标使用 `earth_training_metrics_3hourly_v1`，validation/test 各含 DU 总体 RMSE/MAE、24 个 `by_lead`（lead step 1…24，小时 3…72）和 `by_horizon`。24/48/72 小时汇总分别累计前 8/16/24 个 lead 的全部误差；RMSE 对误差平方合并后开方，MAE 合并绝对误差，均为网格等权口径。
+新指标使用 `earth_training_metrics_3hourly_v2`，validation/test 的总体、每步 `by_lead` 与累计 `by_horizon` 均含 MSE/RMSE/MAE/R²/MAPE/SMAPE，单位分别为 DU²/DU/DU/无量纲/%/%。horizon 使用任务配置，累计为每 24 小时及最终 lead；总体/累计由全部 float64 误差和与稳定真值统计量计算，保持 `forecast_origin_lead_grid_uniform`。旧指标 v1 仍可读、可预测，缺项显示“未提供”；公式、零分母、恒定真值及严格门禁见[地球评价指标](earth-evaluation-metrics.md)。
 
 验证命令从 `AresVision_backend/backend/` 执行，先 smoke 再分文件回归，每次使用 `D:\_Aresvision` 下的新临时目录：
 
@@ -209,9 +214,9 @@ foreach ($earthTrainingTest in $earthTrainingTests) {
 
 沿用认证接口 `GET /api/earth/predict/context?training_task_id=<id>` 和 `POST /api/earth/predict/run`。服务端根据已完成任务的 `dataset_id` 选择三小时 profile；客户端只传任务 ID 和起点，不能指定发布目录、数据版本、fingerprint、snapshot、窗口或目标时间戳。任务必须属于当前用户或由管理员访问，并具有严格可重载的三小时 checkpoint；旧日频 checkpoint 不能用于三小时任务。
 
-起点是输入窗口的最后一个时间中心，要求包含起点的前 56 步与随后的 24 个参考步完整存在。输入从 `origin−165h` 到 `origin`，目标为 `origin+3h` 至 `origin+72h`。只接受明确 UTC 的 ISO datetime（`Z` 或 `+00:00`），精确匹配发布轴，不截断为日期或吸附到最近采样点；响应统一使用 `Z`。真实参考 TO3 从与 checkpoint 相同 fingerprint 的发布包读取，预测仅复用训练期 normalization。
+起点是输入窗口的最后一个时间中心，要求包含起点的 window 个输入步与随后的 horizon 个参考步完整存在。以下 API 数量、时间戳与指标示例采用默认 56→24：输入从 `origin−165h` 到 `origin`，目标为 `origin+3h` 至 `origin+72h`；非默认窗口按保存的任务配置生成。只接受明确 UTC 的 ISO datetime（`Z` 或 `+00:00`），精确匹配发布轴，不截断为日期或吸附到最近采样点；响应统一使用 `Z`。真实参考 TO3 从与 checkpoint 相同 fingerprint 的发布包读取，预测仅复用训练期 normalization。
 
-完整两年、无缺步的 5848 步发布，既有官方模型可选起点共 **5769** 个，从 `2020-01-07T22:30:00Z` 到 `2021-12-28T22:30:00Z`。上传模型还过滤跨 split 起点，返回 **5611** 个。下面是官方 context 节选；省略号仅用于示意，实际数组包含该模型来源的全部可选时间戳：
+完整两年、无缺步的 5848 步发布，既有官方模型可选起点共 **5769** 个，从 `2020-01-07T22:30:00Z` 到 `2021-12-28T22:30:00Z`。旧 manifest 任务的上传模型过滤跨发布 split 起点，返回 **5611** 个；新任务的数量取决于任务分区和窗口。下面是官方 context 节选；省略号仅用于示意，实际数组包含该模型来源的全部可选时间戳：
 
 ```json
 {
@@ -244,9 +249,9 @@ foreach ($earthTrainingTest in $earthTrainingTests) {
 
 此起点的 56 个 `input_timestamps` 从 `2021-07-01T04:30:00Z` 到起点；24 个 `target_timestamps` 从 `2021-07-08T04:30:00Z` 到 `2021-07-11T01:30:00Z`，相邻差严格 3 小时。响应同时给出 `input_dates` / `target_dates` 兼容别名，其内容也是完整 UTC datetime；日频日期字段仅保留历史协议，当前日频预测请求返回 409。
 
-`prediction`、`reference`、`residual` 各有 24 个 `{field, minVal, maxVal, valid_cells}`，每个 `field` 为 `[240][480]`，整体形状各为 `[24,240,480]`，单位均为 DU；`residual = prediction − reference`。真实纬度从南到北，真实经度从西到东，三种场与 `grid.latitude` / `grid.longitude` 一致。选中通道或参考 TO3 的缺测显式报错，不补零。`origin_split` 标记起点所属发布分区；既有官方模型历史回测可跨发布 split 读取完整历史和参考，与旧日频语义一致。三小时上传模型要求完整 80 步落在同一 split 内；所有训练窗口均不得跨 split。
+`prediction`、`reference`、`residual` 各有 24 个 `{field, minVal, maxVal, valid_cells}`，每个 `field` 为 `[240][480]`，整体形状各为 `[24,240,480]`，单位均为 DU；`residual = prediction − reference`。真实纬度从南到北，真实经度从西到东，三种场与 `grid.latitude` / `grid.longitude` 一致。选中通道或参考 TO3 的缺测显式报错，不补零。`origin_split` 标记起点所属任务分区（无新策略的旧任务使用发布分区）。官方历史回测保留完整发布时间轴，可跨分区读取完整历史和参考；上传回测要求完整 window+horizon 步落在同一任务分区内。所有训练窗口均不得跨分区。
 
-`metrics.aggregation=user_forecast_origin_lead_grid_uniform`，含 `overall{rmse,mae}`、24 行 `by_lead[{lead_step,lead_hours,rmse,mae}]` 和三行 `by_horizon[{horizon_hours,lead_steps,rmse,mae}]`。后者的 24/48/72 小时分别累计前 8/16/24 步的全部格点误差，RMSE 合并平方误差后开方，MAE 合并绝对误差；并非仅取第 8/16/24 步，也不平均各步 RMSE。
+`metrics.aggregation=user_forecast_origin_lead_grid_uniform`，总体、每个 lead 和累计时段均含六项指标与逐项单位/公式策略，使用与训练相同的物理公式。默认 24 步的 24/48/72 小时分别累计前 8/16/24 步全部格点；非默认 horizon 自动生成对应汇总，不平均逐步 RMSE/R²。这仅是本次历史预测窗口评价，与训练结果的完整测试集明确分开。
 
 推理只读取一个 80 步跨度，每通道最多 8 个全网格步分块读取；只保留本次 56 步输入和 24 步参考，模型按 24×48 空间块执行，不物化两年数据或全部滑窗。响应仍包含完整全球数组。
 
@@ -256,11 +261,20 @@ foreach ($earthTrainingTest in $earthTrainingTests) {
 
 `POST /api/earth/predict/training-models/compare` 接受 `{"task_ids":[123,124]}`，要求 2–32 个不同的正整数任务 ID。认证与任务访问规则沿用单模型，日频任务仍返回 `dataset_retired`。服务逐个严格加载 checkpoint、复核当前数据发布及保存的 split 范围，读取训练完成时保存的 test 指标；不训练、不重新推理、不读 Mars 数据。
 
-仅当 dataset ID/版本/fingerprint、window/horizon、target/unit/aggregation、测试分区起止与实际窗口数量均一致时可比较；不一致返回 409 `earth_comparison_incompatible`。返回 `metric_source=verified_checkpoint_test_metrics`，每个 `items[]` 带任务、模型与数据身份，以及 `metrics.overall`、24 行 `metrics.per_step`、累计 24/48/72 小时指标、`split_meta` 与 `export_ref`。RMSE/MAE 始终为 DU，按测试集所有起点 × 提前量 × 格点等权汇总；不与单次回测指标混用。页面曲线横轴为提前小时，科研导出横轴保留 step，元数据记录 3 小时频率。Earth 没有 SSIM/R²、误差分布或 PFI 时不显示相应选项。
+仅当 dataset ID/版本/fingerprint、window/horizon、target/unit/aggregation、测试分区起止与实际窗口数量均一致时可比较；不一致返回 409 `earth_comparison_incompatible`。返回 `metric_source=verified_checkpoint_test_metrics`，每个 `items[]` 带任务、模型与数据身份，以及六项 `metrics.overall`、任务 horizon 行 `metrics.per_step`、累计时段指标、`split_meta` 与 `export_ref`。误差与百分比升序，R² 原值降序；旧 v1 缺项为空且排除该项排名，不按 0 处理。页面曲线横轴为提前小时，科研导出横轴保留 step，元数据记录 3 小时频率及指标契约。当前科研导出仅开放 RMSE/MAE/R²；Earth 不开放 SSIM；误差分布与 PFI 已在独立训练后诊断开放，暂不开放其科研导出。
 
 训练页「用于预测」与「去模型比较」分别跳转 `mode=earth` / `mode=earth_compare`；旧 `earth`、`trained`、`trained_compare` 链接继续有效。行星、分析方式或账号切换会取消过期请求，Earth 比较结果不进入 Mars 缓存。
 
 验证入口为 `tests/test_earth_3hourly_prediction_routes.py` 的 comparison 回归，涵盖指标来源、无重新推理、权限、发布身份与测试窗口一致性、DU 科研曲线导出。2026-10-08 已运行三小时路由与科研导出回归、前端测试及生产构建；浏览器合成 API 检查四种入口、任务隔离、DU 不重复换算、3–72 小时曲线与 390px 布局。后端 health、生产前端与数据代理均返回 200。测试使用合成发布及图表数据，不代表真实训练精度验收。
+
+### 地球训练后诊断
+
+训练结果页的 `action=test` 现在按行星分流：Earth 调用 `/api/earth/predict/diagnostics`，Mars 保留原有测试链路。`GET /api/earth/predict/diagnostics/context` 只对已完成、权重有效且身份可复核的三小时任务返回可用状态；日频旧任务、缺失或损坏 checkpoint 会给出禁用原因或稳定错误。诊断默认 4 个 test 窗口、最多 5,000 个散点、40 个残差分箱、固定种子 42、PFI 每通道 3 次；服务端上限为 8 窗口、20,000 点、100 箱和 5 次重复。
+
+完整测试指标只消费 checkpoint 保存的 test 指标，缺项不由抽样结果补齐。诊断窗口在任务固定 test 分区内用种子化无放回抽样；模型以 24×48 空间块和批次流式推理，不物化完整测试集。TO3 输出反归一化为 DU，散点是预测/参考配对抽样并带 `y=x`，直方图为 `prediction-reference` 的 DU 残差，对选定窗口的全部 lead/grid 点流式累计；响应包含实际窗口数、UTC 时间范围、全球覆盖、有效点数和策略。
+
+Earth PFI 按 checkpoint 实际输入通道计算，包括历史 TO3，不置换未来目标或真值。基线与置换共享相同窗口、空间块、lead 和评价口径；通道置换保留单窗口时间/空间结构，并在所有空间块复用同一来源映射。重要性是 `permuted RMSE - baseline RMSE`（DU），保留负值，返回每次 RMSE/增量、均值、标准差、种子和实际抽样数；少于两个窗口时明确不可计算。诊断缓存纳入任务/权重 SHA、数据指纹、test 划分、窗口/horizon、通道、normalization、算法版本、参数与种子，命中前重新复核身份；共享推理槽避免不同诊断或预测请求同时抢占 GPU。诊断图目前仅在 Earth 页面展示，科研导出继续消费已有结果快照且不重新推理。算法、精确范围、缓存及验证入口见[地球训练后诊断](earth-post-training-diagnostics.md)。新任务使用任务固定划分，旧三小时按发布 manifest，不迁移或重拟合。
+
 
 ### 身份、缓存与错误码
 
@@ -277,7 +291,7 @@ context、预测及缓存命中前均严格核对任务与 checkpoint 的数据 
 | 起点不在发布轴，或缺少完整 56 步输入/24 步参考 | 422 `earth_prediction_origin_out_of_range` |
 | 所选输入或真实参考场缺测/不可读取 | 503 `earth_prediction_data_unavailable` |
 | 当前数据包读取权限导致无法验证 | 503 `dataset_unavailable` |
-| Earth 任务进入 Mars predict、metrics、PFI、compare 或 `action=test` | 409 `dataset_prediction_not_supported` |
+| Earth 任务进入 Mars predict、metrics、PFI 或 compare | 409 `dataset_prediction_not_supported` |
 | Earth 任务作为 Mars transfer 来源 | 409 `dataset_transfer_not_supported` |
 | 访问他人任务 / 任务不存在 | 403 / 404 |
 
