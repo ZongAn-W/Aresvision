@@ -33,8 +33,8 @@ export function getPredictAnalysisVisibility(modelMode = 'system') {
   }
 
   if (modelMode === 'earth') {
-    // 地球模式自己渲染 DU 场图与指标，不显示火星的 MY/Ls 侧栏输入与系统超参数，
-    // 也不显示火星场图/误差分布/PFI：这些分析当前只对火星口径定义。
+    // Earth mounts the shared single-model workspace via its adapter entry point.
+    // These flags control only the Mars request/analysis assembly in PredictPage.
     return {
       ...FULL_VISIBILITY,
       predictionFields: false,

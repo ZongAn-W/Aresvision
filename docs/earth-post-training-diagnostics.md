@@ -2,6 +2,10 @@
 
 Earth 三小时官方 DLinear 与独立 v1 上传模型共用诊断服务。训练结果页「模型测试」和预测页「地球训练后诊断」使用同一接口及默认参数；Earth 不进入 Mars 的 Ls、地形、数据准备或 PFI。日频任务继续停用。
 
+预测页的地球与火星单模型工作台共用指标与诊断展示组件：`PredictMetrics`、`ErrorDistributionChart`、`PermutationImportanceChart` 和 `PredictionChartCard`。`predictionPresentation.js` 的 Earth/Mars 展示适配分别提供指标定义、评价范围、单位转换、PFI 轴标签与导出能力；通用图表不判断行星。`EarthDiagnosticPanel` 保留独立手动触发、抽样控件和现有身份/请求协调 hook，只负责地球诊断装配及范围说明；训练结果页自动诊断行为继续由 `autoLoad` 显式配置。
+
+完整组件职责、UTC/Ls 起点、全屏地图/球面及桌面/移动端回归见[共用单模型预测工作台](shared-single-model-prediction.md)。
+
 ## 入口与权限
 
 - `GET /api/earth/predict/diagnostics/context?training_task_id=123`：复核已完成状态、checkpoint、数据及任务固定配置，供按钮禁用和原因展示。
@@ -58,4 +62,4 @@ Earth 诊断缓存是进程内 LRU（8 条 / 16 MiB），键至少包含 task ID
 
 本组散点、残差直方图与 Earth PFI 暂未开放科研图导出。现有 Earth 三联图和多模型 test 曲线仍只消费账号私有的结果快照，导出不重新推理。若后续开放诊断图导出，应消费本次诊断快照，保留抽样范围与 DU PFI 定义；不能套用 Mars 的 ΔR²。
 
-后端回归入口：`tests/test_earth_diagnostics.py`（手算/确定性统计）、`tests/test_earth_diagnostics_routes.py`（权限、分流、参数与协调）、`tests/test_earth_diagnostics_integration.py`（严格产物/数据流）。前端为 `earthDiagnosticsModel.test.js` 与 `services/earthDiagnostics.test.js`；生产构建使用 `npm run build`。从后端目录用项目指定的 AresVision conda 解释器执行 pytest，并使用仓库外新的英文 `--basetemp`。验证使用合成数据及模型，真实两年训练和真实模型精度验收不在此范围。
+后端回归入口：`tests/test_earth_diagnostics.py`（手算/确定性统计）、`tests/test_earth_diagnostics_routes.py`（权限、分流、参数与协调）、`tests/test_earth_diagnostics_integration.py`（严格产物/数据流）。前端为 `earthDiagnosticsModel.test.js`、`predictionPresentation.test.js` 与 `services/earthDiagnostics.test.js`；展示适配回归覆盖 Earth 六项 DU 指标、Mars 误差显示换算、当前窗口/完整 test/抽样诊断范围、服务端散点配对和直方图计数、ΔRMSE/ΔR² 负值与导出能力。生产构建使用 `npm run build`。从后端目录用项目指定的 AresVision conda 解释器执行 pytest，并使用仓库外新的英文 `--basetemp`。验证使用合成数据及模型，真实两年训练和真实模型精度验收不在此范围。

@@ -1,0 +1,35 @@
+.prediction-page { padding: 100px 40px 60px; max-width: 1400px; margin: 0 auto; }
+.predict-workspace > *, .single-model-workbench, .earth-predict-panel { min-width: 0; }
+.single-model-workbench, .earth-predict-panel { display: flex; flex-direction: column; gap: 20px; }
+.earth-predict-panel { padding: 0; border: 0; background: transparent; }
+.prediction-origin-control { display: flex; flex-direction: column; gap: 8px; color: var(--text-60); font-size: calc(11px * var(--font-scale, 1)); }
+.prediction-origin-control input { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-muted); color: var(--text); padding: 10px 12px; font: inherit; font-size: calc(13px * var(--font-scale, 1)); color-scheme: dark; }
+[data-theme="light"] .prediction-origin-control input { color-scheme: light; }
+.prediction-origin-control input[type="range"] { padding: 0; accent-color: #c75b39; }
+.prediction-control-hint { margin: 8px 0 0; font-size: calc(10px * var(--font-scale, 1)); color: var(--text-50); overflow-wrap: anywhere; }
+.prediction-status { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 12px; margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-muted); color: var(--text-60); font-size: calc(12px * var(--font-scale, 1)); overflow-wrap: anywhere; }
+.prediction-status[data-tone="error"] { border-color: rgba(210,60,60,.5); color: var(--text); }
+.prediction-status button { font: inherit; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-muted); color: var(--text); cursor: pointer; }
+.prediction-earth-field { display: flex; flex-direction: column; justify-content: center; gap: 10px; min-width: 0; padding-top: 30px; }
+.prediction-earth-field .earth-map2d { width: 100%; position: relative; }
+.prediction-earth-field .earth-map2d__svg { display: block; width: 100%; height: auto; aspect-ratio: 2 / 1; border-radius: 8px; }
+.prediction-earth-field .earth-map2d__basemap-note { font-size: 11px; color: var(--text-60); }
+.prediction-colorbar { display: flex; gap: 8px; align-items: center; justify-content: center; font-size: calc(10px * var(--font-scale, 1)); color: var(--text-60); }
+.prediction-colorbar span { flex-shrink: 0; }
+.prediction-colorbar i { height: 10px; flex: 1; border-radius: 3px; min-width: 30px; max-width: 180px; }
+.prediction-context-details { margin-top: 16px; }
+.prediction-context-details summary, .prediction-metric-details summary { cursor: pointer; color: var(--text-60); font-size: calc(12px * var(--font-scale, 1)); }
+.prediction-context-details dl { margin-top: 12px; }
+.prediction-table-scroll { width: 100%; overflow-x: auto; margin-top: 12px; }
+.prediction-table-scroll table { min-width: 720px; width: 100%; border-collapse: collapse; font-size: calc(12px * var(--font-scale, 1)); }
+.prediction-table-scroll th, .prediction-table-scroll td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+.prediction-table-scroll caption { color: var(--text-60); margin: 8px; text-align: left; }
+.earth-predict-unit { color: var(--text); }
+.prediction-fullscreen__scene .prediction-earth-field { height: 100%; padding: 30px 12px; }
+@media (max-width: 640px) {
+  .prediction-page { padding: 90px 12px 40px; }
+  .predict-workspace { gap: 16px; }
+  .prediction-colorbar { font-size: 10px; gap: 5px; }
+  .prediction-earth-field { min-height: 0 !important; }
+  .earth-predict-panel { padding: 0; }
+}

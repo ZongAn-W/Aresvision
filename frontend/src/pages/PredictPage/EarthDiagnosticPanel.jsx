@@ -1,39 +1,30 @@
 import { useMemo, useState } from 'react';
-import Plot from 'react-plotly.js';
+import PredictMetrics from './PredictMetrics.jsx';
+import ErrorDistributionChart from './ErrorDistributionChart.jsx';
+import PermutationImportanceChart from './PermutationImportanceChart.jsx';
+import { createEarthPredictionPresentation } from './predictionPresentation.js';
+import { fmtNum } from '../../utils/fmt.js';
 import { useSettings } from '../../contexts/SettingsContext.jsx';
-import { EARTH_METRIC_META, earthMetricUnit } from '../../utils/earthMetricMeta.js';
 import useEarthDiagnostics from './useEarthDiagnostics.js';
-import { earthDiagnosticHistogram, earthDiagnosticScatter, earthDiagnosticPfiItems } from './earthDiagnosticsModel.js';
+import { earthDiagnosticPfiItems } from './earthDiagnosticsModel.js';
 import './earthDiagnostics.css';
 
-const value = (number, decimals = 3) => Number.isFinite(number) ? number.toFixed(decimals) : '—';
 const jsonLabel = (item) => typeof item === 'string' ? item : item == null ? '—' : JSON.stringify(item);
 const timeLabel = (range) => range ? `${range.target_start || range.date_start || range.start || '—'} → ${range.target_end || range.date_end || range.end || '—'}` : '—';
 
 export default function EarthDiagnosticPanel({ taskId, identity, autoLoad = false }) {
   const { settings } = useSettings();
   const isZh = settings.language !== 'en';
-  const isLight = settings.theme === 'light';
+  const value = (number) => Number.isFinite(number) ? fmtNum(number, settings.precision) : '—';
+  const presentation = useMemo(() => createEarthPredictionPresentation({ settings }), [settings]);
+  const fullPresentation = useMemo(() => createEarthPredictionPresentation({ settings, scope: 'full_test' }).metrics, [settings]);
+  const samplePresentation = useMemo(() => createEarthPredictionPresentation({ settings, scope: 'sampled_diagnostic' }).metrics, [settings]);
   const label = (zh, en) => isZh ? zh : en;
   const [windows, setWindows] = useState(4);
   const [repeats, setRepeats] = useState(3);
   const options = useMemo(() => ({ sample_windows: windows, pfi_repeats: repeats }), [windows, repeats]);
   const { status, data, error, run } = useEarthDiagnostics(taskId, { identity, options, autoLoad });
   const busy = status === 'checking' || status === 'computing';
-  const charts = useMemo(() => {
-    if (!data) return {};
-    try { return { scatter: earthDiagnosticScatter(data.scatter), histogram: earthDiagnosticHistogram(data.histogram, data.scope?.valid_points) }; }
-    catch (failure) { return { error: failure.message }; }
-  }, [data]);
-  const layout = {
-    autosize: true, paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
-    font: { color: isLight ? '#334155' : '#cbd5e1', family: 'inherit', size: 11 },
-    margin: { l: 65, r: 20, t: 24, b: 68 },
-    xaxis: { gridcolor: isLight ? '#e2e8f0' : '#263647', zerolinecolor: '#7f94a8' },
-    yaxis: { gridcolor: isLight ? '#e2e8f0' : '#263647', zerolinecolor: '#7f94a8' },
-    showlegend: false,
-  };
-  const plotConfig = { responsive: true, displayModeBar: false };
   const scope = data?.scope;
   const full = data?.full_test_metrics;
   const fullMetrics = full?.metrics?.overall;
@@ -42,7 +33,6 @@ export default function EarthDiagnosticPanel({ taskId, identity, autoLoad = fals
   const rangeText = timeRange ? [timeRange.start || timeRange.input_start || timeRange.target_start,
     timeRange.end || timeRange.target_end].filter(Boolean).join(' → ') || jsonLabel(timeRange) : '—';
   const pfiItems = earthDiagnosticPfiItems(pfi);
-  const pfiChartItems = pfiItems.filter((item) => Number.isFinite(item.importance_mean));
   const sampleMetrics = data?.sample_metrics?.overall;
 
   return <section className="earth-diagnostics" data-earth-diagnostics="true" aria-label={label('地球训练后诊断', 'Earth post-training diagnostics')}>
@@ -75,7 +65,7 @@ export default function EarthDiagnosticPanel({ taskId, identity, autoLoad = fals
         ? label('有效 checkpoint 未提供完整测试集指标；缺失项保持未提供，不用抽样结果代替。', 'The valid checkpoint does not provide full test-set metrics. Missing values stay unprovided; sampled metrics do not replace them.')
         : label('复用 checkpoint 保存的完整 test 指标。', 'Reusing full test metrics saved in the checkpoint.')}</p>
       <p className="earth-diagnostic-note">{label('完整测试集范围：', 'Full test partition: ')}{timeLabel(full?.test_range)} · {full?.metrics?.window_count ?? full?.test_range?.window_count ?? '—'} {label('窗口', 'windows')} · {label('任务 / 发布固定划分', 'Fixed task / release partition')}</p>
-      <MetricCards metrics={fullMetrics} isZh={isZh} />
+      <PredictMetrics metrics={{ overall: fullMetrics }} precision={settings.precision} presentation={fullPresentation} />
       <h4>{label('诊断抽样范围', 'Diagnostic sampling scope')}</h4>
       <dl className="earth-diagnostic-facts">
         <div><dt>{label('分区与窗口', 'Partition and windows')}</dt><dd>{`${scope?.split || 'test'} · ${scope?.window_count ?? '—'} / ${scope?.available_window_count ?? '—'}`}</dd></div>
@@ -91,45 +81,13 @@ export default function EarthDiagnosticPanel({ taskId, identity, autoLoad = fals
       {data.warnings?.length ? <div className="earth-diagnostic-status" role="status">{data.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div> : null}
       <h4>{label('相同诊断窗口的指标', 'Metrics for these diagnostic windows')}</h4>
       <p className="earth-diagnostic-note">{label('覆盖所选窗口全部提前步与空间格点；它们是抽样诊断指标，不是散点子样本指标，也不是完整测试集指标。', 'All leads and spatial cells in the selected windows. These are diagnostic-window metrics, distinct from the scatter subsample and full test-set metrics.')}</p>
-      <MetricCards metrics={sampleMetrics} isZh={isZh} />
-      {charts.error ? <p role="alert" className="earth-diagnostic-status" data-tone="error">{charts.error}</p> : <div className="earth-diagnostic-chart-grid">
-        <figure><figcaption>{label('预测值与参考值 · 抽样散点', 'Prediction vs reference · sampled scatter')}</figcaption>
-          <Plot data={[
-            { x: charts.scatter.reference, y: charts.scatter.prediction, type: 'scattergl', mode: 'markers',
-              marker: { size: 4, color: '#79bbff', opacity: .5 },
-              hovertemplate: `${label('参考', 'Reference')}: %{x:.2f} DU<br>${label('预测', 'Prediction')}: %{y:.2f} DU<extra></extra>` },
-            { x: charts.scatter.range, y: charts.scatter.range, type: 'scatter', mode: 'lines', name: 'y=x',
-              line: { color: '#f0ad66', width: 2, dash: 'dash' }, hoverinfo: 'name' },
-          ]} layout={{ ...layout,
-            xaxis: { ...layout.xaxis, title: { text: label('参考值（DU）', 'Reference (DU)') }, range: charts.scatter.range },
-            yaxis: { ...layout.yaxis, title: { text: label('预测值（DU）', 'Prediction (DU)') }, range: charts.scatter.range } }}
-            config={plotConfig} useResizeHandler style={{ width: '100%', height: 330 }} />
-          <p>{label(`仅显示 ${charts.scatter.reference.length.toLocaleString()} 对流式抽样点；虚线 y=x。上方诊断指标覆盖相同窗口全部提前步与格点。`, `Only ${charts.scatter.reference.length.toLocaleString()} streaming-sampled pairs; dashed line y=x. Diagnostic metrics above cover every lead and grid cell in these windows.`)}</p>
-        </figure>
-        <figure><figcaption>{label('残差分布（DU）', 'Residual distribution (DU)')}</figcaption>
-          <Plot data={[{ x: charts.histogram.centers, y: charts.histogram.counts, width: charts.histogram.widths,
-            type: 'bar', marker: { color: '#79c9b5' }, hovertemplate: '%{x:.3f} DU: %{y}<extra></extra>' }]}
-            layout={{ ...layout, bargap: 0,
-              xaxis: { ...layout.xaxis, title: { text: label('预测 − 参考（DU）', 'Prediction − reference (DU)') } },
-              yaxis: { ...layout.yaxis, title: { text: label('点位数', 'Count') } } }}
-            config={plotConfig} useResizeHandler style={{ width: '100%', height: 330 }} />
-          <p>{label(`残差 = prediction-reference；累计 ${charts.histogram.sampleCount.toLocaleString()} 个值，覆盖所选 test 窗口全部提前步与格点。`, `Residual = prediction-reference; ${charts.histogram.sampleCount.toLocaleString()} accumulated values across every lead and grid cell in the selected test windows.`)}</p>
-          <p>{label('均值 / 标准差 / 最小 / 最大（DU）', 'Mean / std / min / max (DU)')}: {['mean', 'std', 'min', 'max'].map((key) => value(data.histogram.summary?.[key])).join(' / ')}</p>
-        </figure>
-      </div>}
+      <PredictMetrics metrics={{ overall: sampleMetrics }} precision={settings.precision} presentation={samplePresentation} />
+      <ErrorDistributionChart data={data} presentation={presentation.distribution} precision={settings.precision} />
       <h4>{label('置换重要性（PFI）', 'Permutation feature importance (PFI)')}</h4>
       <p className="earth-diagnostic-note">{label('主要重要性 = 置换后 RMSE − 基线 RMSE（DU）；保留负值。PFI 表示当前模型在此抽样范围下的输入敏感性，不能解释为因果贡献。每个通道整段历史窗口置换，含历史 TO3；未来目标和参考真值不置换。', 'Importance = permuted RMSE − baseline RMSE (DU), retaining negative values. PFI measures model sensitivity within this sample, not causal contribution. Each input channel, including historical TO3, is permuted as a whole window; future targets and references remain fixed.')}</p>
       {pfi?.status !== 'completed' && pfi?.status !== 'success' ? <p className="earth-diagnostic-status">{jsonLabel(pfi?.reason?.message || pfi?.reason || pfi?.message || label('此范围无法计算 PFI，至少需要两个有效窗口。', 'PFI requires at least two valid windows and a meaningful permutation.'))}</p> : null}
       {pfiItems.length ? <>
-        {pfiChartItems.length ? <div className="earth-diagnostic-pfi-plot"><Plot
-          data={[{ type: 'bar', x: pfiChartItems.map((item) => item.importance_mean), y: pfiChartItems.map((item) => item.channel),
-            orientation: 'h', marker: { color: pfiChartItems.map((item) => item.importance_mean < 0 ? '#f0ad66' : '#79bbff') },
-            error_x: { type: 'data', array: pfiChartItems.map((item) => item.importance_std), visible: true },
-            hovertemplate: '%{y}: %{x:.3f} DU<extra></extra>' }]}
-          layout={{ ...layout, margin: { l: 82, r: 20, t: 20, b: 60 },
-            xaxis: { ...layout.xaxis, title: { text: label('RMSE 增量（DU）；误差条 = 标准差', 'RMSE increase (DU); error bars = std') } },
-            yaxis: { ...layout.yaxis, autorange: 'reversed' } }}
-          config={plotConfig} useResizeHandler style={{ width: '100%', height: Math.max(230, pfiChartItems.length * 44) }} /></div> : null}
+        <PermutationImportanceChart data={pfi} presentation={presentation.pfi} precision={settings.precision} />
         <p className="earth-diagnostic-note">{pfi.window_count ?? pfi.scope?.window_count ?? '—'} {label('个相同测试窗口、全部提前步与全球格点；目标 UTC 范围', 'identical test windows, all leads and global cells; target UTC range')} {timeLabel(pfi.scope?.time_range)} · seed {pfi.seed ?? 42}</p>
         <div className="earth-diagnostic-table-scroll"><table>
           <thead><tr>{[label('输入通道', 'Input'), label('基线 RMSE（DU）', 'Baseline RMSE (DU)'), label('均值 ± 标准差（DU）', 'Mean ± std (DU)'), label('每次置换 RMSE（DU）', 'Each permuted RMSE (DU)'), label('每次 RMSE 增量（DU）', 'Each RMSE increase (DU)')].map((text) => <th key={text}>{text}</th>)}</tr></thead>
@@ -139,10 +97,4 @@ export default function EarthDiagnosticPanel({ taskId, identity, autoLoad = fals
       <p className="earth-diagnostic-note">{label('本组诊断图暂未开放科研导出；已有历史预测三联图导出仍消费结果快照，不重新推理。', 'Scientific export is not yet available for these diagnostic plots. Existing forecast triptych export consumes result snapshots without rerunning inference.')}</p>
     </> : null}
   </section>;
-}
-
-function MetricCards({ metrics, isZh }) {
-  return <div className="earth-diagnostic-metrics">{EARTH_METRIC_META.map((metric) => <div key={metric.key}>
-    <span>{metric[isZh ? 'zh' : 'en']}</span><b>{Number.isFinite(metrics?.[metric.key]) ? value(metrics[metric.key]) : isZh ? '未提供' : 'Not provided'}</b><small>{earthMetricUnit(metric.key, isZh)}</small>
-  </div>)}</div>;
 }

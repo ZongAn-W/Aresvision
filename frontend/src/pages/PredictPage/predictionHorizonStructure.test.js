@@ -16,7 +16,7 @@ test('prediction page derives and clamps the horizon from selected trained model
   assert.match(pageSource, /selectedTrainingOption\?\.task/);
   assert.match(pageSource, /selectedCompareTrainingTasks/);
   assert.match(pageSource, /setPredStep\(\(current\)\s*=>\s*clampPredictionHorizon\(current, predictionHorizonLimit\)\)/);
-  assert.match(pageSource, /predictionHorizonLimit=\{predictionHorizonLimit\}/);
+  assert.match(pageSource, /predictionHorizonLimit=\{isEarthMode \? earthContext\?\.horizon \?\? null : predictionHorizonLimit\}/);
   assert.match(pageSource, /performanceData,\s*performanceKey,\s*predictionHorizonLimit,\s*predStep,/);
 });
 

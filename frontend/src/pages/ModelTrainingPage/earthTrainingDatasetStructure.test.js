@@ -100,5 +100,5 @@ test('predict 页面共用行星和分析方式选择，Earth 数据仍走独立
   assert.match(predictSource, /setEarthResult\(null\)/);
   assert.match(predictSource, /<PredictModeSelector/);
   assert.match(predictSource, /<EarthCompareWorkspace/);
-  assert.match(predictSource, /planet=\{isEarthMode \? 'earth' : 'mars'\}/);
+  assert.match(predictSource, /adapter=\{isEarthMode \? earthAdapter : marsAdapter\}/);
 });

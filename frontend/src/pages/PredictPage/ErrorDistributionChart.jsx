@@ -1,207 +1,77 @@
-import React from 'react';
+import { useMemo } from 'react';
 import Plot from 'react-plotly.js';
-import C from '../../constants/colors';
-import { useT } from '../../i18n';
 import { useSettings } from '../../contexts/SettingsContext';
-import { convertOzone, ozoneLabel } from '../../utils/units';
+import { fmtNum } from '../../utils/fmt';
 import ResearchExportButton from './ResearchExportButton';
-import { currentStepScatter } from './researchExportModel';
+import PredictionChartCard from './PredictionChartCard.jsx';
+import { createMarsPredictionPresentation, predictionChartTheme } from './predictionPresentation.js';
 
-export default function ErrorDistributionChart({ 
-  data, 
-  predictionResult,
-  step = 0,
-  loading,
-  isLight,
-  plotTextColor,
-  plotText60,
-  plotGridColor
-}) {
-  const t = useT();
+export default function ErrorDistributionChart({ data, predictionResult, step = 0, loading,
+  plotTextColor, plotText60, plotGridColor, presentation, precision }) {
   const { settings } = useSettings();
-  const unit = settings.units.ozone;
-  const unitLabel = ozoneLabel(unit);
   const zh = settings.language !== 'en';
-  const scatter = currentStepScatter(predictionResult, step, unit) || { trues: [], preds: [] };
-  if (!data && !loading) return null;
-
-  if (loading || !data) {
-    const skeletonBg = isLight ? 'bg-gray-100' : 'bg-white/5';
-    const skeletonBorder = isLight ? 'border-gray-200' : 'border-gray-800';
-    return (
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full h-[350px]">
-        {[1, 2, 3].map((item) => (
-          <div 
-            key={item} 
-            className={`animate-pulse ${skeletonBg} rounded-xl border ${skeletonBorder} backdrop-blur-sm h-full w-full min-h-[300px]`} 
-          />
-        ))}
-      </div>
-    );
-  }
-
-  // Basic Dark/Cyborg chart layout configuration (Minimalist Science Fiction)
+  const config = presentation || createMarsPredictionPresentation({ settings }).distribution;
+  const state = useMemo(() => {
+    if (!data) return {};
+    try { return { plots: config.readData(data, { predictionResult, step }) }; }
+    catch (error) { return { error: error.message }; }
+  }, [data, predictionResult, step, config]);
+  const theme = predictionChartTheme(settings, { plotTextColor, plotText60, plotGridColor });
+  const decimals = precision ?? settings.precision;
+  const format = (value) => Number.isFinite(value) ? fmtNum(value, decimals) : '—';
+  const unit = state.plots?.unitLabel || config.unitLabel;
   const baseLayout = {
-    paper_bgcolor: 'rgba(0,0,0,0)',
-    plot_bgcolor: 'rgba(0,0,0,0)',
-    font: { color: plotTextColor, family: 'Inter, system-ui, sans-serif' },
-    margin: { t: 30, r: 20, l: 45, b: 40 },
-    xaxis: { 
-      gridcolor: plotGridColor, 
-      zerolinecolor: plotGridColor,
-      tickfont: { size: 9, color: plotText60 },
-      showline: false,
-    },
-    yaxis: { 
-      gridcolor: plotGridColor, 
-      zerolinecolor: plotGridColor,
-      tickfont: { size: 9, color: plotText60 },
-      showline: false,
-    },
-    autosize: true
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', autosize: true,
+    font: { color: theme.text, family: 'Inter, system-ui, sans-serif' },
+    margin: { t: 28, r: 20, l: 56, b: 58 },
+    xaxis: { gridcolor: theme.grid, zerolinecolor: theme.grid, tickfont: { size: 9, color: theme.muted }, automargin: true },
+    yaxis: { gridcolor: theme.grid, zerolinecolor: theme.grid, tickfont: { size: 9, color: theme.muted }, automargin: true },
   };
-
-  const getCenters = (edges) => edges.slice(0, -1).map((e, i) => (e + edges[i+1]) / 2);
-
-  // Ordinary scatter of every current-step cell; no fabricated density.
-  const scatterTrace = {
-    x: scatter.trues,
-    y: scatter.preds,
-    mode: 'markers',
-    type: 'scatter',
-    marker: {
-      color: '#0072BD',
-      size: 3,
-      opacity: 0.8,
-      showscale: false
-    },
-    name: zh ? '当前预测步格点' : 'Current-step grid cells'
-  };
-
-  const minVal = [...scatter.trues, ...scatter.preds].reduce((value, next) => Math.min(value, next), Infinity);
-  const maxVal = [...scatter.trues, ...scatter.preds].reduce((value, next) => Math.max(value, next), -Infinity);
-  const baselineTrace = {
-    x: [minVal, maxVal],
-    y: [minVal, maxVal],
-    mode: 'lines',
-    type: 'scatter',
-    line: { color: 'rgba(248, 113, 113, 0.8)', dash: 'dash', width: 2 }, // Red-400
-    name: 'y = x',
-    showlegend: false
-  };
-
-  // --- Card 2 Data: Dual-Histogram Overlay ---
-  const trueHist = {
-    x: getCenters(data.hist_trues.bin_edges).map((v) => convertOzone(v, unit)),
-    y: data.hist_trues.counts,
-    type: 'bar',
-    name: t('ai.errorDistribution.trueLabel'),
-    marker: { color: 'rgba(56, 189, 248, 0.6)' }, // Sky-400
-    opacity: 0.8
-  };
-  const predHist = {
-    x: getCenters(data.hist_preds.bin_edges).map((v) => convertOzone(v, unit)),
-    y: data.hist_preds.counts,
-    type: 'bar',
-    name: t('ai.errorDistribution.predLabel'),
-    marker: { color: 'rgba(52, 211, 153, 0.6)' }, // Emerald-400
-    opacity: 0.8
-  };
-
-  // --- Card 3 Data: Error Histogram ---
-  const errorHist = {
-    x: getCenters(data.hist_errors.bin_edges).map((v) => convertOzone(v, unit)),
-    y: data.hist_errors.counts,
-    type: 'bar',
-    name: t('ai.errorDistribution.error'),
-    marker: { color: 'rgba(167, 139, 250, 0.8)' }, // Violet-400
-  };
-  
-  const maxErrorCount = Math.max(...data.hist_errors.counts);
-  const zeroErrorLine = {
-    type: 'line',
-    x0: 0, x1: 0,
-    y0: 0, y1: maxErrorCount * 1.05,
-    line: { color: 'rgba(248, 113, 113, 0.8)', width: 2, dash: 'dash' }
-  };
-
-    const cardBg = isLight ? 'bg-white/60' : 'bg-black/40';
-    const cardBorder = isLight ? 'border-gray-200' : 'border-gray-800';
-    const cardShadow = isLight ? 'shadow-sm' : 'shadow-[0_0_20px_rgba(0,0,0,0.4)]';
-    const headerColor = isLight ? 'text-gray-500' : 'text-gray-400';
-
-    return (
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
-        {/* Density Scatter Plot */}
-        <div className={`${cardBg} border ${cardBorder} ${cardShadow} p-4 rounded-xl flex flex-col backdrop-blur-md relative overflow-hidden group`}>
-          <h3 className={`${headerColor} font-semibold text-xs mb-1 tracking-widest uppercase`}>{t('ai.errorDistribution.trueVsPred')}</h3>
-          <p style={{ fontSize: 11 }}>{zh ? `当前预测步 ${step + 1} · 普通散点` : `Forecast step ${step + 1} · ordinary scatter`}</p>
-          <ResearchExportButton sources={[predictionResult?.export_ref]} kind="scatter" step={step} disabled={loading} />
-        <div className="flex-1 w-full min-h-[250px] relative z-10">
-          <Plot
-            data={[scatterTrace, baselineTrace]}
-            layout={{ 
-              ...baseLayout, 
-              xaxis: { ...baseLayout.xaxis, range: Number.isFinite(minVal) ? [minVal, maxVal] : undefined, title: { text: `${zh ? '参考' : 'Reference'} (${unitLabel})`, font: { size: 11 } } },
-              yaxis: { ...baseLayout.yaxis, scaleanchor: 'x', scaleratio: 1, range: Number.isFinite(minVal) ? [minVal, maxVal] : undefined, title: { text: `${zh ? '预测' : 'Prediction'} (${unitLabel})`, font: { size: 11 } } },
-              showlegend: false
-            }}
-            useResizeHandler
-            className="w-full h-full"
-            config={{ displayModeBar: false, responsive: true }}
-          />
-        </div>
-      </div>
-
-      {/* Distribution Comparison Plot */}
-      <div className={`${cardBg} border ${cardBorder} ${cardShadow} p-4 rounded-xl flex flex-col backdrop-blur-md relative overflow-hidden`}>
-        <h3 className={`${headerColor} font-semibold text-xs mb-1 tracking-widest uppercase`}>{t('ai.errorDistribution.distMatch')}</h3>
-        <p style={{ fontSize: 11 }}>{zh ? `完整测试集 · ${unitLabel}` : `Full test set · ${unitLabel}`}</p>
-        <div className="flex-1 w-full min-h-[250px] relative z-10">
-          <Plot
-            data={[trueHist, predHist]}
-            layout={{ 
-              ...baseLayout, 
-              barmode: 'overlay',
-              xaxis: { ...baseLayout.xaxis, title: unitLabel },
-              legend: { orientation: 'h', y: 1.15, x: 0.5, xanchor: 'center', font: { size: 10 } }
-            }}
-            useResizeHandler
-            className="w-full h-full"
-            config={{ displayModeBar: false, responsive: true }}
-          />
-        </div>
-      </div>
-
-      {/* Error & RMSE Dashboard */}
-      <div className={`${cardBg} border ${cardBorder} ${cardShadow} p-4 rounded-xl flex flex-col backdrop-blur-md relative overflow-hidden`}>
-        <div className="flex justify-between items-start mb-1">
-          <h3 className={`${headerColor} font-semibold text-xs tracking-widest uppercase`}>{t('ai.errorDistribution.errorHist')}</h3>
-          <div className="flex flex-col text-right">
-            <span className={`${isLight ? 'text-emerald-600 bg-emerald-50' : 'text-emerald-400 bg-emerald-400/10'} font-mono text-xs font-bold px-1.5 py-0.5 rounded backdrop-blur border ${isLight ? 'border-emerald-200' : 'border-emerald-400/20'}`}>
-              RMSE: {convertOzone(data.rmse, unit).toFixed(3)} {unitLabel}
-            </span>
-            <span className={`${isLight ? 'text-sky-600 bg-sky-50' : 'text-sky-400 bg-sky-400/10'} font-mono text-xs font-bold mt-1 px-1.5 py-0.5 rounded backdrop-blur border ${isLight ? 'border-sky-200' : 'border-sky-400/20'}`}>
-              MAE: {convertOzone(data.mae, unit).toFixed(3)} {unitLabel}
-            </span>
-          </div>
-        </div>
-        <p style={{ fontSize: 11 }}>{zh ? '完整测试集；残差 = 预测 − 参考' : 'Full test set; residual = prediction - reference'}</p>
-        <div className="flex-1 w-full min-h-[250px] relative z-10">
-          <Plot
-            data={[errorHist]}
-            layout={{ 
-              ...baseLayout, 
-              shapes: [zeroErrorLine],
-              showlegend: false,
-              xaxis: { ...baseLayout.xaxis, title: { text: `${zh ? '预测减参考' : 'Prediction - reference'} (${unitLabel})`, font: { size: 11 } } }
-            }}
-            useResizeHandler
-            className="w-full h-full"
-            config={{ displayModeBar: false, responsive: true }}
-          />
-        </div>
-      </div>
-    </div>
-  );
+  const plotConfig = { displayModeBar: false, responsive: true };
+  const plot = (traces, layout) => <div className="prediction-chart-plot"><Plot data={traces}
+    layout={{ ...baseLayout, ...layout }} useResizeHandler config={plotConfig} style={{ width: '100%', height: '100%' }} /></div>;
+  if (!data && !loading) return null;
+  if (loading || !data) return <div className="prediction-chart-grid" role="status"
+    aria-label={zh ? '诊断图加载中' : 'Loading diagnostic charts'}>
+    {[0, 1, 2].map((index) => <div className="prediction-chart-skeleton" key={index} />)}</div>;
+  if (state.error) return <div role="alert" className="prediction-chart-status prediction-chart-error">{state.error}</div>;
+  const { scatter, distributions, residual } = state.plots;
+  const hoverDigits = decimals === 'full' ? '' : `:.${decimals}f`;
+  const barTrace = (bins, name, color) => ({ x: bins?.centers || [], y: bins?.counts || [], width: bins?.widths,
+    type: 'bar', name, marker: { color }, opacity: .8 });
+  return <div className="prediction-chart-grid" data-predict-distribution="true" data-field-unit={unit}>
+    {scatter ? <PredictionChartCard title={zh ? '参考与预测散点' : 'Reference vs prediction'}
+      subtitle={scatter.scopeText} scope={scatter.scope} note={scatter.note}
+      action={scatter.exportEnabled ? <ResearchExportButton sources={[scatter.exportRef]} kind="scatter" step={step} /> : null}>
+      {plot([
+        { x: scatter.reference, y: scatter.prediction, type: 'scattergl', mode: 'markers',
+          marker: { color: '#0072BD', size: 3, opacity: .65 },
+          hovertemplate: `${zh ? '参考' : 'Reference'}: %{x${hoverDigits}} ${unit}<br>${zh ? '预测' : 'Prediction'}: %{y${hoverDigits}} ${unit}<extra></extra>` },
+        { x: scatter.range || [], y: scatter.range || [], type: 'scatter', mode: 'lines', name: 'y = x',
+          line: { color: '#f0ad66', dash: 'dash', width: 2 }, hoverinfo: 'name' },
+      ], { showlegend: false,
+        xaxis: { ...baseLayout.xaxis, range: scatter.range, title: { text: `${zh ? '参考' : 'Reference'} (${unit})` } },
+        yaxis: { ...baseLayout.yaxis, range: scatter.range, scaleanchor: 'x', scaleratio: 1,
+          title: { text: `${zh ? '预测' : 'Prediction'} (${unit})` } },
+      })}
+    </PredictionChartCard> : null}
+    {distributions ? <PredictionChartCard title={zh ? '参考与预测分布' : 'Reference and prediction distributions'}
+      subtitle={`${distributions.scopeText} · ${unit}`} scope={distributions.scope}>
+      {plot([barTrace(distributions.reference, zh ? '参考' : 'Reference', '#38bdf8'),
+        barTrace(distributions.prediction, zh ? '预测' : 'Prediction', '#34d399')], {
+        barmode: 'overlay', xaxis: { ...baseLayout.xaxis, title: { text: unit } },
+        legend: { orientation: 'h', y: 1.15, x: .5, xanchor: 'center', font: { size: 10 } },
+      })}
+    </PredictionChartCard> : null}
+    {residual ? <PredictionChartCard title={zh ? '残差分布' : 'Residual distribution'}
+      subtitle={residual.scopeText} scope={residual.scope} note={residual.note}>
+      <div className="prediction-chart-scores"><span>RMSE: {format(residual.rmse)} {unit}</span><span>MAE: {format(residual.mae)} {unit}</span></div>
+      {plot([barTrace(residual, zh ? '残差' : 'Residual', '#a78bfa')], { showlegend: false, bargap: 0,
+        xaxis: { ...baseLayout.xaxis, title: { text: `${zh ? '预测 − 参考' : 'Prediction − reference'} (${unit})` } },
+        yaxis: { ...baseLayout.yaxis, title: { text: zh ? '点位数' : 'Count' } },
+        shapes: [{ type: 'line', x0: 0, x1: 0, yref: 'paper', y0: 0, y1: 1, line: { color: '#f0ad66', width: 2, dash: 'dash' } }],
+      })}
+      {residual.summary ? <p className="prediction-chart-subtitle">{zh ? '均值 / 标准差 / 最小 / 最大' : 'Mean / std / min / max'} ({unit}): {['mean', 'std', 'min', 'max'].map((key) => format(residual.summary[key])).join(' / ')}</p> : null}
+    </PredictionChartCard> : null}
+  </div>;
 }

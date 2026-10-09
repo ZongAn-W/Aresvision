@@ -2,6 +2,8 @@
 
 第一版入口在预测分析页面各图旁的「导出科研图」。仅消费已返回的预测与分析结果；导出端点不会训练、调用模型或在结果缺失时补算。
 
+地球与火星单模型现由[共用预测工作台](shared-single-model-prediction.md)装配导出入口：`PredictDisplay` 使用当前步结果快照，`ErrorDistributionChart` 与 `PermutationImportanceChart` 通过 `predictionPresentation.js` 的配置决定能力。共用外壳不新增导出图种；Earth 当前步三联图可用，Earth 抽样诊断散点、残差直方图及 ΔRMSE PFI 继续禁用科研导出。`singleModelAdapters.js` 保留行星、时间、网格与物理单位契约，切换任务/起点/账号后旧快照不作为当前结果使用。
+
 ## 支持图表与统计口径
 
 | 图表 | 实际绘图数据 | 范围 |
@@ -16,6 +18,8 @@
 PFI 不依赖页面 Ls 起点，也不等于当前预测窗口或完整测试集逐格评价。新计算响应附 `sampling`（实际样本数、测试窗口数、抽样索引、置换方式、未固定 seed）；旧缓存缺少该信息时明确标记 `legacy_unknown`，不编造样本数。导出数据只能重画已有 PFI 值，不能复现随机置换实验。
 
 Earth 训练后诊断的散点、残差直方图和 Earth PFI 当前只在页面展示，不新增导出类型；未来开放导出时必须消费诊断结果快照，不能在导出请求中重新推理。页面诊断使用固定 test 分区的有限窗口和明确种子，完整 test 指标与抽样指标分开标注。
+
+共用工作台中的三联图和单图顺序为参考、预测、残差；两者的当前步三联图按钮仍导出该步全部三场。Earth 展示步选择只切换查看内容，每次运行完整任务 horizon，导出引用保持原始完整窗口身份及零基 step。地球值保持 DU，目标标签为提前小时与 UTC；Mars 请求保持原步长上限、Ls 标签及可选显示单位。Earth 地图放大与 Mars 球面放大均不产生新的科研快照。
 
 旧误差分布 API 的 `scatter.density` 为兼容字段，全部为 1，不能作为密度估计。页面已改用当前步全部格点普通散点；误差直方图和其 RMSE/MAE 仍是完整测试集，单独标明范围。Mars 页面与导出统一采用 `1 μm-atm = 0.1 DU`，RMSE/MAE、直方图横坐标与场图读数同步转换；R²、SSIM、ΔR² 不转换。Earth 原有 DU API 契约不变。
 
@@ -67,6 +71,8 @@ MATLAB 重建保持数据、坐标、色阶与图类型；MATLAB 字体、版本
 从后端目录使用工作区规定的 AresVision conda 解释器执行 `-m pytest tests/test_research_export.py`，临时目录指定仓库外的新英文路径。该文件覆盖换算、共同/对称色阶、坐标顺序、残差方向、坏数据拒绝、权限与条件、过期、白名单、尺寸/DPI、SVG 真文字与局部栅格化、PDF MediaBox、MAT 回读和无敏感路径。
 
 `tests/test_earth_3hourly_prediction_routes.py` 的已有合成 24 步响应增加第 24 步科研导出验证，明确禁止导出再次推理，逐项核对 MAT 的 DU 值、纬度与 UTC 目标时间。前端纯函数测试为 `researchExportModel.test.js`；构建从 `frontend/` 执行 `npm run build`。
+
+共用单模型工作台的本轮验证入口另见[验证入口与边界](shared-single-model-prediction.md#验证入口与边界)：适配与展示回归核对 Earth DU、Mars 显示换算、当前窗口/完整 test/抽样诊断、ΔRMSE/ΔR² 负值及科研导出能力；[合成浏览器脚本](../scripts/audit/shared-prediction/browser-check.js)核对桌面/390px、主题/精度/色带、时间步/全屏、旧结果与错误恢复。该脚本替换预测 API，只验证页面和能力约束；实际科研文件格式与布局的验证仍以本文既有文件测试为准，不将页面合成预览视为 MATLAB 或真实精度验收。
 
 布局样例生成器：[generate-fixtures.py](../scripts/audit/research-export/generate-fixtures.py)，以同一解释器从仓库根目录运行，参数为仓库外输出目录。可加 `--curve-models 8` 检查单图模型数量上限；默认 3 条合成曲线。生成中英文、单双栏、全部四类图的 PNG/SVG/PDF 与 MATLAB 包；全部为明确标记的合成布局数据，不能作为模型效果证据。
 

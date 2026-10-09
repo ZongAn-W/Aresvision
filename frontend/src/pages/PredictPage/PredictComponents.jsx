@@ -6,13 +6,9 @@ import { buildCanvasFont, normalizeFontScale } from '../../utils/fontScale';
 import { getRgb, rdbuRgb } from '../../utils/colormaps';
 import { ozoneLabel, ozoneDeltaLabel, convertOzone } from '../../utils/units';
 import { marsPredictionGrid } from './marsPredictionGrid';
+import { fmtNum } from '../../utils/fmt';
 
-// fmtVal 用于 Canvas 色阶标签（精度固定 3 位，与精度设置无关，因其在 useEffect 绘图中使用）
-export function fmtVal(v) {
-  if (v === 0) return '0';
-  if (Math.abs(v) < 0.001) return v.toExponential(2);
-  return v.toFixed(3);
-}
+export function fmtVal(v, precision = 3) { return fmtNum(v, precision); }
 
 // ─── Canvas 场热力图（带坐标轴 + Colorbar） ───
 
@@ -22,6 +18,7 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240, colorRa
   const { settings } = useSettings();
   const colormapName = settings.colormap;
   const ozoneUnit = settings.units.ozone;
+  const precision = settings.precision;
   const theme = settings.theme;
   const fontScale = normalizeFontScale(settings.appearance?.uiScale);
   const isLight = theme === 'light';
@@ -37,7 +34,7 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240, colorRa
     
     // 动态计算内部绘图区，确保维持约 2:1 的物理宽高比，防止地图变形
     const CH = canvas.height;  // h (e.g. 220 or 400)
-    const ML = 56, MR = 72, MT = 22, MB = 48; // 增加左边距和底边距，适应标轴文本
+    const ML = 56, MR = precision === 'full' ? 144 : Number(precision) > 3 ? 96 : 72, MT = 22, MB = 48;
     const plotH = CH - MT - MB;
     const plotW = plotH * 2;
     const CW = plotW + ML + MR;
@@ -171,9 +168,9 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240, colorRa
     ctx.textAlign = 'left';
     ctx.fillStyle = cbLabelColor;
     ctx.font = buildCanvasFont(9, { scale: fontScale });
-    const topLabel = colorMode === 'rdbu' ? `+${fmtVal(convertOzone(absMax, ozoneUnit))}` : fmtVal(convertOzone(dMax, ozoneUnit));
-    const midLabel = colorMode === 'rdbu' ? '0' : fmtVal(convertOzone((dMin + dMax) / 2, ozoneUnit));
-    const botLabel = colorMode === 'rdbu' ? `-${fmtVal(convertOzone(absMax, ozoneUnit))}` : fmtVal(convertOzone(dMin, ozoneUnit));
+    const topLabel = colorMode === 'rdbu' ? `+${fmtVal(convertOzone(absMax, ozoneUnit), precision)}` : fmtVal(convertOzone(dMax, ozoneUnit), precision);
+    const midLabel = colorMode === 'rdbu' ? fmtVal(0, precision) : fmtVal(convertOzone((dMin + dMax) / 2, ozoneUnit), precision);
+    const botLabel = colorMode === 'rdbu' ? `-${fmtVal(convertOzone(absMax, ozoneUnit), precision)}` : fmtVal(convertOzone(dMin, ozoneUnit), precision);
     ctx.fillText(topLabel, lbX, MT + 8);
     ctx.fillText(midLabel, lbX, MT + cbH / 2 + 3);
     ctx.fillText(botLabel, lbX, MT + cbH);
@@ -188,16 +185,16 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240, colorRa
     ctx.fillText(colorMode === 'rdbu' ? ozoneDeltaLabel(ozoneUnit) : ozoneLabel(ozoneUnit), 0, 0);
     ctx.restore();
 
-  }, [fieldData, colorMode, h, colormapName, ozoneUnit, theme, fontScale, colorRange?.min, colorRange?.max]);
+  }, [fieldData, colorMode, h, colormapName, ozoneUnit, precision, theme, fontScale, colorRange?.min, colorRange?.max, t]);
 
   return (
-    <div style={isLight ? { borderRadius: 10, overflow: 'hidden', background: 'transparent' } : {}}>
+    <div style={{ borderRadius: isLight ? 10 : 0, overflow: 'hidden', background: 'transparent', display: 'flex', justifyContent: 'center' }}>
       <canvas
         ref={canvasRef}
         width={400} // 这只是个初始占位值，useEffect 中会根据 h 计算精确的 2:1 宽高
         height={h}
         className="observation-window"
-        style={{ width: '100%', height: h, display: 'block', background: 'transparent' }}
+        style={{ width: '100%', height: 'auto', maxWidth: (h - 70) * 2 + 56 + (precision === 'full' ? 144 : Number(precision) > 3 ? 96 : 72), display: 'block', background: 'transparent' }}
       />
     </div>
   );

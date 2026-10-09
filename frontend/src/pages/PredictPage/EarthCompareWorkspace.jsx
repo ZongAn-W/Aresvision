@@ -6,6 +6,7 @@ import CompareTrainingModelsPanel from './CompareTrainingModels/CompareTrainingM
 import { getCompareSelectionState, buildCompareModelSummary } from './CompareTrainingModels/compareTrainingModelsData';
 import { getEarthTrainingModelOptions, resolveEarthPredictErrorMessage } from './earthPredictModel';
 import { PREDICT_MODEL_MODE_COMPARE } from './predictModelModes';
+import { earthPredictionAdapter } from './PredictionPlanetAdapter';
 
 export default function EarthCompareWorkspace({ tasks, scope, tasksLoading, isLight, precision, isZh, plotTextColor, plotGridColor }) {
   const t = useT();
@@ -46,7 +47,7 @@ export default function EarthCompareWorkspace({ tasks, scope, tasksLoading, isLi
     }
   };
   return <div className="predict-workspace" data-earth-compare-workspace>
-    <PredictSidebar planet="earth" isLight={isLight} modelMode={PREDICT_MODEL_MODE_COMPARE}
+    <PredictSidebar adapter={earthPredictionAdapter({ context: horizon ? { horizon, dataset_id: 'earth_merra2_3hourly_v1' } : null, isZh })} isLight={isLight} modelMode={PREDICT_MODEL_MODE_COMPARE}
       trainingModelOptions={options} selectedCompareTrainingTaskIds={ids} setSelectedCompareTrainingTaskIds={setIds}
       trainingTasksLoading={tasksLoading} loading={loading} requestContextLocked={loading} error={error}
       predStep={horizon ?? ''} predictionHorizonLimit={horizon} handlePredict={run}

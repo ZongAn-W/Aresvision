@@ -22,6 +22,8 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 ## 快速接手：先读这一节
 
+2026-10-09 地球与火星单模型预测使用同一套[单模型预测工作台](docs/shared-single-model-prediction.md)：模型侧栏、参考/预测/残差三联图与单图、时间步、指标、诊断图表外壳及全屏操作共用组件；无模型或尚无指标数据时统一显示 `--`，实际 Earth 响应缺项仍显示“未提供”。行星适配层保留各自 API、时间轴、坐标、单位、评价范围和导出能力。Earth 每次运行完整任务 horizon，展示步只改变查看内容，保持 UTC/DU、独立手动抽样诊断、ΔRMSE PFI 和地球地图全屏；Mars 保持 Ls、训练步长上限、ΔR² PFI 与球面。验证包含前端测试/生产构建、合成浏览器桌面与 390px 交互，以及后端逐文件契约回归；既有 Mars 坐标失败单独列出，不代表真实训练精度或全分辨率浏览器性能验收。
+
 2026-10-09 地球训练链路补强了任务恢复和上传模型契约：新任务保存独立划分策略标记，缺失冻结划分时拒绝恢复及产物读取；兼容未带新标记但已有 task split 的任务，真正旧任务继续使用 manifest。上传模型的构建、训练与重载统一初始化为 CPU float32，再迁移到运行设备；eval 必须通过单样本/合批、顺序、其他样本及重复调用一致性检查，覆盖实际任务 batch size，且不能修改参数/缓冲区；checkpoint 加载权重后再次核验。旧上传校验报告缺少新验证证据时需重新校验。实现与边界见[任务级划分](docs/earth-task-splits.md)和[上传模型契约](docs/earth-3hourly-uploaded-model.md)。
 
 Earth 官方 DLinear 与独立契约上传模型统一支持 MSE、RMSE、MAE、R²、MAPE、SMAPE。六项基于反归一化 TO3（DU），保持预测起点 × 提前步 × 格点等权；新任务/checkpoint 保存完整 v2 指标契约及单位，旧三小时 RMSE/MAE 产物继续读取和预测，缺项显示“未提供”。结果与矩阵默认读取完整测试集，验证集和本次回测分开标注；比较消费已保存 test 指标。训练结果页的 Earth `action=test` 和预测页共用测试分区诊断：默认 4 个窗口、5,000 个散点、40 个残差分箱、seed 42、PFI 3 次，DU 残差定义为 prediction-reference，PFI 为置换后 RMSE 减基线 RMSE 并保留负值；页面诊断图暂不开放科研导出。公式、流式统计、缓存与兼容规则见[地球评价指标](docs/earth-evaluation-metrics.md)和[地球训练后诊断](docs/earth-post-training-diagnostics.md)。验证使用合成数据，不代表真实精度验收。
@@ -32,7 +34,7 @@ Earth 官方 DLinear 与独立契约上传模型统一支持 MSE、RMSE、MAE、
 
 2026-10-08 地球训练新增[任务级自定义数据划分](docs/earth-task-splits.md)：官方 DLinear 与独立契约上传模型共用完整原始 UTC 三小时时间轴的连续划分，默认 70/20/10，三项均大于 0。先确定原始分区，再在分区内部生成完整窗口；各区至少包含输入窗口 + 输出窗口个时间步。服务器持久化请求比例、策略版本和实际边界，normalization 仅拟合当前任务 train，缓存检查任务划分。新 checkpoint 严格核对划分与指标；旧三小时任务继续使用发布 manifest，不自动迁移，日频仍停用。合成数据用于训练链路回归，未执行完整真实两年训练。
 
-文档最近核对日期：**2026-10-09**（本轮范围为地球训练、划分恢复及上传契约）。地球唯一活动数据集 `earth_merra2_3hourly_v1` 是 3 小时 UTC、240×480 全球五变量数据，官方 DLinear 与符合独立 v1 契约的上传模型均支持按任务配置输入/输出窗口（默认 56→24）训练和历史回测。上传兼容性按具体 dataset_id 校验，未知或 dry-run 失败不能训练；服务器固定数据身份和源码版本。实际模型调用使用 24×48 空间块、float32 BTCHW，上传模型不使用 Mars 字段或假设。训练只用 train split 拟合 normalization，产物发布前 strict reload。完整两年数据包已独立验证；已有合成训练/回测记录不代表真实训练结果或预测精度验收。入口见 [三小时专题](docs/earth-merra2-3hourly.md)及[独立上传契约与模板](docs/earth-3hourly-uploaded-model.md)。
+文档最近核对日期：**2026-10-09**（本轮范围包含共用单模型预测工作台、地球训练、划分恢复及上传契约）。地球唯一活动数据集 `earth_merra2_3hourly_v1` 是 3 小时 UTC、240×480 全球五变量数据，官方 DLinear 与符合独立 v1 契约的上传模型均支持按任务配置输入/输出窗口（默认 56→24）训练和历史回测。上传兼容性按具体 dataset_id 校验，未知或 dry-run 失败不能训练；服务器固定数据身份和源码版本。实际模型调用使用 24×48 空间块、float32 BTCHW，上传模型不使用 Mars 字段或假设。训练只用 train split 拟合 normalization，产物发布前 strict reload。完整两年数据包已独立验证；已有合成训练/回测记录不代表真实训练结果或预测精度验收。入口见 [三小时专题](docs/earth-merra2-3hourly.md)及[独立上传契约与模板](docs/earth-3hourly-uploaded-model.md)。
 
 Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定，固定支持 `earth_merra2_3hourly_v1`，见[生产默认值模板](AresVision_backend/backend/.env.production.example)。`ARESVISION_EARTH_MERRA2_3HOURLY_DIR` 应指向已验证的完整发布目录；三小时包缺失会显示不可用，不回退到日频。旧配置若将 `ARESVISION_DEFAULT_EARTH_DATASET_ID` 设为日频，应改为三小时或移除该项；日频默认值会在启动时明确拒绝。
 
@@ -54,7 +56,7 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 | 项目形态 | React 单页前端 + FastAPI 后端 + Python 训练子进程；开发时前后端分别启动，构建后可由后端托管页面 |
 | 前端页面 | 使用 hash 路由，入口为 `frontend/src/App.jsx`，并非 React Router 路由表 |
 | 当前预测入口 | 先选择地球/火星，再选择单模型/多模型；兼容 `trained`、`trained_compare`、`earth`、`earth_compare` 链接。单模型携带任务 ID，多模型携带任务 ID 列表 |
-| 地球训练与预测 | 仅三小时官方/独立契约上传模型、总览与历史回测；新实验默认采用设置中的 Earth 输入/输出窗口（默认 56→24），任务按自身窗口运行；日频返回 `dataset_retired`。未知兼容性或缺包不能训练；Earth 不进入火星推理/比较/PFI/`action=test`/迁移 |
+| 地球训练与预测 | 仅三小时官方/独立契约上传模型、总览与历史回测；新实验默认采用设置中的 Earth 输入/输出窗口（默认 56→24），任务按自身窗口运行；日频返回 `dataset_retired`。未知兼容性或缺包不能训练；Earth 不进入火星推理/比较/PFI/迁移，`action=test` 分流到 Earth 专用诊断 |
 | 数据边界 | 上传数据主要用于数据总览；训练、预测使用服务器管理的数据，不能把上传成功等同于加入训练集 |
 | 模型边界 | `model_source=official/uploaded` 表示模型实现来源；`training_dataset` 表示训练数据集，两者不同 |
 | 持久化 | SQLite 保存用户、任务与缓存索引，文件系统保存数据、模型、日志和缓存载荷 |
@@ -131,11 +133,13 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 
 ### 预测与模型对比
 
-- 预测页按「行星 → 分析方式」选择地球/火星与单模型/多模型，两者都复用模型选择、标签筛选与比较图表。地球多模型通过 `POST /api/earth/predict/training-models/compare` 读取严格验证 checkpoint 保存的六项完整测试集指标，展示正确方向的排名、总体柱状图、任务 horizon 对应的提前小时曲线及参数矩阵；只允许相同发布指纹、测试范围、窗口数量与指标口径，差异返回 409 `earth_comparison_incompatible`。旧产物缺项显示“未提供”并排除该项排名，不重新推理。地球误差分布/PFI 仍未开放。训练结果跳转自动选择对应行星；单次历史回测指标与完整测试集指标分别注明口径。
+- 预测页按「行星 → 分析方式」选择地球/火星与单模型/多模型，两者都复用模型选择、标签筛选与比较图表。地球多模型通过 `POST /api/earth/predict/training-models/compare` 读取严格验证 checkpoint 保存的六项完整测试集指标，展示正确方向的排名、总体柱状图、任务 horizon 对应的提前小时曲线及参数矩阵；只允许相同发布指纹、测试范围、窗口数量与指标口径，差异返回 409 `earth_comparison_incompatible`。旧产物缺项显示“未提供”并排除该项排名，不重新推理。地球多模型未开放误差分布/PFI；单模型另有独立手动测试分区诊断。训练结果跳转自动选择对应行星；单次历史回测指标与完整测试集指标分别注明口径。
+
+- 地球与火星单模型复用 `PredictSidebar`，结果由 [SingleModelWorkbench.jsx](frontend/src/pages/PredictPage/SingleModelWorkbench.jsx) 组装三联图/单图、时间步、指标卡片、诊断图表与全屏外壳。三场顺序统一为参考、预测、残差，共用深浅主题、色带与数值精度设置；桌面侧栏与结果并排，窄屏上下排列。Earth 展示步同时显示提前小时和 UTC 时间，每次运行完整任务 horizon；全屏使用地球地图，Mars 全屏使用球面。请求转换、真实坐标、物理单位、指标范围与科研导出能力由[行星适配层](docs/shared-single-model-prediction.md#行星适配层)保留。
 
 - 提供参考值、预测场和残差展示，以及误差分布、置换重要性、逐步指标等分析。
 - 火星单次预测的 `overall` 指标标记为 `mean_over_forecast_steps`（各预测步指标平均）；训练模型测试集指标与多模型比较标记为 `pooled_test_set_pixels`（完整测试集汇总，其中 RMSE/MAE/R² 按像素合并，SSIM 按样本平均）。预测页会同时显示聚合口径和 `split_meta` 的测试集划分来源，避免直接比较不同口径的数值。
-- **地球历史预测与火星预测分开。** 地球只接受已完成的三小时任务，按 UTC 历史起点和保存的 window/horizon 读取输入，返回预测、参考与残差（DU）及任务分区 `origin_split`。默认窗口为 56→24。日频任务返回 409 `dataset_retired`；起点越界返回 422 `earth_prediction_origin_out_of_range`，数据身份变化返回 409 `dataset_version_changed`。Earth 在火星推理、比较、PFI 与 `action=test` 路径仍返回 409，不回退到火星数据。无参考真值的未来外推、Earth/Mars 混合比较、持久性基线与预测持久化缓存未开放。
+- **地球历史预测保留独立业务契约。** 地球只接受已完成的三小时任务，按 UTC 历史起点和保存的 window/horizon 读取输入，返回参考、预测与残差（DU）及任务分区 `origin_split`。默认窗口为 56→24。日频任务返回 409 `dataset_retired`；起点越界返回 422 `earth_prediction_origin_out_of_range`，数据身份变化返回 409 `dataset_version_changed`。Earth 在火星推理、比较与 PFI 路径返回 409，训练 `action=test` 使用 Earth 专用诊断。无参考真值的未来外推、Earth/Mars 混合比较、持久性基线与预测持久化缓存未开放。
 - 三小时 Earth 历史回测使用 `GET /api/earth/predict/context` 和 `POST /api/earth/predict/run`，采用 UTC datetime、任务窗口与 240×480 网格；预测、参考、残差各返回 horizon 个场和相同目标时间戳，指标按任务 lead 和累计时长生成。使用独立的 128 MiB 进程内 LRU，缓存键包含行星、数据身份、任务、起点、全部目标时间戳和 checkpoint SHA；命中前仍严格复核身份。训练页展示当前窗口，预测页使用 UTC datetime 和任务对应 lead；详见 [三小时历史回测 API](docs/earth-merra2-3hourly.md#三小时历史回测-api)。
 - 支持选择已训练模型进行预测，也可比较多个训练结果。
 - 火星逻辑数据集 `mcd_overview` 的训练和预测均绑定 `MCD_RAW_3H_DIR` 指向的原始全量 MCD（默认 `data/MCD_Output_global_10m_ls_lst/`，覆盖 MY24–MY35）；`data/mcd_overview/*.nc` 是生成的 overview 产物，不是当前训练预测的默认数据源。`openmars_mcd` 始终使用 OpenMARS + `MCD_DIR`。
@@ -145,7 +149,7 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 - 火星已训练模型的请求步长范围为 `1–30`，且不能超过该模型训练时的输出步长；火星多模型对比采用所选模型输出步长的最小值作为上限。地球单模型使用任务保存的 horizon，多模型要求相同 window/horizon 与测试窗口；默认输出 24 步 / 72 小时。
 - 预测输入完整基础为 **6 通道**：臭氧、纬向风、经向风、温度、沙尘光学厚度和太阳下行辐射通量；具体通道组合由所选模型的训练配置决定。
 - 提供预测请求协调、用户会话缓存隔离和预测分析持久化缓存。
-- 图旁「导出科研图」支持 Mars/Earth 当前步三联图、Mars 当前步普通散点、多模型逐步指标与单模型 PFI；PDF/SVG 保留文字与曲线矢量质量，PNG 支持 300/600 DPI，可选 `.mat` + `.m` 重建包。多模型导出面板单独选择本图的 2–8 个模型；页面可继续对比更多模型，分组导出。Mars RMSE/MAE、误差分布横轴随单位同步换算；Earth 保持 DU。完整测试集指标与最多 40 窗口抽样 PFI 单独标注，详见[科研图导出](docs/research-figure-export.md)。
+- 图旁「导出科研图」支持 Mars/Earth 当前步三联图、Mars 当前步普通散点、多模型逐步指标与 Mars 单模型 PFI；Earth 抽样诊断图继续禁用科研导出。PDF/SVG 保留文字与曲线矢量质量，PNG 支持 300/600 DPI，可选 `.mat` + `.m` 重建包。多模型导出面板单独选择本图的 2–8 个模型；页面可继续对比更多模型，分组导出。Mars RMSE/MAE、误差分布横轴随单位同步换算；Earth 保持 DU。当前预测窗口、完整测试集指标和抽样 PFI 分别标注；Mars PFI 为最多 40 窗口的 ΔR²，Earth 诊断 PFI 为固定种子 1–8 窗口的 ΔRMSE（DU），详见[科研图导出](docs/research-figure-export.md)。
 
 火星预测不再接受或使用 `mars_year`，服务器在完整合并后的实际 Ls 时间轴上按周期最近邻选择合法滑动窗口；官方模型和上传模型共用同一套定位规则，不按均匀 0–360° 比例估算样本位置。响应中的 `input_ls_values` 和 `ls_values` 都来自实际输入/目标窗口；完整数据的 Ls 回绕顺序原样保留，单个输入加目标窗口可以跨越 MY 边界，不根据请求值或固定 5° 步长推算标签。训练任务按完整时间轴生成窗口，配置的 train / validation / test 比例严格作用于保留窗口数量；为保证不同分区的输入和目标原始时间索引不重叠，分区交界处会丢弃必要的边界窗口。归一化只拟合训练窗口。checkpoint 保存 `split_policy`、各分区原始边界、窗口数量与范围，测试指标和 PFI 复用这些边界。训练或预测数据遇到 masked、NaN、Inf 或填充值会抛出 `MarsDataError`，不会静默替换为 0。预测会校验快照，原始文件变化返回 `dataset_version_changed`（409）。旧任务若缺少严格分区元数据会标记为 legacy 兼容来源。
 
@@ -239,6 +243,7 @@ AresVision/
 | Mars 数据身份与检查点 | — | [mars_dataset_identity.py](AresVision_backend/backend/services/mars_dataset_identity.py)（目录、文件清单和指纹的唯一入口）、[mars_data_service.py](AresVision_backend/backend/services/mars_data_service.py)（读取与预测前复核）、[mars_checkpoint.py](AresVision_backend/backend/services/mars_checkpoint.py)（检查点及任务快照契约） |
 | 自定义模型接入 | [UploadedModelPanel.jsx](frontend/src/pages/ModelTrainingPage/UploadedModelPanel.jsx) | [user_models.py](AresVision_backend/backend/routers/user_models.py)、[uploaded_model_contract.py](AresVision_backend/backend/training_backbones/uploaded_model_contract.py)、[uploaded_model_dataset_spec.py](AresVision_backend/backend/training_backbones/uploaded_model_dataset_spec.py)（数据源声明与兼容性原因）、[uploaded_model_earth_gate.py](AresVision_backend/backend/training_backbones/uploaded_model_earth_gate.py)（Earth 兼容性判定）、[uploaded_model_source_check.py](AresVision_backend/backend/training_backbones/uploaded_model_source_check.py)（共享 AST 安全门）、[user_model_validator.py](AresVision_backend/backend/services/user_model_validator.py)、[user_model_runner.py](AresVision_backend/backend/training_backbones/user_model_runner.py) |
 | 预测与模型比较 | [PredictPage.jsx](frontend/src/pages/PredictPage.jsx)、[CompareTrainingModelsPanel.jsx](frontend/src/pages/PredictPage/CompareTrainingModels/CompareTrainingModelsPanel.jsx) | [predict.py](AresVision_backend/backend/routers/predict.py)、[inference_service.py](AresVision_backend/backend/services/inference_service.py) |
+| 共用单模型预测工作台 | [SingleModelWorkbench.jsx](frontend/src/pages/PredictPage/SingleModelWorkbench.jsx)、[EarthPredictPanel.jsx](frontend/src/pages/PredictPage/EarthPredictPanel.jsx)、[singleModelAdapters.js](frontend/src/pages/PredictPage/singleModelAdapters.js)、[PredictionPlanetAdapter.jsx](frontend/src/pages/PredictPage/PredictionPlanetAdapter.jsx)、[predictionPresentation.js](frontend/src/pages/PredictPage/predictionPresentation.js) | Earth 保持 [earth_predict.py](AresVision_backend/backend/routers/earth_predict.py) 与 [earth_prediction_service.py](AresVision_backend/backend/services/earth_prediction_service.py)；Mars 保持既有 predict / inference 服务 |
 | 科研图导出 | [ResearchExportButton.jsx](frontend/src/pages/PredictPage/ResearchExportButton.jsx)、[researchExportModel.js](frontend/src/pages/PredictPage/researchExportModel.js) | [research_export.py](AresVision_backend/backend/routers/research_export.py)、[research_export_sources.py](AresVision_backend/backend/services/research_export_sources.py)、[research_figure.py](AresVision_backend/backend/services/research_figure.py) |
 | 预测请求与缓存 | [predictRequestCoordinator.js](frontend/src/pages/PredictPage/predictRequestCoordinator.js)、[predictCache.js](frontend/src/stores/predictCache.js) | [prediction_analysis_cache.py](AresVision_backend/backend/services/prediction_analysis_cache.py)、[prediction_volume_cache.py](AresVision_backend/backend/services/prediction_volume_cache.py)（标准化体积缓存与按需切窗）、[netcdf_read_lock.py](AresVision_backend/backend/services/netcdf_read_lock.py)（NetCDF 读取串行化） |
 | AI 对话、总览 Copilot | [AIPage.jsx](frontend/src/pages/AIPage.jsx)、[AICopilotWidget.jsx](frontend/src/pages/DataOverviewPage/AICopilotWidget.jsx) | [ai_service.py](AresVision_backend/backend/services/ai_service.py)、[copilot_service.py](AresVision_backend/backend/services/copilot_service.py) |
@@ -325,6 +330,8 @@ Mars 的 `selected_channels`（包括检查点的 `training_contract.selected_ch
 
 ### 已训练模型预测与缓存
 
+单模型页面由共用工作台管理三联图/单图与全屏展示状态；`EarthPredictPanel` 只装配 Earth 上下文、逐步指标与手动诊断，时间/数据/单位等差异由适配层提供。Earth 请求始终使用任务完整 horizon，点击展示步不发送预测请求。切换行星、任务、起点或账号取消旧请求并清理结果和全屏；晚到响应须通过请求 token、账号作用域及任务/数据身份检查后才可展示或导出。组件职责与回归入口见[共用单模型预测工作台](docs/shared-single-model-prediction.md)。
+
 Mars 输出的 `lat` / `lon` 使用数据 loader 提供的真实网格坐标，与 `field` 的行/列逐项对应。`mcd_overview` 使用 raw MCD loader 转换后的北到南纬度 `87.5 → -87.5`，经度保留源文件顺序；`openmars_mcd` 保留 OpenMARS 文件坐标及数组顺序（当前文件纬度约 `87.5 → -87.5`）。官方、上传模型与旧权重预测共用坐标校验和输出流程，预测/真值/残差采用相同坐标，不重新猜测轴、不只反转标签。坐标缺失、为空、非有限或长度与空间场不一致时明确报错。前端二维图按这些坐标绘制，放大图表和三维粒子也使用相同网格；后端预测缓存纳入输出坐标策略，旧猜测标签的载荷不再复用。详见[Mars 输出网格契约](docs/dataset-registry.md#mars-预测输出网格)。
 
 1. 用户选择任务及预测条件；前端从任务元数据读取输出步长，并协调并发请求。火星预测请求只携带任务、Ls 起点、步长和变量，不公开 MY 年份选择。
@@ -376,6 +383,7 @@ NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，
 
 ## 当前功能边界
 
+- **共用预测布局保留行星契约。** Earth 与 Mars 共用单模型组件，分别使用 Earth API / UTC / DU / 地球地图和 Mars API / Ls / 当前步长限制 / 球面。共用图表由配置区分当前预测窗口、完整 test 与抽样诊断，Earth PFI 为 ΔRMSE（DU）、Mars PFI 为 ΔR²，均保留负值。Earth 诊断仍需独立手动触发，诊断科研导出未开放；合成浏览器交互验证未覆盖真实模型精度和完整 240×480 长 horizon 的浏览器性能，见[专题](docs/shared-single-model-prediction.md)。
 - **Earth 训练后诊断明确抽样范围。** 模型测试与预测页共用[诊断服务](docs/earth-post-training-diagnostics.md)，完整 test 指标复用有效 checkpoint；散点、残差和 PFI 默认取 4 个 test 窗口，最多 8 个。所有值为反归一化 DU，PFI 为 ΔRMSE、固定种子、整窗口通道置换并保留负值。缓存 8 条 / 16 MiB、进程内共享，两入口同条件复用；新任务读取固定 task split，旧三小时读取 manifest。新诊断图暂无科研导出，真实模型精度未验收。
 - **科研导出只重画已有结果。** 当前步场与散点不等于完整测试集评价；逐步曲线使用各模型完整测试集，Mars 导出 PFI 使用最多 40 个抽样窗口且历史缓存可能缺少抽样元数据；Earth 页面 PFI 使用自身 1–8 个固定种子窗口。多模型曲线每图选择 2–8 个模型；超过 8 个时等待明确选择，预览和下载使用同一组模型，不自动截断。导出拒绝过期/缺失/条件不匹配的快照；首版单 worker，最多 8 模型/100 万网格格点/25 万散点/2400 万 PNG 像素。MATLAB 脚本提供可编辑重建入口，尚未执行验证；不是 `.fig`，不保证跨字体/版本像素一致。
 - **Earth 仅使用三小时数据集。** 活动发布为 UTC、240×480，默认 56→24；训练页读取设置中的 Earth 默认值，并支持配置 1–240 个三小时时间步的输入/输出窗口，checkpoint、预测和比较按任务保存的窗口运行，支持官方 DLinear 和独立 v1 上传模型；日频身份仅用于识别旧记录，所有运行入口均拒绝，不自动改写旧 checkpoint。训练/回测数据由 registry 提供，上传模型不能指定数据路径或身份，也不能使用日频/Mars checkpoint。真实包验收范围是数据与只读读取，模型训练/回测已有合成 smoke；无参考真值未来外推和 Earth/Mars 混合比较未开放，全分辨率预测 JSON 有传输和内存成本。细节见[停用约定](docs/earth-dataset-retirement.md)及[三小时专题](docs/earth-merra2-3hourly.md)。
@@ -551,6 +559,8 @@ python -m pytest tests
 ```
 
 `tests/` 中有相当一部分是 `async def` 测试（预测与训练契约、用户模型等），**只装 `pytest` 会全部报 “async def functions are not natively supported” 而失败**，必须同时装 `pytest-asyncio`。
+
+共用单模型预测的适配、展示范围与交互回归为 `singleModelAdapters.test.js`、`predictionPresentation.test.js`、`predictionDisplayModel.test.js` 及既有请求/缓存隔离测试；合成浏览器脚本为 [browser-check.js](scripts/audit/shared-prediction/browser-check.js)。脚本只在隔离浏览器中替换 API，检查桌面与 390px、主题/色带/精度、行星/任务/时间步/全屏、错误重试及旧响应清理；不启动真实训练。后端使用工作区规定的 AresVision conda 解释器逐文件执行预测/诊断/身份回归，未标记的 async 契约文件加 `--asyncio-mode=auto`，并为每个文件指定仓库外新英文 `--basetemp`。实际范围与已知 Mars 坐标失败见[验证入口与边界](docs/shared-single-model-prediction.md#验证入口与边界)。
 
 科研图导出契约与文件验证为 `tests/test_research_export.py`，Earth 三小时路由另核对第 24 步导出无再次推理、DU 值与 UTC 时间。前端测试为 `frontend/src/pages/PredictPage/researchExportModel.test.js`。合成布局样例脚本位于 `scripts/audit/research-export/generate-fixtures.py`，输出目录设在仓库外；命令与验证边界见[科研图导出](docs/research-figure-export.md)。
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Plot from 'react-plotly.js';
 import SphericalFieldCanvas from '../../components/SphericalFieldCanvas';
@@ -8,8 +8,10 @@ import { useT } from '../../i18n';
 import { fmtNum } from '../../utils/fmt';
 import { convertOzone, ozoneDeltaLabel, ozoneLabel } from '../../utils/units';
 import { useSettings } from '../../contexts/SettingsContext';
-import { PLOTLY_SCALE } from '../../utils/colormaps';
+import { getRgbStr } from '../../utils/colormaps';
 import { marsPredictionGrid } from './marsPredictionGrid';
+import { activatePredictionDialog, fullscreenFieldModel } from './predictionDisplayModel';
+import './predictionDisplay.css';
 
 function InfoCard({ label, value, hint, accent }) {
   return (
@@ -43,47 +45,49 @@ export default function PredictFullscreenHUD({
   stepLs,
   precision,
   ozoneUnit,
+  adapter,
+  results,
+  activeHorizon = 0,
 }) {
   const t = useT();
   const { settings } = useSettings();
   const colormapName = settings.colormap;
   const isLight = settings.theme === 'light';
   const isZh = settings?.language !== 'en';
+  const dialogRef = useRef(null);
+  const closeRef = useRef(() => setFullscreen3D(null));
+  closeRef.current = () => setFullscreen3D(null);
+  const grid = fullscreen3D ? (adapter?.grid?.(fullscreen3D.fieldData) || (!adapter && marsPredictionGrid(fullscreen3D.fieldData))) : null;
+  useEffect(() => {
+    if (!fullscreen3D || !grid || !dialogRef.current) return;
+    return activatePredictionDialog(document, dialogRef.current, () => closeRef.current());
+  }, [!!fullscreen3D, !!grid]);
 
   if (!fullscreen3D) return null;
-  const grid = marsPredictionGrid(fullscreen3D.fieldData);
   if (!grid) return null;
 
-  const titleText = fullscreen3D.colorMode === 'rdbu'
-    ? t('predict.fullscreen3D.residual')
-    : (fullscreen3D.fieldData === truthField ? t('predict.fullscreen3D.truth') : t('predict.fullscreen3D.prediction'));
-
-  const rawMin = fullscreen3D.fieldData.minVal;
-  const rawMax = fullscreen3D.fieldData.maxVal;
-  const minValStr = fmtNum(convertOzone(rawMin, ozoneUnit), precision);
-  const maxValStr = fmtNum(convertOzone(rawMax, ozoneUnit), precision);
-  const rangeStr = fmtNum(convertOzone(rawMax - rawMin, ozoneUnit), precision);
-  const colorTitle = fullscreen3D.colorMode === 'rdbu' ? ozoneDeltaLabel(ozoneUnit) : ozoneLabel(ozoneUnit);
-
-  const field = fullscreen3D.fieldData.field;
-  const nLat = field.length;
-  const nLon = field[0].length;
+  const kind = fullscreen3D.kind || (fullscreen3D.colorMode === 'rdbu' ? 'residual'
+    : fullscreen3D.fieldData === truthField ? 'truth' : 'prediction');
+  const titleText = adapter?.fieldTitle?.(kind, isZh) || t(`predict.fullscreen3D.${kind}`);
+  const currentStep = adapter?.stepLabel?.(results, activeHorizon) || (stepLs != null ? `Ls=${stepLs.toFixed(3)}°` : '');
+  const convertValue = adapter?.convertValue || ((value) => convertOzone(value, ozoneUnit || settings.units.ozone));
+  const isResidual = fullscreen3D.colorMode === 'rdbu';
+  const model = fullscreenFieldModel(fullscreen3D.fieldData, grid, convertValue, isResidual);
+  if (!model) return null;
+  const displayPrecision = precision ?? settings.precision;
+  const { nLat, nLon, heatmap: heatmapZ, profile: latProfile } = model;
+  const minValStr = fmtNum(model.minimum, displayPrecision);
+  const maxValStr = fmtNum(model.maximum, displayPrecision);
+  const rangeStr = fmtNum(model.range, displayPrecision);
+  const colorTitle = isResidual ? (adapter?.deltaUnit || ozoneDeltaLabel(ozoneUnit || settings.units.ozone))
+    : (adapter?.unit || ozoneLabel(ozoneUnit || settings.units.ozone));
   const latitudes = grid.latitude;
   const longitudes = grid.longitude;
-  const latProfile = field.map((row) => convertOzone(row.reduce((sum, value) => sum + value, 0) / nLon, ozoneUnit));
-  const heatmapZ = field.map((row) => row.map((value) => convertOzone(value, ozoneUnit)));
-
-  let absMax = 0;
-  if (fullscreen3D.colorMode === 'rdbu') {
-    field.forEach((row) => row.forEach((value) => {
-      absMax = Math.max(absMax, Math.abs(value));
-    }));
-  }
-
-  const absMaxOzone = convertOzone(absMax, ozoneUnit);
-  const minOzone = convertOzone(rawMin, ozoneUnit);
-  const maxOzone = convertOzone(rawMax, ozoneUnit);
-  const averageValue = heatmapZ.flat().reduce((sum, value) => sum + value, 0) / Math.max(1, nLat * nLon);
+  const zmin = !isResidual && fullscreen3D.colorRange ? convertValue(fullscreen3D.colorRange.min) : model.colorMinimum;
+  const zmax = !isResidual && fullscreen3D.colorRange ? convertValue(fullscreen3D.colorRange.max) : model.colorMaximum;
+  const colorscale = Array.from({ length: 11 }, (_, index) => [index / 10,
+    getRgbStr(isResidual ? 'rdbu' : colormapName, index / 10)]);
+  const hoverPrecision = displayPrecision === 'full' ? '' : `.${displayPrecision}f`;
 
   const chartTheme = {
     paper_bgcolor: 'transparent',
@@ -97,7 +101,7 @@ export default function PredictFullscreenHUD({
   };
 
   const copy = {
-    title: isZh ? '3D 场景放大查看' : 'Expanded 3D field view',
+    title: adapter?.fullscreenLabel || (isZh ? '场分布全屏查看' : 'Expanded field view'),
     subtitle: isZh
       ? '聚焦单个时间步的全球场分布，并同步查看数值范围、二维展开和纬向剖面。'
       : 'Focus on a single global field while keeping the value range, 2D map, and latitudinal profile in view.',
@@ -112,23 +116,32 @@ export default function PredictFullscreenHUD({
 
   const overlay = (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 md:p-5"
+      className="prediction-fullscreen"
       style={{ background: isLight ? 'rgba(15,23,42,0.18)' : 'rgba(2,6,23,0.62)', backdropFilter: 'blur(10px)' }}
       onDoubleClick={() => setFullscreen3D(null)}
     >
       <GlowCard
-        className="relative w-full max-w-[1680px] h-[94vh] cursor-default overflow-hidden"
+        className="prediction-fullscreen__dialog"
         style={{
           padding: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
           borderRadius: 28,
           background: isLight ? 'rgba(255,255,255,0.96)' : 'rgba(7,10,18,0.96)',
           border: `1px solid ${isLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.08)'}`,
           boxShadow: isLight ? '0 24px 80px rgba(15,23,42,0.12)' : '0 30px 90px rgba(0,0,0,0.4)',
         }}
-        onDoubleClick={(event) => event.stopPropagation()}
       >
-        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr 360px', height: '100%' }}>
-          <div style={{ padding: 24, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 14, background: isLight ? 'rgba(248,250,252,0.92)' : 'rgba(255,255,255,0.02)' }}>
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={copy.title} tabIndex={-1} data-testid="prediction-fullscreen"
+          style={{ minHeight: '100%' }} onDoubleClick={(event) => event.stopPropagation()}>
+          <div className="prediction-fullscreen__toolbar" style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px', position: 'sticky', top: 0, zIndex: 4, background: isLight ? '#fff' : '#070a12', borderBottom: `1px solid ${C.border}` }}>
+            <button type="button" className="prediction-fullscreen__close" onClick={() => setFullscreen3D(null)}
+              style={{ padding: '10px 14px', borderRadius: 10, border: `1px solid ${C.borderStrong}`, background: C.bgMuted, color: C.ice, cursor: 'pointer' }}>
+              {copy.close} ×
+            </button>
+          </div>
+        <div className="prediction-fullscreen__layout">
+          <div className="prediction-fullscreen__info" style={{ background: isLight ? 'rgba(248,250,252,0.92)' : 'rgba(255,255,255,0.02)' }}>
             <div>
               <div style={{ fontSize: 'calc(18px * var(--font-scale, 1))', fontWeight: 700, color: C.ice, fontFamily: 'var(--font-display)' }}>
                 {copy.title}
@@ -146,47 +159,34 @@ export default function PredictFullscreenHUD({
                 {titleText}
               </div>
               <div style={{ marginTop: 6, fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50 }}>
-                {t('predict.tableHeaders.lsShort')} {stepLs?.toFixed(1)}°
+                {currentStep}
               </div>
             </div>
 
+            <div className="prediction-fullscreen__stats">
             <InfoCard label={t('predict.hud.maxValue')} value={maxValStr} hint={colorTitle} accent={C.mars} />
             <InfoCard label={t('predict.hud.minValue')} value={minValStr} hint={colorTitle} accent={C.green} />
             <InfoCard label={copy.range} value={rangeStr} hint={colorTitle} accent={C.blue} />
-            <InfoCard label={copy.average} value={fmtNum(averageValue, precision)} hint={colorTitle} accent={C.purple} />
-            <InfoCard label={copy.resolution} value="72 × 36" hint={isZh ? '5° × 5° 全球网格' : '5° × 5° global grid'} accent={C.ice} />
-
-            <button
-              onClick={() => setFullscreen3D(null)}
-              style={{
-                marginTop: 'auto',
-                padding: '12px 14px',
-                borderRadius: 14,
-                border: `1px solid ${C.borderStrong}`,
-                background: C.bgMuted,
-                color: C.ice,
-                fontSize: 'calc(12px * var(--font-scale, 1))',
-                fontWeight: 700,
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
-              }}
-            >
-              {copy.close}
-            </button>
+            <InfoCard label={copy.average} value={fmtNum(model.average, displayPrecision)} hint={colorTitle} accent={C.purple} />
+            <InfoCard label={copy.resolution} value={`${nLon} × ${nLat}`} hint={isZh ? '服务端经纬度网格' : 'Server latitude / longitude grid'} accent={C.ice} />
+            </div>
           </div>
 
-          <div style={{ position: 'relative', minWidth: 0, background: isLight ? '#f8fafc' : '#030712' }}>
+          <div className="prediction-fullscreen__scene" style={{ background: isLight ? '#f8fafc' : '#030712' }}>
             <div style={{ position: 'absolute', top: 20, left: 20, zIndex: 2, padding: '8px 12px', borderRadius: 999, background: isLight ? 'rgba(255,255,255,0.82)' : 'rgba(7,10,18,0.72)', border: `1px solid ${C.border}`, color: C.ice, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600 }}>
               {titleText}
             </div>
-            <SphericalFieldCanvas
+            {adapter?.renderField ? adapter.renderField({
+              fieldData: fullscreen3D.fieldData, colorMode: fullscreen3D.colorMode,
+              height: '100%', fullscreen: true, colorRange: fullscreen3D.colorRange, precision: displayPrecision,
+            }) : <SphericalFieldCanvas
               fieldData={grid.sphericalFieldData}
               geometry={{ latCenters: grid.latitude, lonCenters: grid.longitude }}
               colorMode={fullscreen3D.colorMode}
               h="100%"
               zoom={3.25}
               showMars={false}
-            />
+            />}
             <div
               style={{
                 position: 'absolute',
@@ -199,8 +199,8 @@ export default function PredictFullscreenHUD({
             />
           </div>
 
-          <div style={{ padding: 24, borderLeft: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 16, background: isLight ? 'rgba(248,250,252,0.88)' : 'rgba(255,255,255,0.02)', overflowY: 'auto' }}>
-            <div>
+          <div className="prediction-fullscreen__charts" style={{ background: isLight ? 'rgba(248,250,252,0.88)' : 'rgba(255,255,255,0.02)' }}>
+            <div className="prediction-fullscreen__chart-heading">
               <div style={{ fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 700, color: C.ice, fontFamily: 'var(--font-display)' }}>
                 {copy.mapTitle}
               </div>
@@ -217,12 +217,12 @@ export default function PredictFullscreenHUD({
                     x: longitudes,
                     y: latitudes,
                     type: 'heatmap',
-                    zsmooth: 'best',
-                    colorscale: fullscreen3D.colorMode === 'rdbu' ? 'RdBu' : (PLOTLY_SCALE[colormapName] ?? 'Jet'),
-                    zmin: fullscreen3D.colorMode === 'rdbu' ? -absMaxOzone : minOzone,
-                    zmax: fullscreen3D.colorMode === 'rdbu' ? absMaxOzone : maxOzone,
+                    zsmooth: false,
+                    colorscale,
+                    zmin,
+                    zmax,
                     showscale: false,
-                    hovertemplate: 'Lat: %{y:.1f}°<br>Lon: %{x:.1f}°<br>Val: %{z:.2f}<extra></extra>',
+                    hovertemplate: `Lat: %{y:.1f}°<br>Lon: %{x:.1f}°<br>Val: %{z${hoverPrecision ? ':' + hoverPrecision : ''}} ${colorTitle}<extra></extra>`,
                   },
                 ]}
                 layout={{
@@ -237,7 +237,7 @@ export default function PredictFullscreenHUD({
               />
             </div>
 
-            <div>
+            <div className="prediction-fullscreen__chart-heading">
               <div style={{ fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 700, color: C.ice, fontFamily: 'var(--font-display)' }}>
                 {copy.profileTitle}
               </div>
@@ -257,7 +257,7 @@ export default function PredictFullscreenHUD({
                     line: { color: C.blue, width: 3, shape: 'spline' },
                     fill: 'tozerox',
                     fillcolor: 'rgba(74,158,255,0.12)',
-                    hovertemplate: 'Lat: %{y:.1f}°<br>Mean: %{x:.2f}<extra></extra>',
+                    hovertemplate: `Lat: %{y:.1f}°<br>Mean: %{x${hoverPrecision ? ':' + hoverPrecision : ''}} ${colorTitle}<extra></extra>`,
                   },
                 ]}
                 layout={{
@@ -272,6 +272,7 @@ export default function PredictFullscreenHUD({
               />
             </div>
           </div>
+        </div>
         </div>
       </GlowCard>
     </div>

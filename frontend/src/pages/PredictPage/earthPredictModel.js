@@ -11,8 +11,8 @@ export const EARTH_PREDICT_QUERY_VALUE = 'earth';
 export const EARTH_PLANET = 'earth';
 export const EARTH_TARGET_UNIT = 'DU';
 
-export const EARTH_METRIC_KEYS = ['rmse', 'mae'];
-export const EARTH_FIELD_KINDS = ['prediction', 'reference', 'residual'];
+export const EARTH_METRIC_KEYS = ['mse', 'rmse', 'mae', 'r2', 'mape', 'smape'];
+export const EARTH_FIELD_KINDS = ['reference', 'prediction', 'residual'];
 export const EARTH_3HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1';
 
 /** Return the cadence advertised by the server, retaining daily defaults. */
@@ -113,6 +113,10 @@ export function buildEarthFieldPayload({ response, dayIndex, kind, colormap, col
   const lon = response?.grid?.longitude;
   if (!Array.isArray(lat) || !Array.isArray(lon) || lat.length === 0 || lon.length === 0) return null;
   if (day.field.length !== lat.length || day.field[0]?.length !== lon.length) return null;
+  const validAxis = axis => axis.every(Number.isFinite) && (axis.length < 2
+    || axis.slice(1).every((value, index) => axis[1] > axis[0] ? value > axis[index] : value < axis[index]));
+  if (!validAxis(lat) || !validAxis(lon)
+    || day.field.some(row => !Array.isArray(row) || row.length !== lon.length || !row.every(Number.isFinite))) return null;
   const range = colorRange || {};
   const min = Number.isFinite(range.min) ? range.min : day.minVal;
   const max = Number.isFinite(range.max) ? range.max : day.maxVal;

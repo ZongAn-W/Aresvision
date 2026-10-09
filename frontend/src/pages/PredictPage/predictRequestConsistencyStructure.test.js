@@ -81,7 +81,7 @@ test('default prediction reuses run metrics instead of pairing runPrediction wit
 
 test('rendering uses only single-model results matching the current context', () => {
   assert.match(pageSource, /resultContextKey === currentPredictionContextKey/);
-  assert.match(pageSource, /results=\{activeResults\}/);
+  assert.match(pageSource, /result=\{activeResults\}/);
   assert.match(pageSource, /metrics=\{activeMetrics\}/);
   assert.match(pageSource, /data=\{activeErrorDistData\}/);
   assert.match(pageSource, /data=\{activePfiData\}/);
@@ -101,6 +101,6 @@ test('loading locks every control that can change prediction request context', (
   assert.doesNotMatch(sidebarSource, /marsYear|availableMarsYears|setMarsYear/);
   assert.match(sidebarSource, /disabled=\{requestContextLocked \|\| trainingTasksLoading/);
   assert.match(sidebarSource, /disabled=\{requestContextLocked \|\| predictionHorizonLimit == null\}/);
-  assert.match(sidebarSource, /type="range"[\s\S]*disabled=\{requestContextLocked\}/);
+  assert.match(sidebarSource, /PredictionOriginControl[\s\S]*disabled=\{originDisabled \|\| requestContextLocked\}/);
   assert.match(sidebarSource, /type="checkbox"[\s\S]*disabled=\{requestContextLocked\}/);
 });

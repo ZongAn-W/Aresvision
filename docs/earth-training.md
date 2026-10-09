@@ -9,6 +9,7 @@
 - 数据包、网格与源处理见[地球 MERRA-2 数据包](earth-compact-dataset.md)
 - 数据集身份、发布指纹与目录接口见[服务器数据集注册表](dataset-registry.md)
 - 训练页交互与前端结构见[实验中心](experiment-center.md)
+- 地球/火星单模型组件、适配层与交互验证见[共用单模型预测工作台](shared-single-model-prediction.md)
 
 ## 已开放与未开放
 
@@ -18,9 +19,9 @@
 | 官方 DLinear，过去 56 步 → 后续 24 步，目标 TO3 | 已开放，三小时数据 |
 | 日频上传模型及旧 checkpoint | 仅保留历史产物，不能启动训练或预测 |
 | 三小时官方 DLinear 后端训练，默认 56→24、窗口可配置为 1–240 个三小时时间步、240×480、TO3 DU | 已实现；按需读窗与空间块，完成前严格重载 |
-| 三小时历史回测 API，56 输入步与 24 个预测/参考/残差场 | 已实现；UTC datetime、总体/逐步/累计 24/48/72 小时 DU 指标 |
+| 三小时历史回测 API，按任务 window/horizon 运行（默认 56→24） | 已实现；UTC datetime、总体/逐步/累计时段 DU 指标，默认输出 72 小时 |
 | 三小时数据总览 | 已开放 UTC 时间轴、降采样地图、原生点位及后端日聚合；见[总览协议](earth-overview.md#三小时-utc-总览) |
-| 三小时训练/预测前端选项与预测展示 | 已开放；训练显示 UTC/240×480 及当前窗口，预测按 UTC 起点展示任务对应 lead、场和指标 |
+| 三小时训练/预测前端选项与预测展示 | 已开放；训练显示 UTC/240×480 及当前窗口，地球与火星共用单模型侧栏、三联图/单图、时间步、指标及全屏外壳 |
 | 三小时用户上传模型 | 已开放独立 v1 契约、隔离 dry-run、训练/验证/测试、严格重载与历史回测；见[专用模板说明](earth-3hourly-uploaded-model.md) |
 | TO3 必选 + U10M / V10M / T2M / SWGDN 四个可选输入（允许只用 TO3） | 已开放 |
 | 训练期归一化（只拟合 train 划分），验证/测试/预测复用 | 已开放 |
@@ -29,9 +30,9 @@
 | 保存验证集与测试集总体 / 逐步 / 累计时段六项指标 | 已开放；MSE（DU²）、RMSE/MAE（DU）、R²（无量纲）、MAPE/SMAPE（%），见[公式及兼容规则](earth-evaluation-metrics.md) |
 | 地球多模型完整测试集比较 | 已开放；读取严格验证 checkpoint 的六项 test 指标，旧产物缺项排除该项排名；要求发布身份与测试窗口一致，支持任务 horizon 曲线、参数矩阵与实际契约内的科研导出；不重新推理 |
 | 地球训练后诊断（测试入口、预测/真值散点、残差直方图、Earth PFI） | 已开放；固定任务 test 分区，流式空间块计算，页面诊断图不开放科研导出 |
-| 预测页按**历史预测起点**回测随后 3 天的预测场 / 参考场 / 残差场（DU）与指标 | 已开放 |
+| 预测页按**历史 UTC 起点**回测完整任务 horizon（默认 3 天） | 已开放；参考/预测/残差保持 DU，展示步只切换查看内容，不重新推理 |
 | 预测上下文与结果显示所用模型身份（官方 DLinear 或上传模型名称/版本/内容指纹） | 已开放 |
-| 服务端返回 UTC 可选起点、24 个目标时间戳与真实经纬网格 | 已开放 |
+| 服务端返回 UTC 可选起点、任务 horizon 个目标时间戳与真实经纬网格 | 已开放；提前小时与 UTC 时间并列，放大视图使用地球地图 |
 | 训练任务的启动、进度、日志、停止、历史、重命名、标签 | 复用现有机制，已开放 |
 | 无参考真值的未来日期外推 | 未开放（数据集只到 2021-12-31） |
 | Earth / Mars 混合比较、持久性基线 | 未开放 |
@@ -248,13 +249,13 @@
 
 ## 三小时历史回测
 
-同一 `GET /api/earth/predict/context` 和 `POST /api/earth/predict/run` 按已完成任务的 `dataset_id=earth_merra2_3hourly_v1` 选择三小时分支。`forecast_origin` 使用明确 UTC 的 ISO datetime，例如 `2021-07-08T01:30:00Z`；输入包含起点共 56 步，目标共 24 步，从 `2021-07-08T04:30:00Z` 到 `2021-07-11T01:30:00Z`。
+同一 `GET /api/earth/predict/context` 和 `POST /api/earth/predict/run` 按已完成任务的 `dataset_id=earth_merra2_3hourly_v1` 选择三小时分支。`forecast_origin` 使用明确 UTC 的 ISO datetime，例如 `2021-07-08T01:30:00Z`；输入包含起点共 window 步，目标共 horizon 步。默认 56→24 时目标从 `2021-07-08T04:30:00Z` 到 `2021-07-11T01:30:00Z`。请求只发送任务 ID 与起点，horizon 取任务冻结契约；前端展示步不能缩短模型输出。
 
 context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/step=3；默认 56→24 的完整两年发布有 5769 个有效起点。结果返回 `input_timestamps`、`target_timestamps`，预测/参考/残差各 `[horizon,240,480]`、单位 DU；`input_dates` / `target_dates` 在三小时响应中为相同时间戳的兼容别名。本次预测总体、每步与累计时段均返回六项指标，采用同一[物理公式](earth-evaluation-metrics.md)，并与完整测试集评价分开标注。参考场来自相同 fingerprint 的真实发布，不重新拟合 normalization。
 
-任务、checkpoint、数据发布、时间规则、窗口和网格均严格一致后才读取缓存。三小时有独立的进程内 LRU（128 MiB、至多 4 条），键包含 planet、dataset_id/version/fingerprint、task_id、规范 origin、24 个 target timestamps 和 checkpoint SHA；缓存不会持久化，也不进入 Mars 或旧日频路径。训练页与预测页已提供三小时选项、UTC 起点和 24 个 lead 展示。完整 API 示例、错误码与验证命令见[三小时历史回测 API](earth-merra2-3hourly.md#三小时历史回测-api)。
+任务、checkpoint、数据发布、时间规则、窗口和网格均严格一致后才读取缓存。三小时有独立的进程内 LRU（128 MiB、至多 4 条），键包含 planet、dataset_id/version/fingerprint、task_id、规范 origin、全部 target timestamps 和 checkpoint SHA；缓存不会持久化，也不进入 Mars 或旧日频路径。预测页每步显示提前小时与对应 UTC 时间，默认 24 个 lead，切换查看内容不请求预测。完整 API 示例、错误码与验证命令见[三小时历史回测 API](earth-merra2-3hourly.md#三小时历史回测-api)。
 
-预测参考场必须来自同一已绑定发布，当前只支持历史回测；无参考真值的未来外推未开放。三小时每次成功回测都序列化 prediction、reference、residual 三组 `[24,240,480]` 完整场。合成 smoke 的实际响应 JSON 约 157.5 MB，预测约 5.1 秒、采样 RSS 峰值约 1.75 GiB；这是该次运行的测量，不是容量保证。完整响应下载、JSON 解析和浏览器内存是高分辨率预测界面的性能限制；总览地图默认先降采样到 60×120，点位序列仍基于原生网格。
+预测参考场必须来自同一已绑定发布，当前只支持历史回测；无参考真值的未来外推未开放。三小时每次成功回测都序列化 reference、prediction、residual 三组 `[horizon,240,480]` 完整场。默认 24 步的既有合成 smoke 实际响应 JSON 约 157.5 MB，预测约 5.1 秒、采样 RSS 峰值约 1.75 GiB；这是该次运行的测量，不是容量保证。完整响应下载、JSON 解析和浏览器内存是高分辨率预测界面的性能限制；共用工作台的本轮小网格合成浏览器验证不覆盖此性能边界。总览地图默认先降采样到 60×120，点位序列仍基于原生网格。
 
 ## 错误码
 
@@ -289,7 +290,7 @@ context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/st
 - 训练 `action=test` 按任务行星分流；Earth 使用专用诊断，Mars 保留原有推理数据环境和测试行为。
 - 火星迁移在读取来源任务后、加载权重前拒绝 Earth 来源。
 - 上传权重校验识别日频 `aresvision_earth_forecast_checkpoint_v1` 和三小时 `aresvision_earth_forecast_checkpoint_3hourly_v1`，返回明确不兼容并记录为 `invalid`，不会抽取其 `state_dict` 冒充火星权重。
-- 前端缓存键包含 `planet`、数据集 ID/版本/指纹、任务与预测起点，并带 `mode:earth` 前缀，与火星键互不命中；切换任务或起点会清空旧结果。
+- 前端 Earth 结果身份以 `planet:earth` 开头，包含数据集 ID/版本/指纹、任务、预测起点和全部目标时间戳，与火星键互不命中。切换行星、任务、起点或账号取消旧请求并清空结果和全屏；Earth 回包还须匹配冻结的账号作用域、任务、起点、完整 window/horizon、模型身份、数据身份和真实坐标。
 
 ## 前端
 
@@ -297,7 +298,9 @@ context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/st
 - Earth 的「模型」分区提供**官方 DLinear / 用户上传模型**两个来源。选官方时只显示固定架构说明；选上传时复用同一套上传卡片（上传、模板/说明下载、重新校验、删除、自定义参数入口），选中后向 `GET /api/user-models/{id}/earth-compatibility` 取回服务端 Earth 兼容性结论：**未取到结论一律按不可用处理**，不兼容时在区内显示具体原因并禁用「开始实验」，检查器同步列出阻塞项。
 - Earth + 上传模型的请求只发送模型 ID 与自定义参数值；版本、内容哈希与数据快照由服务端固定，前端不生成也不接受。
 - 地球数据集分区显示当前发布的频率、网格、变量、单位与窗口契约；发布日期划分和发布指纹仍由服务端在创建任务时校验并绑定。数据不可用时会在就绪检查里给出阻塞原因并禁用「开始实验」，新实验默认使用设置中的窗口（默认 56→24），范围为 1–240 个三小时时间步，任务按保存的窗口运行，网格仍为 240×480。
-- 预测页「地球历史预测」仅提供已完成且权重有效的三小时任务，选择 UTC 起点并使用绑定 checkpoint 和窗口；展示预测/参考/残差场（DU）、逐步与时段指标。地球任务不进入 Earth/Mars 混合比较、火星推理或迁移学习。窗口不兼容的上传模型在任务创建前拒绝；旧日频任务仅用于追溯。
+- 预测页地球单模型仅提供已完成且权重有效的三小时任务，选择 UTC 起点并使用绑定 checkpoint 和完整窗口；展示顺序为参考、预测、残差（DU）。`EarthPredictPanel` 装配上下文、逐步/累计时段指标与手动诊断，由 `SingleModelWorkbench` 复用火星的三联图/单图、时间步、指标卡片和全屏外壳，模型选择与参数摘要共用 `PredictSidebar`。地球全屏使用真实地球地图，不加载火星纹理、Ls 或火星单位；主题、色带和数值精度遵循全局设置。
+- `singleModelAdapters.js` 负责 UTC 起点、Earth 请求/响应、真实网格、DU、时间步与能力配置；`PredictionPlanetAdapter.jsx` 装配地球地图渲染，`predictionPresentation.js` 提供六项指标、评价范围及 ΔRMSE（DU）PFI 展示配置。共用组件不自行转换 Earth DU 或请求 Mars API。当前预测窗口指标、完整测试集指标与抽样诊断分别标注；诊断独立手动触发，保留默认参数和现有 test 分区/缓存身份，诊断图科研导出未开放。
+- 地球任务不进入 Earth/Mars 混合比较、火星推理或迁移学习。窗口不兼容的上传模型在任务创建前拒绝；旧日频任务仅用于追溯。组件职责、合成桌面/390px 交互回归和实际后端验证见[共用单模型预测工作台](shared-single-model-prediction.md)。
 - 生产站点使用 `frontend/dist`，前端源码修改后必须在 `frontend/` 执行 `npm run build`。
 
 ## 日频历史验证入口（当前不能运行）

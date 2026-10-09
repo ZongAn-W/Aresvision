@@ -13,6 +13,9 @@ import { clampPredictionHorizon } from './predictionHorizon';
 import { useTrainingTags } from '../../components/TrainingTags/useTrainingTags';
 import { TagChips, TagFilter } from '../../components/TrainingTags/TagControls';
 import { addVisibleSelection, filterTaggedTasks } from '../../components/TrainingTags/trainingTagFilters';
+import { createMarsPredictionAdapter } from './singleModelAdapters';
+import { PredictionOriginControl } from './PredictionPlanetAdapter';
+import PredictStatus from './PredictStatus';
 
 function SectionTitle({ title, subtitle, accent = C.ice }) {
   return (
@@ -544,7 +547,15 @@ function ModelHyperparams({ t, isZh }) {
 }
 
 export default function PredictSidebar({
-  planet = 'mars',
+  adapter,
+  originValue,
+  onOriginChange,
+  originDisabled = false,
+  originHint,
+  onReloadContext,
+  contextLoading = false,
+  contextError,
+  runDisabled = false,
   isLight,
   loading,
   requestContextLocked = false,
@@ -576,6 +587,7 @@ export default function PredictSidebar({
   const canShowSystemHyperparams = analysisVisibility.systemHyperparams !== false;
   const isCompareMode = modelMode === PREDICT_MODEL_MODE_COMPARE;
   const compareSelection = getCompareSelectionState(selectedCompareTrainingTaskIds);
+  const planetAdapter = adapter || createMarsPredictionAdapter({ isZh, horizonLimit: predictionHorizonLimit });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -593,17 +605,20 @@ export default function PredictSidebar({
         isZh={isZh}
       />
 
-      {planet !== 'earth' || isCompareMode ? <GlowCard style={{ padding: 20 }}>
+      <GlowCard style={{ padding: 20 }}>
         <SectionTitle
           title={t('predict.sidebar.predictionControl')}
-          subtitle={planet === 'earth' ? (predictionHorizonLimit == null
-            ? (isZh ? '完整测试集 · 任务输出窗口' : 'Full test set · task output window')
-            : (isZh ? `完整测试集 · ${predStep} 步 / ${predStep * 3} 小时` : `Full test set · ${predStep} steps / ${predStep * 3} hours`)) : isCompareMode
+          subtitle={isCompareMode
             ? (isZh ? '选择对比使用的测试集预测步长。' : 'Choose the test-set horizon used for comparison.')
-            : (isZh ? '选择预测步长并发起本次推演。' : 'Choose the prediction horizon and run the next inference.')}
+            : planetAdapter.horizon.hint}
           accent={isCompareMode ? C.green : C.mars}
         />
 
+        {!isCompareMode ? <div style={{ marginBottom: 16 }}>
+          <PredictionOriginControl adapter={planetAdapter} value={originValue ?? lsStart}
+            onChange={onOriginChange || setLsStart} disabled={originDisabled || requestContextLocked} />
+          {originHint ? <p className="prediction-control-hint">{originHint}</p> : null}
+        </div> : null}
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50, marginBottom: 8 }}>
             {t('predict.horizon')}
@@ -614,7 +629,7 @@ export default function PredictSidebar({
             max={predictionHorizonLimit}
             step="1"
             value={predStep}
-            readOnly={planet === 'earth'}
+            readOnly={!planetAdapter.horizon.editable}
             disabled={requestContextLocked || predictionHorizonLimit == null}
             aria-label={t('predict.horizon')}
             onChange={(event) => {
@@ -637,16 +652,16 @@ export default function PredictSidebar({
             }}
           />
           <div style={{ marginTop: 6, color: C.ice40, fontSize: 'calc(10px * var(--font-scale, 1))' }}>
-            {predictionHorizonLimit == null
+            {!planetAdapter.horizon.editable ? planetAdapter.horizon.label : predictionHorizonLimit == null
               ? (isZh ? '请选择具有有效输出窗口的训练模型' : 'Select a trained model with a valid output horizon')
-              : (isZh ? `当前最大输出窗口：${predictionHorizonLimit}` : `Current maximum: ${predictionHorizonLimit}`)}
+              : planetAdapter.horizon.hint}
           </div>
         </div>
 
         <div style={{ display: 'grid', gap: 10 }}>
           <ActionButton
             onClick={handlePredict}
-            disabled={loading
+            disabled={loading || runDisabled
               || predictionHorizonLimit == null
               || predStep > predictionHorizonLimit
               || (isCompareMode && !compareSelection.canCompare)}
@@ -656,46 +671,15 @@ export default function PredictSidebar({
               t('predict.runningBtn')
             ) : isCompareMode ? (isZh ? '开始对比' : 'Start comparison') : t('predict.runBtn')}
           </ActionButton>
-
+          {onReloadContext ? <ActionButton secondary onClick={onReloadContext} disabled={loading || contextLoading}>
+            {isZh ? '刷新起点范围' : 'Reload origin range'}
+          </ActionButton> : null}
         </div>
 
-        {error ? (
-          <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 12, background: 'rgba(255,80,80,0.08)', border: '1px solid rgba(255,80,80,0.18)', fontSize: 'calc(11px * var(--font-scale, 1))', color: '#ff7b7b', lineHeight: 1.6 }}>
-            {error}
-          </div>
-        ) : null}
-      </GlowCard> : null}
-
-      {!isCompareMode && planet !== 'earth' ? (
-      <GlowCard style={{ padding: 20 }}>
-        <SectionTitle
-          title={t('predict.sidebar.parameters')}
-          subtitle={isZh ? '在服务器完整火星数据集上选择起始太阳黄经。' : 'Choose a starting solar longitude on the complete server Mars dataset.'}
-          accent={C.mars}
-        />
-
-        <div style={{ display: 'grid', gap: 16 }}>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-              <span style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50 }}>{t('predict.startLs')}</span>
-              <span style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: C.ice, fontWeight: 700, fontFamily: 'var(--font-display)' }}>
-                {lsStart}°
-              </span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={355}
-              step={1}
-              value={lsStart}
-              disabled={requestContextLocked}
-              onChange={(e) => setLsStart(Number(e.target.value))}
-              style={{ width: '100%', accentColor: C.mars }}
-            />
-          </div>
-        </div>
+        <PredictStatus loading={contextLoading} message={contextLoading ? (isZh ? '正在读取预测起点…' : 'Loading forecast origins…') : null}
+          error={contextError} onRetry={onReloadContext} retryLabel={isZh ? '重试' : 'Retry'} />
+        <PredictStatus error={error} onRetry={handlePredict} retryLabel={isZh ? '重试预测' : 'Retry prediction'} />
       </GlowCard>
-      ) : null}
 
       {canShowInputVariables ? (
         <GlowCard style={{ padding: 20 }}>
