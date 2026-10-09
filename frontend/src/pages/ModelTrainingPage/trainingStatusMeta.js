@@ -1,5 +1,3 @@
-import C from '../../constants/colors';
-
 /**
  * 训练状态配色与文案。实验目录、监控工作区和进度组件共用同一份定义，
  * 避免同一状态在不同区域出现不同颜色或不同标签。
@@ -8,56 +6,56 @@ export function getTrainingStatusMeta(status, t) {
   if (status === 'completed') {
     return {
       label: t('modelTraining.statusCompleted'),
-      color: C.green,
-      tint: 'rgba(74, 207, 172, 0.12)',
-      border: 'rgba(74, 207, 172, 0.22)',
+      color: 'var(--status-success)',
+      tint: 'color-mix(in srgb, var(--status-success) 8%, transparent)',
+      border: 'color-mix(in srgb, var(--status-success) 28%, transparent)',
     };
   }
   if (status === 'failed') {
     return {
       label: t('modelTraining.statusFailed'),
-      color: '#d95c5c',
-      tint: 'rgba(217, 92, 92, 0.12)',
-      border: 'rgba(217, 92, 92, 0.22)',
+      color: 'var(--status-danger)',
+      tint: 'color-mix(in srgb, var(--status-danger) 8%, transparent)',
+      border: 'color-mix(in srgb, var(--status-danger) 28%, transparent)',
     };
   }
   if (status === 'running') {
     return {
       label: t('modelTraining.statusRunning'),
-      color: '#79bbdf',
-      tint: 'rgba(121, 187, 223, 0.12)',
-      border: 'rgba(121, 187, 223, 0.26)',
+      color: 'var(--brand-ice)',
+      tint: 'color-mix(in srgb, var(--brand-ice) 8%, transparent)',
+      border: 'color-mix(in srgb, var(--brand-ice) 28%, transparent)',
     };
   }
   if (status === 'pending') {
     return {
       label: t('modelTraining.statusPending'),
-      color: '#c89448',
-      tint: 'rgba(200, 148, 72, 0.12)',
-      border: 'rgba(200, 148, 72, 0.22)',
+      color: 'var(--status-warning)',
+      tint: 'color-mix(in srgb, var(--status-warning) 8%, transparent)',
+      border: 'color-mix(in srgb, var(--status-warning) 28%, transparent)',
     };
   }
   if (status === 'queued') {
     return {
       label: t('modelTraining.statusQueued'),
-      color: '#e0b15a',
-      tint: 'rgba(224, 177, 90, 0.12)',
-      border: 'rgba(224, 177, 90, 0.24)',
+      color: 'var(--status-warning)',
+      tint: 'color-mix(in srgb, var(--status-warning) 8%, transparent)',
+      border: 'color-mix(in srgb, var(--status-warning) 28%, transparent)',
     };
   }
   if (status === 'cancelled') {
     return {
       label: t('modelTraining.statusCancelled'),
-      color: '#a9a9b8',
-      tint: 'rgba(169, 169, 184, 0.12)',
-      border: 'rgba(169, 169, 184, 0.22)',
+      color: 'var(--text-secondary)',
+      tint: 'var(--surface-2)',
+      border: 'var(--line-default)',
     };
   }
   return {
     label: t('modelTraining.idle'),
-    color: C.ice60,
-    tint: 'rgba(255, 255, 255, 0.04)',
-    border: 'rgba(255, 255, 255, 0.08)',
+    color: 'var(--text-secondary)',
+    tint: 'var(--surface-2)',
+    border: 'var(--line-subtle)',
   };
 }
 

@@ -1,31 +1,48 @@
 .prediction-display { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-.prediction-display__tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.prediction-display__tabs { display: flex; gap: 2px; flex-wrap: wrap; align-self: flex-start; }
+.prediction-display__tabs > button { min-height: var(--control-height); padding-inline: 14px; font-size: calc(var(--type-control) * var(--font-scale, 1)); }
 .prediction-display__steps { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
-.prediction-display__steps .prediction-display__tabs { max-height: 190px; overflow-y: auto; width: 100%; padding: 2px; }
+.prediction-display__steps .prediction-display__tabs { max-height: 220px; overflow-y: auto; width: 100%; padding: 3px; }
+.prediction-display__steps .prediction-display__tabs > button { flex: 1 1 auto; min-height: var(--control-compact); font-size: calc(var(--type-label) * var(--font-scale, 1)); }
 .prediction-display__triptych { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .prediction-display__card { min-width: 0; }
+.prediction-display__fullscreen-action { width: 100%; }
+.prediction-display[data-empty="true"] .prediction-display__card { background: transparent; border: 0; border-top: 1px solid var(--line-subtle); border-radius: 0; }
+.prediction-field-empty { display: flex; align-items: center; justify-content: center; padding: 16px 8px; color: var(--text-secondary); font-size: calc(var(--type-helper) * var(--font-scale, 1)); line-height: 1.5; text-align: center; }
+.prediction-display__empty { padding: 16px 20px; border-left: 2px solid var(--line-active); background: var(--surface-2); }
+.prediction-display__empty-title { font-size: calc(16px * var(--font-scale, 1)); font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.prediction-display__empty-description { max-width: 65ch; font-size: calc(var(--type-helper) * var(--font-scale, 1)); color: var(--text-secondary); line-height: 1.5; white-space: pre-line; }
 .prediction-display__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
-.prediction-display__time { overflow-wrap: anywhere; }
+.prediction-display__time { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .prediction-earth-field { display: flex; flex-direction: column; justify-content: center; gap: 10px; min-width: 0; }
-.prediction-colorbar { display: flex; align-items: center; gap: 8px; font-size: calc(10px * var(--font-scale, 1)); color: var(--text-60); }
+.prediction-colorbar { display: flex; align-items: center; gap: 8px; font-size: calc(var(--type-micro) * var(--font-scale, 1)); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .prediction-colorbar > i { display: block; flex: 1; min-width: 24px; height: 10px; border-radius: 4px; }
 .prediction-fullscreen { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .prediction-fullscreen__dialog { position: relative; width: 100%; max-width: 1680px; height: 94dvh; overflow: auto; }
 .prediction-fullscreen__layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 330px; min-height: 100%; }
-.prediction-fullscreen__info { padding: 24px; border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.prediction-fullscreen__info { padding: 24px; border-right: 1px solid var(--line-subtle); display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .prediction-fullscreen__stats { display: flex; flex-direction: column; gap: 14px; }
 .prediction-fullscreen__scene { position: relative; min-width: 0; min-height: 540px; }
 .prediction-fullscreen__scene > .prediction-earth-field { height: 100%; padding: 56px 20px 20px; }
-.prediction-fullscreen__charts { padding: 24px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.prediction-fullscreen__charts { padding: 24px; border-left: 1px solid var(--line-subtle); display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .prediction-fullscreen__close { flex-shrink: 0; }
+.prediction-fullscreen__toolbar { display: flex; justify-content: flex-end; padding: 8px 16px; position: sticky; top: 0; z-index: 4; background: var(--surface-1); border-bottom: 1px solid var(--line-subtle); }
+.prediction-fullscreen__stat { padding: 14px 16px; border-top: 1px solid var(--line-subtle); min-width: 0; }
+.prediction-fullscreen__stat-label { font-size: calc(var(--type-label) * var(--font-scale, 1)); color: var(--text-secondary); font-weight: 600; letter-spacing: 0; }
+.prediction-fullscreen__stat-value { margin-top: 8px; font-size: calc(20px * var(--font-scale, 1)); font-weight: 700; font-family: var(--font-display); letter-spacing: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.prediction-fullscreen__stat-hint { margin-top: 6px; font-size: calc(var(--type-helper) * var(--font-scale, 1)); color: var(--text-secondary); line-height: 1.5; }
 @media (max-width: 1180px) {
   .prediction-display__triptych { grid-template-columns: minmax(0, 1fr); }
+  .prediction-display[data-empty="true"] .prediction-display__triptych { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .prediction-fullscreen__layout { grid-template-columns: 240px minmax(0, 1fr); }
   .prediction-fullscreen__charts { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .prediction-fullscreen__charts > .prediction-fullscreen__chart-heading { grid-row: 1; }
 }
 @media (max-width: 640px) {
   .prediction-display__tabs > button { flex: 1 1 auto; }
+  .prediction-display__tabs { align-self: stretch; }
+  .prediction-display[data-empty="true"] .prediction-display__triptych { grid-template-columns: minmax(0, 1fr); }
+  .prediction-display[data-empty="true"] .prediction-field-empty { min-height: 48px !important; }
   .prediction-display__steps .prediction-display__tabs > button { flex: 1 1 100%; }
   .prediction-fullscreen { padding: 8px; }
   .prediction-fullscreen__dialog { height: calc(100dvh - 16px); border-radius: 16px !important; }

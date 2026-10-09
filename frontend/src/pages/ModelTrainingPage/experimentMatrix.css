@@ -43,7 +43,7 @@
 .experiment-matrix-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .experiment-matrix-name-editor { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .experiment-matrix-name-editor input { min-width: 0; width: min(170px, 100%); min-height: 31px; padding: 5px 7px; border: 1px solid var(--brand-primary); border-radius: 5px; background: var(--experiment-surface-2); color: var(--text); font: inherit; }
-.experiment-matrix-cell-error { display: block; flex-basis: 100%; color: var(--experiment-danger, #d95c5c); font-size: calc(10px * var(--font-scale, 1)); line-height: 1.35; }
+.experiment-matrix-cell-error { display: block; flex-basis: 100%; color: var(--status-danger); font-size: calc(var(--type-helper) * var(--font-scale, 1)); line-height: 1.5; }
 .experiment-matrix-tags-cell { position: relative; min-height: 30px; }
 .experiment-matrix-tags-line { flex-wrap: wrap; }
 .experiment-matrix-tags-line .training-tag-chips { min-width: 0; }
@@ -89,4 +89,114 @@
   .experiment-matrix-search { grid-column: 1 / -1; width: 100%; }
   .experiment-matrix-toolbar select, .experiment-matrix-tag-filter { min-width: 0; width: 100%; }
   .experiment-matrix-properties-button { width: 100%; }
+}
+
+.experiment-matrix {
+  gap: 16px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.experiment-matrix :is(input, select, summary, button) {
+  font-family: var(--font-body);
+  line-height: 1.4;
+}
+
+.experiment-matrix :is(input, select),
+.experiment-matrix-tag-filter summary,
+.experiment-matrix-properties-button,
+.experiment-matrix-text-button {
+  min-height: 40px;
+  border-color: var(--line-default);
+  border-radius: var(--radius-control);
+  font-size: calc(var(--type-control) * var(--font-scale, 1));
+}
+
+.experiment-matrix-toolbar,
+.experiment-matrix-layout {
+  gap: 16px;
+}
+
+.experiment-matrix-properties-button:hover,
+.experiment-matrix-text-button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+}
+
+.experiment-matrix-scroll,
+.experiment-matrix-property-panel {
+  border-radius: var(--radius-panel);
+}
+
+.experiment-matrix-scroll {
+  border: 0;
+}
+
+.experiment-matrix-table :is(th, td) {
+  padding: 10px 12px;
+  border-color: var(--line-subtle);
+}
+
+.experiment-matrix-table th {
+  font-size: calc(var(--type-label) * var(--font-scale, 1));
+  font-weight: 600;
+}
+
+.experiment-matrix-table td {
+  font-size: calc(var(--type-body) * var(--font-scale, 1));
+}
+
+.experiment-matrix-icon-button {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  border-radius: var(--radius-control);
+}
+
+.experiment-matrix-name-editor input,
+.experiment-matrix-property-search {
+  min-height: 32px;
+  font-size: calc(var(--type-body) * var(--font-scale, 1));
+}
+
+.experiment-matrix-name-editor input {
+  border-color: var(--brand-ice);
+}
+
+.experiment-matrix-panel-actions .experiment-matrix-text-button {
+  min-height: 32px;
+  font-size: calc(var(--type-label) * var(--font-scale, 1));
+}
+
+.experiment-matrix-property-group h3,
+.experiment-matrix-footer {
+  color: var(--text-secondary);
+  font-size: calc(var(--type-helper) * var(--font-scale, 1));
+}
+
+.experiment-matrix-icon-button:hover,
+.experiment-matrix-icon-button:focus-visible {
+  color: var(--brand-ice);
+}
+
+.experiment-matrix :is(button, input, select, summary):focus-visible,
+.experiment-matrix-scroll:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--brand-ice) 38%, transparent);
+  outline-offset: 2px;
+}
+
+.experiment-matrix input::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.experiment-matrix-icon-button:active:not(:disabled),
+.experiment-matrix-text-button:active:not(:disabled) {
+  background: var(--surface-3);
+}
+
+@media (max-width: 560px) {
+  .experiment-matrix :is(input, select, summary, button) {
+    min-height: 44px;
+  }
 }

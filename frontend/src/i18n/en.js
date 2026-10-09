@@ -983,7 +983,7 @@ const en = {
     testSetNote: '* The test set contains MY28 data unseen during training, providing an unbiased evaluation of model generalization.',
     fallbackWarning: 'Note: This prediction uses a fallback model selected automatically due to missing weights.',
     fallbackReason: 'Reason: ',
-    initPrompt: 'Configure parameters and click "Run Prediction" to run PredRNNv2 inference',
+    initPrompt: 'Select a trained model and run a prediction',
     initDesc: "The model follows the selected training task's input and output horizon configuration to\npredict global Mars ozone column concentration from the selected Ls.",
     summary: ({ lsStart, year, horizon, varCount, varNames, rmse, ssim, r2 }) =>
       `<strong>Prediction complete</strong>: Start Ls=${lsStart}°, MY${year}, ${horizon} steps predicted.\n` +

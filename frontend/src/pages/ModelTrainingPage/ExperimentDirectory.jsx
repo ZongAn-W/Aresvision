@@ -155,7 +155,7 @@ function ExperimentDirectoryRow({
             <button
               type="button"
               className="experiment-center-button"
-              style={{ minHeight: 34, padding: '6px 10px', fontSize: 'calc(11px * var(--font-scale, 1))', color: '#d95c5c', borderColor: 'rgba(217,92,92,0.28)' }}
+              style={{ minHeight: 32, padding: '6px 12px', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', color: 'var(--status-danger)', borderColor: 'color-mix(in srgb, var(--status-danger) 28%, transparent)' }}
               disabled={isProcessing}
               onClick={() => onStop(task.id)}
             >
@@ -167,7 +167,7 @@ function ExperimentDirectoryRow({
       {isQueued ? (
         <div className="experiment-center-actions" onClick={(event) => event.stopPropagation()}>
           <span className="training-tag-hint">{copy.queuePosition(task.queue_position)}</span>
-          <button type="button" className="experiment-center-button" style={{ minHeight: 34, padding: '6px 10px', fontSize: 'calc(11px * var(--font-scale, 1))' }} disabled={isProcessing} onClick={() => onCancel(task.id)}>
+          <button type="button" className="experiment-center-button" style={{ minHeight: 32, padding: '6px 12px', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))' }} disabled={isProcessing} onClick={() => onCancel(task.id)}>
             {copy.cancelQueued}
           </button>
         </div>

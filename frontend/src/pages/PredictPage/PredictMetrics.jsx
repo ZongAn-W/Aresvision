@@ -1,5 +1,5 @@
 import C from '../../constants/colors';
-import GlowCard from '../../components/GlowCard';
+import { Panel } from '../../components/ui/Controls';
 import { fmtNum } from '../../utils/fmt';
 import { useSettings } from '../../contexts/SettingsContext';
 import { createMarsPredictionPresentation, predictionMetricCards } from './predictionPresentation.js';
@@ -12,7 +12,7 @@ export default function PredictMetrics({ loading, metrics, precision, ozoneUnit,
   const cards = predictionMetricCards(metrics, config);
   const missingLabel = metrics == null ? '--' : config.missingLabel;
   return (
-    <GlowCard style={{ padding: 20, minWidth: 0 }}>
+    <Panel className="prediction-panel">
       <section data-predict-metrics="true" data-evaluation-scope={description.scope}>
         <h3 className="prediction-chart-title">{config.title}</h3>
         <p className="prediction-chart-subtitle">{description.subtitle}</p>
@@ -27,6 +27,6 @@ export default function PredictMetrics({ loading, metrics, precision, ozoneUnit,
           </div>)}
         </div>
       </section>
-    </GlowCard>
+    </Panel>
   );
 }

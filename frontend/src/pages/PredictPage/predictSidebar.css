@@ -1,0 +1,16 @@
+.predict-sidebar { display: flex; flex-direction: column; gap: 16px; min-width: 0; font-variant-numeric: tabular-nums; }
+.predict-sidebar__title { color: var(--text-primary); font: 700 calc(16px * var(--font-scale, 1))/1.3 var(--font-display); letter-spacing: 0; }
+.predict-sidebar__description { margin-top: 6px; color: var(--text-secondary); font-size: calc(var(--type-helper) * var(--font-scale, 1)); line-height: 1.5; overflow-wrap: anywhere; }
+.predict-sidebar__action { width: 100%; }
+.predict-sidebar .prediction-panel { overflow: visible; }
+.predict-sidebar input:not([type="checkbox"]):not([type="range"]) { border-color: var(--line-default) !important; border-radius: var(--radius-control); background: var(--surface-2) !important; font-variant-numeric: tabular-nums; }
+.predict-sidebar input:focus-visible { border-color: var(--line-active) !important; outline: 3px solid color-mix(in srgb, var(--line-active) 22%, transparent); outline-offset: 2px; }
+.predict-sidebar input:disabled { color: var(--text-disabled); }
+.predict-sidebar button:focus-visible { outline: 3px solid color-mix(in srgb, var(--line-active) 22%, transparent); outline-offset: 2px; }
+.predict-sidebar button:not(:disabled):hover { border-color: var(--line-strong); }
+.predict-sidebar button:not(:disabled):active { transform: translateY(1px); }
+.predict-sidebar button:disabled { cursor: not-allowed; }
+.predict-sidebar .training-tag-picker { padding-inline: 0; border: 0; border-top: 1px solid var(--line-subtle); border-radius: 0; }
+.predict-sidebar .training-tag-button { min-height: var(--control-compact); border-color: var(--line-default); border-radius: var(--radius-control); background: var(--surface-2); }
+.predict-sidebar .training-tag-button[aria-pressed="true"] { background: var(--surface-3); border-color: var(--line-subtle); box-shadow: inset 0 -2px var(--line-active); color: var(--brand-ice); }
+.predict-sidebar .training-tag-hint, .predict-sidebar .training-tag-mode-note { font-size: calc(var(--type-helper) * var(--font-scale, 1)); color: var(--text-secondary); }

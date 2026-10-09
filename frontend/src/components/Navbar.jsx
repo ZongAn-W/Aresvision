@@ -8,6 +8,8 @@ import ConfirmDialog from './ConfirmDialog';
 import ChangePasswordModal from './ChangePasswordModal';
 import NotificationPanel from './NotificationPanel';
 import BrandMark from './BrandMark';
+import NotificationsNoneRoundedIcon from '@mui/icons-material/NotificationsNoneRounded';
+import { Button } from './ui/Controls';
 import { getPendingReviews, getUnreadCount } from '../services/api';
 import { NOTIFICATION_REFRESH_EVENT } from '../notifications/notificationEvents';
 
@@ -35,7 +37,24 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
     return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
   }, [dropOpen]);
 
+  useEffect(() => {
+    if (!dropOpen) return;
+    wrapRef.current?.querySelector('[data-user-menu] button')?.focus();
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setDropOpen(false);
+        wrapRef.current?.querySelector('[aria-expanded]')?.focus();
+      }
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [dropOpen]);
+
   const isAdmin = user?.role === 'admin';
+  const closeMenu = () => {
+    wrapRef.current?.querySelector('[aria-expanded]')?.focus();
+    setDropOpen(false);
+  };
   const L = isLight;
   const dropBg     = L ? 'var(--bg-card-strong)' : 'var(--bg-card-strong)';
   const dropBorder = L ? 'var(--border)'         : 'var(--border)';
@@ -50,14 +69,15 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
   if (!user) {
     return (
       <div style={{ width: 130, display: 'flex', justifyContent: 'flex-end' }}>
-        <button
+        <Button
+          variant="quiet"
           onClick={() => openAuthModal('login')}
           onMouseEnter={() => setHovLogin(true)}
           onMouseLeave={() => setHovLogin(false)}
           style={{
             background: 'none', border: 'none',
             cursor: 'pointer', padding: '4px 0',
-            color: hovLogin ? C.mars : C.blue,
+            color: C.brand,
             fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 600,
             textDecoration: hovLogin ? 'underline' : 'none',
             textUnderlineOffset: 3,
@@ -67,7 +87,7 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
           }}
         >
           {t('auth.menuLogin')}
-        </button>
+        </Button>
       </div>
     );
   }
@@ -79,6 +99,10 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
       <div ref={wrapRef} style={{ width: 130, display: 'flex', justifyContent: 'flex-end', position: 'relative' }}>
         {/* Avatar button */}
         <button
+          type="button"
+          className="nav-user-button"
+          aria-expanded={dropOpen}
+          aria-label={user.username || user.email}
           onClick={() => setDropOpen(v => !v)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
@@ -90,11 +114,11 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
           {/* Avatar circle */}
           <div style={{
             width: 28, height: 28, borderRadius: '50%',
-            background: `linear-gradient(135deg, ${C.blue}, ${C.mars})`,
+            background: 'var(--surface-3)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             flexShrink: 0,
           }}>
-            <span style={{ fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700, color: '#fff' }}>{initial}</span>
+            <span style={{ fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 700, color: C.brand }}>{initial}</span>
           </div>
           {/* Username */}
           <div style={{ textAlign: 'left', maxWidth: 76, overflow: 'hidden' }}>
@@ -107,8 +131,8 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
             </div>
             {isAdmin && (
               <div style={{
-                display: 'inline-block', fontSize: 'calc(9px * var(--font-scale, 1))', fontWeight: 700,
-                color: C.mars, letterSpacing: '0.06em',
+                display: 'inline-block', fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600,
+                color: C.action, letterSpacing: 0,
                 background: 'rgba(199,91,57,0.10)',
                 borderRadius: 4, padding: '1px 5px', marginTop: 1,
                 lineHeight: 1.5,
@@ -121,7 +145,7 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
 
         {/* Dropdown */}
         {dropOpen && (
-          <div style={{
+          <div data-user-menu className="nav-user-menu" style={{
             position: 'absolute', top: '100%', right: 0, marginTop: 6,
             width: 220,
             background: dropBg,
@@ -141,8 +165,8 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
             {/* Admin review — only for admin */}
             {isAdmin && (
               <>
-                <div
-                  onClick={() => { setDropOpen(false); onOpenAdmin?.(); }}
+                <button type="button"
+                  onClick={() => { closeMenu(); onOpenAdmin?.(); }}
                   onMouseEnter={() => setHovAdmin(true)}
                   onMouseLeave={() => setHovAdmin(false)}
                   style={{
@@ -166,9 +190,9 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
                       {pendingCount > 99 ? '99+' : pendingCount}
                     </span>
                   )}
-                </div>
-                <div
-                  onClick={() => { setDropOpen(false); onOpenFeedback?.(); }}
+                </button>
+                <button type="button"
+                  onClick={() => { closeMenu(); onOpenFeedback?.(); }}
                   onMouseEnter={() => setHovFeedback(true)}
                   onMouseLeave={() => setHovFeedback(false)}
                   style={{
@@ -180,7 +204,7 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
                   <span style={{ fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 500, color: labelClr, userSelect: 'none' }}>
                     {t('feedback.adminMenuItem')}
                   </span>
-                </div>
+                </button>
                 <div style={{ height: 1, background: divClr, margin: '4px 10px' }} />
               </>
             )}
@@ -188,7 +212,7 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
             {/* Change password */}
             <DropItem
               label={t('auth.changePassword')}
-              onClick={() => { setDropOpen(false); setChangePwdOpen(true); }}
+              onClick={() => { closeMenu(); setChangePwdOpen(true); }}
               hoverBg={hoverBg} color={labelClr}
             />
 
@@ -197,7 +221,7 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
             {/* Logout */}
             <DropItem
               label={t('auth.menuLogout')}
-              onClick={() => { setDropOpen(false); setLogoutConfirm(true); }}
+              onClick={() => { closeMenu(); setLogoutConfirm(true); }}
               hoverBg={hoverBg} color={C.mars}
             />
           </div>
@@ -229,7 +253,7 @@ function NavUserEntry({ t, isLight, onOpenAdmin, onOpenFeedback, pendingCount })
 function DropItem({ label, onClick, hoverBg, color }) {
   const [hov, setHov] = useState(false);
   return (
-    <div
+    <button type="button"
       onClick={onClick}
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
@@ -240,7 +264,7 @@ function DropItem({ label, onClick, hoverBg, color }) {
       }}
     >
       <span style={{ fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 500, color, userSelect: 'none' }}>{label}</span>
-    </div>
+    </button>
   );
 }
 
@@ -301,20 +325,21 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
   }, [fetchUnreadCount]);
 
   const navLabelStyle = (isActive) => ({
-    fontSize: 'calc(11px * var(--font-scale, 1))',
-    fontWeight: 700,
-    letterSpacing: 0.4,
-    fontFamily: 'var(--font-display)',
-    color: isActive ? C.mars : C.ice60,
+    fontSize: 'calc(12px * var(--font-scale, 1))',
+    fontWeight: isActive ? 600 : 500,
+    letterSpacing: 0,
+    fontFamily: 'var(--font-body)',
+    color: isActive ? C.brand : C.ice60,
     transition: 'color 0.25s',
   });
 
   const navBtnStyle = (isActive) => ({
-    background: isActive ? 'rgba(199,91,57,0.10)' : 'transparent',
-    border: `1px solid ${isActive ? 'rgba(199,91,57,0.22)' : 'transparent'}`,
-    borderBottom: `1px solid ${isActive ? 'rgba(199,91,57,0.22)' : 'transparent'}`,
-    borderRadius: 10,
-    padding: '10px 16px',
+    background: isActive ? 'var(--bg-muted)' : 'transparent',
+    border: '1px solid transparent',
+    boxShadow: isActive ? 'inset 0 -2px var(--brand-ice)' : 'none',
+    borderRadius: 'var(--radius-control)',
+    minHeight: 'var(--control-height)',
+    padding: '8px 12px',
     cursor: 'pointer',
     transition: 'all 0.25s',
     display: 'flex',
@@ -325,6 +350,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
 
   return (
     <nav
+      aria-label={settings.language === 'zh' ? '主导航' : 'Main navigation'}
       className={`nav-glass${current === 'home' ? ' home-nav' : ''}`}
       data-page={current}
       style={{
@@ -354,7 +380,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
           }}>
             AstraAtmos
           </div>
-          <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice60, letterSpacing: 0.4 }}>
+          <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice60, letterSpacing: 0, lineHeight: 1.4 }}>
             {t('nav.subtitle')}
           </div>
         </div>
@@ -364,7 +390,9 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
       <div className="home-nav__links" style={{ display: 'flex', gap: 2, alignItems: 'center', marginLeft: 'auto' }}>
         {NAV_IDS.map((id) => (
           <button
+            type="button"
             key={id}
+            aria-current={current === id ? 'page' : undefined}
             onClick={() => onChange(id)}
             style={navBtnStyle(current === id)}
           >
@@ -384,6 +412,10 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
         {user && (
           <div style={{ position: 'relative' }}>
             <button
+              type="button"
+              className="nav-user-button nav-notification-button"
+              aria-label={t('notification.title')}
+              aria-expanded={notifOpen}
               onClick={() => setNotifOpen(v => !v)}
               title={t('notification.title')}
               style={{
@@ -394,11 +426,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
                 transition: 'background 0.15s',
               }}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-              </svg>
+              <NotificationsNoneRoundedIcon sx={{ fontSize: 20 }} />
             </button>
             {unreadCount > 0 && (
               <span style={{

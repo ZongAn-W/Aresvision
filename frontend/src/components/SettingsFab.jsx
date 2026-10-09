@@ -1,120 +1,20 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
+import SettingsOutlined from '@mui/icons-material/SettingsOutlined';
+import ChevronRightOutlined from '@mui/icons-material/ChevronRightOutlined';
+import ChevronLeftOutlined from '@mui/icons-material/ChevronLeftOutlined';
+import CheckOutlined from '@mui/icons-material/CheckOutlined';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useT } from '../i18n';
-import C from '../constants/colors';
 import ConfirmDialog from './ConfirmDialog';
 import FeedbackModal from './FeedbackModal';
 import PerformanceMonitor from './PerformanceMonitor';
+import './ui/overlay.css';
 
 const COLORMAP_IDS = ['inferno', 'viridis', 'plasma', 'magma', 'cividis', 'jet', 'rdbu'];
 
-function GearIcon({ size = 17 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 18 18" fill="none">
-      <path d="M9 11.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"
-        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M14.55 11.25a1.238 1.238 0 0 0 .248 1.364l.045.045a1.5 1.5 0 1 1-2.121 2.121l-.045-.045a1.238 1.238 0 0 0-1.364-.248 1.238 1.238 0 0 0-.75 1.133V15.75a1.5 1.5 0 0 1-3 0v-.075a1.238 1.238 0 0 0-.81-1.133 1.238 1.238 0 0 0-1.364.248l-.045.045a1.5 1.5 0 1 1-2.121-2.121l.045-.045A1.238 1.238 0 0 0 3.52 11.306a1.238 1.238 0 0 0-1.133-.75H2.25a1.5 1.5 0 0 1 0-3h.075A1.238 1.238 0 0 0 3.458 6.75a1.238 1.238 0 0 0-.248-1.364l-.045-.045A1.5 1.5 0 1 1 5.286 3.22l.045.045a1.238 1.238 0 0 0 1.364.248h.06A1.238 1.238 0 0 0 7.505 2.38V2.25a1.5 1.5 0 0 1 3 0v.075a1.238 1.238 0 0 0 .75 1.133 1.238 1.238 0 0 0 1.364-.248l.045-.045a1.5 1.5 0 1 1 2.121 2.121l-.045.045A1.238 1.238 0 0 0 14.492 6.694v.06a1.238 1.238 0 0 0 1.133.746H15.75a1.5 1.5 0 0 1 0 3h-.075a1.238 1.238 0 0 0-1.125.75Z"
-        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function ChevronRight() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-      <path d="M3.5 2L6.5 5L3.5 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function CheckIcon({ color }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style={{ flexShrink: 0 }}>
-      <path d="M2 6.5L5 9.5L11 3" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function SubOption({ label, selected, onClick, hoverBg, labelColor, activeClr }) {
-  const [hov, setHov] = useState(false);
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '9px 16px', cursor: 'pointer',
-        background: hov ? hoverBg : 'transparent',
-        transition: 'background 0.1s',
-        gap: 12,
-      }}
-    >
-      <span style={{
-        fontSize: 'calc(13px * var(--font-scale, 1))', userSelect: 'none',
-        color: selected ? activeClr : labelColor,
-        fontWeight: selected ? 600 : 400,
-      }}>
-        {label}
-      </span>
-      {selected
-        ? <CheckIcon color={activeClr} />
-        : <span style={{ width: 13, flexShrink: 0 }} />}
-    </div>
-  );
-}
-
-function PerfToggleItem({ label, active, onClick, hoverBg, labelClr, valueClr }) {
-  const [hov, setHov] = useState(false);
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '10px 16px', cursor: 'pointer',
-        background: hov ? hoverBg : 'transparent',
-        transition: 'background 0.1s',
-      }}
-    >
-      <span style={{ fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 500, color: labelClr, userSelect: 'none' }}>
-        {label}
-      </span>
-      <span style={{
-        fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600,
-        color: active ? '#22c55e' : valueClr,
-        userSelect: 'none',
-      }}>
-        {active ? 'ON' : 'OFF'}
-      </span>
-    </div>
-  );
-}
-
-function UserActionItem({ label, onClick, hoverBg, color }) {
-  const [hov, setHov] = useState(false);
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        padding: '10px 16px', cursor: 'pointer',
-        background: hov ? hoverBg : 'transparent',
-        transition: 'background 0.1s',
-      }}
-    >
-      <span style={{ fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 500, color, userSelect: 'none' }}>
-        {label}
-      </span>
-    </div>
-  );
-}
-
-export default function SettingsFab({ onOpenSettings, onOpenAdmin }) {
+export default function SettingsFab({ onOpenSettings }) {
   const { settings, updateSetting } = useSettings();
   const { user, logout, openAuthModal } = useAuth();
   const { showToast } = useToast();
@@ -125,355 +25,167 @@ export default function SettingsFab({ onOpenSettings, onOpenAdmin }) {
   const [perfMonitor, setPerfMonitor] = useState(false);
   const [activeSubmenu, setActiveSubmenu] = useState(null);
   const [showTooltip, setShowTooltip] = useState(false);
-  const [moreHov, setMoreHov] = useState(false);
   const containerRef = useRef(null);
-  const closeTimerRef = useRef(null);
+  const triggerRef = useRef(null);
+  const mainMenuRef = useRef(null);
+  const submenuRef = useRef(null);
+  const submenuTriggers = useRef({});
+  const focusSubmenuRef = useRef(false);
+  const menuId = useId();
+  const tooltipId = useId();
+  const zh = settings.language === 'zh';
+  const tooltipText = zh ? '设置' : 'Settings';
 
-  // Cancel pending close timer on unmount
   useEffect(() => {
-    return () => { if (closeTimerRef.current) clearTimeout(closeTimerRef.current); };
-  }, []);
-
-  // Clear timer when menu closes
-  useEffect(() => {
-    if (!menuOpen) {
-      if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
-      setActiveSubmenu(null);
-    }
-  }, [menuOpen]);
-
-  const scheduleClose = () => {
-    closeTimerRef.current = setTimeout(() => setActiveSubmenu(null), 150);
-  };
-  const cancelClose = () => {
-    if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
-  };
-
-  const isLight = settings.theme === 'light';
-
-  // Click outside closes menu
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
-        setMenuOpen(false);
-      }
+    if (!menuOpen) { setActiveSubmenu(null); return undefined; }
+    mainMenuRef.current?.querySelector('button')?.focus();
+    const onPointerDown = event => {
+      if (!containerRef.current?.contains(event.target)) setMenuOpen(false);
     };
-    const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0);
-    return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
   }, [menuOpen]);
 
-  // ── Theme-aware palette ──
-  const L = isLight;
-  const cardBg     = L ? '#ffffff'                  : '#13132a';
-  const cardBorder = L ? 'rgba(0,0,0,0.09)'         : 'rgba(255,255,255,0.1)';
-  const cardShadow = L
-    ? '0 8px 32px rgba(0,0,0,0.14), 0 2px 6px rgba(0,0,0,0.07)'
-    : '0 8px 32px rgba(0,0,0,0.7),  0 2px 6px rgba(0,0,0,0.35)';
-  const labelClr   = L ? '#000000' : '#ffffff';
-  const valueClr   = L ? '#000000' : '#ffffff';
-  const hoverBg    = L ? 'rgba(0,0,0,0.045)'        : 'rgba(255,255,255,0.07)';
-  const divClr     = L ? '#000000' : '#ffffff';
-  const activeClr  = C.blue;
-  const fabBg      = L
-    ? (menuOpen ? 'rgba(228,232,248,0.97)' : 'rgba(255,255,255,0.88)')
-    : (menuOpen ? 'rgba(22,22,46,0.97)'   : 'rgba(10,10,22,0.88)');
-  const fabBorder  = L ? 'rgba(0,0,0,0.09)'         : 'rgba(255,255,255,0.1)';
-  const fabShadow  = L ? '0 2px 12px rgba(0,0,0,0.1)' : '0 2px 12px rgba(0,0,0,0.48)';
-  const fabColor   = L
-    ? (menuOpen ? '#1e1e30' : 'rgba(42,42,58,0.52)')
-    : (menuOpen ? '#e8edf3' : 'rgba(232,237,243,0.52)');
+  useEffect(() => {
+    if (activeSubmenu && focusSubmenuRef.current) {
+      submenuRef.current?.querySelector('[aria-checked="true"]')?.focus();
+      focusSubmenuRef.current = false;
+    }
+  }, [activeSubmenu]);
 
-  // ── Display values ──
-  const langDisplay = settings.language === 'zh' ? '中文' : 'English';
-  const themeDisplay = settings.theme === 'dark' ? t('settings.theme.dark') : t('settings.theme.light');
-  const cmapDisplay  = settings.colormap.charAt(0).toUpperCase() + settings.colormap.slice(1);
-  const moreLabel    = settings.language === 'zh' ? '更多设置' : 'More Settings';
-  const tooltipText  = settings.language === 'zh' ? '设置' : 'Settings';
-  const roleLabel    = user?.role === 'admin' ? t('auth.roleAdmin') : t('auth.roleUser');
+  const closeMenu = (restoreFocus = true) => {
+    setMenuOpen(false);
+    setActiveSubmenu(null);
+    if (restoreFocus) triggerRef.current?.focus();
+  };
+  const openSubmenu = (key, focus = false) => {
+    focusSubmenuRef.current = focus;
+    setActiveSubmenu(key);
+    if (focus && activeSubmenu === key) submenuRef.current?.querySelector('[aria-checked="true"]')?.focus();
+  };
+  const closeSubmenu = () => {
+    submenuTriggers.current[activeSubmenu]?.focus();
+    setActiveSubmenu(null);
+  };
+  const onMenuKeyDown = event => {
+    if (!menuOpen) return;
+    const inSubmenu = event.target.closest('[data-submenu]');
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (activeSubmenu) closeSubmenu(); else closeMenu();
+      return;
+    }
+    if (event.key === 'Tab') {
+      // Continue the normal tab order from the trigger after closing its menu.
+      closeMenu();
+      return;
+    }
+    if (event.key === 'ArrowLeft' && inSubmenu) { event.preventDefault(); closeSubmenu(); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const menu = inSubmenu ? submenuRef.current : mainMenuRef.current;
+    const buttons = Array.from(menu?.querySelectorAll('button:not(:disabled)') || []);
+    const current = buttons.indexOf(document.activeElement);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+      : (current + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length;
+    buttons[index]?.focus();
+  };
 
-  const MAIN_ITEMS = [
-    { key: 'language', label: t('settings.language.label'), value: langDisplay },
-    { key: 'theme',    label: t('settings.theme.label'),    value: themeDisplay },
-    { key: 'colormap', label: t('settings.colormap.label'), value: cmapDisplay },
+  const mainItems = [
+    { key: 'language', label: t('settings.language.label'), value: zh ? '中文' : 'English' },
+    { key: 'theme', label: t('settings.theme.label'), value: t('settings.theme.' + settings.theme) },
+    { key: 'colormap', label: t('settings.colormap.label'), value: settings.colormap.charAt(0).toUpperCase() + settings.colormap.slice(1) },
   ];
-
-  const SUB_OPTIONS = {
-    language: [
-      { value: 'zh', label: '中文' },
-      { value: 'en', label: 'English' },
-    ],
-    theme: [
-      { value: 'dark',  label: t('settings.theme.dark') },
-      { value: 'light', label: t('settings.theme.light') },
-    ],
-    colormap: COLORMAP_IDS.map(id => ({
-      value: id,
-      label: id.charAt(0).toUpperCase() + id.slice(1),
-    })),
+  const subOptions = {
+    language: [{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }],
+    theme: [{ value: 'dark', label: t('settings.theme.dark') }, { value: 'light', label: t('settings.theme.light') }],
+    colormap: COLORMAP_IDS.map(value => ({ value, label: value.charAt(0).toUpperCase() + value.slice(1) })),
   };
-
-  const getCurrentVal = (key) => settings[key] ?? settings.colormap;
-
-  const handleSelect = (key, value) => {
-    updateSetting(key, value);
-  };
-
-  const activeOptions = activeSubmenu ? SUB_OPTIONS[activeSubmenu] : null;
 
   return (
-    <div className="settings-fab" ref={containerRef} style={{ position: 'fixed', left: 24, bottom: 'var(--floating-settings-bottom, 24px)', zIndex: 1500 }}>
-      <style>{`
-        @keyframes _sfadeup { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes _sfadein  { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: translateX(0); } }
-      `}</style>
-
-      {/* ── Menu system ── */}
+    <div className="settings-fab" ref={containerRef} onKeyDown={onMenuKeyDown}
+      onBlur={event => { if (menuOpen && event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) closeMenu(false); }}>
       {menuOpen && (
-        <div style={{ position: 'absolute', bottom: 54, left: 0, animation: '_sfadeup 0.15s ease-out' }}>
-          {/*
-            position:relative wrapper — submenu anchors here via position:absolute.
-            Submenu is out of normal flow so it does NOT affect this wrapper's height,
-            which eliminates the layout-shift + upward scroll that caused flickering.
-          */}
-          <div style={{ position: 'relative' }}>
-
-            {/* Main menu card */}
-            <div
-              style={{
-                width: 264,
-                background: cardBg,
-                border: `1px solid ${cardBorder}`,
-                borderRadius: 13,
-                backdropFilter: 'blur(24px)',
-                WebkitBackdropFilter: 'blur(24px)',
-                boxShadow: cardShadow,
-                padding: '5px 0',
-                overflow: 'hidden',
-              }}
-              onMouseLeave={scheduleClose}
-            >
-              {MAIN_ITEMS.map((item, i) => (
-                <div key={item.key}>
-                  {i > 0 && (
-                    <div style={{ height: 1, background: divClr, margin: '2px 10px' }} />
-                  )}
-                  <div
-                    onMouseEnter={() => { cancelClose(); setActiveSubmenu(item.key); }}
-                    style={{
-                      display: 'flex', alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '11px 16px',
-                      cursor: 'default',
-                      background: activeSubmenu === item.key ? hoverBg : 'transparent',
-                      transition: 'background 0.1s',
-                    }}
-                  >
-                    <span style={{
-                      fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 500,
-                      color: labelClr, userSelect: 'none',
-                    }}>
-                      {item.label}
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: valueClr }}>
-                      <span style={{ fontSize: 'calc(13px * var(--font-scale, 1))', userSelect: 'none' }}>{item.value}</span>
-                      <ChevronRight />
-                    </div>
+        <div className="av-quick-menu-wrap">
+          <div id={menuId} ref={mainMenuRef} className="av-quick-menu" role="menu" aria-label={tooltipText}>
+            {mainItems.map(item => (
+              <button key={item.key} ref={element => { submenuTriggers.current[item.key] = element; }}
+                type="button" tabIndex={-1} className="av-quick-item" role="menuitem" aria-haspopup="menu"
+                aria-expanded={activeSubmenu === item.key} aria-controls={menuId + '-' + item.key}
+                onMouseEnter={() => openSubmenu(item.key)} onClick={() => openSubmenu(item.key, true)}
+                onKeyDown={event => {
+                  if (event.key === 'ArrowRight') { event.preventDefault(); openSubmenu(item.key, true); }
+                }}>
+                <span>{item.label}</span>
+                <span className="av-quick-item-value">{item.value}<ChevronRightOutlined /></span>
+              </button>
+            ))}
+            <div className="av-quick-separator" role="separator" />
+            <button type="button" tabIndex={-1} role="menuitem" className="av-quick-item" onMouseEnter={() => setActiveSubmenu(null)}
+              onClick={() => { closeMenu(); onOpenSettings(); }}>{zh ? '更多设置' : 'More Settings'}</button>
+            <button type="button" tabIndex={-1} role="menuitem" className="av-quick-item"
+              onClick={() => { closeMenu(); setFeedbackOpen(true); }}>{t('feedback.menuItem')}</button>
+            <button type="button" tabIndex={-1} role="menuitemcheckbox" aria-checked={perfMonitor} className="av-quick-item"
+              onClick={() => setPerfMonitor(value => !value)}>
+              <span>{t('settings.perfMonitor')}</span><span className="av-quick-item-value">{perfMonitor ? 'ON' : 'OFF'}</span>
+            </button>
+            <div className="av-quick-separator" role="separator" />
+            {user ? (
+              <>
+                <div className="av-quick-user">
+                  <span className="av-quick-avatar" aria-hidden="true">{(user.username || user.email || '?')[0].toUpperCase()}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="av-quick-user-name">{user.username || user.email}</div>
+                    <div className="av-helper">{user.role === 'admin' ? t('auth.roleAdmin') : t('auth.roleUser')}</div>
                   </div>
                 </div>
-              ))}
-
-              <div style={{ height: 1, background: divClr, margin: '3px 10px' }} />
-
-              {/* More Settings */}
-              <div
-                onMouseEnter={() => { cancelClose(); setActiveSubmenu(null); setMoreHov(true); }}
-                onMouseLeave={() => setMoreHov(false)}
-                onClick={() => { setMenuOpen(false); onOpenSettings(); }}
-                style={{
-                  padding: '11px 16px', cursor: 'pointer',
-                  background: moreHov ? hoverBg : 'transparent',
-                  transition: 'background 0.1s',
-                }}
-              >
-                <span style={{
-                  fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 500,
-                  color: labelClr, userSelect: 'none',
-                }}>
-                  {moreLabel}
-                </span>
-              </div>
-
-              {/* Feedback */}
-              <UserActionItem
-                label={t('feedback.menuItem')}
-                onClick={() => { setMenuOpen(false); setFeedbackOpen(true); }}
-                hoverBg={hoverBg}
-                color={labelClr}
-              />
-
-              {/* Performance Monitor toggle */}
-              <PerfToggleItem
-                label={t('settings.perfMonitor')}
-                active={perfMonitor}
-                onClick={() => setPerfMonitor(v => !v)}
-                hoverBg={hoverBg}
-                labelClr={labelClr}
-                valueClr={valueClr}
-              />
-
-              <div style={{ height: 1, background: divClr, margin: '3px 10px' }} />
-
-              {/* User section */}
-              {user ? (
-                <>
-                  {/* User info row */}
-                  <div style={{ padding: '9px 16px 5px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{
-                        width: 28, height: 28, borderRadius: '50%',
-                        background: `linear-gradient(135deg, ${C.blue}, ${C.mars})`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        flexShrink: 0,
-                      }}>
-                        <span style={{ fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700, color: '#fff' }}>
-                          {(user?.username || user?.email || "?")[0]?.toUpperCase() || "?"}
-                        </span>
-                      </div>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{
-                          fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 600, color: labelClr,
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
-                          {user.username || user.email}
-                        </div>
-                        <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: valueClr }}>{roleLabel}</div>
-                      </div>
-                    </div>
-                  </div>
-                  {/* Logout */}
-                  <UserActionItem
-                    label={t('auth.menuLogout')}
-                    onClick={() => { setMenuOpen(false); setLogoutConfirm(true); }}
-                    hoverBg={hoverBg}
-                    color={C.mars}
-                  />
-                </>
-              ) : (
-                <UserActionItem
-                  label={t('auth.menuLogin')}
-                  onClick={() => { setMenuOpen(false); openAuthModal('login'); }}
-                  hoverBg={hoverBg}
-                  color={C.blue}
-                />
-              )}
-            </div>
-
-            {/*
-              Submenu — position:absolute so it floats beside the main card without
-              affecting layout. left:264 places it flush against the main card's right
-              content edge (0 gap), preventing any mouse-gap between the two panels.
-              The 150ms scheduleClose/cancelClose timer bridges any sub-pixel rounding.
-            */}
-            {activeSubmenu && activeOptions && (
-              <div
-                key={activeSubmenu}
-                style={{
-                  position: 'absolute',
-                  left: 264,
-                  top: 0,
-                  background: cardBg,
-                  border: `1px solid ${cardBorder}`,
-                  borderRadius: 11,
-                  backdropFilter: 'blur(24px)',
-                  WebkitBackdropFilter: 'blur(24px)',
-                  boxShadow: cardShadow,
-                  padding: '5px 0',
-                  minWidth: 152,
-                  overflow: 'hidden',
-                  animation: '_sfadein 0.1s ease-out',
-                }}
-                onMouseEnter={cancelClose}
-                onMouseLeave={scheduleClose}
-              >
-                {activeOptions.map(opt => {
-                  const selected = getCurrentVal(activeSubmenu) === opt.value;
-                  return (
-                    <SubOption
-                      key={opt.value}
-                      label={opt.label}
-                      selected={selected}
-                      onClick={() => handleSelect(activeSubmenu, opt.value)}
-                      hoverBg={hoverBg}
-                      labelColor={labelClr}
-                      activeClr={activeClr}
-                    />
-                  );
-                })}
-              </div>
+                <button type="button" tabIndex={-1} role="menuitem" className="av-quick-item av-quick-item--danger"
+                  onClick={() => { closeMenu(); setLogoutConfirm(true); }}>{t('auth.menuLogout')}</button>
+              </>
+            ) : (
+              <button type="button" tabIndex={-1} role="menuitem" className="av-quick-item"
+                onClick={() => { closeMenu(); openAuthModal('login'); }}>{t('auth.menuLogin')}</button>
             )}
           </div>
+          {activeSubmenu && (
+            <div id={menuId + '-' + activeSubmenu} ref={submenuRef} data-submenu
+              className="av-quick-menu av-quick-submenu" role="menu"
+              aria-label={mainItems.find(item => item.key === activeSubmenu)?.label}>
+              <button type="button" tabIndex={-1} role="menuitem" className="av-quick-item" onClick={closeSubmenu}>
+                <ChevronLeftOutlined fontSize="small" /><span>{zh ? '返回' : 'Back'}</span>
+              </button>
+              {subOptions[activeSubmenu].map(option => (
+                <button key={option.value} type="button" tabIndex={-1} role="menuitemradio"
+                  aria-checked={settings[activeSubmenu] === option.value} className="av-quick-item"
+                  onClick={() => updateSetting(activeSubmenu, option.value)}>
+                  <span>{option.label}</span>
+                  {settings[activeSubmenu] === option.value && <CheckOutlined fontSize="small" />}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
-
-      {/* ── Tooltip ── */}
-      {showTooltip && !menuOpen && (
-        <div style={{
-          position: 'absolute', bottom: 50, left: 0,
-          background: L ? 'rgba(28,28,48,0.9)' : 'rgba(10,10,22,0.92)',
-          color: '#fff', fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 500,
-          padding: '5px 10px', borderRadius: 7,
-          whiteSpace: 'nowrap', pointerEvents: 'none',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.22)',
+      {showTooltip && !menuOpen && <div id={tooltipId} role="tooltip" className="av-quick-tooltip">{tooltipText}</div>}
+      <button ref={triggerRef} type="button" className="av-quick-trigger" aria-label={tooltipText}
+        title={tooltipText} aria-haspopup="menu" aria-expanded={menuOpen} aria-controls={menuId}
+        aria-describedby={showTooltip && !menuOpen ? tooltipId : undefined}
+        onClick={() => { if (menuOpen) closeMenu(); else setMenuOpen(true); setShowTooltip(false); }}
+        onMouseEnter={() => setShowTooltip(true)} onMouseLeave={() => setShowTooltip(false)}
+        onFocus={() => setShowTooltip(true)} onBlur={() => setShowTooltip(false)}
+        onKeyDown={event => {
+          if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); }
         }}>
-          {tooltipText}
-        </div>
-      )}
-
-      {/* ── FAB Button ── */}
-      <button
-        onClick={() => {
-          setMenuOpen(v => !v);
-          setShowTooltip(false);
-        }}
-        onMouseEnter={() => setShowTooltip(true)}
-        onMouseLeave={() => setShowTooltip(false)}
-        style={{
-          width: 42, height: 42, borderRadius: '50%',
-          background: fabBg,
-          border: `1px solid ${fabBorder}`,
-          backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
-          boxShadow: fabShadow,
-          cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: fabColor,
-          transition: 'background 0.2s, color 0.2s',
-          padding: 0,
-        }}
-      >
-        <GearIcon size={17} />
+        <SettingsOutlined />
       </button>
-
-      {/* ── Performance Monitor ── */}
       <PerformanceMonitor visible={perfMonitor} />
-
-      {/* ── Feedback modal ── */}
       <FeedbackModal open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
-
-      {/* ── Logout confirmation ── */}
       {logoutConfirm && (
-        <ConfirmDialog
-          title={t('auth.logoutConfirmTitle')}
-          message={t('auth.logoutConfirmMsg')}
-          confirmLabel={t('auth.logoutConfirmBtn')}
-          cancelLabel={t('auth.cancelBtn')}
-          onConfirm={() => {
-            setLogoutConfirm(false);
-            logout();
-            showToast(t('auth.toastLoggedOut'), 'success');
-          }}
-          onCancel={() => setLogoutConfirm(false)}
-        />
+        <ConfirmDialog title={t('auth.logoutConfirmTitle')} message={t('auth.logoutConfirmMsg')}
+          confirmLabel={t('auth.logoutConfirmBtn')} cancelLabel={t('auth.cancelBtn')}
+          onConfirm={() => { setLogoutConfirm(false); logout(); showToast(t('auth.toastLoggedOut'), 'success'); }}
+          onCancel={() => setLogoutConfirm(false)} />
       )}
     </div>
   );

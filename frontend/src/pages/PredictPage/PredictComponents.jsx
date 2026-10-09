@@ -167,7 +167,7 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240, colorRa
     const lbX = cbX + cbW + 3;
     ctx.textAlign = 'left';
     ctx.fillStyle = cbLabelColor;
-    ctx.font = buildCanvasFont(9, { scale: fontScale });
+    ctx.font = buildCanvasFont(11, { scale: fontScale });
     const topLabel = colorMode === 'rdbu' ? `+${fmtVal(convertOzone(absMax, ozoneUnit), precision)}` : fmtVal(convertOzone(dMax, ozoneUnit), precision);
     const midLabel = colorMode === 'rdbu' ? fmtVal(0, precision) : fmtVal(convertOzone((dMin + dMax) / 2, ozoneUnit), precision);
     const botLabel = colorMode === 'rdbu' ? `-${fmtVal(convertOzone(absMax, ozoneUnit), precision)}` : fmtVal(convertOzone(dMin, ozoneUnit), precision);
@@ -181,7 +181,7 @@ export function FieldCanvas({ fieldData, colorMode = 'inferno', h = 240, colorRa
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
     ctx.fillStyle = cbTitleColor;
-    ctx.font = buildCanvasFont(9, { scale: fontScale });
+    ctx.font = buildCanvasFont(11, { scale: fontScale });
     ctx.fillText(colorMode === 'rdbu' ? ozoneDeltaLabel(ozoneUnit) : ozoneLabel(ozoneUnit), 0, 0);
     ctx.restore();
 
@@ -223,11 +223,7 @@ export function LoadingBox({ h = 240 }) {
 export function EmptyBox({ h = 240 }) {
   const t = useT();
   return (
-    <div style={{
-      height: h, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'rgba(255,255,255,0.02)', borderRadius: 8,
-      fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice30,
-    }}>
+    <div className="prediction-field-empty" style={{ minHeight: h }}>
       {t('predict.clickToStart')}
     </div>
   );

@@ -1,369 +1,209 @@
-/**
- * NotificationPanel — 通知右侧抽屉
- * 显示当前用户的通知列表，支持单条/全部已读
- */
-
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import ReactDOM from 'react-dom';
-import C from '../constants/colors';
+import CheckOutlined from '@mui/icons-material/CheckOutlined';
+import CloseOutlined from '@mui/icons-material/CloseOutlined';
+import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutlined';
+import ErrorOutline from '@mui/icons-material/ErrorOutline';
+import WarningAmberOutlined from '@mui/icons-material/WarningAmberOutlined';
+import RefreshOutlined from '@mui/icons-material/RefreshOutlined';
 import { useT } from '../i18n';
 import { useSettings } from '../contexts/SettingsContext';
 import { useTraining } from '../contexts/TrainingContext';
+import { useToast } from '../contexts/ToastContext';
 import { useScrollLock } from '../hooks/useScrollLock';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { getNotifications, markNotificationRead, markAllNotificationsRead } from '../services/api';
-import {
-  getNotificationVisual,
-  getRelatedTrainingTaskId,
-  parseNotificationTimestamp,
-} from './notificationModel';
-
-// ─── Icons ────────────────────────────────────────────────────────────────────
-
-function BellIcon({ size = 20, color = 'currentColor' }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-    </svg>
-  );
-}
-
-function CheckIcon({ size = 14, color = 'currentColor' }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
-function CloseIcon({ size = 16, color = 'currentColor' }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}
-
-function BellEmptyIcon({ size = 44, color = 'currentColor' }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke={color} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-    </svg>
-  );
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+import { getRelatedTrainingTaskId, parseNotificationTimestamp } from './notificationModel';
+import './ui/overlay.css';
 
 function relativeTime(isoStr, t) {
   const timestamp = parseNotificationTimestamp(isoStr);
   if (Number.isNaN(timestamp)) return t('notification.justNow');
-
   const diff = Math.max(0, Date.now() - timestamp);
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return t('notification.justNow');
   if (mins < 60) return t('notification.minutesAgo', { n: mins });
   const hours = Math.floor(mins / 60);
   if (hours < 24) return t('notification.hoursAgo', { n: hours });
-  const days = Math.floor(hours / 24);
-  return t('notification.daysAgo', { n: days });
+  return t('notification.daysAgo', { n: Math.floor(hours / 24) });
 }
 
-// ─── NotificationCard ─────────────────────────────────────────────────────────
-
-function NotificationCard({ notif, t, onMarkRead, onSelect }) {
-  const { icon, color, bg, border } = getNotificationVisual(notif.type);
-  const isActionable = getRelatedTrainingTaskId(notif) !== null;
-  const cardBg = 'var(--bg-muted)';
-  const cardBorder = notif.is_read
-    ? 'var(--border)'
-    : C.blue;
-
+function NotificationCard({ notif, t, onMarkRead, onSelect, pending, markReadLabel }) {
+  const actionable = getRelatedTrainingTaskId(notif) !== null;
+  const TypeIcon = notif.type === 'approved' ? CheckOutlined
+    : notif.type === 'rejected' ? CloseOutlined
+      : notif.type === 'training_oom' ? ErrorOutline : WarningAmberOutlined;
   return (
-    <div
-      role={isActionable ? 'button' : undefined}
-      tabIndex={isActionable ? 0 : undefined}
-      onClick={isActionable ? () => onSelect(notif) : undefined}
-      onKeyDown={isActionable ? (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onSelect(notif);
-        }
-      } : undefined}
-      style={{
-        background: cardBg,
-        border: `1px solid ${cardBorder}`,
-        borderLeft: `3px solid ${notif.is_read ? 'var(--border)' : C.blue}`,
-        borderRadius: 10,
-        padding: '12px 14px',
-        display: 'flex', gap: 12, alignItems: 'flex-start',
-        opacity: notif.is_read ? 0.72 : 1,
-        transition: 'opacity 0.2s',
-        cursor: isActionable ? 'pointer' : 'default',
+    <article className="av-notification" data-unread={!notif.is_read} data-actionable={actionable}
+      onClick={event => {
+        if (actionable && !pending && !event.target.closest('button')) onSelect(notif);
       }}>
-      {/* Type badge */}
-      <div style={{
-        width: 28, height: 28, borderRadius: '50%',
-        background: bg, border: `1px solid ${border}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 700, color,
-      }}>
-        {icon}
+      <span className="av-notification-icon" data-type={notif.type} aria-hidden="true"><TypeIcon /></span>
+      <div className="av-notification-content">
+        {actionable ? <button type="button" className="av-notification-title" disabled={pending}
+          onClick={() => onSelect(notif)}>{notif.title}</button>
+          : <div className="av-notification-title">{notif.title}</div>}
+        {notif.content && <p className="av-notification-copy">{notif.content}</p>}
+        <div className="av-notification-time">{relativeTime(notif.created_at, t)}</div>
       </div>
-
-      {/* Content */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: notif.is_read ? 500 : 700,
-          color: 'var(--text)', marginBottom: 3,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>
-          {notif.title}
-        </div>
-        {notif.content && (
-          <div style={{
-            fontSize: 'calc(11px * var(--font-scale, 1))', color: 'var(--text-60)', lineHeight: 1.55, marginBottom: 5,
-          }}>
-            {notif.content}
-          </div>
-        )}
-        <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: 'var(--text-30)' }}>
-          {relativeTime(notif.created_at, t)}
-        </div>
-      </div>
-
-      {/* Mark read button (only for unread) */}
       {!notif.is_read && (
-        <button
-          onClick={(event) => {
-            event.stopPropagation();
-            onMarkRead(notif.id);
-          }}
-          title={t('notification.markAllRead')}
-          style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: 'var(--text-30)', padding: 2, flexShrink: 0,
-            display: 'flex', alignItems: 'center',
-          }}
-        >
-          <CheckIcon size={14} color="currentColor" />
+        <button type="button" className="av-icon-button" title={markReadLabel}
+          aria-label={markReadLabel + ': ' + notif.title} disabled={pending}
+          onClick={() => onMarkRead(notif.id)}>
+          <CheckOutlined />
         </button>
       )}
-    </div>
+    </article>
   );
 }
 
-// ─── Panel Content ─────────────────────────────────────────────────────────────
-
-function PanelContent({ t, onClose, onReadCountChange, onNavigate }) {
+function PanelContent({ t, titleId, onClose, onReadCountChange, onNavigate }) {
   const { setActiveTaskId } = useTraining();
+  const { settings } = useSettings();
+  const { showToast } = useToast();
+  const zh = settings.language === 'zh';
   const [notifications, setNotifications] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [pending, setPending] = useState(false);
+  const requestRef = useRef(0);
+  const mountedRef = useRef(true);
+  const readErrorLabel = zh ? '未能更新已读状态，请重试。' : 'Could not update read status. Please retry.';
+  const closeLabel = zh ? '关闭通知' : 'Close notifications';
+  const markReadLabel = zh ? '标为已读' : 'Mark as read';
 
-  const titleColor  = 'var(--text)';
-  const subColor    = 'var(--text-60)';
-  const borderColor = 'var(--border)';
-  const hoverBg     = 'var(--bg-muted)';
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await getNotifications();
-      setNotifications(Array.isArray(data) ? data : []);
-    } catch {
-      // 静默失败
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; requestRef.current += 1; };
   }, []);
 
+  const load = useCallback(async () => {
+    const request = ++requestRef.current;
+    setLoading(true);
+    setLoadError(false);
+    setActionError('');
+    try {
+      const data = await getNotifications();
+      if (!Array.isArray(data)) throw new Error('Invalid notification response');
+      if (mountedRef.current && request === requestRef.current) setNotifications(data);
+    } catch {
+      if (mountedRef.current && request === requestRef.current) setLoadError(true);
+    } finally {
+      if (mountedRef.current && request === requestRef.current) setLoading(false);
+    }
+  }, []);
   useEffect(() => { load(); }, [load]);
 
-  const handleMarkRead = useCallback(async (id) => {
+  const handleMarkRead = useCallback(async id => {
+    setPending(true);
+    setActionError('');
     try {
       await markNotificationRead(id);
+      if (!mountedRef.current) return;
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
       onReadCountChange?.();
     } catch {
-      // 静默失败
+      if (mountedRef.current) setActionError(readErrorLabel);
+    } finally {
+      if (mountedRef.current) setPending(false);
     }
-  }, [onReadCountChange]);
+  }, [onReadCountChange, readErrorLabel]);
 
   const handleMarkAllRead = useCallback(async () => {
+    setPending(true);
+    setActionError('');
     try {
       await markAllNotificationsRead();
+      if (!mountedRef.current) return;
       setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
       onReadCountChange?.();
     } catch {
-      // 静默失败
+      if (mountedRef.current) setActionError(readErrorLabel);
+    } finally {
+      if (mountedRef.current) setPending(false);
     }
-  }, [onReadCountChange]);
+  }, [onReadCountChange, readErrorLabel]);
 
-  const handleSelect = useCallback(async (notification) => {
+  const handleSelect = useCallback(async notification => {
     const taskId = getRelatedTrainingTaskId(notification);
     if (taskId === null) return;
-
+    setPending(true);
     if (!notification.is_read) {
       try {
         await markNotificationRead(notification.id);
-        setNotifications(prev => prev.map(n => (
-          n.id === notification.id ? { ...n, is_read: true } : n
-        )));
+        if (!mountedRef.current) return;
+        setNotifications(prev => prev.map(n => n.id === notification.id ? { ...n, is_read: true } : n));
         onReadCountChange?.();
       } catch {
-        // Navigation remains available if marking the notification read fails.
+        if (mountedRef.current) showToast(readErrorLabel, 'error');
       }
     }
-
+    if (!mountedRef.current) return;
+    setPending(false);
     setActiveTaskId(taskId);
     onClose();
     onNavigate?.('training');
-  }, [onClose, onNavigate, onReadCountChange, setActiveTaskId]);
+  }, [onClose, onNavigate, onReadCountChange, setActiveTaskId, showToast, readErrorLabel]);
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
-
   return (
     <>
-      {/* Header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '0 24px', height: 70,
-        borderBottom: `1px solid ${borderColor}`, flexShrink: 0,
-      }}>
-        <div>
-          <div style={{
-            fontSize: 'calc(15px * var(--font-scale, 1))',
-            fontWeight: 700,
-            color: titleColor,
-            fontFamily: 'var(--font-display)',
-          }}>
-            {t('notification.title')}
-          </div>
-        </div>
+      <div className="av-drawer-header">
+        <h2 id={titleId} className="av-dialog-title">{t('notification.title')}</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {unreadCount > 0 && (
-            <button
-              onClick={handleMarkAllRead}
-              style={{
-                background: 'none', border: `1px solid ${borderColor}`,
-                borderRadius: 7, padding: '5px 10px', cursor: 'pointer',
-                color: subColor, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 500,
-                fontFamily: 'inherit', transition: 'background 0.1s',
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = hoverBg}
-              onMouseLeave={e => e.currentTarget.style.background = 'none'}
-            >
-              {t('notification.markAllRead')}
-            </button>
-          )}
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none', border: `1px solid ${borderColor}`,
-              borderRadius: 7, padding: '5px 8px', cursor: 'pointer',
-              color: subColor, display: 'flex', alignItems: 'center',
-              transition: 'background 0.1s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = hoverBg}
-            onMouseLeave={e => e.currentTarget.style.background = 'none'}
-          >
-            <CloseIcon size={14} color="currentColor" />
-          </button>
+          {unreadCount > 0 && <button type="button" className="av-button av-button--compact"
+            disabled={loading || pending} onClick={handleMarkAllRead}>{t('notification.markAllRead')}</button>}
+          <button type="button" className="av-icon-button" title={closeLabel}
+            aria-label={closeLabel} data-dialog-autofocus onClick={onClose}><CloseOutlined /></button>
         </div>
       </div>
-
-      {/* Body */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {loading && (
-          <div style={{ textAlign: 'center', color: subColor, paddingTop: 60, fontSize: 'calc(13px * var(--font-scale, 1))' }}>
-            {t('common.loading')}
+      <div className="av-drawer-body" aria-busy={loading || pending}>
+        {actionError && <div className="av-alert" role="alert">{actionError}</div>}
+        {loading && <div className="av-panel-state" role="status">{t('common.loading')}</div>}
+        {!loading && loadError && (
+          <div className="av-panel-state" role="alert">
+            <ErrorOutline />
+            <strong>{t('common.error')}</strong>
+            <p>{zh ? '暂时无法读取通知，请检查连接后重试。' : 'Notifications could not be loaded. Check your connection and retry.'}</p>
+            <button type="button" className="av-button" onClick={load}>
+              <RefreshOutlined fontSize="small" style={{ verticalAlign: 'middle', marginRight: 6 }} />{t('common.retry')}
+            </button>
           </div>
         )}
-
-        {!loading && notifications.length === 0 && (
-          <div style={{
-            display: 'flex', flexDirection: 'column', alignItems: 'center',
-            gap: 14, paddingTop: 60, textAlign: 'center',
-          }}>
-            <div style={{ color: subColor, opacity: 0.5 }}>
-              <BellEmptyIcon size={48} color="currentColor" />
-            </div>
-            <div style={{ fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 700, color: titleColor, fontFamily: 'var(--font-display)' }}>
-              {t('notification.empty')}
-            </div>
-            <div style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: subColor }}>{t('notification.emptySub')}</div>
+        {!loading && !loadError && notifications.length === 0 && (
+          <div className="av-panel-state">
+            <NotificationsNoneOutlined />
+            <strong>{t('notification.empty')}</strong>
+            <p>{t('notification.emptySub')}</p>
           </div>
         )}
-
-        {!loading && notifications.map(notif => (
-          <NotificationCard
-            key={notif.id}
-            notif={notif}
-            t={t}
-            onMarkRead={handleMarkRead}
-            onSelect={handleSelect}
-          />
-        ))}
+        {!loading && !loadError && <div className="av-notification-list">
+          {notifications.map(notif => <NotificationCard key={notif.id} notif={notif} t={t}
+            onMarkRead={handleMarkRead} onSelect={handleSelect} pending={pending} markReadLabel={markReadLabel} />)}
+        </div>}
       </div>
     </>
   );
 }
 
-// ─── Panel Wrapper ────────────────────────────────────────────────────────────
-
 function NotificationPanelInner({ open, onClose, onReadCountChange, onNavigate }) {
-  const { settings } = useSettings();
   const t = useT();
-  const isLight = settings.theme === 'light';
+  const panelRef = useRef(null);
+  const titleId = useId();
   useScrollLock(open);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [open, onClose]);
-
+  useDialogFocus(open, panelRef, onClose);
   return (
     <>
-      <div
-        onClick={onClose}
-        style={{
-          position: 'fixed', inset: 0,
-          background: isLight ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.4)',
-          zIndex: 2999,
-          opacity: open ? 1 : 0,
-          pointerEvents: open ? 'auto' : 'none',
-          transition: 'opacity 0.25s',
-          backdropFilter: 'blur(2px)',
-        }}
-      />
-      <div
-        style={{
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(420px, 100vw)',
-          zIndex: 3000,
-          background: 'var(--bg-card-strong)',
-          backdropFilter: 'blur(18px)',
-          borderLeft: '1px solid var(--border)',
-          display: 'flex', flexDirection: 'column',
-          transform: open ? 'translateX(0)' : 'translateX(100%)',
-          transition: 'transform 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
-          boxShadow: isLight ? '-20px 0 60px rgba(15,23,42,0.10)' : '-20px 0 60px rgba(0,0,0,0.32)',
-        }}
-      >
-        {open && (
-          <PanelContent
-            t={t}
-            onClose={onClose}
-            onReadCountChange={onReadCountChange}
-            onNavigate={onNavigate}
-          />
-        )}
+      <div className="av-overlay-backdrop" onClick={onClose} style={{
+        zIndex: 2999, opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none',
+        transition: 'opacity 220ms ease',
+      }} />
+      <div ref={panelRef} className="av-drawer" data-open={open} style={{ zIndex: 3000 }}
+        role="dialog" aria-modal={open ? true : undefined} aria-labelledby={titleId}
+        tabIndex={-1} inert={!open} aria-hidden={!open}>
+        {open && <PanelContent t={t} titleId={titleId} onClose={onClose}
+          onReadCountChange={onReadCountChange} onNavigate={onNavigate} />}
       </div>
     </>
   );
@@ -371,12 +211,7 @@ function NotificationPanelInner({ open, onClose, onReadCountChange, onNavigate }
 
 export default function NotificationPanel({ open, onClose, onReadCountChange, onNavigate }) {
   return ReactDOM.createPortal(
-    <NotificationPanelInner
-      open={open}
-      onClose={onClose}
-      onReadCountChange={onReadCountChange}
-      onNavigate={onNavigate}
-    />,
+    <NotificationPanelInner open={open} onClose={onClose} onReadCountChange={onReadCountChange} onNavigate={onNavigate} />,
     document.body
   );
 }

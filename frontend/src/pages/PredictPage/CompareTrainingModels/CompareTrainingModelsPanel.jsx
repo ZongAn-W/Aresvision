@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
-import GlowCard from '../../../components/GlowCard';
+import { Button, Panel, SegmentedControl } from '../../../components/ui/Controls';
 import { fmtNum } from '../../../utils/fmt';
 import { METRIC_META } from '../PredictComponents';
 import {
@@ -40,64 +40,41 @@ function withAlpha(color, alpha) {
 
 function MetricTabs({ activeMetric, setActiveMetric, metrics = METRIC_META }) {
   return (
-    <div style={{ display: 'flex', gap: 6, padding: 4, borderRadius: 14, background: C.bgMuted, border: `1px solid ${C.border}`, flexWrap: 'wrap' }}>
-      {metrics.map((metric) => {
-        const active = activeMetric === metric.key;
-        return (
-          <button
-            key={metric.key}
-            title={metric.zh ? (metric.zh + ' / ' + metric.en) : metric.name}
-            type="button"
-            onClick={() => setActiveMetric(metric.key)}
-            style={{
-              minHeight: 34,
-              padding: '7px 12px',
-              borderRadius: 10,
-              border: 'none',
-              background: active ? 'rgba(121,187,255,0.16)' : 'transparent',
-              color: active ? C.blue : C.ice60,
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              fontWeight: active ? 800 : 600,
-              cursor: 'pointer',
-            }}
-          >
-            {metric.name}
-          </button>
-        );
-      })}
-    </div>
+    <SegmentedControl value={activeMetric} onChange={setActiveMetric} className="prediction-compare__metric-tabs"
+      options={metrics.map(metric => ({ value: metric.key, label: metric.name,
+        description: metric.zh ? `${metric.zh} / ${metric.en}` : metric.name }))} />
   );
 }
 
 function LoadingState({ isZh }) {
   return (
-    <GlowCard style={{ padding: 24 }}>
+    <Panel className="prediction-panel">
       <div style={{ minHeight: 180, display: 'grid', placeItems: 'center', gap: 12 }}>
         <div style={{ width: 28, height: 28, border: `3px solid ${C.border}`, borderTop: `3px solid ${C.green}`, borderRadius: '50%', animation: 'spin-slow 0.9s linear infinite' }} />
         <div style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))' }}>
           {isZh ? '正在计算多模型测试集指标…' : 'Computing multi-model test-set metrics...'}
         </div>
       </div>
-    </GlowCard>
+    </Panel>
   );
 }
 
 function EmptyState({ isZh, selectedCount }) {
   return (
-    <GlowCard style={{ padding: 24 }}>
-      <div style={{ padding: '34px 20px', borderRadius: 16, border: `1px dashed ${C.borderStrong}`, background: C.bgMuted, textAlign: 'center' }}>
-        <div style={{ color: selectedCount >= 2 ? C.green : C.mars, fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 800 }}>
+    <Panel className="prediction-panel">
+      <div style={{ padding: '16px 4px', textAlign: 'center' }}>
+        <div style={{ color: 'var(--text-primary)', fontSize: 'calc(var(--type-control) * var(--font-scale, 1))', fontWeight: 600 }}>
           {selectedCount >= 2
             ? (isZh ? '点击左侧“开始对比”生成结果' : 'Start comparison from the sidebar')
             : (isZh ? '至少选择 2 个训练模型' : 'Select at least 2 trained models')}
         </div>
-        <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.65, marginTop: 8 }}>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', lineHeight: 1.5, marginTop: 8 }}>
           {isZh
             ? '对比结果会基于完整测试集指标，而不是当前预测窗口。'
             : 'Comparison results use full test-set metrics rather than the current prediction window.'}
         </div>
       </div>
-    </GlowCard>
+    </Panel>
   );
 }
 
@@ -125,10 +102,10 @@ function SummaryTable({ items, precision, isZh, unit, metrics, planet }) {
   };
 
   return (
-    <GlowCard style={{ padding: 20 }}>
+    <Panel className="prediction-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+          <div className="prediction-chart-title">
             {isZh ? '多模型综合排名' : 'Multi-model ranking'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
@@ -139,34 +116,27 @@ function SummaryTable({ items, precision, isZh, unit, metrics, planet }) {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {metrics.map((metric) => (
-            <button
+            <Button size="compact"
               key={metric.key}
               type="button"
               onClick={() => setSort(metric.key)}
-              style={{
-                minHeight: 34,
-                padding: '7px 11px',
-                borderRadius: 10,
-                border: `1px solid ${sortMetric === metric.key ? withAlpha(metric.color, 0.46) : C.border}`,
-                background: sortMetric === metric.key ? withAlpha(metric.color, 0.12) : C.bgMuted,
-                color: sortMetric === metric.key ? metric.color : C.ice60,
-                fontSize: 'calc(11px * var(--font-scale, 1))',
-                fontWeight: 800,
-                cursor: 'pointer',
-              }}
+              aria-pressed={sortMetric === metric.key}
+              style={{ background: sortMetric === metric.key ? 'var(--surface-3)' : 'transparent',
+                color: sortMetric === metric.key ? 'var(--brand-ice)' : 'var(--text-secondary)',
+                boxShadow: sortMetric === metric.key ? 'inset 0 -2px var(--line-active)' : 'none' }}
             >
               {metric.name}{sortMetric === metric.key ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
 
-      <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+      <div style={{ overflowX: 'auto', borderTop: '1px solid var(--line-subtle)' }}>
         <table style={{ width: '100%', minWidth: 920, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: C.bgMuted }}>
               {columns.map((column) => (
-                <th key={column.key} style={{ padding: '11px 12px', textAlign: 'left', color: C.ice50, fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 800, textTransform: 'uppercase' }}>
+                <th key={column.key} style={{ padding: '11px 12px', textAlign: 'left', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', fontWeight: 600 }}>
                   {column.label}
                 </th>
               ))}
@@ -180,21 +150,21 @@ function SummaryTable({ items, precision, isZh, unit, metrics, planet }) {
               const splitLabel = getSplitLabel(item.metrics, isZh);
               return (
                 <tr key={item.task_id} style={{ borderTop: `1px solid ${C.border}` }}>
-                  <td style={{ padding: '12px', color: C.ice, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 800 }}>
+                  <td style={{ padding: '12px', color: C.ice, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', fontWeight: 600 }}>
                     <span style={{ color: index === 0 ? C.green : C.ice40, marginRight: 8 }}>{metricValue(item, sortMetric) == null ? '--' : `#${index + 1}`}</span>
                     {item.model_name || `Task #${item.task_id}`}
-                    <div style={{ color: C.ice40, fontSize: 'calc(10px * var(--font-scale, 1))', marginTop: 3 }}>Task #{item.task_id}</div>
-                    <div style={{ color: C.blue, fontSize: 'calc(9px * var(--font-scale, 1))', lineHeight: 1.35, marginTop: 5, fontWeight: 700 }}>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', marginTop: 3 }}>Task #{item.task_id}</div>
+                    <div style={{ color: 'var(--brand-ice)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', lineHeight: 1.5, marginTop: 5, fontWeight: 600 }}>
                       {aggregationLabel}
                     </div>
                     {splitLabel && (
-                      <div style={{ color: C.ice40, fontSize: 'calc(9px * var(--font-scale, 1))', lineHeight: 1.35, marginTop: 2 }}>
+                      <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', lineHeight: 1.5, marginTop: 2 }}>
                         {splitLabel}
                       </div>
                     )}
                   </td>
                   {metrics.map(({ key: metric }) => (
-                    <td key={metric} style={{ padding: '12px', color: GOOD_METRICS.has(metric) ? C.green : C.mars, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+                    <td key={metric} style={{ padding: '12px', color: GOOD_METRICS.has(metric) ? C.success : C.action, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', fontWeight: 700, fontFamily: 'var(--font-display)', fontVariantNumeric: 'tabular-nums' }}>
                       {metricValue(item, metric) == null ? (isZh ? '未提供' : 'Not provided') : fmtNum(overall[metric], precision)}
                     </td>
                   ))}
@@ -209,7 +179,7 @@ function SummaryTable({ items, precision, isZh, unit, metrics, planet }) {
           </tbody>
         </table>
       </div>
-    </GlowCard>
+    </Panel>
   );
 }
 
@@ -220,10 +190,10 @@ function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor, unit
   const color = GOOD_METRICS.has(activeMetric) ? C.green : C.mars;
 
   return (
-    <GlowCard style={{ padding: 20 }}>
+    <Panel className="prediction-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+          <div className="prediction-chart-title">
             {isZh ? '多模型指标柱状图' : 'Metric comparison'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
@@ -264,7 +234,7 @@ function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor, unit
         config={{ displayModeBar: false, responsive: true }}
         style={{ width: '100%', height: Math.max(300, sorted.length * 46 + 100), flexShrink: 0 }}
       />
-    </GlowCard>
+    </Panel>
   );
 }
 
@@ -288,19 +258,19 @@ function ParameterMatrix({ items, isZh, planet }) {
   ];
 
   return (
-    <GlowCard style={{ padding: 20 }}>
-      <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+    <Panel className="prediction-panel">
+      <div className="prediction-chart-title">
         {isZh ? '模型参数矩阵' : 'Parameter matrix'}
       </div>
       <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5, marginBottom: 14 }}>
         {isZh ? '横向对比训练配置，帮助解释指标差异。' : 'Compare training configurations side by side to explain metric differences.'}
       </div>
-      <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+      <div style={{ overflowX: 'auto', borderTop: '1px solid var(--line-subtle)' }}>
         <table style={{ width: '100%', minWidth: 1120, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: C.bgMuted }}>
               {columns.map((column) => (
-                <th key={column.key} style={{ padding: '11px 12px', textAlign: 'left', color: C.ice50, fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 800, textTransform: 'uppercase' }}>
+                <th key={column.key} style={{ padding: '11px 12px', textAlign: 'left', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', fontWeight: 600 }}>
                   {column.label}
                 </th>
               ))}
@@ -310,7 +280,7 @@ function ParameterMatrix({ items, isZh, planet }) {
             {rows.map((row) => (
               <tr key={row.taskId} style={{ borderTop: `1px solid ${C.border}` }}>
                 {columns.map((column) => (
-                  <td key={column.key} title={String(row[column.key] ?? '--')} style={{ padding: '12px', color: column.key === 'modelName' ? C.ice : C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: column.key === 'modelName' ? 800 : 600, maxWidth: column.key === 'modelName' ? 190 : 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td key={column.key} title={String(row[column.key] ?? '--')} style={{ padding: '12px', color: column.key === 'modelName' ? C.ice : C.ice70, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', fontWeight: 600, maxWidth: column.key === 'modelName' ? 190 : 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {row[column.key] ?? '--'}
                   </td>
                 ))}
@@ -319,7 +289,7 @@ function ParameterMatrix({ items, isZh, planet }) {
           </tbody>
         </table>
       </div>
-    </GlowCard>
+    </Panel>
   );
 }
 
@@ -329,10 +299,10 @@ function StepCurves({ items, isZh, plotTextColor, plotGridColor, unit, metrics, 
   const traces = useMemo(() => buildStepCurveTraces(items, activeMetric), [activeMetric, items]);
 
   return (
-    <GlowCard style={{ padding: 20 }}>
+    <Panel className="prediction-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+          <div className="prediction-chart-title">
             {isZh ? '逐步性能' : 'Step-by-step performance'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
@@ -367,59 +337,48 @@ function StepCurves({ items, isZh, plotTextColor, plotGridColor, unit, metrics, 
           font: { color: plotTextColor, family: 'var(--font-body)' },
           xaxis: { title: planet === 'earth' ? (isZh ? '提前量（小时）' : 'Lead (hours)') : (isZh ? '预测步' : 'Forecast step'), gridcolor: plotGridColor },
           yaxis: { title: metricLabel(metricMeta, unit), gridcolor: plotGridColor, zerolinecolor: plotGridColor },
-          legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 10 } },
+          legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 11 } },
         }}
         config={{ displayModeBar: false, responsive: true }}
         style={{ width: '100%', height: 340, flexShrink: 0 }}
       />
-    </GlowCard>
+    </Panel>
   );
 }
 
 function LazyDiagnosticCard({ title, description, buttonText, loading, data, onLoad, children, isZh }) {
   return (
-    <GlowCard style={{ padding: 20 }}>
+    <Panel className="prediction-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div style={{ maxWidth: 680 }}>
-          <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+          <div className="prediction-chart-title">
             {title}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
             {description}
           </div>
         </div>
-        <button
+        <Button
           type="button"
           onClick={onLoad}
           disabled={loading}
-          style={{
-            minHeight: 38,
-            padding: '9px 13px',
-            borderRadius: 12,
-            border: `1px solid ${data ? 'rgba(99,232,191,0.34)' : C.borderStrong}`,
-            background: data ? 'rgba(99,232,191,0.10)' : C.bgMuted,
-            color: loading ? C.ice40 : data ? C.green : C.ice70,
-            fontSize: 'calc(11px * var(--font-scale, 1))',
-            fontWeight: 800,
-            cursor: loading ? 'not-allowed' : 'pointer',
-          }}
         >
           {loading ? (isZh ? '计算中…' : 'Computing...') : data ? (isZh ? '刷新' : 'Refresh') : buttonText}
-        </button>
+        </Button>
       </div>
       {loading ? (
-        <div style={{ height: 220, display: 'grid', placeItems: 'center', background: C.bgMuted, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+        <div style={{ height: 220, display: 'grid', placeItems: 'center', background: 'var(--surface-2)', borderRadius: 'var(--radius-control)' }}>
           <div style={{ display: 'grid', gap: 10, justifyItems: 'center' }}>
             <div style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTop: `2px solid ${C.green}`, borderRadius: '50%', animation: 'spin-slow 0.8s linear infinite' }} />
             <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{isZh ? '正在读取完整测试集结果' : 'Reading full test-set results'}</div>
           </div>
         </div>
       ) : data ? children : (
-        <div style={{ padding: '28px 18px', borderRadius: 12, border: `1px dashed ${C.borderStrong}`, background: C.bgMuted, color: C.ice50, textAlign: 'center', fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6 }}>
+        <div style={{ padding: '20px 8px', borderTop: '1px solid var(--line-subtle)', color: 'var(--text-secondary)', textAlign: 'center', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', lineHeight: 1.5 }}>
           {isZh ? '该模块计算较重，点击按钮后按需加载。' : 'This module is computed on demand because it can be heavier.'}
         </div>
       )}
-    </GlowCard>
+    </Panel>
   );
 }
 
@@ -455,7 +414,7 @@ function ErrorDistributionCompare({ data, loading, onLoad, isZh, plotTextColor, 
           font: { color: plotTextColor, family: 'var(--font-body)' },
           xaxis: { title: `${isZh ? '预测减参考' : 'Prediction - reference'} (${unit})`, gridcolor: plotGridColor, zerolinecolor: plotGridColor },
           yaxis: { title: isZh ? '数量' : 'Count', gridcolor: plotGridColor },
-          legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 10 } },
+          legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 11 } },
         }}
         config={{ displayModeBar: false, responsive: true }}
         style={{ width: '100%' }}
@@ -508,7 +467,7 @@ function PfiCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor 
           style={{ width: '100%' }}
         />
       ) : (
-        <div style={{ padding: 24, border: `1px dashed ${C.borderStrong}`, borderRadius: 12, color: C.ice50, textAlign: 'center', fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+        <div style={{ padding: 24, borderTop: '1px solid var(--line-subtle)', color: 'var(--text-secondary)', textAlign: 'center', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))' }}>
           {isZh ? '暂无 PFI 数据。' : 'No PFI data available.'}
         </div>
       )}

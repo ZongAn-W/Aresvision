@@ -82,7 +82,7 @@ export default function App() {
 
   return (
     <TrainingProvider enabled={page === 'training'}>
-      <StarField />
+      {page !== 'training' && page !== 'predict' && page !== 'overview' && <StarField />}
       <ErrorBoundary>
         <Navbar current={page} onChange={navigate} onOpenAdmin={() => setAdminPanelOpen(true)} onOpenFeedback={() => setFeedbackPanelOpen(true)} pendingRefreshSignal={reviewSignal} />
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
@@ -131,7 +131,7 @@ export default function App() {
           <BrandMark size={24} mono compact />
           <span>{t('footer.copyright')}</span>
         </div>
-        <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice30, fontFamily: "'Orbitron', sans-serif", letterSpacing: 1 }}>
+        <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice30, fontFamily: 'var(--font-body)', letterSpacing: 0 }}>
           {t('footer.powered')}
         </div>
       </footer>

@@ -25,7 +25,7 @@ test('experiment center shell is a console with a directory, a workspace and an 
   );
   assert.match(cssSource, /--experiment-rail-width:\s*235px/);
   assert.match(cssSource, /--experiment-inspector-width:\s*284px/);
-  assert.match(cssSource, /--experiment-gap:\s*14px/);
+  assert.match(cssSource, /--experiment-gap:\s*16px/);
   // 监控视图为两列。
   assert.match(
     cssSource,
@@ -77,7 +77,7 @@ test('bottom run bar is fixed across the browser and reserving space below the g
   assert.match(shellSource, /createPortal\(node, document\.body\)/);
   assert.match(shellSource, /runBarPortal\(/);
   // 网格按实测运行条高度预留底部空间，最后一个字段不会被底栏遮住。
-  assert.match(shellSource, /paddingBottom: `\$\{runBarHeight \+ 20\}px`/);
+  assert.match(shellSource, /paddingBottom: `\$\{runBarHeight \+ 24\}px`/);
   assert.match(shellSource, /\{view === 'config' && runBar \? \(/);
 });
 

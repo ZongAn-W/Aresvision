@@ -53,7 +53,7 @@ export default function OverviewAnalysisPanel({
                 width: 30, height: 30, marginRight: 14,
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 borderRadius: 999, background: `${header.color}18`, color: header.color,
-                fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 800,
+                fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 700,
                 fontFamily: 'var(--font-display)', flexShrink: 0,
               }}
             >
@@ -62,8 +62,8 @@ export default function OverviewAnalysisPanel({
             <h3
               style={{
                 color: header.color, fontFamily: 'var(--font-display)',
-                fontSize: 'calc(16px * var(--font-scale, 1))', fontWeight: 800,
-                margin: 0, letterSpacing: '-0.01em',
+                fontSize: 'calc(16px * var(--font-scale, 1))', fontWeight: 700,
+                margin: 0, letterSpacing: 0,
               }}
             >
               {header.title}

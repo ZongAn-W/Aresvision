@@ -1,4 +1,4 @@
-import GlowCard from '../../components/GlowCard';
+import { Panel } from '../../components/ui/Controls';
 import { fmtNum } from '../../utils/fmt';
 import { useSettings } from '../../contexts/SettingsContext';
 
@@ -11,7 +11,7 @@ export default function ForecastMetricDetails({ result, adapter, precision }) {
   if (!byLead.length) return null;
   const format = (value, key) => Number.isFinite(value)
     ? fmtNum(adapter.presentation.metrics.convertValue(value, key), precision) : adapter.presentation.metrics.missingLabel;
-  return <GlowCard style={{ padding: 20 }}>
+  return <Panel className="prediction-panel">
     <details className="prediction-metric-details">
       <summary>{isZh ? '逐步与累计窗口指标' : 'Lead and cumulative-window metrics'}</summary>
       <div className="prediction-table-scroll"><table>
@@ -27,5 +27,5 @@ export default function ForecastMetricDetails({ result, adapter, precision }) {
           {items.map(item => <td key={item.key}>{format(row[item.key], item.key)}</td>)}</tr>)}</tbody>
       </table></div> : null}
     </details>
-  </GlowCard>;
+  </Panel>;
 }

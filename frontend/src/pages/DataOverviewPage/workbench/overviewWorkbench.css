@@ -30,22 +30,19 @@
   --overview-gutter: 16px;
   --overview-overlay-gap: 14px;
   --overview-timeline-bottom: 14px;
-  --overview-panel-bg: rgba(10, 12, 18, 0.72);
-  --overview-panel-bg-strong: rgba(10, 12, 18, 0.88);
-  --overview-panel-border: rgba(255, 255, 255, 0.08);
+  --overview-panel-bg: var(--surface-1);
+  --overview-panel-bg-strong: var(--surface-2);
+  --overview-panel-border: var(--line-subtle);
   --overview-panel-blur: 20px;
-  --overview-card-radius: 12px;
-  --overview-control-radius: 8px;
+  --overview-card-radius: var(--radius-panel);
+  --overview-control-radius: var(--radius-control);
   --overview-accent: var(--brand-primary, #9ad9ef);
   --overview-accent-soft: rgba(154, 217, 239, 0.16);
-  --overview-warn: #f19a78;
-  --overview-hairline: rgba(255, 255, 255, 0.08);
-  --overview-elevated: rgba(255, 255, 255, 0.04);
+  --overview-warn: var(--status-warning);
+  --overview-hairline: var(--line-subtle);
+  --overview-elevated: var(--surface-3);
   isolation: isolate;
-  background:
-    radial-gradient(ellipse at 50% 42%, rgba(20, 48, 79, 0.20), transparent 46%),
-    radial-gradient(ellipse at 72% 26%, rgba(56, 189, 248, 0.06), transparent 32%),
-    linear-gradient(180deg, #030711 0%, #060a12 58%, #02040a 100%);
+  background: var(--surface-0);
   display: grid;
   grid-template-rows:
     var(--overview-toolbar-height)
@@ -59,6 +56,8 @@
     'analysis';
 }
 
+.overview-shell .overview-deep-space-backdrop { display: none; }
+
 /*
  * 带观测刻度轨时：时间轴立在画布左侧，与画布并排，底部不再有独立轨道行。
  * 行高：toolbar / scene / timeline / analysis，其中 timeline、analysis 两行
@@ -66,7 +65,7 @@
  * rail 纵向贯穿 scene + timeline + analysis 三行，所以它就是一整条左栏。
  */
 .overview-shell--with-rail {
-  --overview-rail-width: 124px;
+  --overview-rail-width: 152px;
   --overview-rail-row-height: var(--overview-scene-height);
   grid-template-columns: var(--overview-rail-width) minmax(0, 1fr);
   grid-template-rows:
@@ -120,16 +119,14 @@
 }
 
 .overview-shell.is-light {
-  --overview-panel-bg: rgba(255, 255, 255, 0.88);
-  --overview-panel-bg-strong: rgba(255, 255, 255, 0.95);
-  --overview-panel-border: rgba(15, 23, 42, 0.10);
-  --overview-hairline: rgba(15, 23, 42, 0.10);
-  --overview-elevated: rgba(15, 23, 42, 0.035);
+  --overview-panel-bg: var(--surface-1);
+  --overview-panel-bg-strong: var(--surface-2);
+  --overview-panel-border: var(--line-subtle);
+  --overview-hairline: var(--line-subtle);
+  --overview-elevated: var(--surface-3);
   --overview-accent: var(--brand-primary, #236387);
   --overview-accent-soft: rgba(35, 99, 135, 0.10);
-  background:
-    radial-gradient(ellipse at 50% 42%, rgba(148, 190, 226, 0.20), transparent 46%),
-    linear-gradient(180deg, #e8f0f8 0%, #dce7f3 58%, #c9d8e8 100%);
+  background: var(--surface-0);
 }
 
 .overview-shell--external {
@@ -144,7 +141,7 @@
   z-index: 1200;
   box-sizing: border-box;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   border-bottom: 1px solid var(--overview-hairline);
   background: var(--overview-panel-bg-strong);
   backdrop-filter: blur(var(--overview-panel-blur));
@@ -161,7 +158,8 @@
   padding: 0 var(--overview-gutter);
   /* 桌面固定一行：条件栏不允许换行撑高，否则会把画布挤小。 */
   flex-wrap: nowrap;
-  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 /* ── 画布 ───────────────────────────────────────────────────────── */
@@ -213,7 +211,7 @@
   overflow: hidden;
   background: var(--overview-panel-bg);
   backdrop-filter: blur(var(--overview-panel-blur));
-  -webkit-backdrop-filter: var(--overview-panel-blur);
+  -webkit-backdrop-filter: blur(var(--overview-panel-blur));
 }
 
 /*
@@ -421,7 +419,8 @@
   font: 600 calc(13px * var(--font-scale, 1)) var(--font-body); line-height: 1.4;
 }
 .analysis-groups button[aria-pressed='true'], .analysis-action {
-  color: var(--overview-accent); border-color: var(--overview-accent); background: var(--overview-accent-soft);
+  color: var(--overview-accent); border-color: transparent; background: var(--overview-accent-soft);
+  box-shadow: inset 0 -2px var(--overview-accent);
 }
 .analysis-back { margin-left: auto; border-color: var(--overview-hairline); }
 .analysis-dock button:hover, .analysis-support summary:hover { background: var(--overview-accent-soft); }
@@ -532,7 +531,7 @@
   gap: 12px;
   min-width: 0;
   overflow: hidden;
-  color: color-mix(in srgb, var(--text) 50%, transparent);
+  color: var(--text-secondary);
   font-size: calc(11px * var(--font-scale, 1));
   line-height: 1.4;
 }
@@ -566,10 +565,10 @@
 }
 
 .dock-selector__label, .dock-selector > span {
-  color: color-mix(in srgb, var(--text) 50%, transparent);
+  color: var(--text-secondary);
   font-size: calc(12px * var(--font-scale, 1));
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -587,6 +586,11 @@
   font-weight: 600;
   cursor: pointer;
 }
+
+.observatory-panel label:has(input[type='checkbox']:focus-visible) { outline: 3px solid var(--brand-ice); outline-offset: 2px; }
+.overview-shell :is(button, select, input) { font-variant-numeric: tabular-nums; }
+.overview-shell button:hover:not(:disabled) { background-color: var(--overview-elevated); }
+.observatory-toolbar__section { flex-shrink: 0; }
 
 /* 主图与下方面板共用的滚动列；头部固定不滚 */
 .dock-body {

@@ -1002,7 +1002,7 @@ const zh = {
     testSetNote: '* 注：测试集包含模型未学习过的 MY28 早期数据，真实反映了模型的泛化能力。',
     fallbackWarning: '注意：此预测使用了由于缺失而自动选择的回退模型',
     fallbackReason: '原因：',
-    initPrompt: '配置参数并点击"开始预测"以运行 PredRNNv2 推理',
+    initPrompt: '选择已训练模型，开始预测',
     initDesc: '模型将基于选定的 Ls 起始时刻，遵循所选训练任务的输入与输出窗口配置，\n预测火星全球臭氧柱浓度空间分布。',
     summary: ({ lsStart, year, horizon, varCount, varNames, rmse, ssim, r2 }) =>
       `<strong>预测完成</strong>：起始 Ls=${lsStart}°，MY${year}，共预测 ${horizon} 步。\n` +

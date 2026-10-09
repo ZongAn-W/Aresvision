@@ -116,7 +116,7 @@ export default function ExperimentCenterShell({
         data-stage={stage}
         data-view={view}
         data-inspector={isConfigure && inspector ? 'present' : 'absent'}
-        style={view === 'config' && runBar && runBarHeight ? { paddingBottom: `${runBarHeight + 20}px` } : undefined}
+        style={view === 'config' && runBar && runBarHeight ? { paddingBottom: `${runBarHeight + 24}px` } : undefined}
       >
           {view === 'monitor' ? (
             <aside

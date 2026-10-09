@@ -27,7 +27,7 @@ export function SectionLabel({ children }) {
     <div
       style={{
         color: C.ice50,
-        fontSize: 'calc(10px * var(--font-scale, 1))',
+        fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))',
         fontWeight: 700,
         letterSpacing: '0.08em',
         textTransform: 'uppercase',
@@ -80,7 +80,7 @@ export function OverviewModeCard({ mode, selected, onSelect, isZh, isLight, name
               background: selected ? `${mode.color}1a` : C.bgMuted,
               color: selected ? mode.color : C.ice40,
               fontSize: 'calc(11px * var(--font-scale, 1))',
-              fontWeight: 800,
+              fontWeight: 700,
               flexShrink: 0,
             }}
           >
@@ -93,7 +93,7 @@ export function OverviewModeCard({ mode, selected, onSelect, isZh, isLight, name
               fontWeight: 700,
               fontFamily: 'var(--font-display)',
               lineHeight: 1.35,
-              letterSpacing: '-0.01em',
+              letterSpacing: 0,
             }}
           >
             {isZh ? mode.title.zh : mode.title.en}

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import GlowCard from '../../components/GlowCard';
+import { Panel } from '../../components/ui/Controls';
 import { useSettings } from '../../contexts/SettingsContext';
 import { describeEarthModelIdentity, readEarthResponseModelIdentity } from './earthPredictModel';
 import SingleModelWorkbench from './SingleModelWorkbench';
@@ -22,7 +22,7 @@ export default function EarthPredictPanel({ copy, adapter, context, result, load
     presentation: createEarthPredictionPresentation({ settings, scope: 'full_test' }).metrics,
   } : null };
   return <div className="earth-predict-panel" data-earth-predict-panel="true">
-    {context ? <GlowCard style={{ padding: 20 }}>
+    {context ? <Panel className="prediction-panel">
       <header className="earth-predict-head"><div><h2>{copy.title}</h2><p className="earth-predict-note">{copy.threeHourlyNote || copy.note}</p></div>
         <span className="earth-predict-unit" data-earth-unit="DU">TO3 · DU</span></header>
       <details className="prediction-context-details"><summary>{settings.language === 'en' ? 'Model and dataset context' : '模型与数据集上下文'}</summary>
@@ -39,7 +39,7 @@ export default function EarthPredictPanel({ copy, adapter, context, result, load
       {result ? <p className="earth-predict-origin-line" data-earth-origin-line>{copy.originLine(result.forecast_origin, inputs[0], inputs.at(-1), true, result.window, result.horizon)}
         {result.origin_split ? ` · ${copy.originSplit(result.origin_split)}` : ''}</p> : null}
       {Array.isArray(warnings) && warnings.length ? <PredictStatus message={warnings.join(' · ')} /> : null}
-    </GlowCard> : null}
+    </Panel> : null}
     <SingleModelWorkbench adapter={workbenchAdapter} result={normalized} metrics={result?.metrics} loading={loading}
       activeStep={selectedDay} onStepChange={onSelectDay} identityKey={identityKey}>
       {result ? <ForecastMetricDetails result={result} adapter={adapter} precision={settings.precision} /> : null}

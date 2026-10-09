@@ -15,3 +15,37 @@
 .training-task-parameter-row dd { margin: 0; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
 .training-task-parameter-row pre { margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; text-align: left; font-size: inherit; }
 .training-task-card button:focus-visible { outline: 2px solid var(--accent-blue, #4a9eff); outline-offset: 3px; }
+
+.training-task-summary,
+.training-task-disclosure {
+  color: var(--text-secondary);
+  font-size: calc(var(--type-label) * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.training-task-summary-item strong,
+.training-task-parameter-row dd {
+  color: var(--text-primary);
+  font-size: calc(var(--type-body) * var(--font-scale, 1));
+}
+
+.training-task-parameter-content h4,
+.training-task-parameter-row {
+  font-size: calc(var(--type-label) * var(--font-scale, 1));
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+.training-task-parameter-row {
+  border-color: var(--line-subtle);
+}
+
+.training-task-parameter-row dt {
+  color: var(--text-secondary);
+}
+
+.training-task-parameters > summary:focus-visible,
+.training-task-card button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--brand-ice) 38%, transparent);
+  outline-offset: 2px;
+}

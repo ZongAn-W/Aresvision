@@ -35,9 +35,9 @@ export default function PermutationImportanceChart({ data, loading, plotTextColo
           paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
           font: { color: theme.text, family: 'Inter, system-ui, sans-serif' },
           xaxis: { title: { text: model.axisLabel, font: { size: 11, color: theme.text } },
-            tickfont: { size: 9, color: theme.muted }, gridcolor: theme.grid,
+            tickfont: { size: 11, color: theme.muted }, gridcolor: theme.grid,
             zeroline: true, zerolinecolor: theme.grid, zerolinewidth: 1, automargin: true },
-          yaxis: { autorange: 'reversed', tickfont: { size: 10, color: theme.text }, gridcolor: 'transparent', automargin: true },
+          yaxis: { autorange: 'reversed', tickfont: { size: 11, color: theme.text }, gridcolor: 'transparent', automargin: true },
           hovermode: 'closest',
         }} config={{ displayModeBar: false, responsive: true }} useResizeHandler style={{ width: '100%', height: '100%' }} />
       </div> : <div className="prediction-chart-status">{model.emptyLabel}</div>}

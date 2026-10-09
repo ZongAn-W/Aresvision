@@ -14,7 +14,7 @@ export function PanelSectionLabel({ children }) {
     <div
       style={{
         color: C.ice50,
-        fontSize: 'calc(10px * var(--font-scale, 1))',
+        fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))',
         fontWeight: 700,
         letterSpacing: '0.08em',
         textTransform: 'uppercase',
@@ -28,7 +28,7 @@ export function PanelSectionLabel({ children }) {
 export function FieldRow({ label, value }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 8, alignItems: 'baseline' }}>
-      <span style={{ color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))' }}>{label}</span>
+      <span style={{ color: C.ice45, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))' }}>{label}</span>
       <span
         data-field-label={label}
         style={{ color: C.ice80, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6, wordBreak: 'break-word' }}
@@ -167,7 +167,7 @@ export function InlineSwitch({ label, checked, onChange, accent = C.blue, isLigh
           type="checkbox"
           checked={checked}
           onChange={onChange}
-          style={{ opacity: 0, width: 0, height: 0 }}
+          style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', margin: 0, cursor: 'pointer', zIndex: 1 }}
         />
         <span
           aria-hidden="true"

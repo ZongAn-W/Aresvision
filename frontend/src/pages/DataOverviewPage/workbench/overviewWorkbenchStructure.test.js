@@ -63,7 +63,7 @@ test('the observatory shell wires observe/analyze through one shared state', () 
   assert.doesNotMatch(shellSource, /useState\('observe'\)/);
   // 场景容器不随 view 改变 key，模式切换不重建三维实例。
   assert.doesNotMatch(shellSource, /key=\{[^}]*view/);
-  assert.match(toolbarSource, /aria-pressed=\{active\}/);
+  assert.match(toolbarSource, /<SegmentedControl[\s\S]*value=\{view\}/);
   assert.match(dockSource, /aria-pressed=\{active\}/);
   // 分析区两档共用一个主图身份。
   assert.match(dockSource, /pickActiveCard/);

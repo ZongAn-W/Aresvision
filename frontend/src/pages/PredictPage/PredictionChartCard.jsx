@@ -1,8 +1,8 @@
-import GlowCard from '../../components/GlowCard';
+import { Panel } from '../../components/ui/Controls';
 import './predictionCharts.css';
 
 export default function PredictionChartCard({ title, subtitle, scope, action, children, note }) {
-  return <GlowCard style={{ padding: 16, minWidth: 0 }}>
+  return <Panel className="prediction-panel prediction-panel--chart">
     <section className="prediction-chart-card" data-evaluation-scope={scope}>
       <header className="prediction-chart-header"><div>
         <h3 className="prediction-chart-title">{title}</h3>
@@ -11,5 +11,5 @@ export default function PredictionChartCard({ title, subtitle, scope, action, ch
       {children}
       {note ? <p className="prediction-chart-subtitle">{note}</p> : null}
     </section>
-  </GlowCard>;
+  </Panel>;
 }

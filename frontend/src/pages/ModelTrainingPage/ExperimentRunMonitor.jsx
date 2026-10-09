@@ -79,7 +79,7 @@ export default function ExperimentRunMonitor({
           <button
             type="button"
             className="experiment-center-button"
-            style={{ color: '#d95c5c', borderColor: 'rgba(217,92,92,0.28)', background: 'rgba(217,92,92,0.08)' }}
+            style={{ color: 'var(--status-danger)', borderColor: 'color-mix(in srgb, var(--status-danger) 28%, transparent)', background: 'transparent' }}
             aria-label={`${copy.stopTraining} #${activeTask.id}`}
             disabled={isProcessing}
             onClick={() => onStop(activeTask.id)}

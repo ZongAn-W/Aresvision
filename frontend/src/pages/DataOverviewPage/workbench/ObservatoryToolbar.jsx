@@ -11,6 +11,7 @@
 
 import React from 'react';
 import C from '../../../constants/colors';
+import { SegmentedControl } from '../../../components/ui/Controls';
 import { useOverviewLayout } from './OverviewShell.jsx';
 
 export function ToolbarSection({ label, children }) {
@@ -19,9 +20,9 @@ export function ToolbarSection({ label, children }) {
       <span
         style={{
           color: C.ice50,
-          fontSize: 'calc(10px * var(--font-scale, 1))',
+          fontSize: 'calc(var(--type-label) * var(--font-scale, 1))',
           fontWeight: 700,
-          letterSpacing: '0.06em',
+          letterSpacing: 0,
           textTransform: 'uppercase',
           whiteSpace: 'nowrap',
         }}
@@ -46,7 +47,7 @@ export function ToolbarSelect({ label, value, onChange, options, disabled = fals
         <span
           style={{
             color: C.ice50,
-            fontSize: 'calc(10px * var(--font-scale, 1))',
+            fontSize: 'calc(var(--type-label) * var(--font-scale, 1))',
             fontWeight: 700,
             whiteSpace: 'nowrap',
           }}
@@ -99,11 +100,12 @@ export function ToolbarToolButton({ label, hint = null, active = false, onClick,
       aria-expanded={active}
       title={hint || label}
       style={{
-        minHeight: 36,
+        minHeight: 'var(--control-height)',
         minWidth: 44,
         padding: '7px 12px',
         borderRadius: 'var(--overview-control-radius)',
-        border: `1px solid ${active ? 'var(--overview-accent)' : 'var(--border)'}`,
+        border: '1px solid var(--line-default)',
+        boxShadow: active ? 'inset 0 -2px var(--brand-ice)' : 'none',
         background: active ? 'var(--overview-accent-soft)' : 'transparent',
         color: active ? 'var(--overview-accent)' : C.ice80,
         fontFamily: 'var(--font-body)',
@@ -127,50 +129,12 @@ export function ToolbarToolButton({ label, hint = null, active = false, onClick,
  */
 export function ObservatoryViewSwitch({ view, onChange, isZh }) {
   const options = [
-    { id: 'observe', label: isZh ? '观测' : 'Observe' },
-    { id: 'analyze', label: isZh ? '分析' : 'Analyze' },
+    { value: 'observe', label: isZh ? '观测' : 'Observe' },
+    { value: 'analyze', label: isZh ? '分析' : 'Analyze' },
   ];
   return (
-    <div
-      role="group"
-      aria-label={isZh ? '观测台档位' : 'Observatory view'}
-      style={{
-        display: 'inline-flex',
-        gap: 4,
-        padding: 3,
-        borderRadius: 'var(--overview-control-radius)',
-        border: '1px solid var(--border)',
-        background: 'var(--overview-elevated)',
-      }}
-    >
-      {options.map((option) => {
-        const active = view === option.id;
-        return (
-          <button
-            key={option.id}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onChange?.(option.id)}
-            style={{
-              minHeight: 32,
-              minWidth: 52,
-              padding: '6px 12px',
-              borderRadius: 6,
-              border: 'none',
-              background: active ? 'var(--overview-accent-soft)' : 'transparent',
-              color: active ? 'var(--overview-accent)' : C.ice60,
-              fontFamily: 'var(--font-body)',
-              fontSize: 'calc(12px * var(--font-scale, 1))',
-              fontWeight: active ? 800 : 600,
-              cursor: 'pointer',
-              transition: 'background 150ms ease, color 150ms ease',
-            }}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
+    <SegmentedControl label={isZh ? '观测台档位' : 'Observatory view'} value={view}
+      options={options} onChange={next => onChange?.(next)} />
   );
 }
 
@@ -209,7 +173,7 @@ export function ToolbarStatus({ items = [] }) {
             maxWidth: 180,
           }}
         >
-          <span style={{ color: C.ice40, fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 600 }}>
+          <span style={{ color: C.ice40, fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', fontWeight: 600 }}>
             {item.label}
           </span>
           {item.value}

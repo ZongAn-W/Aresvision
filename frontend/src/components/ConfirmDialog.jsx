@@ -1,81 +1,48 @@
 import ReactDOM from 'react-dom';
-import { useSettings } from '../contexts/SettingsContext';
-import C from '../constants/colors';
+import { useId, useRef } from 'react';
 import { useScrollLock } from '../hooks/useScrollLock';
+import { useDialogFocus } from '../hooks/useDialogFocus';
+import './ui/overlay.css';
 
 function ConfirmContent({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, confirmColor }) {
-  const { settings } = useSettings();
-  const L = settings.theme === 'light';
+  const dialogRef = useRef(null);
+  const titleId = useId();
+  const messageId = useId();
   useScrollLock();
-
-  const overlayBg  = L ? 'rgba(210,215,235,0.70)' : 'rgba(0,0,8,0.78)';
-  const cardBg     = 'var(--bg-card-strong)';
-  const cardBorder = 'var(--border)';
-  const cardShadow = L
-    ? '0 12px 36px rgba(15,23,42,0.10), 0 2px 8px rgba(15,23,42,0.06)'
-    : '0 12px 36px rgba(0,0,0,0.40), 0 2px 8px rgba(0,0,0,0.22)';
-  const titleColor = 'var(--text)';
-  const msgColor   = 'var(--text-80)';
-  const cancelBg   = 'var(--bg-muted)';
-  const cancelClr  = 'var(--text)';
-  const color      = confirmColor ?? C.mars;
+  useDialogFocus(true, dialogRef, onCancel);
 
   return (
     <div
+      className="av-overlay-backdrop av-modal-backdrop"
       onClick={onCancel}
-      style={{
-        position: 'fixed', inset: 0,
-        background: overlayBg,
-        backdropFilter: 'blur(6px)',
-        WebkitBackdropFilter: 'blur(6px)',
-        zIndex: 9800,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        overscrollBehavior: 'contain',
-      }}
+      style={{ zIndex: 9800 }}
     >
       <div
+        ref={dialogRef}
+        className="av-modal av-modal--confirm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={messageId}
+        tabIndex={-1}
         onClick={e => e.stopPropagation()}
-        style={{
-          width: 320,
-          background: cardBg,
-          border: `1px solid ${cardBorder}`,
-          borderRadius: 14,
-          boxShadow: cardShadow,
-          backdropFilter: 'blur(18px)',
-          WebkitBackdropFilter: 'blur(18px)',
-          padding: '24px 24px 20px',
-        }}
       >
-        <div style={{
-          fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 700, color: titleColor, marginBottom: 10,
-          fontFamily: 'var(--font-display)', letterSpacing: '0.01em',
-        }}>
-          {title}
-        </div>
-        <div style={{ fontSize: 'calc(13px * var(--font-scale, 1))', color: msgColor, marginBottom: 22, lineHeight: 1.65 }}>
-          {message}
-        </div>
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+        <h2 id={titleId} className="av-dialog-title">{title}</h2>
+        <div id={messageId} className="av-dialog-message">{message}</div>
+        <div className="av-dialog-actions">
           <button
+            type="button"
+            className="av-button"
+            data-dialog-autofocus
             onClick={onCancel}
-            style={{
-              padding: '8px 20px', borderRadius: 8,
-              background: cancelBg, border: 'none',
-              color: cancelClr, fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 500,
-              cursor: 'pointer', fontFamily: 'inherit',
-              transition: 'background 0.12s',
-            }}
           >
             {cancelLabel}
           </button>
           <button
+            type="button"
+            className="av-button av-button--confirm"
             onClick={onConfirm}
-            style={{
-              padding: '8px 20px', borderRadius: 8,
-              background: color, border: 'none',
-              color: '#fff', fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 600,
-              cursor: 'pointer', fontFamily: 'inherit',
-            }}
+            style={confirmColor ? { '--confirm-color': confirmColor } : undefined}
           >
             {confirmLabel}
           </button>

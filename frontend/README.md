@@ -1,6 +1,6 @@
 
 
-# AresVision 智绘赤星 — 前端本地运行指南
+# AstraAtmos 行星大气实验室 — 前端本地运行指南
 
 ---
 
@@ -85,7 +85,7 @@ AresVision/
 │       └── core/                ← ML 核心模块
 │
 └── frontend/                    ← React 前端
-    ├── index.html               ← HTML 入口（Google Fonts: Orbitron + Exo 2）
+    ├── index.html               ← HTML 入口（系统字体 fallback，无远程字体请求）
     ├── package.json             ← 依赖声明
     ├── vite.config.js           ← Vite 配置（/api/* → localhost:8000 代理）
     └── src/
@@ -117,7 +117,7 @@ AresVision/
         │   ├── Navbar.jsx            ← 导航栏（用户头像下拉/通知铃铛/管理员入口）
         │   ├── SettingsFab.jsx       ← 左下角浮动按钮（语言/主题/Colormap 快捷切换）
         │   ├── SettingsPanel.jsx     ← 右侧完整设置抽屉
-        │   ├── AuthModal.jsx         ← 登录/注册/找回密码（createPortal）
+        │   ├── AuthModal.jsx         ← 登录/注册/找回密码（根节点挂载，共享弹窗焦点）
         │   ├── NotificationPanel.jsx ← 站内通知抽屉
         │   ├── AdminReviewPanel.jsx  ← 管理员 NC 文件审核抽屉
         │   ├── FeedbackManagePanel.jsx ← 管理员反馈管理抽屉
@@ -126,6 +126,7 @@ AresVision/
         │   ├── ContributeHistoryPanel.jsx ← 贡献记录抽屉
         │   ├── ChangePasswordModal.jsx ← 修改密码（createPortal）
         │   ├── ConfirmDialog.jsx     ← 通用确认对话框（createPortal）
+        │   ├── ui/                   ← Button / Panel / Input / Badge / SegmentedControl、弹窗焦点与共享样式
         │   ├── Toast.jsx             ← Toast 通知条（createPortal）
         │   ├── StarField.jsx         ← 星空粒子背景
         │   ├── GlowCard.jsx          ← 发光卡片
@@ -146,6 +147,16 @@ AresVision/
 ```
 
 ---
+
+## 界面样式与可访问性
+
+`src/index.css` 统一维护 `--surface-*`、`--text-*`、品牌/状态色、三级边框、圆角、控件高度和字号令牌。深浅主题共用这些语义，旧 `--bg-*` / `--border-*` 为兼容别名。字号通过 `--font-scale` 保留设置缩放；正文优先使用 Noto Sans SC / Inter，展示字体使用 Sora，当前未打包字体文件，实际由系统无衬线 fallback 渲染，不请求 Google Fonts。
+
+首页保留地球、星空与轨道；总览、训练及预测使用实色工作台，冰蓝表示选择/定位，橙色表示主操作，绿色/红色表示成功/错误，紫色用于诊断。科学色带和 `C.blue` / `C.mars` 兼容常量不受界面状态色调整影响。共享基础控件在 `src/components/ui/Controls.jsx`，新增图标复用既有 MUI Icons，没有新增依赖。
+
+登录、确认弹窗和设置/通知抽屉使用 `useDialogFocus`：打开后焦点进入，Tab 循环、Esc 关闭，关闭后返回可用触发项；堆叠弹窗只处理最上层。设置快捷菜单支持键盘选择，通知请求失败单独显示错误和重试，不作为空列表显示。
+
+从 `frontend` 目录运行 `npm run build` 构建，前端测试通过 `node --test` 执行 `src` 下的 `*.test.js`。应用运行、后端解释器和生产代理启动方式以[主 README](../README.md)为准。
 
 ## 运行后端
 

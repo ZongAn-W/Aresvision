@@ -1,5 +1,7 @@
-.research-export-button { min-height: 36px; padding: 7px 12px; border: 1px solid var(--text-30, #718096); border-radius: 8px; background: transparent; color: var(--text-90, #cdd7e0); cursor: pointer; font-size: calc(12px * var(--font-scale, 1)); }
-.research-export-button:disabled { opacity: .45; cursor: default; }
+.research-export-button { min-height: var(--control-height); padding: 8px 12px; border: 1px solid var(--line-default); border-radius: var(--radius-control); background: transparent; color: var(--text-primary); cursor: pointer; font-size: calc(var(--type-control) * var(--font-scale, 1)); line-height: 1.4; }
+.research-export-button:hover:not(:disabled) { background: var(--surface-2); border-color: var(--line-strong); }
+.research-export-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--line-active) 22%, transparent); outline-offset: 2px; }
+.research-export-button:disabled { color: var(--text-disabled); border-color: var(--line-subtle); cursor: not-allowed; }
 .research-export-dialog { box-sizing: border-box; width: min(1100px, 94vw); max-width: 94vw; max-height: 92vh; overflow: auto; margin: auto; border: 1px solid #c3cbd5; border-radius: 12px; padding: 20px; color: #17212f; background: #fff; font: 14px/1.5 system-ui, sans-serif; }
 .research-export-dialog::backdrop { background: #0009; }
 .research-export-dialog header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }

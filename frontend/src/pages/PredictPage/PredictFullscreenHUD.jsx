@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Plot from 'react-plotly.js';
 import SphericalFieldCanvas from '../../components/SphericalFieldCanvas';
-import GlowCard from '../../components/GlowCard';
+import { Button, Panel } from '../../components/ui/Controls';
 import C from '../../constants/colors';
 import { useT } from '../../i18n';
 import { fmtNum } from '../../utils/fmt';
@@ -16,21 +16,16 @@ import './predictionDisplay.css';
 function InfoCard({ label, value, hint, accent }) {
   return (
     <div
-      style={{
-        padding: '14px 16px',
-        borderRadius: 16,
-        background: C.bgMuted,
-        border: `1px solid ${C.border}`,
-      }}
+      className="prediction-fullscreen__stat"
     >
-      <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice40, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+      <div className="prediction-fullscreen__stat-label">
         {label}
       </div>
-      <div style={{ marginTop: 8, fontSize: 'calc(20px * var(--font-scale, 1))', fontWeight: 800, color: accent || C.ice, fontFamily: 'var(--font-display)', letterSpacing: '-0.03em' }}>
+      <div className="prediction-fullscreen__stat-value" style={{ color: accent || 'var(--text-primary)' }}>
         {value}
       </div>
       {hint ? (
-        <div style={{ marginTop: 6, fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice50, lineHeight: 1.5 }}>
+        <div className="prediction-fullscreen__stat-hint">
           {hint}
         </div>
       ) : null}
@@ -95,7 +90,7 @@ export default function PredictFullscreenHUD({
     font: {
       family: 'var(--font-body)',
       color: isLight ? '#0f172a' : '#f3f6fb',
-      size: 10,
+      size: 11,
     },
     margin: { t: 16, r: 12, l: 38, b: 30 },
   };
@@ -120,60 +115,59 @@ export default function PredictFullscreenHUD({
       style={{ background: isLight ? 'rgba(15,23,42,0.18)' : 'rgba(2,6,23,0.62)', backdropFilter: 'blur(10px)' }}
       onDoubleClick={() => setFullscreen3D(null)}
     >
-      <GlowCard
+      <Panel
         className="prediction-fullscreen__dialog"
         style={{
           padding: 0,
           overflowY: 'auto',
           overflowX: 'hidden',
-          borderRadius: 28,
-          background: isLight ? 'rgba(255,255,255,0.96)' : 'rgba(7,10,18,0.96)',
-          border: `1px solid ${isLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.08)'}`,
-          boxShadow: isLight ? '0 24px 80px rgba(15,23,42,0.12)' : '0 30px 90px rgba(0,0,0,0.4)',
+          borderRadius: 'var(--radius-workspace)',
+          background: 'var(--surface-1)',
+          border: '1px solid var(--line-subtle)',
+          boxShadow: 'var(--shadow-panel)',
         }}
       >
         <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={copy.title} tabIndex={-1} data-testid="prediction-fullscreen"
           style={{ minHeight: '100%' }} onDoubleClick={(event) => event.stopPropagation()}>
-          <div className="prediction-fullscreen__toolbar" style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px', position: 'sticky', top: 0, zIndex: 4, background: isLight ? '#fff' : '#070a12', borderBottom: `1px solid ${C.border}` }}>
-            <button type="button" className="prediction-fullscreen__close" onClick={() => setFullscreen3D(null)}
-              style={{ padding: '10px 14px', borderRadius: 10, border: `1px solid ${C.borderStrong}`, background: C.bgMuted, color: C.ice, cursor: 'pointer' }}>
+          <div className="prediction-fullscreen__toolbar">
+            <Button type="button" className="prediction-fullscreen__close" aria-label={copy.close} onClick={() => setFullscreen3D(null)}>
               {copy.close} ×
-            </button>
+            </Button>
           </div>
         <div className="prediction-fullscreen__layout">
-          <div className="prediction-fullscreen__info" style={{ background: isLight ? 'rgba(248,250,252,0.92)' : 'rgba(255,255,255,0.02)' }}>
+          <div className="prediction-fullscreen__info" style={{ background: 'var(--surface-2)' }}>
             <div>
               <div style={{ fontSize: 'calc(18px * var(--font-scale, 1))', fontWeight: 700, color: C.ice, fontFamily: 'var(--font-display)' }}>
                 {copy.title}
               </div>
-              <div style={{ marginTop: 8, fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50, lineHeight: 1.6 }}>
+              <div style={{ marginTop: 8, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                 {copy.subtitle}
               </div>
             </div>
 
-            <div style={{ padding: '10px 12px', borderRadius: 14, background: C.bgMuted, border: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice40, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--line-subtle)' }}>
+              <div className="prediction-fullscreen__stat-label">
                 {copy.viewLabel}
               </div>
-              <div style={{ marginTop: 8, fontSize: 'calc(16px * var(--font-scale, 1))', color: C.blue, fontWeight: 700, fontFamily: 'var(--font-display)' }}>
+              <div style={{ marginTop: 8, fontSize: 'calc(16px * var(--font-scale, 1))', color: 'var(--brand-ice)', fontWeight: 700, fontFamily: 'var(--font-display)' }}>
                 {titleText}
               </div>
-              <div style={{ marginTop: 6, fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice50 }}>
+              <div className="prediction-fullscreen__stat-hint">
                 {currentStep}
               </div>
             </div>
 
             <div className="prediction-fullscreen__stats">
-            <InfoCard label={t('predict.hud.maxValue')} value={maxValStr} hint={colorTitle} accent={C.mars} />
-            <InfoCard label={t('predict.hud.minValue')} value={minValStr} hint={colorTitle} accent={C.green} />
-            <InfoCard label={copy.range} value={rangeStr} hint={colorTitle} accent={C.blue} />
-            <InfoCard label={copy.average} value={fmtNum(model.average, displayPrecision)} hint={colorTitle} accent={C.purple} />
+            <InfoCard label={t('predict.hud.maxValue')} value={maxValStr} hint={colorTitle} accent={C.action} />
+            <InfoCard label={t('predict.hud.minValue')} value={minValStr} hint={colorTitle} accent={C.success} />
+            <InfoCard label={copy.range} value={rangeStr} hint={colorTitle} accent={C.brand} />
+            <InfoCard label={copy.average} value={fmtNum(model.average, displayPrecision)} hint={colorTitle} accent={C.diagnostic} />
             <InfoCard label={copy.resolution} value={`${nLon} × ${nLat}`} hint={isZh ? '服务端经纬度网格' : 'Server latitude / longitude grid'} accent={C.ice} />
             </div>
           </div>
 
           <div className="prediction-fullscreen__scene" style={{ background: isLight ? '#f8fafc' : '#030712' }}>
-            <div style={{ position: 'absolute', top: 20, left: 20, zIndex: 2, padding: '8px 12px', borderRadius: 999, background: isLight ? 'rgba(255,255,255,0.82)' : 'rgba(7,10,18,0.72)', border: `1px solid ${C.border}`, color: C.ice, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600 }}>
+            <div style={{ position: 'absolute', top: 20, left: 20, zIndex: 2, padding: '8px 12px', borderRadius: 'var(--radius-control)', background: 'var(--surface-1)', border: '1px solid var(--line-subtle)', color: C.ice, fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', fontWeight: 600 }}>
               {titleText}
             </div>
             {adapter?.renderField ? adapter.renderField({
@@ -187,29 +181,19 @@ export default function PredictFullscreenHUD({
               zoom={3.25}
               showMars={false}
             />}
-            <div
-              style={{
-                position: 'absolute',
-                inset: 0,
-                pointerEvents: 'none',
-                background: isLight
-                  ? 'linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0))'
-                  : 'radial-gradient(circle at center, transparent 0%, rgba(0,0,0,0.58) 100%)',
-              }}
-            />
           </div>
 
-          <div className="prediction-fullscreen__charts" style={{ background: isLight ? 'rgba(248,250,252,0.88)' : 'rgba(255,255,255,0.02)' }}>
+          <div className="prediction-fullscreen__charts" style={{ background: 'var(--surface-2)' }}>
             <div className="prediction-fullscreen__chart-heading">
               <div style={{ fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 700, color: C.ice, fontFamily: 'var(--font-display)' }}>
                 {copy.mapTitle}
               </div>
-              <div style={{ marginTop: 6, fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice50, lineHeight: 1.55 }}>
+              <div className="prediction-fullscreen__stat-hint">
                 {isZh ? '查看同一时间步在经纬度平面上的展开分布。' : 'Flatten the same field onto latitude-longitude coordinates.'}
               </div>
             </div>
 
-            <div style={{ height: 240, borderRadius: 18, background: C.bgMuted, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+            <div style={{ height: 240, borderRadius: 'var(--radius-control)', background: 'var(--surface-1)', overflow: 'hidden' }}>
               <Plot
                 data={[
                   {
@@ -241,12 +225,12 @@ export default function PredictFullscreenHUD({
               <div style={{ fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 700, color: C.ice, fontFamily: 'var(--font-display)' }}>
                 {copy.profileTitle}
               </div>
-              <div style={{ marginTop: 6, fontSize: 'calc(10px * var(--font-scale, 1))', color: C.ice50, lineHeight: 1.55 }}>
+              <div className="prediction-fullscreen__stat-hint">
                 {isZh ? '通过纬向平均观察不同纬度带的整体浓度差异。' : 'Use the zonal mean to compare field intensity across latitude bands.'}
               </div>
             </div>
 
-            <div style={{ height: 280, borderRadius: 18, background: C.bgMuted, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+            <div style={{ height: 280, borderRadius: 'var(--radius-control)', background: 'var(--surface-1)', overflow: 'hidden' }}>
               <Plot
                 data={[
                   {
@@ -274,7 +258,7 @@ export default function PredictFullscreenHUD({
           </div>
         </div>
         </div>
-      </GlowCard>
+      </Panel>
     </div>
   );
 

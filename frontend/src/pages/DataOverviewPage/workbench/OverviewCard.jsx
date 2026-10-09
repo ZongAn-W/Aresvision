@@ -85,7 +85,7 @@ export default function OverviewCard({
             fontFamily: 'var(--font-display)',
             fontSize: 'calc(13px * var(--font-scale, 1))',
             fontWeight: expanded ? 700 : 600,
-            letterSpacing: '-0.01em',
+            letterSpacing: 0,
             display: 'inline-flex',
             alignItems: 'center',
             gap: 8,
@@ -132,7 +132,7 @@ function CardBadge({ label, tone = 'muted' }) {
   return (
     <span
       style={{
-        fontSize: 'calc(10px * var(--font-scale, 1))',
+        fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))',
         fontFamily: 'var(--font-body)',
         fontWeight: 600,
         padding: '1px 7px',
