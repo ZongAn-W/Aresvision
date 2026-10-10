@@ -544,11 +544,12 @@ node scripts\serve-prod.mjs
 | `ARESVISION_EARTH_MERRA2_DIR` | 归档日频 v2 路径，当前运行不读取；旧文件可保留 |
 | `ARESVISION_EARTH_MERRA2_3HOURLY_DIR` | 三小时独立发布目录，默认 `data/earth/merra2_3hourly_v1`；相对路径相对后端启动目录，须同时有 `manifest.json` 与 `earth_merra2_3hourly.nc`；不会替换日频配置 |
 | `ARESVISION_DEFAULT_EARTH_DATASET_ID` | 开发与生产均为 `earth_merra2_3hourly_v1`；仅接受该值，由 `GET /api/datasets` 返回，日频配置会在启动时拒绝 |
-| `ARESVISION_EARTH_TRAINING_CACHE_DIR` | 三小时训练 normalized memmap 目录，默认工作区父级 `earth_training_cache/`；每次训练独立生成并保留，五通道完整发布约 12.55 GiB；不覆盖原包 |
+| `ARESVISION_EARTH_TRAINING_CACHE_DIR` | 三小时验证证明、train-only 统计量和 normalized memmap 的共享目录，默认工作区父级 `earth_training_cache/`；按数据/通道/统计量/布局版本复用，五通道完整发布约 12.55 GiB；不覆盖原包 |
 | `TRAINING_PYTHON_PATH` | 训练子进程使用的 Python，默认使用后端当前解释器 |
 | `ARESVISION_MOLA_TOPOGRAPHY_PATH` | MOLA 地形 NetCDF 路径，默认使用平台地形资源 |
 | `ARESVISION_MAX_UPLOAD_SIZE_MB` | 数据上传大小上限，默认 512 MB |
 | `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` | 上传、重新校验及创建 Earth 任务前模型 dry-run 的隔离进程时间上限，默认 120 秒，须为正整数；超时终止子进程并显示“校验超时，请重试”，兼容性为未知且禁止训练 |
+| `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` | 全图 Earth v2 实际任务配置 dry-run 的隔离进程预算，默认 300 秒、正整数，取其与通用预算的较大值；短窗口上传检查及 v1/Mars 保持通用预算，显式验证器超时仍优先 |
 | `ARESVISION_FRONTEND_DIST` | 指定后端托管的前端构建目录 |
 
 ## 自定义模型
@@ -559,7 +560,7 @@ Earth 三小时官方和 v1 新训练缓存按空间块连续存储（`earth_spa
 
 Earth 三小时有独立的 [v1 上传说明](docs/earth-3hourly-uploaded-model.md)与[Python 模板](docs/earth-3hourly-uploaded-model-template.py)。训练页选中该数据集时下载对应模板，兼容性显示可用/不可用/未知及原因；Mars 使用原上传入口。新模型声明 `earth_merra2_3hourly_v1`，实际调用 `[B,window,C,24,48] → [B,horizon,1,24,48]`，拼回 240×480。服务器检查通道、单位、dtype、设备和反向传播，创建任务前再 dry-run 实际参数；checkpoint 保存独立契约、源码摘要、发布身份、任务划分与 normalization。上传模型历史回测完整窗口必须在同一任务分区内，旧任务仍按 manifest。
 
-模型校验默认最多等待 120 秒，所有执行检查保持完整。超时报告使用 `uploaded_model_validation_timeout`，显示“校验超时，请重试”，不会视为已证实不兼容，也不会允许训练；已有仅保存超时文本的旧报告按同一规则显示，可在“管理模型”中重新校验。该预算不改变 checkpoint 完成门禁的独立 30 秒重载检查。
+模型上传和短窗口校验默认最多等待 120 秒；全图 Earth v2 创建任务前按实际 window/horizon、通道、batch 和模型参数再次校验，默认使用 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS=300` 与通用预算的较大值。上传报告的绿色兼容不代表任意实际配置已经通过，完整 eval 独立性、前向/反向和梯度检查仍必须完成。超时报告使用 `uploaded_model_validation_timeout`，启动错误明确为实际配置校验未完成，不视为已证实不兼容，也不创建任务。隔离校验先读取结果再等待子进程退出，避免大报告塞满管道被误判超时；超时仍强制终止子进程。v1 checkpoint 保持独立 30 秒重载预算，v2 checkpoint 继续使用通用验证预算，未放宽重载门禁。细节见[全图 v2 准入](docs/earth-3hourly-fullgrid-model.md)。
 
 自定义模型文件需导出 `MODEL_SPEC` 和 `build_model(config)`。基本张量约定为：
 

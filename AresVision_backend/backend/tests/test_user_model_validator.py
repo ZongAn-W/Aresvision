@@ -414,6 +414,134 @@ print(json.dumps({"configured": config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS, "b
     assert json.loads(completed.stdout) == {"configured": expected, "budgets": [expected, expected]}
 
 
+def test_full_grid_probe_uses_the_dedicated_validation_budget(monkeypatch):
+    calls = []
+    result = UserModelValidationResult(ok=True)
+
+    def isolated(path, budget, **kwargs):
+        calls.append(budget)
+        return result
+
+    monkeypatch.setattr(UserModelValidator, "_validate_file_with_timeout", staticmethod(isolated))
+    monkeypatch.setattr(user_model_validator.config, "USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS", 300)
+    validator = UserModelValidator()
+    assert validator.validate_file(
+        Path("model.py"),
+        earth_probe={"contract_schema": "aresvision_earth_3hourly_fullgrid_model_v2"},
+    ) is result
+    assert calls == [300]
+
+
+@pytest.mark.parametrize('explicit', [0.5, 4, 120, None])
+def test_full_grid_probe_preserves_explicit_timeout(monkeypatch, explicit):
+    calls = []
+    result = UserModelValidationResult(ok=True)
+    def isolated(path, budget, **kwargs):
+        calls.append(budget)
+        return result
+    def in_process(path, **kwargs):
+        calls.append(None)
+        return result
+    monkeypatch.setattr(UserModelValidator, '_validate_file_with_timeout', staticmethod(isolated))
+    monkeypatch.setattr(UserModelValidator, '_validate_file_in_process', staticmethod(in_process))
+    validator = UserModelValidator(timeout_seconds=explicit)
+    assert validator.validate_file(Path('model.py'), earth_probe={
+        'contract_schema': 'aresvision_earth_3hourly_fullgrid_model_v2',
+    }) is result
+    assert calls == [explicit]
+
+
+@pytest.mark.parametrize('configured,expected', [(None, 300), ('420', 420)])
+def test_full_grid_budget_configuration_reaches_default_probe(configured, expected):
+    environment = os.environ.copy()
+    environment.pop('USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS', None)
+    environment['USER_MODEL_VALIDATION_TIMEOUT_SECONDS'] = '120'
+    if configured is not None:
+        environment['USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS'] = configured
+    script = '''
+import dotenv
+dotenv.load_dotenv = lambda *args, **kwargs: None
+from pathlib import Path
+import json
+from services.user_model_validator import UserModelValidator, UserModelValidationResult
+budgets = []
+def isolated(path, budget, **kwargs):
+    budgets.append(budget)
+    return UserModelValidationResult(ok=True)
+UserModelValidator._validate_file_with_timeout = staticmethod(isolated)
+probe = {'contract_schema': 'aresvision_earth_3hourly_fullgrid_model_v2'}
+UserModelValidator().validate_file(Path('model.py'), earth_probe=probe)
+UserModelValidator.validate_file(Path('model.py'), earth_probe=probe)
+UserModelValidator().validate_file(Path('model.py'), earth_probe={'contract_schema': 'aresvision_earth_3hourly_uploaded_model_v1'})
+print(json.dumps(budgets))
+'''
+    completed = subprocess.run([sys.executable, '-c', script], cwd=BACKEND_DIR, env=environment,
+                               capture_output=True, text=True, timeout=30)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == [expected, expected, 120]
+
+
+@pytest.mark.parametrize('configured', ['0', '-1', 'invalid'])
+def test_full_grid_budget_rejects_invalid_configuration(configured):
+    environment = {**os.environ, 'USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS': configured}
+    script = 'import dotenv; dotenv.load_dotenv = lambda *args, **kwargs: None; import config'
+    completed = subprocess.run([sys.executable, '-c', script], cwd=BACKEND_DIR, env=environment,
+                               capture_output=True, text=True, timeout=30)
+    assert completed.returncode != 0
+    assert 'ValueError' in completed.stderr
+
+
+def test_large_validation_report_is_drained_before_child_exit(tmp_path):
+    previous_children = {child.pid for child in multiprocessing.active_children()}
+    description = 'validation report ' * 4096
+    source = VALID_MODEL_SOURCE.replace('Tiny repeat baseline for validator tests.', description)
+    path = tmp_path / 'large_report.py'
+    path.write_text(source, encoding='utf-8')
+    result = UserModelValidator(timeout_seconds=20).validate_file(path)
+    assert result.ok, result.errors
+    assert result.description == description
+    assert {child.pid for child in multiprocessing.active_children()} <= previous_children
+
+
+@pytest.mark.parametrize('exitcode', [1, None])
+def test_successful_payload_requires_successful_child_exit(monkeypatch, exitcode):
+    from types import SimpleNamespace
+    calls = []
+    class ResultQueue:
+        def get(self, **kwargs):
+            calls.append('get')
+            return {'ok': True}
+        def close(self):
+            calls.append('close')
+    class Process:
+        def __init__(self):
+            self.exitcode = exitcode
+            self.alive = exitcode is None
+        def start(self):
+            calls.append('start')
+        def join(self, timeout):
+            calls.append('join')
+        def is_alive(self):
+            return self.alive
+        def terminate(self):
+            calls.append('terminate')
+            self.alive = False
+        def kill(self):
+            pytest.fail('Terminated fake process is already stopped')
+    monkeypatch.setattr(multiprocessing, 'get_context', lambda kind: SimpleNamespace(
+        Queue=lambda **kwargs: ResultQueue(), Process=lambda **kwargs: Process(),
+    ))
+    result = UserModelValidator(timeout_seconds=.5).validate_file(Path('model.py'))
+    assert not result.ok
+    assert calls.index('get') < calls.index('join')
+    assert calls[-1] == 'close'
+    if exitcode is None:
+        assert result.code == VALIDATION_TIMEOUT_CODE
+        assert 'terminate' in calls
+    else:
+        assert 'without a result: 1' in result.errors[0]
+
+
 @pytest.mark.parametrize("configured", ["0", "-1", "invalid"])
 def test_validation_budget_configuration_rejects_invalid_values(configured):
     environment = {**os.environ, "USER_MODEL_VALIDATION_TIMEOUT_SECONDS": configured}

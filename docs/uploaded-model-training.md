@@ -356,6 +356,13 @@ the package stays invalid until revalidation succeeds. Earth compatibility repor
 timeout error text receive the same treatment. This budget is separate from the
 30-second checkpoint completion/reload gate.
 
+Actual Earth full-grid v2 task configurations use the larger of the ordinary
+budget and `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` (default 300 seconds).
+Upload short-window probes, Mars and v1 tile checks retain the ordinary budget;
+explicit validator timeouts remain authoritative. The process result is drained
+before joining its sender to avoid false timeouts for large reports. The process
+must still exit successfully within the deadline. See [full-grid admission](earth-3hourly-fullgrid-model.md).
+
 Version 1 accepts these import roots:
 
 - `torch`

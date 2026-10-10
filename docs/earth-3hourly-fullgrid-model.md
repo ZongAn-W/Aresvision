@@ -41,8 +41,40 @@ window/horizon, channel subset, batch and parameters, including backward, finite
 gradients and eval sample independence, including the requested batch rather than
 only the upload's small probes. This isolated CPU check does not guarantee CUDA
 memory capacity. Larger batches can take longer or exhaust memory during validation.
-The configured isolated process budget is
-`USER_MODEL_VALIDATION_TIMEOUT_SECONDS`. Unknown or failed checks prohibit training.
+Upload/revalidation uses `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` (default 120
+seconds). The actual full-grid task probe uses the larger of that budget and
+`USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` (default 300 seconds); both must
+be positive integers. The server supplies the frozen schema from the upload
+report, and the child checks it against the executed model declaration. Explicit
+validator budgets, including short test timeouts and the in-process `None`
+override, keep their original semantics. Tile/Mars checks keep the ordinary
+budget. Unknown or failed checks prohibit training.
+
+An available upload report covers its declared short windows, not an arbitrary
+20->20 configuration or requested batch. A task-probe timeout is reported as
+`uploaded_model_validation_timeout`: the actual configuration has not finished
+validation, so no task is created; it is not proof of incompatibility. The parent
+drains the validation result before joining the child so reports larger than the
+Windows process pipe do not cause false timeouts. A result alone is insufficient:
+the child must exit successfully within the same deadline. Infinite model code
+and hung process exit still terminate at the deadline.
+
+2026-10-10 local isolated CPU admission measurements used the stored full-grid
+SimVP source with five channels, 20->20 and parameters 8/16/2/0.1. Batch 8
+completed in 45.46 seconds under the original 120-second budget; batch 32 timed
+out after 120.56 seconds, then passed the complete check in 234.64 seconds under
+the new default 300-second task budget. The screenshot does not reveal the
+requested batch/parameters, so these runs reproduce the budget failure for the
+stored model, not its exact screenshot configuration. Larger batches may still
+time out or exhaust CPU/GPU memory. This is a budget correction, not a measured
+compute speedup; the tests use synthetic tensors and create no training task,
+read no release data, upload no model and publish no checkpoint. A separate
+large-report regression covers the pipe issue; the stored model's normal report
+is smaller than the Windows pipe and does not establish that issue as its cause.
+Validation covered 158 upload/admission/tile-regression tests plus seven focused
+deadline/explicit-budget/report tests (partly overlapping). No real training was
+started; defaults still cannot guarantee that every full-grid configuration fits
+the validation budget or device memory.
 
 The server freezes the schema in the model reference and
 `_earth_uploaded_contract_schema`. Source, task, saved build configuration and

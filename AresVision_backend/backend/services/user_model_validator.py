@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import keyword
 import multiprocessing
+import time
 from queue import Empty
 import sys
 import uuid
@@ -45,6 +46,7 @@ from training_backbones.uploaded_model_source_check import (
 
 EXPECTED_OUTPUT_SHAPE = [2, 3, 1, 8, 16]
 VALIDATION_TIMEOUT_CODE = "uploaded_model_validation_timeout"
+_DEFAULT_TIMEOUT = object()
 
 
 def validation_report_timed_out(report: dict[str, Any]) -> bool:
@@ -114,19 +116,31 @@ class UserModelValidationResult:
 
 
 class UserModelValidator:
-    def __init__(self, timeout_seconds: float | None = config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS):
-        self.timeout_seconds = timeout_seconds
+    def __init__(self, timeout_seconds=_DEFAULT_TIMEOUT):
+        self._uses_default_timeout = timeout_seconds is _DEFAULT_TIMEOUT
+        self.timeout_seconds = (config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS
+                                if self._uses_default_timeout else timeout_seconds)
 
     def validate_file(self_or_file_path, file_path: Path | None = None, *, earth_probe=None) -> UserModelValidationResult:
         if isinstance(self_or_file_path, UserModelValidator):
             path = file_path
             timeout_seconds = self_or_file_path.timeout_seconds
+            uses_default_timeout = self_or_file_path._uses_default_timeout
         else:
             path = self_or_file_path
             timeout_seconds = config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS
+            uses_default_timeout = True
 
         if path is None:
             raise TypeError("validate_file() missing required file_path")
+
+        # Only server-provided task probes use the full-grid budget. Explicit
+        # timeouts (including test budgets and None) retain their semantics.
+        if (uses_default_timeout and isinstance(earth_probe, dict)
+                and earth_probe.get("contract_schema") == "aresvision_earth_3hourly_fullgrid_model_v2"):
+            timeout_seconds = max(
+                timeout_seconds, config.USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS
+            )
 
         if timeout_seconds is None:
             return UserModelValidator._validate_file_in_process(Path(path), earth_probe=earth_probe)
@@ -144,27 +158,36 @@ class UserModelValidator:
             target=_validate_file_child,
             args=(str(file_path), result_queue, earth_probe),
         )
-        process.start()
-        process.join(timeout_seconds)
-
-        if process.is_alive():
-            process.terminate()
-            process.join(1)
-            result_queue.close()
-            return UserModelValidationResult(
-                ok=False,
-                errors=[f"User model validation timed out after {timeout_seconds} seconds"],
-                code=VALIDATION_TIMEOUT_CODE,
-            )
-
+        deadline = time.monotonic() + timeout_seconds
+        payload = None
         try:
-            payload = result_queue.get(timeout=1)
-        except Empty:
-            exitcode = process.exitcode
-            return UserModelValidationResult(
-                ok=False,
-                errors=[f"User model validation process exited without a result: {exitcode}"],
-            )
+            process.start()
+            # Drain the queue while the child is alive. Joining first blocks
+            # its feeder thread when a complete validation report fills the
+            # pipe, incorrectly turning a successful probe into a timeout.
+            while time.monotonic() < deadline:
+                try:
+                    payload = result_queue.get(timeout=min(.1, max(0., deadline - time.monotonic())))
+                    break
+                except Empty:
+                    if not process.is_alive():
+                        break
+            process.join(max(0., deadline - time.monotonic()))
+            if process.is_alive():
+                process.terminate()
+                process.join(1)
+                if process.is_alive():
+                    process.kill()
+                    process.join(1)
+                return UserModelValidationResult(
+                    ok=False, code=VALIDATION_TIMEOUT_CODE,
+                    errors=[f"User model validation timed out after {timeout_seconds} seconds"],
+                )
+            if not isinstance(payload, dict) or process.exitcode != 0:
+                return UserModelValidationResult(
+                    ok=False,
+                    errors=[f"User model validation process exited without a result: {process.exitcode}"],
+                )
         finally:
             result_queue.close()
 
@@ -506,6 +529,10 @@ class UserModelValidator:
                 raise ValueError("; ".join(parameter_errors))
             orders = [earth_probe["input_channel_order"]] if earth_probe else channel_orders()
             feed = datasets[EARTH_3HOURLY_FEED_KEY]
+            if ((earth_probe or {}).get('contract_schema') is not None
+                    and earth_probe['contract_schema'] != feed['schema']):
+                code = 'uploaded_model_contract_invalid'
+                raise ValueError('Frozen spatial contract disagrees with the model declaration')
             execution = contract_profile(feed['schema'])
             window = (earth_probe or {}).get('window', execution['probe_window'] if execution['probe_window'] in feed['window'] else feed['window'][0])
             horizon = (earth_probe or {}).get('horizon', execution['probe_horizon'] if execution['probe_horizon'] in feed['horizon'] else feed['horizon'][0])

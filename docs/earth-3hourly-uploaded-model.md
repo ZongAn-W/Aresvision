@@ -39,6 +39,8 @@
 
 上传、重新校验及创建任务前的模型 dry-run 默认使用 120 秒隔离进程预算，可通过后端 `.env` 的 `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` 设置正整数秒数；修改配置后重启后端。到期仍强制终止子进程，全部通道、前向、梯度及 eval 批次一致性检查保留。超时报告顶层 `code` 为 `uploaded_model_validation_timeout`，兼容性查询返回 `status=unknown`、`compatible=false` 和同一错误码，页面显示“校验超时，请重试”。上传包在重新校验成功前仍为 `validation_status=invalid`，禁止创建训练任务。旧报告只有 `User model validation timed out after ... seconds` 文本时也识别为超时，无需改写数据库。该预算不影响下文 checkpoint 完成门禁的独立 30 秒重载检查。
 
+全图 v2 的实际任务配置检查使用通用预算与 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`（默认 300 秒）的较大值，v1 分块及 Mars 不改变预算。上传短窗口报告通过后仍需检查实际窗口、batch、通道和模型参数；启动超时表示当前配置尚未完成验证，不是模型已经证实不兼容。隔离进程先读取完整报告再等待退出，避免大报告堵塞 Windows 管道；无结果、异常退出和真正超时继续拒绝，详见[全图 v2](earth-3hourly-fullgrid-model.md)。
+
 上传 dry-run 检查全部 16 种通道组合、B=1/2、eval 前向、train 前向及 backward。在 backward 前后均用固定的不同样本核对单独与合批、交换顺序、更换其他成员和重复调用的输出，覆盖 B=2/3/默认8，采用 float32 容差 `rtol=1e-5, atol=1e-5`。创建任务时还覆盖实际请求 batch size；重载时使用保存的 batch 配置。探针拒绝 eval 修改参数或缓冲区，并在结束时恢复原值与各模块模式。依赖 batch 均值、`BatchNorm(track_running_stats=False)`、首次调用校准或 eval 计数缓冲区的模型会被拒绝。创建任务前再次在隔离进程中检查实际所选通道和自定义参数。成功报告保存 `eval_batch_policy=earth_eval_sample_independent_v1`；旧报告没有该证据时显示 unknown，需要重新校验。有限探针不能证明任意源码对全部输入都独立，CPU dry-run 通过也不代表任意 GPU 资源预算或模型收敛已验收。
 
 兼容性接口 `GET /api/user-models/{id}/earth-compatibility?dataset_id=earth_merra2_3hourly_v1` 返回具体数据集的 `status`、`compatible`、`code` 和 `reasons`：`available` 可用，`unavailable` 明确不兼容，`unknown` 未获得有效执行结论。未知、超时、失败均不能创建训练任务。日频的原接口默认值保留。

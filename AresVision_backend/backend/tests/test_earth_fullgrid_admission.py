@@ -90,6 +90,44 @@ def test_full_grid_task_probe_checks_actual_window_and_horizon(full_package):
     assert not verdict.compatible and 'batch size' in verdict.reasons[0]
 
 
+def test_task_probe_rejects_frozen_contract_mismatch(full_package):
+    package, _ = full_package
+    verdict = evaluate_package_earth_compatibility(
+        package, UserModelValidator(timeout_seconds=None), dataset_id=DATASET_ID,
+        earth_probe={'input_channel_order': ['TO3'], 'window': 2, 'horizon': 1,
+                     'batch_size': 1, 'custom_model_params': {}, 'contract_schema': CONTRACT_SCHEMA},
+    )
+    assert not verdict.compatible
+    assert verdict.code == 'uploaded_model_contract_invalid'
+    assert 'Frozen spatial contract' in verdict.reasons[0]
+
+
+def test_task_timeout_is_unknown_not_proven_incompatible(full_package):
+    from services.training_service import TrainingService
+    from services.user_model_validator import UserModelValidationResult, VALIDATION_TIMEOUT_CODE
+    from services.dataset_identity import DatasetRequestError
+    package, _ = full_package
+    package.param_schema = '{}'
+    class Packages:
+        async def get_package_for_user(self, *args):
+            return package
+    class TimedOut:
+        def validate_file(self, *args, **kwargs):
+            assert kwargs['earth_probe']['contract_schema'] == FULL_GRID_CONTRACT_SCHEMA
+            return UserModelValidationResult(ok=False, code=VALIDATION_TIMEOUT_CODE,
+                errors=['User model validation timed out after 300 seconds'])
+    service = TrainingService(earth_model_validator=TimedOut())
+    with pytest.raises(DatasetRequestError) as error:
+        asyncio.run(service._resolve_earth_uploaded_model(
+            user_id=1, uploaded_model_id=package.id, user_model_service=Packages(),
+            custom_model_params={}, dataset_id=DATASET_ID, input_channel_order=['TO3'],
+            window=20, horizon=20, batch_size=1,
+        ))
+    assert error.value.code == VALIDATION_TIMEOUT_CODE
+    assert 'did not finish' in str(error.value)
+    assert 'not compatible' not in str(error.value)
+
+
 @pytest.mark.parametrize('mutation', [
     {'spatial_tile_shape': [24,48]}, {'schema': 'unknown'}, {'tensor_layout': 'BTHWC'},
 ])
@@ -211,7 +249,10 @@ def test_executed_schema_is_frozen_for_nonliteral_model_declarations(tmp_path, s
             return package
     class ProvenValidator:
         def validate_file(self, *args, **kwargs):
-            assert kwargs['earth_probe'] == probe
+            expected_probe = dict(probe)
+            if schema == FULL_GRID_CONTRACT_SCHEMA:
+                expected_probe['contract_schema'] = FULL_GRID_CONTRACT_SCHEMA
+            assert kwargs['earth_probe'] == expected_probe
             return validation
     service = training_service.TrainingService()
     service._earth_model_validator = ProvenValidator()

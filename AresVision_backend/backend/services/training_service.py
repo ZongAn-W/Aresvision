@@ -836,14 +836,19 @@ class TrainingService:
             evaluate_package_earth_compatibility, package, validator=self._earth_validator(),
             dataset_id=dataset_id,
             earth_probe={"input_channel_order": input_channel_order, "custom_model_params": resolved_params,
-                         "window": window, "horizon": horizon, "batch_size": batch_size}
+                         "window": window, "horizon": horizon, "batch_size": batch_size,
+                         **({"contract_schema": feed.get("schema")}
+                            if feed.get("schema") == FULL_GRID_CONTRACT_SCHEMA else {})}
             if dataset_id == EARTH_DATASET_3HOURLY_ID else None,
         )
         if not verdict.compatible:
+            from services.user_model_validator import VALIDATION_TIMEOUT_CODE
+            prefix = ("Earth model validation did not finish for the requested configuration: "
+                      if verdict.code == VALIDATION_TIMEOUT_CODE else
+                      "The uploaded model is not compatible with this Earth dataset: ")
             raise DatasetRequestError(
                 verdict.code or "uploaded_model_not_earth_compatible",
-                "The uploaded model is not compatible with this Earth dataset: "
-                + "; ".join(verdict.reasons or ["unsupported model"]), status_code=422,
+                prefix + "; ".join(verdict.reasons or ["unsupported model"]), status_code=422,
             )
 
         contract_schema = None
