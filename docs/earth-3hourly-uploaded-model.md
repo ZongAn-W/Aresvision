@@ -68,4 +68,4 @@
 
 ## 任务级比例
 
-上传模型和官方 DLinear 共用[任务级划分策略](earth-task-splits.md)。请求比例均为有限数值、大于 0 且总和为 1，默认 0.7/0.2/0.1；每区至少 window+horizon 步。数据身份仍绑定原发布，normalization 与缓存绑定任务实际 train 区间和完整策略。队列重启复用固定划分；多模型比较要求相同 test UTC 范围及窗口口径。
+上传模型和官方 DLinear 共用[任务级划分策略](earth-task-splits.md)。请求比例均为有限数值、大于 0 且总和为 1，默认 0.7/0.2/0.1；每区至少 window+horizon 步。数据身份仍绑定原发布，normalization 与缓存按数据、实际 train 区间、通道顺序及方法/布局版本共享；当前任务和 checkpoint 继续严格保存自己的完整划分。模型自定义参数、batch、学习率和轮次不改变全时间轴缓存内容。复用证明、完整性与失效规则见[训练准备缓存](earth-preparation-cache.md)。队列重启复用固定划分；多模型比较要求相同 test UTC 范围及窗口口径。

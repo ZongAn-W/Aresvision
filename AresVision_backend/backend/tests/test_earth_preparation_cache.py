@@ -51,9 +51,7 @@ def _build(release, root, normalization, *, full_grid=True, progress=None):
 
 
 def _close(dataset):
-    if dataset._normalized_map is not None:
-        dataset._normalized_map._mmap.close()
-        dataset._normalized_map = None
+    dataset.close_training_cache()
 
 
 def _reject_scan(*args, **kwargs):
@@ -77,6 +75,147 @@ def test_same_preparation_reuses_statistics_and_volume(disk_release, tmp_path, m
     assert any("earth_full_grid_v1 cache hit" in message for message in logs)
     assert any("train frames" in message for message in logs)
     assert any("generated" in message and "s" in message for message in logs)
+
+
+@pytest.mark.parametrize("full_grid", [False, True])
+def test_verified_cache_hash_is_shared_by_builder_and_split_attachments(
+    mutable_release, tmp_path, monkeypatch, full_grid,
+):
+    """A process hashes each unchanged array once, including all three splits."""
+    from services import earth_preparation_cache as preparation
+
+    release = mutable_release
+    task_split = _split(release)
+    normalization = _fit(release, tmp_path, task_split=task_split)
+    path = _build(release, tmp_path, normalization, full_grid=full_grid)
+    metadata = json.loads(path.with_name("metadata.json").read_text(encoding="utf-8"))
+    checksum = preparation.sha256_file
+    hashes = []
+    def counted_hash(candidate, **kwargs):
+        hashes.append(Path(candidate).resolve())
+        return checksum(candidate, **kwargs)
+    monkeypatch.setattr(preparation, "sha256_file", counted_hash)
+    monkeypatch.setattr(data, "_fit_threehour_normalization_uncached", _reject_scan)
+    monkeypatch.setattr(data, "_build_threehour_training_cache_uncached", _reject_scan)
+    assert _build(release, tmp_path, normalization, full_grid=full_grid) == path
+    assert hashes == [path.resolve()]
+    windows = [data.EarthThreeHourlyWindows.from_release(
+        release, split=split, window=7, horizon=3, selected_channels=[],
+        normalization=normalization, task_split=task_split,
+    ) for split in ("train", "validation", "test")]
+    try:
+        for dataset in windows:
+            dataset.use_training_cache(path)
+            inputs, targets = dataset.read_window(0, lat_slice=slice(0, 1), lon_slice=slice(0, 1))
+            assert np.isfinite(inputs).all() and np.isfinite(targets).all()
+            assert hashes == [path.resolve()]
+        assert _build(release, tmp_path, normalization, full_grid=full_grid) == path
+        assert hashes == [path.resolve()]
+
+        # A fresh interpreter has no in-memory integrity result. Its builder
+        # must hash the complete published file once before attaching splits.
+        child = '''
+import json
+import sys
+from pathlib import Path
+from types import MappingProxyType
+import numpy as np
+from services import earth_dataset as data
+from services import earth_preparation_cache as preparation
+from services.earth_dataset_metadata import VerifiedEarthRelease, package_signature
+
+payload = json.loads(sys.stdin.read())
+source = Path(payload['data_path'])
+release = VerifiedEarthRelease(
+    metadata=payload['metadata'], signature=package_signature(source.parent, data_file_name=source.name),
+    dates=np.array(payload['dates'], dtype='datetime64[ns]'),
+    latitude=np.array(payload['latitude']), longitude=np.array(payload['longitude']),
+    fields=MappingProxyType({}), data_path=source,
+)
+assert not preparation._CHECKED_ARRAYS
+original_hash = preparation.sha256_file
+hashes = []
+def counted_hash(path, **kwargs):
+    hashes.append(str(Path(path).resolve()))
+    return original_hash(path, **kwargs)
+preparation.sha256_file = counted_hash
+def reject_build(*args, **kwargs):
+    raise AssertionError('Existing cache must not be generated again')
+data._build_threehour_training_cache_uncached = reject_build
+normalization = payload['normalization']
+path = data.build_threehour_training_cache(
+    release, ['TO3'], normalization, payload['cache_root'], full_grid=payload['full_grid'],
+)
+assert path == Path(payload['cache_path'])
+counts = [len(hashes)]
+for split in ('train', 'validation', 'test'):
+    windows = data.EarthThreeHourlyWindows.from_release(
+        release, split=split, window=7, horizon=3, selected_channels=[],
+        normalization=normalization, task_split=payload['task_split'],
+    )
+    try:
+        windows.use_training_cache(path)
+        inputs, targets = windows.read_window(0, lat_slice=slice(0, 1), lon_slice=slice(0, 1))
+        assert np.isfinite(inputs).all() and np.isfinite(targets).all()
+        counts.append(len(hashes))
+    finally:
+        if windows._normalized_map is not None:
+            windows._normalized_map._mmap.close()
+print(json.dumps({'path': str(path), 'hashes': hashes, 'counts': counts}))
+'''
+        payload = {
+            "data_path": str(release.data_path), "metadata": release.metadata,
+            "dates": release.dates.astype(str).tolist(),
+            "latitude": release.latitude.tolist(), "longitude": release.longitude.tolist(),
+            "normalization": normalization, "task_split": task_split,
+            "cache_root": str(tmp_path), "cache_path": str(path), "full_grid": full_grid,
+        }
+        backend = Path(__file__).resolve().parents[1]
+        env = {**os.environ, "PYTHONPATH": str(backend)}
+        completed = subprocess.run(
+            [sys.executable, "-c", child], input=json.dumps(payload),
+            cwd=backend, env=env, capture_output=True, text=True, timeout=60,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        independent = json.loads(completed.stdout)
+        assert independent["hashes"] == [str(path.resolve())]
+        assert independent["counts"] == [1, 1, 1, 1]
+
+        # Windows defers mmap timestamps until reader handles close. The read
+        # guard must forbid writes while the certified maps are alive.
+        if os.name == 'nt':
+            with pytest.raises(OSError):
+                np.load(path, mmap_mode='r+', allow_pickle=False)
+            with pytest.raises(OSError):
+                path.replace(path.with_name('replaced.npy'))
+            for dataset in windows:
+                _close(dataset)
+            preparation.clear_verified_arrays()
+
+        # Once readers close, a finite edit invalidates the cached digest.
+        modified = np.load(path, mmap_mode="r+", allow_pickle=False)
+        modified.flat[0] += np.float32(.125)
+        modified.flush()
+        modified._mmap.close()
+        assert not preparation.verify_array_file(
+            path, metadata["array_identity"], metadata["array_sha256"],
+        )
+        if os.name != 'nt':
+            with pytest.raises(ValueError, match="cache file changed after publication"):
+                windows[0].read_window(0, lat_slice=slice(0, 1), lon_slice=slice(0, 1))
+        with pytest.raises(ValueError, match="changed after publication|integrity check failed"):
+            windows[1].use_training_cache(path)
+        assert hashes[-1] == path.resolve()
+
+        with netcdf_read_lock(), netCDF4.Dataset(release.data_path, "r+") as stored:
+            stored["TO3"][0, 0, 0] += np.float32(1)
+        with pytest.raises(ValueError, match="changed since verification"):
+            windows[0].read_window(0, lat_slice=slice(0, 1), lon_slice=slice(0, 1))
+        with pytest.raises(ValueError, match="changed since verification"):
+            windows[2].use_training_cache(path)
+    finally:
+        for dataset in windows:
+            _close(dataset)
 
 
 @pytest.mark.parametrize("full_grid", [False, True])
@@ -489,7 +628,7 @@ def test_cache_changed_between_validation_and_mapping_is_rejected(disk_release, 
             mapped._mmap.close()
         return result
     monkeypatch.setattr(data, '_training_cache_candidate', replace_after_validation)
-    with pytest.raises(ValueError, match='changed after publication'):
+    with pytest.raises((ValueError, OSError)):
         windows.use_training_cache(path)
     assert windows._normalized_map is None
 

@@ -177,7 +177,7 @@ def _build_loaders(
             full_grid=full_grid, progress=lambda message: print(message, flush=True),
         )
         for dataset in splits.values():
-            dataset.use_training_cache(cache_path)
+            dataset.use_training_cache(cache_path, progress=lambda message: print(message, flush=True))
     cache_seconds = time.perf_counter() - cache_started
     if window_type is EarthThreeHourlyWindows:
         print(f'Earth preparation: cache stage (including integrity/attach) elapsed={cache_seconds:.3f}s', flush=True)

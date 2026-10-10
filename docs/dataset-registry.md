@@ -177,7 +177,7 @@ Mars 两个注册项的 `availability=unverified`、`availability_reason=legacy_
 - 日频文件名固定为 `earth_merra2_daily.nc`，三小时固定为 `earth_merra2_3hourly.nc`；不接受客户端路径或任意 manifest 路径。
 - 元数据由文件真实计算得出，不写死 731 天或 31 × 49 来伪造成功。
 - 时间 `calendar` 从解码时间编码读取，只接受 `standard`、`gregorian`、`proleptic_gregorian`；其他日历按 `invalid_dataset` 拒绝，不会标成火星时间。
-- 校验由锁保护，按 ID 缓存描述符及快照，key 为两个文件的 `(路径, 大小, mtime_ns, ctime_ns)`；变化后重新校验。日频保留不可写五场数组，三小时每变量最多扫描 8 步并只缓存元信息/只读坐标；完整体积留在磁盘。三小时未变化的缺失或无效结果也复用，校验中变化的结果不复用。API 返回深拷贝，不允许客户端污染缓存。
+- 校验由锁保护，按 ID 缓存描述符及快照，key 绑定两个文件的绝对路径、大小、mtime 和设备/文件 ID/变更时间；Windows 使用 NTFS ChangeTime，不能把创建时间当作变更时间。三小时服务端和训练子进程通过 `ARESVISION_EARTH_TRAINING_CACHE_DIR/verification/` 共享完整校验生成的证明，证明包含验证器版本、原始/canonical manifest SHA、NetCDF SHA、fingerprint 和完整元信息摘要。命中前后复核源身份并重新读取 manifest；证明损坏、版本变化、文件替换或修改均重新完整校验。`get_earth_snapshot(..., force_full=True)` 保留强制完整校验，直接 `read_earth_3hourly_release()` 未指定缓存目录时仍完整扫描，详见[训练准备缓存](earth-preparation-cache.md)。日频保留不可写五场数组，三小时每变量最多扫描 8 步并只缓存元信息/只读坐标；完整体积留在磁盘。三小时未变化的缺失或无效结果也复用，校验中变化的结果不复用。API 返回深拷贝，不允许客户端污染缓存。
 - 注册表构造不读取文件，首次查询时才校验。
 
 三小时目录配置、训练与 descriptor 示例见 [三小时数据构建与训练](earth-merra2-3hourly.md)；当前完整包共 5848 步，`availability=available`。`ARESVISION_EARTH_MERRA2_3HOURLY_DIR` 不改变日频两个配置项；旧数据库身份迁移、任务 JSON 和 checkpoint 不重写。三小时 binding 保留完整 UTC datetime、网格、发布 split、canonical manifest SHA 与 dataset-selected profile，实际 NetCDF 路径只经过服务端内部 spec，不返回客户端。

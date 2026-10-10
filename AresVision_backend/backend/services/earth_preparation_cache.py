@@ -150,11 +150,55 @@ def sha256_file(path: Path, *, progress=None, stage='cache integrity') -> str:
 _CHECKED_ARRAYS = {}
 
 
+class ReadOnlyFileGuard:
+    """Prevent writes/replacement while Windows keeps read-only maps open.
+
+    NTFS timestamps can remain unchanged until all mmap handles close. Holding
+    a shared-read-only handle makes integrity memoization safe during that gap.
+    Other readers can still open the same published cache concurrently.
+    """
+
+    def __init__(self, path: Path):
+        self._handle = None
+        if os.name == 'nt':
+            import ctypes
+            from ctypes import wintypes
+            kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+            create = kernel.CreateFileW
+            create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                               wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            create.restype = wintypes.HANDLE
+            close = kernel.CloseHandle
+            close.argtypes = [wintypes.HANDLE]
+            close.restype = wintypes.BOOL
+            self._close_handle = close
+            handle = create(str(Path(path).resolve()), 0x80000000, 1, None, 3, 0, None)
+            if handle == ctypes.c_void_p(-1).value:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._handle = handle
+
+    def close(self):
+        if self._handle is not None:
+            self._close_handle(self._handle)
+            self._handle = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+
 def verify_array_file(path: Path, expected: dict, checksum: str, *, progress=None) -> bool:
     """Hash once per process/unchanged file and reject edits or partial writes."""
     if not isinstance(checksum, str) or len(checksum) != 64:
         return False
+    guard = None
     try:
+        guard = ReadOnlyFileGuard(path)
         before = cache_file_identity(path)
         if before != expected:
             return False
@@ -162,10 +206,25 @@ def verify_array_file(path: Path, expected: dict, checksum: str, *, progress=Non
         if key not in _CHECKED_ARRAYS:
             if sha256_file(path, progress=progress) != checksum:
                 return False
-            _CHECKED_ARRAYS[key] = True
+            if cache_file_identity(path) != before:
+                return False
+            # Keep Windows write protection as long as the digest is memoized.
+            # Releasing it earlier permits an mmap edit with delayed timestamps.
+            _CHECKED_ARRAYS[key] = guard
+            guard = None
         return cache_file_identity(path) == before
     except OSError:
         return False
+    finally:
+        if guard is not None:
+            guard.close()
+
+
+def clear_verified_arrays():
+    """Release integrity results and their read guards together."""
+    for guard in _CHECKED_ARRAYS.values():
+        guard.close()
+    _CHECKED_ARRAYS.clear()
 
 
 def seal_payload(payload: dict) -> dict:

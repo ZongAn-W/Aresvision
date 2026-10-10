@@ -1079,7 +1079,7 @@ class EarthThreeHourlyWindows:
     def __getitem__(self, index):
         return self.read_window(index)
 
-    def use_training_cache(self, path):
+    def use_training_cache(self, path, *, progress=None):
         """Attach a server-created map after checking identity and statistics."""
         _threehour_path(self._release)
         path = Path(path)
@@ -1124,39 +1124,54 @@ class EarthThreeHourlyWindows:
                           dataset_version=THREE_HOURLY_DATASET_VERSION,
                           layout=identity['layout'], storage_shape=list(storage_shape))
             if _certify_existing_training_cache(path, legacy, identity, self._release,
-                                                progress=None) is None:
+                                                progress=progress) is None:
                 raise ValueError('Three-hour training cache integrity check failed')
-            return self.use_training_cache(path)
-        if _training_cache_candidate(path, identity, verify_payload=False) is None:
-            raise ValueError('Three-hour training cache integrity check failed')
-        # Keep the certified identity, never adopt a new stat baseline after
-        # validation. A replacement between SHA validation and mmap must fail.
-        certified_identity = metadata.get('array_identity')
-        from services.earth_preparation_cache import file_identity_matches
-        if not file_identity_matches(path, certified_identity):
-            raise ValueError('Three-hour training cache file changed after publication')
-        mapped = np.load(path, mmap_mode='r', allow_pickle=False)
-        if (mapped.shape != storage_shape or mapped.dtype != np.dtype('float32')
-                or path.stat().st_size != mapped.offset + mapped.nbytes):
-            mapped._mmap.close()
-            raise ValueError('Three-hour training cache shape or dtype mismatch')
-        if not file_identity_matches(path, certified_identity):
-            mapped._mmap.close()
-            raise ValueError('Three-hour training cache file changed after publication')
-        # A same-size in-place edit can evade filesystem timestamps on some
-        # filesystems. Re-hash the mapped payload after opening it so the
-        # validation-to-mapping interval cannot adopt altered finite values.
-        from services.earth_preparation_cache import sha256_file
-        if sha256_file(path) != metadata.get('array_sha256'):
-            mapped._mmap.close()
-            raise ValueError('Three-hour training cache changed after publication')
-        if self._normalized_map is not None:
-            self._normalized_map._mmap.close()
+            return self.use_training_cache(path, progress=progress)
+        from services.earth_preparation_cache import (ReadOnlyFileGuard,
+                                                      file_identity_matches, verify_array_file)
+        guard = ReadOnlyFileGuard(path)
+        mapped = None
+        try:
+            if _training_cache_candidate(path, identity, verify_payload=False) is None:
+                raise ValueError('Three-hour training cache integrity check failed')
+            # Keep the certified identity; never adopt a newer stat baseline.
+            certified_identity = metadata.get('array_identity')
+            if not file_identity_matches(path, certified_identity):
+                raise ValueError('Three-hour training cache file changed after publication')
+            mapped = np.load(path, mmap_mode='r', allow_pickle=False)
+            if (mapped.shape != storage_shape or mapped.dtype != np.dtype('float32')
+                    or path.stat().st_size != mapped.offset + mapped.nbytes):
+                raise ValueError('Three-hour training cache shape or dtype mismatch')
+            if not verify_array_file(path, certified_identity, metadata.get('array_sha256'),
+                                     progress=progress):
+                raise ValueError('Three-hour training cache changed after publication')
+            _threehour_path(self._release)
+            if not file_identity_matches(path, certified_identity):
+                raise ValueError('Three-hour training cache file changed after publication')
+        except BaseException:
+            if mapped is not None:
+                mapped._mmap.close()
+            guard.close()
+            raise
+        self.close_training_cache()
         self._normalized_map = mapped
         self._normalized_cache_layout = layout
         self._normalized_cache_path = path
         self._normalized_cache_file_identity = certified_identity
-        _threehour_path(self._release)
+        self._normalized_cache_guard = guard
+
+    def close_training_cache(self):
+        mapped = getattr(self, '_normalized_map', None)
+        if mapped is not None:
+            mapped._mmap.close()
+            self._normalized_map = None
+        guard = getattr(self, '_normalized_cache_guard', None)
+        if guard is not None:
+            guard.close()
+            self._normalized_cache_guard = None
+
+    def __del__(self):
+        self.close_training_cache()
 
     def _check_cache_file(self):
         from services.earth_preparation_cache import file_identity_matches

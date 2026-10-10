@@ -69,13 +69,13 @@ def main():
                 release, split=name, window=args.window, horizon=args.horizon,
                 selected_channels=channels[1:], normalization=normalization, task_split=split,
             )
-            dataset.use_training_cache(cache)
+            dataset.use_training_cache(cache, progress=progress)
             datasets.append(dataset)
         # One bounded read proves the map is usable, without model execution.
         datasets[0].read_window(0, lat_slice=slice(0, 24), lon_slice=slice(0, 48))
     finally:
         for dataset in datasets:
-            dataset._normalized_map._mmap.close()
+            dataset.close_training_cache()
     result = {
         'mode': args.mode, 'layout': args.layout, 'channel_order': channels,
         'dataset_fingerprint': release.metadata['dataset_fingerprint'],
