@@ -184,6 +184,8 @@ class DatasetRegistry:
         earth_dataset_id: Optional[str] = None,
         legacy_earth_package_dir: Any = None,
         earth_3hourly_package_dir: Any = None,
+        verification_cache_dir: Any = None,
+        progress=None,
     ):
         self._earth_package_dir = Path(earth_package_dir).expanduser()
         primary_id = earth_dataset_id or (
@@ -218,6 +220,9 @@ class DatasetRegistry:
             "display": EARTH_V2_DISPLAY_NAME if secondary_id == EARTH_DATASET_V2_ID else EARTH_DISPLAY_NAME,
         }
         self._data_file_name = data_file_name
+        self._verification_cache_dir = (Path(verification_cache_dir).expanduser()
+                                       if verification_cache_dir is not None else None)
+        self._verification_progress = progress
         for spec in self._earth_specs.values():
             spec["data_file_name"] = data_file_name
         self._earth_specs[EARTH_DATASET_3HOURLY_ID] = {
@@ -235,8 +240,10 @@ class DatasetRegistry:
         self._earth_cache_signature: dict[str, tuple] = {}
         self._earth_cache_release: dict[str, VerifiedEarthRelease] = {}
         self._earth_cache_descriptor: dict[str, dict] = {}
-        # Observability for tests: how many full verifications actually ran.
+        # Observability: unchanged in-process snapshots do not count as a read;
+        # cross-process proof reads do not count as a full verification.
         self.verification_count = 0
+        self.verification_cache_hits = 0
 
     # ── public protocol ────────────────────────────────────────────────
     def list_datasets(self) -> list[dict]:
@@ -321,7 +328,8 @@ class DatasetRegistry:
         }
 
     def get_earth_snapshot(
-        self, dataset_id: str, expected_fingerprint: Optional[str] = None
+        self, dataset_id: str, expected_fingerprint: Optional[str] = None,
+        *, force_full: bool = False,
     ) -> VerifiedEarthRelease:
         """Return the verified release for any supported Earth purpose.
 
@@ -334,7 +342,7 @@ class DatasetRegistry:
         ``expected_fingerprint=None`` takes the currently verified release.
         """
         normalized = self._require_registered_earth(dataset_id)
-        release = self._earth_release(normalized)
+        release = self._earth_release(normalized, force_full=force_full)
         if release is None:
             with self._lock:
                 descriptor = self._earth_cache_descriptor.get(normalized, {})
@@ -454,7 +462,7 @@ class DatasetRegistry:
         with self._lock:
             return copy.deepcopy(self._earth_cache_descriptor.get(dataset_id) or self._unavailable_earth_descriptor(dataset_id))
 
-    def _earth_release(self, dataset_id: str) -> Optional[VerifiedEarthRelease]:
+    def _earth_release(self, dataset_id: str, *, force_full: bool = False) -> Optional[VerifiedEarthRelease]:
         """Load, verify and cache the release once per unchanged package.
 
         The cache tag is the signature that this very verification confirmed, so
@@ -462,14 +470,14 @@ class DatasetRegistry:
         changes mid verification drops the whole cache.
         """
         spec = self._earth_specs[dataset_id]
-        signature = package_signature(spec["path"], data_file_name=spec["data_file_name"])
         with self._lock:
+            signature = package_signature(spec["path"], data_file_name=spec["data_file_name"])
             if (
-                dataset_id in self._earth_cache_release
+                not force_full and dataset_id in self._earth_cache_release
                 and signature == self._earth_cache_signature.get(dataset_id)
             ):
                 return self._earth_cache_release[dataset_id]
-            if (dataset_id == EARTH_DATASET_3HOURLY_ID
+            if (not force_full and dataset_id == EARTH_DATASET_3HOURLY_ID
                     and signature == self._earth_cache_signature.get(dataset_id)
                     and dataset_id in self._earth_cache_descriptor):
                 return None  # An unchanged missing/invalid new package is already classified.
@@ -482,7 +490,17 @@ class DatasetRegistry:
                 return None
             try:
                 if dataset_id == EARTH_DATASET_3HOURLY_ID:
-                    release = read_earth_3hourly_release(spec["path"])
+                    kwargs = {"verification_cache_dir": self._verification_cache_dir}
+                    if force_full:
+                        kwargs["force_full"] = True
+                    if self._verification_progress is not None:
+                        kwargs["progress"] = self._verification_progress
+                    release = read_earth_3hourly_release(
+                        spec["path"], **kwargs
+                    )
+                    if release.verification_cached:
+                        self.verification_count -= 1
+                        self.verification_cache_hits += 1
                 else:
                     release = read_earth_release(
                         spec["path"], expected_manifest_sha256=spec["manifest"],
@@ -501,9 +519,9 @@ class DatasetRegistry:
                 if reason != REASON_PACKAGE_CHANGED:
                     # Settle the negative result for the current signature; a
                     # package that changed mid verification is retried at once.
-                    self._earth_cache_signature[dataset_id] = package_signature(
-                        spec["path"], data_file_name=spec["data_file_name"]
-                    )
+                    current = package_signature(spec["path"], data_file_name=spec["data_file_name"])
+                    if current == signature:
+                        self._earth_cache_signature[dataset_id] = signature
                 return None
             except Exception:
                 # Unexpected failures stay visible instead of being reported as

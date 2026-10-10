@@ -121,13 +121,18 @@ def _build_loaders(
     max_batch_size = contract_profile(FULL_GRID_CONTRACT_SCHEMA)['max_batch_size']
     if full_grid and (type(batch_size) is not int or not 1 <= batch_size <= max_batch_size):
         raise EarthTrainingError(f'Full-grid Earth training batch_size must be an integer between 1 and {max_batch_size}')
+    preparation_started = time.perf_counter()
     print('Earth preparation: loading verified dataset and checking task binding', flush=True)
     hyperparameters = normalize_earth_training_hyperparameters(
         spec["hyperparameters"], dataset_id=binding["dataset_id"]
     )
     profile = earth_training_profile(binding["dataset_id"], hyperparameters)
+    validation_started = time.perf_counter()
     release = registry.get_earth_snapshot(binding["dataset_id"])
     assert_release_matches_binding(release, binding)
+    validation_seconds = time.perf_counter() - validation_started
+    print(f"Earth preparation: data validation {'hit' if release.verification_cached else 'verified'} "
+          f"elapsed={validation_seconds:.3f}s", flush=True)
 
     selected = hyperparameters["selected_channels"]
     # Fit on the frozen task train interval (manifest for legacy tasks), then
@@ -137,13 +142,19 @@ def _build_loaders(
         from services.earth_task_split import validate_earth_task_split
         validate_earth_task_split(task_split, release.dates, profile["window"], profile["horizon"], hyperparameters)
     window_type = EarthThreeHourlyWindows if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else EarthOzoneWindows
+    normalization_started = time.perf_counter()
     if window_type is EarthThreeHourlyWindows:
+        from config import EARTH_TRAINING_CACHE_DIR
+        effective_cache_root = cache_root if cache_root is not None else EARTH_TRAINING_CACHE_DIR
         normalization = fit_threehour_normalization(
             release, ["TO3", *selected], task_split=task_split,
+            cache_root=effective_cache_root,
             progress=lambda message: print(message, flush=True),
         )
     else:
         normalization = normalization_from_release(release, ["TO3", *selected], task_split=task_split)
+    normalization_seconds = time.perf_counter() - normalization_started
+    print(f'Earth preparation: normalization stage elapsed={normalization_seconds:.3f}s', flush=True)
     splits = {
         name: window_type.from_release(
             release,
@@ -157,15 +168,19 @@ def _build_loaders(
         for name in ("train", "validation", "test")
     }
     counts = {name: len(dataset) for name, dataset in splits.items()}
+    cache_path = None
+    cache_started = time.perf_counter()
     if window_type is EarthThreeHourlyWindows:
-        from config import EARTH_TRAINING_CACHE_DIR
         cache_path = build_threehour_training_cache(
             release, ["TO3", *selected], normalization,
-            cache_root if cache_root is not None else EARTH_TRAINING_CACHE_DIR,
+            effective_cache_root,
             full_grid=full_grid, progress=lambda message: print(message, flush=True),
         )
         for dataset in splits.values():
             dataset.use_training_cache(cache_path)
+    cache_seconds = time.perf_counter() - cache_started
+    if window_type is EarthThreeHourlyWindows:
+        print(f'Earth preparation: cache stage (including integrity/attach) elapsed={cache_seconds:.3f}s', flush=True)
     split_ranges = {
         name: {
             "date_start": (np.datetime_as_string(dataset.dates[0], unit="s") + "Z"
@@ -207,7 +222,8 @@ def _build_loaders(
     spatial_mode = 'spatial_tile' if wrapper is _SpatialTileDataset else 'full_grid'
     print(
         f'Earth preparation complete: spatial mode={spatial_mode}, '
-        f'train samples={len(train_loader.dataset)}, batches={len(train_loader)}',
+        f'train samples={len(train_loader.dataset)}, batches={len(train_loader)}, '
+        f'elapsed={time.perf_counter() - preparation_started:.3f}s',
         flush=True,
     )
     return {
@@ -223,6 +239,11 @@ def _build_loaders(
         "validation_loader": validation_loader,
         "test_loader": test_loader,
         "full_grid": full_grid,
+        "cache_path": cache_path,
+        "preparation_timings": {'validation_seconds': validation_seconds,
+                                'normalization_seconds': normalization_seconds,
+                                'cache_seconds': cache_seconds,
+                                'total_seconds': time.perf_counter() - preparation_started},
     }
 
 
@@ -690,7 +711,8 @@ def _load_spec_from_env() -> dict:
 
 
 def _build_registry(spec: Optional[dict] = None) -> DatasetRegistry:
-    from config import EARTH_MERRA2_DIR, EARTH_MERRA2_V1_DIR, EARTH_MERRA2_3HOURLY_DIR
+    from config import (EARTH_MERRA2_DIR, EARTH_MERRA2_V1_DIR,
+                        EARTH_MERRA2_3HOURLY_DIR, EARTH_TRAINING_CACHE_DIR)
 
     threehour_dir = EARTH_MERRA2_3HOURLY_DIR
     if (spec or {}).get("dataset_binding", {}).get("dataset_id") == "earth_merra2_3hourly_v1":
@@ -705,6 +727,8 @@ def _build_registry(spec: Optional[dict] = None) -> DatasetRegistry:
         earth_dataset_id="earth_merra2_daily_v2",
         legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
         earth_3hourly_package_dir=threehour_dir,
+        verification_cache_dir=EARTH_TRAINING_CACHE_DIR,
+        progress=lambda message: print(message, flush=True),
     )
 
 

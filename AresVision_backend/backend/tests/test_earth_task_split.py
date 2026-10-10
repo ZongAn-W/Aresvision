@@ -222,7 +222,7 @@ def test_changed_validation_and_test_data_cannot_affect_task_normalization(synth
     assert fit_threehour_normalization(modified, ["TO3"], task_split=split) == expected
 
 
-def test_cache_rejects_same_statistics_with_different_validation_test_boundaries(synthetic_training_release, tmp_path):
+def test_cache_reuses_same_train_statistics_with_different_validation_test_boundaries(synthetic_training_release, tmp_path):
     release = synthetic_training_release
     first = build_earth_task_split(release.dates, 2, 1, {"train_ratio": .5, "validation_ratio": .25, "test_ratio": .25})
     second = build_earth_task_split(release.dates, 2, 1, {"train_ratio": .5, "validation_ratio": .3, "test_ratio": .2})
@@ -232,8 +232,9 @@ def test_cache_rejects_same_statistics_with_different_validation_test_boundaries
     cache = build_threehour_training_cache(release, ["TO3"], one, tmp_path)
     dataset = EarthThreeHourlyWindows.from_release(release, window=2, horizon=1,
         selected_channels=[], normalization=two, task_split=second)
-    with pytest.raises(ValueError, match="cache identity or normalization mismatch"):
-        dataset.use_training_cache(cache)
+    dataset.use_training_cache(cache)
+    assert dataset.normalization['task_split'] == second
+    assert build_threehour_training_cache(release, ['TO3'], two, tmp_path) == cache
 
 
 def test_dataset_rejects_a_fixed_partition_for_different_window_settings(synthetic_training_release):

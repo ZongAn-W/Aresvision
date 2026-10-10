@@ -26,7 +26,7 @@
 
 服务器在任务 `hyperparameters._earth_task_split` 保存策略版本、请求比例、完整时间步数、window/horizon 和三个 `ranges`，并独立保存 `_earth_task_split_policy=earth_raw_utc_timeline_v1`。每个 range 包含 `raw_start/raw_end`、`date_start/date_end`、`step_count/window_count`。这些是服务端内部字段，不接受客户端设置；排队 spec 的独立 `task_split` 传递同一固定副本。重启恢复会对照发布的原始时间轴和已保存请求严格校验，不能重新选择边界。策略标记或已有 `_earth_metrics_schema=earth_training_metrics_3hourly_v2` 均要求完整冻结划分；缺失/损坏的划分、未知标记或版本不一致返回 409，不会降级为发布 manifest。此前已创建、只有 v2 标记和完整划分的任务继续读取，无需迁移。
 
-仅以当前任务完整 train 区间拟合逐通道人口均值/标准差（ddof=0、epsilon=1e-6），保留逐通道最多八步的有界读取、连续性、有效掩码及有限值检查。验证、测试与预测复用保存值，不重新拟合。normalization 同时保存 UTC 拟合边界、步数及完整任务划分策略。训练缓存每次生成独立目录，挂载时检查发布指纹、通道和完整 normalization（包含任务边界）；即使两个任务 train 统计量相同而 validation/test 边界不同，也不能混用。预测 LRU 的 task ID 和 checkpoint SHA 隔离不同策略、边界及统计量，命中前仍严格校验产物和当前发布。
+仅以当前任务完整 train 区间拟合逐通道人口均值/标准差（ddof=0、epsilon=1e-6），保留逐通道最多八步的有界读取、连续性、有效掩码及有限值检查。验证、测试与预测复用保存值，不重新拟合。normalization 同时保存 UTC 拟合边界、步数及完整任务划分策略。共享统计量按数据身份、train 实际 UTC 边界/步数、通道顺序及方法版本匹配，并将当前任务的完整冻结划分绑定回返回值。训练缓存覆盖完整已归一化时间轴，按数据、通道、归一化内容、布局和缓存版本寻址；仅修改窗口或 validation/test 边界而 train 边界不变时可以共享缓存字节，窗口索引与 checkpoint 划分仍分别严格校验。train 实际边界变化必须重新拟合并建立另一缓存身份，详见[训练准备缓存](earth-preparation-cache.md)。预测 LRU 的 task ID 和 checkpoint SHA 隔离不同策略、边界及统计量，命中前仍严格校验产物和当前发布。
 
 ## Checkpoint、预测与比较
 

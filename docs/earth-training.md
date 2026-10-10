@@ -111,7 +111,7 @@
 
 同一训练接口选择 `dataset_id=earth_merra2_3hourly_v1` 后，服务端 profile 为三小时 UTC、任务配置的 window/horizon（默认 56→24）、240×480 全球网格。TO3 必选，四个辅助输入可选，通道顺序固定；目标仅 TO3，单位 DU。支持官方 DLinear 及独立 v1 契约上传模型，创建任务前校验兼容性、实际参数及分区长度，不调用日频上传兼容门或降级模型。
 
-新任务按原始时间轴比例划分后各自独立切窗，完整两年默认 70/20/10 和 56→24 对应 4094/1169/585 步、4015/1090/506 个窗口。无新策略的旧任务仍按 manifest，分别为 2928/1448/1472 步、2849/1369/1393 个窗口。归一化只扫描当前任务 train，逐通道最多 8 步，以 float64 合并统计量；选中通道的缺失显式拒绝。分块生成 normalized float32 磁盘内存映射后按需读取窗口与 24×48 空间块，避免压缩整场反复解压；每个窗口 100 块，`batch_size` 以块为单位，checkpoint 仍绑定完整 240×480 网格。缓存检查完整任务划分与 normalization，通过 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认位于 Git checkout 外的工作区父级，完整五通道约 12.55 GiB，并在训练结束或中断后保留。
+新任务按原始时间轴比例划分后各自独立切窗，完整两年默认 70/20/10 和 56→24 对应 4094/1169/585 步、4015/1090/506 个窗口。无新策略的旧任务仍按 manifest，分别为 2928/1448/1472 步、2849/1369/1393 个窗口。归一化只扫描当前任务 train，逐通道最多 8 步，以 float64 合并统计量；选中通道的缺失显式拒绝。分块生成 normalized float32 磁盘内存映射后按需读取窗口与 24×48 空间块，避免压缩整场反复解压；每个窗口 100 块，`batch_size` 以块为单位，checkpoint 仍绑定完整 240×480 网格。缓存按源数据、实际 train 边界、通道、归一化内容和布局复用，任务的窗口索引和 checkpoint 仍严格保存自己的完整划分；准备日志显示验证/统计量/缓存的命中或生成、进度及耗时，见[训练准备缓存](earth-preparation-cache.md)。缓存通过 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认位于 Git checkout 外的工作区父级，完整五通道约 12.55 GiB；全图与分块布局分别使用 `earth_full_grid_v1` 和 `earth_spatial_tiles_v1`，未认证/损坏/中断缓存不得挂载。
 
 三小时 checkpoint schema 为 `aresvision_earth_forecast_checkpoint_3hourly_v1`，实现 ID 为 `aresvision_gridpoint_dlinear_3hourly_v1`。保存 window/horizon、hour/step=3、UTC、区间中心规则和 90 分钟中心偏移（01:30…22:30）、完整网格、通道/单位、独立任务分区策略与边界、训练期 normalization、发布 snapshot/SHA/fingerprint 和任务身份；日频 checkpoint 不能加载到三小时任务。验证/测试保存总体、任务 horizon 个 lead step 及累计时长的六项指标（指标 schema v2，单位与公式策略逐项保存），默认 24 步为 3…72 小时和累计前 24/48/72 小时。v1 指标 checkpoint 保持只读兼容；[评价专题](earth-evaluation-metrics.md)定义公式和门禁。
 

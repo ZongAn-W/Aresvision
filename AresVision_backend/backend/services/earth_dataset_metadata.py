@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -40,6 +41,8 @@ from services.earth_dataset import (
 from services.netcdf_read_lock import netcdf_read_lock
 
 logger = logging.getLogger("aresvision.datasets.earth")
+
+VERIFIER_VERSION = "earth_3hourly_verifier_v2"
 
 MANIFEST_FILE_NAME = "manifest.json"
 DATA_FILE_NAME = "earth_merra2_daily.nc"
@@ -83,17 +86,27 @@ def file_sha256(path: Path) -> str:
 
 
 def package_signature(package_dir: Any, *, data_file_name: str = DATA_FILE_NAME) -> tuple:
-    """Cheap signature used as a cache key; changes whenever a file changes."""
+    """Return a stable source identity for the package files.
+
+    ``st_ctime`` is creation time on Windows and therefore cannot be used as a
+    modification signal.  The shared helper obtains the NTFS ChangeTime and
+    also includes the volume/file identity.  Keep the historical four-column
+    tuple shape for existing callers and cache files, but use the fourth column
+    for that identity token rather than Windows creation time.
+    """
+    from services.earth_preparation_cache import file_identity
+
     root = Path(package_dir).expanduser()
     parts = []
     for name in (MANIFEST_FILE_NAME, data_file_name):
         path = root / name
         try:
-            stat = path.stat()
+            identity = file_identity(path)
         except OSError:
             parts.append((str(path), None, None, None))
         else:
-            parts.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+            token = f"{identity['device']}:{identity['inode']}:{identity['change_ns']}"
+            parts.append((str(path.resolve()), identity["bytes"], identity["mtime_ns"], token))
     return tuple(parts)
 
 
@@ -255,6 +268,7 @@ class VerifiedEarthRelease:
     longitude: np.ndarray
     fields: Mapping[str, np.ndarray]
     data_path: Optional[Path] = None
+    verification_cached: bool = False
 
 
 def read_earth_metadata(
@@ -587,22 +601,211 @@ def _assert_threehour_manifest_matches(ds, manifest, statistics):
                                 "three-hour source, variable statistics or split metadata mismatch")
 
 
-def read_earth_3hourly_release(package_dir: Any) -> VerifiedEarthRelease:
+def _verification_proof_path(cache_dir: Any, package_dir: Any) -> Path:
+    from services.earth_preparation_cache import digest_json
+    root = Path(cache_dir).expanduser().resolve()
+    package = str(Path(package_dir).expanduser().resolve())
+    return root / "verification" / f"{digest_json({'package': package, 'file': THREE_HOURLY_DATA_FILE_NAME})}.json"
+
+
+def _proof_matches_manifest(release: VerifiedEarthRelease, manifest: dict, raw: bytes) -> bool:
+    """Check every cached descriptor field against the currently read manifest.
+
+    Arrays have fixed scientific semantics and must also match the manifest;
+    this does not trust a deserialized metadata dictionary merely because the
+    top-level fingerprint and source signature happen to agree.
+    """
+    try:
+        dates, lat, lon = release.dates, release.latitude, release.longitude
+        if (np.isnat(dates).any() or len(dates) % 8
+                or np.any(np.diff(dates) != np.timedelta64(3, "h"))
+                or _iso_utc(dates[0]) != manifest["time_start"]
+                or _iso_utc(dates[-1]) != manifest["time_end"]
+                or dates[0] != dates[0].astype("datetime64[D]") + np.timedelta64(90, "m")
+                or dates[-1] != dates[-1].astype("datetime64[D]") + np.timedelta64(1350, "m")
+                or len(dates) != manifest["dimensions"]["time"]
+                or not np.array_equal(lat, -89.625 + np.arange(240) * .75)
+                or not np.array_equal(lon, -179.625 + np.arange(480) * .75)):
+            return False
+        metadata = release.metadata
+        calendar = metadata["time"]["calendar"]
+        if calendar not in GREGORIAN_CALENDARS:
+            return False
+        expected = _threehour_metadata(manifest, raw, calendar, dates, lat, lon,
+                                       manifest["variables"])
+        # Registration adds these stable ids to in-memory snapshots, so allow
+        # them only when equal to their fixed values.
+        candidate = dict(metadata)
+        for name, value in (("dataset_id", THREE_HOURLY_DATASET_ID),
+                            ("dataset_version", THREE_HOURLY_DATASET_VERSION)):
+            if name in candidate and candidate.pop(name) != value:
+                return False
+        return candidate == expected
+    except (KeyError, TypeError, ValueError, OverflowError, IndexError):
+        return False
+
+
+def _threehour_metadata(manifest, raw, calendar, dates, lat, lon, statistics) -> dict:
+    return {
+        "dataset_fingerprint": manifest["dataset_fingerprint"],
+        "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+        "manifest_content_sha256": threehour_manifest_content_sha256(manifest),
+        "data_sha256": manifest["data_sha256"],
+        "manifest": manifest, "schema": THREE_HOURLY_SCHEMA,
+        "frequency_hours": 3, "step_unit": "hour", "step": 3, "grid_shape": [240, 480],
+        "training_profile": dict(THREE_HOURLY_TRAINING_PROFILE),
+        "time": {"kind": "datetime", "calendar": calendar, "time_zone": "UTC",
+                 "start": manifest["time_start"], "end": manifest["time_end"],
+                 "count": len(dates), "step": 3, "step_unit": "hour",
+                 "frequency_hours": 3, "label": "interval_center",
+                 "interval_start": manifest["time_rule"]["interval_start"],
+                 "interval_end_exclusive": manifest["time_rule"]["interval_end_exclusive"]},
+        "grid": {"shape": [240, 480], "dimension_order": ["lat", "lon"],
+                 "latitude_range": [-90., 90.], "longitude_range": [-180., 180.],
+                 "cell_bounds": {"latitude": [-90., 90.], "longitude": [-180., 180.]},
+                 "latitude_step": .75, "longitude_step": .75,
+                 "latitude_order": "ascending", "longitude_order": "ascending",
+                 "coverage": "global", "wrap_longitude": True,
+                 "latitude_values": lat.tolist(), "longitude_values": lon.tolist()},
+        "channel_order": list(CHANNELS),
+        "variables": [{"id": name, "label": VARIABLE_LABELS[name], "units": unit,
+                       "role": "target_and_input" if name == TARGET_CHANNEL else "optional_input",
+                       "missing_rate": statistics[name]["missing_rate"],
+                       "valid_mask": statistics[name]["valid_mask"]}
+                      for name, unit in zip(CHANNELS, UNITS)],
+        "splits": dict(manifest["splits"]),
+        "limitations": [str(item) for item in manifest.get("limitations", [])],
+    }
+
+
+def _release_from_verification_proof(proof: Mapping[str, Any], *, package_dir: Path,
+                                     signature: tuple) -> VerifiedEarthRelease | None:
+    """Rehydrate the lightweight release after a completed full verification."""
+    from services.earth_preparation_cache import canonical_json, normalize_signature
+    try:
+        if proof.get("schema") != VERIFIER_VERSION:
+            return None
+        if (proof.get("dataset_id") != THREE_HOURLY_DATASET_ID
+                or proof.get("dataset_version") != THREE_HOURLY_DATASET_VERSION
+                or type(proof.get("created_at")) not in (int, float)
+                or not math.isfinite(proof["created_at"])):
+            return None
+        # The proof is written atomically, but a torn/partially edited JSON file
+        # can still parse.  Verify an integrity digest over the complete payload
+        # before using any metadata from it.
+        proof_digest = proof.get("proof_sha256")
+        if not isinstance(proof_digest, str) or not _SHA256_PATTERN.fullmatch(proof_digest):
+            return None
+        unsigned = {key: value for key, value in proof.items() if key != "proof_sha256"}
+        if hashlib.sha256(canonical_json(unsigned)).hexdigest() != proof_digest:
+            return None
+        if proof.get("source_path") != str(package_dir.resolve()):
+            return None
+        if normalize_signature(proof.get("package_signature")) != signature:
+            return None
+        metadata = proof["metadata"]
+        dates = np.asarray(proof["dates"], dtype="datetime64[ns]")
+        latitude = readonly_array(proof["latitude"], "float64")
+        longitude = readonly_array(proof["longitude"], "float64")
+        if (not isinstance(metadata, dict) or dates.ndim != 1 or len(dates) < 8
+                or latitude.shape != (240,) or longitude.shape != (480,)
+                or metadata.get("dataset_id") not in (None, THREE_HOURLY_DATASET_ID)
+                or metadata.get("schema") != THREE_HOURLY_SCHEMA
+                or metadata.get("manifest_sha256") != proof.get("manifest_sha256")
+                or metadata.get("manifest_content_sha256") != proof.get("manifest_content_sha256")
+                or metadata.get("data_sha256") != proof.get("data_sha256")
+                or metadata.get("dataset_fingerprint") != proof.get("dataset_fingerprint")
+                or not _SHA256_PATTERN.fullmatch(str(proof.get("manifest_sha256", "")))
+                or not _SHA256_PATTERN.fullmatch(str(proof.get("data_sha256", "")))
+                or not _SHA256_PATTERN.fullmatch(str(proof.get("dataset_fingerprint", "")))):
+            return None
+        return VerifiedEarthRelease(
+            metadata=metadata, signature=signature, dates=readonly_array(dates, "datetime64[ns]"),
+            latitude=latitude, longitude=longitude, fields=MappingProxyType({}),
+            data_path=package_dir / THREE_HOURLY_DATA_FILE_NAME, verification_cached=True,
+        )
+    except (KeyError, TypeError, ValueError, OverflowError, RecursionError):
+        return None
+
+
+def _write_verification_proof(cache_dir: Any, package_dir: Path, release: VerifiedEarthRelease) -> None:
+    from services.earth_preparation_cache import atomic_write_json, canonical_json, signature_json
+    payload = {
+        "schema": VERIFIER_VERSION,
+        "source_path": str(package_dir.resolve()),
+        "package_signature": signature_json(release.signature),
+        "dataset_id": release.metadata.get("dataset_id", THREE_HOURLY_DATASET_ID),
+        "dataset_version": release.metadata.get("dataset_version", THREE_HOURLY_DATASET_VERSION),
+        "manifest_sha256": release.metadata.get("manifest_sha256"),
+        "manifest_content_sha256": release.metadata.get("manifest_content_sha256"),
+        "data_sha256": release.metadata.get("data_sha256"),
+        "dataset_fingerprint": release.metadata.get("dataset_fingerprint"),
+        "metadata": release.metadata,
+        "dates": [np.datetime_as_string(value, unit="ns") for value in release.dates],
+        "latitude": release.latitude.tolist(), "longitude": release.longitude.tolist(),
+        "created_at": time.time(),
+    }
+    payload["proof_sha256"] = hashlib.sha256(
+        canonical_json(payload)
+    ).hexdigest()
+    atomic_write_json(_verification_proof_path(cache_dir, package_dir), payload)
+
+
+def read_earth_3hourly_release(package_dir: Any, *, verification_cache_dir: Any = None,
+                              force_full: bool = False, progress=None) -> VerifiedEarthRelease:
     """Verify the server-configured three-hour package and return a catalog snapshot.
 
     The builder's canonical manifest content hash defines identity. Its actual
     raw-byte hash is retained separately for diagnostics and cache signatures.
     Fields remain on disk: registering a complete two-year release never creates
     a full in-memory data snapshot or opens daily training/prediction paths.
+
+    A shared proof is optional for direct callers.  ``force_full=True`` always
+    repeats the complete raw-file SHA-256 and scientific data/mask scan, then
+    atomically replaces the proof.  A hit rechecks the manifest and source file
+    identities before and after reading the proof.
     """
-    root = Path(package_dir).expanduser()
+    started = time.perf_counter()
+    root = Path(package_dir).expanduser().resolve()
+    _verification_log(progress, "data validation checking shared proof")
+    if verification_cache_dir is None:
+        release = _read_earth_3hourly_release(root, force_full=force_full, progress=progress)
+    else:
+        from services.earth_preparation_cache import preparation_lock
+        proof_path = _verification_proof_path(verification_cache_dir, root)
+        with preparation_lock(proof_path.with_suffix(".lock"), progress=progress):
+            # Capture the source signature only after the builder lock: a
+            # process waiting for another verifier can then reuse its proof.
+            release = _read_earth_3hourly_release(
+                root, verification_cache_dir=verification_cache_dir,
+                force_full=force_full, progress=progress)
+    _verification_log(progress, f"data validation {'hit' if release.verification_cached else 'completed full scan'} "
+                      f"elapsed={time.perf_counter() - started:.3f}s")
+    return release
+
+
+def _verification_log(progress, message):
+    message = f"Earth preparation: {message}"
+    logger.info(message)
+    if progress is not None:
+        progress(message)
+
+
+def _read_earth_3hourly_release(root: Path, *, verification_cache_dir=None,
+                               force_full=False, progress=None) -> VerifiedEarthRelease:
     before = package_signature(root, data_file_name=THREE_HOURLY_DATA_FILE_NAME)
     manifest_path, data_path = root / MANIFEST_FILE_NAME, root / THREE_HOURLY_DATA_FILE_NAME
     try:
         if not manifest_path.is_file() or not data_path.is_file():
             raise EarthPackageError(REASON_PACKAGE_MISSING, "three-hour package files are missing")
+        if any(any(value is None for value in part) for part in before):
+            # A failed Windows ChangeTime query must not become a reusable
+            # all-None signature.  Reliable identity is mandatory even when
+            # the file bytes can otherwise be read.
+            raise EarthPackageError(REASON_PACKAGE_UNREADABLE, "cannot obtain reliable source file identity")
     except OSError as exc:
         raise EarthPackageError(REASON_PACKAGE_UNREADABLE, str(exc)) from exc
+
     try:
         raw = manifest_path.read_bytes()
         manifest = json.loads(raw, object_pairs_hook=_unique_json_object,
@@ -622,45 +825,42 @@ def read_earth_3hourly_release(package_dir: Any) -> VerifiedEarthRelease:
     if manifest["dataset_fingerprint"] != expected_fingerprint:
         raise EarthPackageError(REASON_MANIFEST_FINGERPRINT_MISMATCH,
                                 "three-hour dataset fingerprint does not match its manifest")
+    if verification_cache_dir is not None and not force_full:
+        from services.earth_preparation_cache import _read_json
+        try:
+            proof = _read_json(_verification_proof_path(verification_cache_dir, root))
+        except RecursionError:
+            proof = None
+        if proof is not None:
+            cached = _release_from_verification_proof(proof, package_dir=root, signature=before)
+            if cached is not None and _proof_matches_manifest(cached, manifest, raw):
+                if package_signature(root, data_file_name=THREE_HOURLY_DATA_FILE_NAME) != before:
+                    raise EarthPackageError(REASON_PACKAGE_CHANGED, "package changed while reading its proof")
+                return cached
+    _verification_log(progress, "data validation proof miss; performing complete SHA-256 and scientific scan")
     try:
         if data_path.stat().st_size != manifest["data_bytes"]:
             raise EarthPackageError(REASON_MANIFEST_METADATA_MISMATCH, "NetCDF size mismatch")
-        if file_sha256(data_path) != manifest["data_sha256"]:
+        sha_started = time.perf_counter()
+        if progress is None:
+            actual_sha = file_sha256(data_path)
+        else:
+            from services.earth_preparation_cache import sha256_file
+            actual_sha = sha256_file(data_path, progress=progress, stage="source SHA-256")
+        _verification_log(progress, f"source SHA-256 elapsed={time.perf_counter() - sha_started:.3f}s")
+        if actual_sha != manifest["data_sha256"]:
             raise EarthPackageError(REASON_DATA_FINGERPRINT_MISMATCH, "NetCDF SHA-256 mismatch")
+        scan_started = time.perf_counter()
+        _verification_log(progress, "scientific data/mask validation started")
         with netcdf_read_lock(), xr.open_dataset(data_path, engine="netcdf4", mask_and_scale=False) as ds:
             calendar = _decode_calendar(ds)
-            statistics = validate_earth_3hourly_dataset(ds)
+            # Preserve the no-callback call for direct callers; training also
+            # gets per-variable chunk progress during the large data scan.
+            statistics = (validate_earth_3hourly_dataset(ds) if progress is None
+                          else validate_earth_3hourly_dataset(ds, progress=progress))
             _assert_threehour_manifest_matches(ds, manifest, statistics)
             lat, lon = readonly_array(ds.lat.values), readonly_array(ds.lon.values)
-            metadata = {
-                "dataset_fingerprint": expected_fingerprint,
-                "manifest_sha256": hashlib.sha256(raw).hexdigest(),
-                "manifest_content_sha256": content_sha, "data_sha256": manifest["data_sha256"],
-                "manifest": manifest, "schema": THREE_HOURLY_SCHEMA,
-                "frequency_hours": 3, "step_unit": "hour", "step": 3, "grid_shape": [240, 480],
-                "training_profile": dict(THREE_HOURLY_TRAINING_PROFILE),
-                "time": {"kind": "datetime", "calendar": calendar, "time_zone": "UTC",
-                         "start": manifest["time_start"], "end": manifest["time_end"],
-                         "count": int(ds.sizes["time"]), "step": 3, "step_unit": "hour",
-                         "frequency_hours": 3, "label": "interval_center",
-                         "interval_start": manifest["time_rule"]["interval_start"],
-                         "interval_end_exclusive": manifest["time_rule"]["interval_end_exclusive"]},
-                "grid": {"shape": [240, 480], "dimension_order": ["lat", "lon"],
-                         "latitude_range": [-90., 90.], "longitude_range": [-180., 180.],
-                         "cell_bounds": {"latitude": [-90., 90.], "longitude": [-180., 180.]},
-                         "latitude_step": .75, "longitude_step": .75,
-                         "latitude_order": "ascending", "longitude_order": "ascending",
-                         "coverage": "global", "wrap_longitude": True,
-                         "latitude_values": lat.tolist(), "longitude_values": lon.tolist()},
-                "channel_order": list(CHANNELS),
-                "variables": [{"id": name, "label": VARIABLE_LABELS[name], "units": unit,
-                               "role": "target_and_input" if name == TARGET_CHANNEL else "optional_input",
-                               "missing_rate": statistics[name]["missing_rate"],
-                               "valid_mask": statistics[name]["valid_mask"]}
-                              for name, unit in zip(CHANNELS, UNITS)],
-                "splits": dict(manifest["splits"]),
-                "limitations": [str(item) for item in manifest.get("limitations", [])],
-            }
+            metadata = _threehour_metadata(manifest, raw, calendar, ds.time.values, lat, lon, statistics)
             release = VerifiedEarthRelease(metadata=metadata, signature=before,
                                            dates=readonly_array(ds.time.values, "datetime64[ns]"),
                                            latitude=lat, longitude=lon, fields=MappingProxyType({}),
@@ -677,6 +877,12 @@ def read_earth_3hourly_release(package_dir: Any) -> VerifiedEarthRelease:
         raise EarthPackageError(reason, str(exc)) from exc
     except Exception as exc:
         raise EarthPackageError(REASON_INVALID_DATASET, str(exc)) from exc
+    _verification_log(progress, f"scientific data/mask validation elapsed={time.perf_counter() - scan_started:.3f}s")
     if package_signature(root, data_file_name=THREE_HOURLY_DATA_FILE_NAME) != before:
         raise EarthPackageError(REASON_PACKAGE_CHANGED, "package files changed during verification")
+    if verification_cache_dir is not None:
+        try:
+            _write_verification_proof(verification_cache_dir, root, release)
+        except (OSError, TypeError, ValueError):
+            logger.warning("Could not publish Earth verification proof", exc_info=True)
     return release

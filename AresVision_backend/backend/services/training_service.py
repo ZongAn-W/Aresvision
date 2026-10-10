@@ -25,6 +25,7 @@ from config import (
     EARTH_MERRA2_DIR,
     EARTH_MERRA2_V1_DIR,
     EARTH_MERRA2_3HOURLY_DIR,
+    EARTH_TRAINING_CACHE_DIR,
     MCD_VARIABLES,
     TRAINING_RESULTS_DIR,
     TRAINING_SCRIPTS_DIR,
@@ -665,6 +666,7 @@ class TrainingService:
             EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2",
             legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
             earth_3hourly_package_dir=EARTH_MERRA2_3HOURLY_DIR,
+            verification_cache_dir=EARTH_TRAINING_CACHE_DIR,
         )
 
     def _restore_3hourly_training_spec(
@@ -1225,7 +1227,7 @@ class TrainingService:
         args.extend(["--output_path", str(output_path)])
 
         with open(log_file, "w", encoding="utf-8") as f:
-            f.write(f"--- 训练任务 {task_id} 已启动 ---\\n")
+            f.write(f"--- 训练任务 {task_id} 已启动 ---\n")
             f.flush()
 
         try:

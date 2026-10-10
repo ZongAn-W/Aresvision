@@ -61,8 +61,10 @@ def test_existing_global_cache_remains_readable(cached_windows, tmp_path):
         legacy[:, :, row * 24:(row + 1) * 24, column * 48:(column + 1) * 48] = windows._normalized_map[tile]
     legacy.flush()
     legacy._mmap.close()
-    for key in ('layout', 'storage_shape', 'spatial_tile_shape'):
-        del metadata[key]
+    for key in ('layout', 'storage_shape', 'spatial_tile_shape', 'cache_identity_version',
+                'cache_status', 'cache_key', 'identity', 'array_identity', 'array_sha256',
+                'package_signature', 'proof_sha256'):
+        metadata.pop(key, None)
     (tmp_path / 'metadata.json').write_text(json.dumps(metadata))
     old = EarthThreeHourlyWindows.from_release(
         windows._release, selected_channels=['U10M'], normalization=windows.normalization,

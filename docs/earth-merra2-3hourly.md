@@ -179,9 +179,9 @@ TO3 始终为首个输入和唯一输出；`selected_channels=[]` 表示只用 T
 
 归一化只拟合当前任务完整 train 区间（旧任务使用 manifest train），每次读取一个通道最多 8 个全网格时间步，以 float64 合并均值/总体方差，保存通道顺序、均值、scale、常量通道标记、拟合 UTC 起止与步数。validation / test 复用统计量。训练先以最多 8 步、一个通道的分块读取生成 normalized float32 `.npy` 内存映射，再由 `EarthThreeHourlyWindows` 读取所需 56→24 窗口及 24×48 空间块；每个时间窗口恰好 100 块，`batch_size` 表示空间块数量。缓存避免压缩 NetCDF 整场 chunk 被每个小块反复解压，不复制全部滑窗或将两年体积读入内存。模型共享各网格点的时间权重，checkpoint 的网格仍为完整 240×480。
 
-缓存目录由 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认在 Git checkout 的工作区父目录 `earth_training_cache/`；每次训练生成独立目录，检查 fingerprint、通道和含任务策略/实际边界的 normalization 后以只读映射使用。完整两年五通道缓存约 12.55 GiB，TO3-only 约 2.51 GiB；默认 batch=8 的窗口/目标张量约 10.7 MiB，另有模型 activation 与系统文件页缓存。完成及中断的缓存均保留，不删除源包或旧缓存。
+缓存目录由 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认在 Git checkout 的工作区父目录 `earth_training_cache/`；按源包身份、通道顺序、train-only normalization 内容、存储布局和缓存版本查找复用，以只读映射使用。模型参数、batch、学习率和 epoch 不进入键；window/horizon 变化但 train 实际边界不变时也无需重建全时间轴缓存。验证证明和统计量跨后端/训练子进程共享，完整验证仍保留；发布、并发、损坏拒绝和实测计时见[训练准备缓存](earth-preparation-cache.md)。完整两年五通道缓存约 12.55 GiB，TO3-only 约 2.51 GiB；默认 batch=8 的窗口/目标张量约 10.7 MiB，另有模型 activation 与系统文件页缓存。完成、中断和损坏的缓存均保留，不批量删除源包或旧缓存。未发布临时目录不得命中；既有当前布局全图/分块缓存必须先完整对照源值认证一次。
 
-新缓存采用 `layout=earth_spatial_tiles_v1`：物理数组为 `[100,time,C,24,48]`，metadata 的 `shape` 仍保存逻辑全球形状 `[time,C,240,480]`，另存 `storage_shape` 与 `spatial_tile_shape`。流式构建仍每次只解压最多 8 个时间步、一个通道，再按纬向优先的 100 个空间块重排写入；模型输入/目标及归一化数值不变。读取支持对齐空间块、跨块、反向/跨步切片及全球窗口；没有 `layout` 的旧全球缓存继续读取，未知 layout、错误物理形状、身份或统计量明确拒绝。运行中的任务不迁移已有缓存。
+新缓存采用 `layout=earth_spatial_tiles_v1`：物理数组为 `[100,time,C,24,48]`，metadata 的 `shape` 仍保存逻辑全球形状 `[time,C,240,480]`，另存 `storage_shape` 与 `spatial_tile_shape`；全图模型使用 `earth_full_grid_v1` 的 `[time,C,240,480]`。流式构建仍每次只解压最多 8 个时间步、一个通道，再按纬向优先的 100 个空间块重排写入；模型输入/目标及归一化数值不变。读取支持对齐空间块、跨块、反向/跨步切片及全球窗口；旧缓存首次挂载前完整认证，未知 layout、错误物理形状、身份或统计量明确拒绝。运行中的任务不迁移已有缓存。
 
 PyTorch 批量取样通过 `EarthThreeHourlyWindows.read_windows` 在一批读取前后各核对一次源包签名，减少逐样本重复文件状态查询；期间源包变化会使整批失败。样本顺序、重复索引、训练 shuffle 及每轮全部窗口 × 100 块的覆盖保持不变。CUDA loader 使用 `pin_memory`，输入/目标以 `non_blocking` 传输，CPU 路径保持普通传输；未增加多进程 worker 或额外预取副本。每批全部非空梯度仍检查 NaN/Inf，但有限性标志在设备上合并后只同步一次，失败时保留首个异常参数名；没有放宽上传输出、梯度或 checkpoint 门禁。缓存调整不减少批次数，也不承诺端到端固定倍数提速或 100% GPU 利用率。
 

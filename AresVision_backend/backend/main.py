@@ -28,6 +28,7 @@ from config import (
     EARTH_MERRA2_DIR,
     EARTH_MERRA2_V1_DIR,
     EARTH_MERRA2_3HOURLY_DIR,
+    EARTH_TRAINING_CACHE_DIR,
     OVERVIEW_MCD_VARIABLES,
     PENDING_REVIEW_DIR,
     TRAINING_WEIGHTS_DIR,
@@ -297,6 +298,7 @@ async def lifespan(app: FastAPI):
         EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2",
         legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
         earth_3hourly_package_dir=EARTH_MERRA2_3HOURLY_DIR,
+        verification_cache_dir=EARTH_TRAINING_CACHE_DIR,
     )
     app.state.default_earth_dataset_id = DEFAULT_EARTH_DATASET_ID
     # 二维地球总览数值服务（复用同一注册表实例与已验证快照）

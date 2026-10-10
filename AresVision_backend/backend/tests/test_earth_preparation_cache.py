@@ -471,3 +471,45 @@ windows._normalized_map._mmap.close()
     assert sum("_fit_threehour_normalization_uncached" in line for line in builders) == 1
     assert sum("_build_threehour_training_cache_uncached" in line for line in builders) == 1
     assert len(list((tmp_path / "cache").rglob("normalized.npy"))) == 1
+
+
+def test_cache_changed_between_validation_and_mapping_is_rejected(disk_release, tmp_path, monkeypatch):
+    normalization = _fit(disk_release, tmp_path)
+    path = _build(disk_release, tmp_path, normalization)
+    windows = data.EarthThreeHourlyWindows.from_release(
+        disk_release, window=7, horizon=3, selected_channels=[], normalization=normalization,
+    )
+    candidate = data._training_cache_candidate
+    def replace_after_validation(*args, **kwargs):
+        result = candidate(*args, **kwargs)
+        if result is not None:
+            mapped = np.load(path, mmap_mode='r+')
+            mapped.flat[0] += np.float32(.5)
+            mapped.flush()
+            mapped._mmap.close()
+        return result
+    monkeypatch.setattr(data, '_training_cache_candidate', replace_after_validation)
+    with pytest.raises(ValueError, match='changed after publication'):
+        windows.use_training_cache(path)
+    assert windows._normalized_map is None
+
+
+def test_direct_legacy_cache_attachment_requires_full_source_certification(disk_release, tmp_path):
+    normalization = _fit(disk_release, tmp_path)
+    path = _build(disk_release, tmp_path, normalization)
+    metadata_path = path.with_name('metadata.json')
+    metadata = json.loads(metadata_path.read_text())
+    for key in ('cache_identity_version', 'cache_status', 'cache_key', 'identity',
+                'array_identity', 'array_sha256', 'proof_sha256', 'package_signature'):
+        metadata.pop(key, None)
+    metadata_path.write_text(json.dumps(metadata))
+    mapped = np.load(path, mmap_mode='r+')
+    mapped.flat[0] += np.float32(.5)
+    mapped.flush()
+    mapped._mmap.close()
+    windows = data.EarthThreeHourlyWindows.from_release(
+        disk_release, window=7, horizon=3, selected_channels=[], normalization=normalization,
+    )
+    with pytest.raises(ValueError, match='integrity check failed'):
+        windows.use_training_cache(path)
+    assert windows._normalized_map is None

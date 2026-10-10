@@ -55,7 +55,7 @@ separate 30-second checkpoint gate. Old weights are not automatically promoted.
 The normalized cache is time-major `[time,C,240,480]`, tagged
 `earth_full_grid_v1` with explicit schema/version, data identity and normalization.
 Temporal windows are read as needed, without expanding overlapping windows into
-a second dataset. Preparation logs show normalization and cache-writing progress.
+a second dataset. Preparation reuses shared validation proofs, train-only statistics, and content-addressed full-grid or tile caches. Changing model parameters, batch size, learning rate, or epochs does not rebuild the normalized volume; changing windows only rebuilds it when the actual training interval changes. Logs show hit/miss status, chunk progress, integrity checks, and stage times. See [preparation cache](earth-preparation-cache.md).
 One temporal origin is one sample, rather than 100 spatial samples. This changes
 the optimization batch composition even when the loss still weights all pixels.
 
