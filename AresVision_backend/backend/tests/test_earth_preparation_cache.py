@@ -79,8 +79,9 @@ def test_same_preparation_reuses_statistics_and_volume(disk_release, tmp_path, m
     assert any("generated" in message and "s" in message for message in logs)
 
 
+@pytest.mark.parametrize("full_grid", [False, True])
 def test_model_batch_and_training_parameters_do_not_rebuild_loaders_cache(
-    synthetic_training_release, tmp_path, monkeypatch,
+    synthetic_training_release, tmp_path, monkeypatch, full_grid,
 ):
     """Exercise the real preparation caller without running an optimizer."""
     release = synthetic_training_release
@@ -92,6 +93,9 @@ def test_model_batch_and_training_parameters_do_not_rebuild_loaders_cache(
         task_split=build_earth_task_split(release.dates, 56, 24, ratios),
         hyperparameters={**ratios, "selected_channels": [], "batch_size": 2},
     )
+    if full_grid:
+        original["hyperparameters"].update(model_source="uploaded", model_architecture="uploaded")
+        original["uploaded_model"] = {"contract_schema": FULL_GRID_CONTRACT_SCHEMA}
     first = _build_loaders(original, registry, 2, 42, cache_root=tmp_path)
     try:
         first_path = Path(first["splits"]["train"]._normalized_map.filename)
@@ -104,7 +108,9 @@ def test_model_batch_and_training_parameters_do_not_rebuild_loaders_cache(
             custom_model_params={"width": 64, "dropout": .1},
             model_source="uploaded", model_architecture="uploaded",
         )
-        changed["uploaded_model"] = {"contract_schema": "aresvision_earth_3hourly_model_v1"}
+        changed["uploaded_model"] = {
+            "contract_schema": FULL_GRID_CONTRACT_SCHEMA if full_grid else "aresvision_earth_3hourly_model_v1",
+        }
         second = _build_loaders(changed, registry, 5, 6, cache_root=tmp_path)
         try:
             assert Path(second["splits"]["train"]._normalized_map.filename) == first_path
@@ -364,6 +370,7 @@ def test_existing_complete_full_grid_cache_is_validated_and_reused(disk_release,
     for key in ("cache_identity_version", "cache_status", "cache_key", "identity",
                 "array_identity", "array_sha256", "metadata_sha256", "package_signature"):
         metadata.pop(key, None)
+    metadata.pop("proof_sha256", None)
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     monkeypatch.setattr(data, "_build_threehour_training_cache_uncached", _reject_scan)
     current = _fit(disk_release, tmp_path)
