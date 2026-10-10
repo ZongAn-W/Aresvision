@@ -61,6 +61,7 @@ import {
   classifyEarthTrainingError,
   readEarthDatasetAvailability,
   readEarthUploadedModelCompatibility,
+  EARTH_3HOURLY_FULL_GRID_SCHEMA,
 } from './ModelTrainingPage/earthTrainingConfig';
 import { createTrainingDraftSession } from './ModelTrainingPage/trainingDraftSession';
 import { getUploadedModelValidationStatus, UPLOADED_MODEL_VALIDATION_TIMEOUT } from './ModelTrainingPage/uploadedModelValidation';
@@ -461,6 +462,7 @@ export default function ModelTrainingPage() {
       uploadedModelInvalid: isZh ? '需修正' : 'Invalid',
       uploadedModelPending: isZh ? '校验中' : 'Pending',
       uploadedModelTimeout: isZh ? '校验超时，请重试' : 'Validation timed out. Please retry.',
+      fullGridBatchInvalid: isZh ? '全图模型的批大小须为 1–64 的整数' : 'Full-grid batch size must be an integer from 1 to 64',
       uploadedModelReady: isZh ? '该模型已通过校验，可以训练。' : 'This model is ready for training.',
       uploadedModelUnnamed: isZh ? '未命名模型' : 'Unnamed model',
       uploadedModelNoFilename: isZh ? '未知文件' : 'Unknown file',
@@ -858,6 +860,7 @@ export default function ModelTrainingPage() {
     compatibility: earthUploadedStatus,
     datasetId: trainingDataset,
     windowValue: window_, horizon,
+    batchSize,
   });
   const earthUploadedInlineError = earthMode
     && modelSource === EARTH_MODEL_SOURCE_UPLOADED
@@ -952,6 +955,22 @@ export default function ModelTrainingPage() {
     [selectedUploadedModelId, uploadedModels]
   );
   const selectedUploadedModelTimedOut = getUploadedModelValidationStatus(selectedUploadedModel) === 'timeout';
+  const selectedUploadedModelIsFullGrid = earthMode
+    && selectedUploadedModel?.validation_report?.datasets?.[EARTH_3HOURLY_DATASET_ID]?.schema === EARTH_3HOURLY_FULL_GRID_SCHEMA;
+  const handleSelectUploadedModel = (modelId) => {
+    const model = uploadedModels.find((item) => item.id === modelId);
+    if (earthMode && modelId !== selectedUploadedModelId
+        && model?.validation_report?.datasets?.[EARTH_3HOURLY_DATASET_ID]?.schema === EARTH_3HOURLY_FULL_GRID_SCHEMA) {
+      setBatchSize(1);
+    }
+    setSelectedUploadedModelId(modelId);
+  };
+  const handleModelSourceChange = (source) => {
+    if (source === EARTH_MODEL_SOURCE_UPLOADED && modelSource !== source && selectedUploadedModelIsFullGrid) {
+      setBatchSize(1);
+    }
+    setModelSource(source);
+  };
   const selectedUploadedParamSchema = useMemo(
     () => selectedUploadedModel?.param_schema || {},
     [selectedUploadedModel]
@@ -1109,6 +1128,8 @@ export default function ModelTrainingPage() {
         ? copy.inspectorMissingUploadedModel
         : earthUploadedBlocker === UPLOADED_MODEL_VALIDATION_TIMEOUT
           ? copy.uploadedModelTimeout
+          : earthUploadedBlocker === 'earth_full_grid_batch_invalid'
+            ? copy.fullGridBatchInvalid
           : earthUploadedBlocker === 'earth_compatibility_unknown'
           ? (earthUploadedLoading ? copy.earthCompatibilityChecking : copy.earthCompatibilityUnknown)
           : earthUploadedBlocker;
@@ -1120,6 +1141,7 @@ export default function ModelTrainingPage() {
     copy.earthCompatibilityChecking,
     copy.earthCompatibilityUnknown,
     copy.uploadedModelTimeout,
+    copy.fullGridBatchInvalid,
     copy.earthUnavailableFallback,
     earthAvailability.reason,
     earthAvailability.selectable,
@@ -1529,6 +1551,9 @@ export default function ModelTrainingPage() {
       await refreshUploadedModels(uploaded?.id);
       setSelectedUploadedModelId(uploaded?.id || '');
       setModelSource('uploaded');
+      if (earthMode && uploaded?.validation_report?.datasets?.[EARTH_3HOURLY_DATASET_ID]?.schema === EARTH_3HOURLY_FULL_GRID_SCHEMA) {
+        setBatchSize(1);
+      }
       showToast(
         uploaded?.validation_status === 'valid' ? copy.uploadModelSuccess
           : getUploadedModelValidationStatus(uploaded) === 'timeout' ? copy.uploadedModelTimeout : copy.uploadModelInvalid,
@@ -1698,7 +1723,7 @@ export default function ModelTrainingPage() {
     setTransferFreezeMode(defaults.transferFreezeMode);
     setFinetuneLearningRate(defaults.finetuneLearningRate);
     setEpochs(defaults.epochs);
-    setBatchSize(defaults.batchSize);
+    setBatchSize(modelSource === EARTH_MODEL_SOURCE_UPLOADED && selectedUploadedModelIsFullGrid ? 1 : defaults.batchSize);
     setLearningRate(defaults.learningRate);
     const splitDefaults = earthMode ? getEarthSplitDefaults(defaults) : defaults;
     setTrainRatio(splitDefaults.trainRatio);
@@ -2210,8 +2235,10 @@ export default function ModelTrainingPage() {
         architecturePickerOpen,
         advancedOpen,
         modelArchitectures: MODEL_ARCHITECTURES,
-        guideDownloadUrl: getUserModelDownloadUrl(earthMode && trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1 ? 'earth-3hourly-guide' : 'guide'),
-        templateDownloadUrl: getUserModelDownloadUrl(earthMode && trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1 ? 'earth-3hourly-template' : 'template'),
+        guideDownloadUrl: getUserModelDownloadUrl(earthMode && trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1
+          ? selectedUploadedModel?.validation_report?.datasets?.[EARTH_3HOURLY_DATASET_ID]?.schema === EARTH_3HOURLY_FULL_GRID_SCHEMA ? 'earth-3hourly-fullgrid-guide' : 'earth-3hourly-guide' : 'guide'),
+        templateDownloadUrl: getUserModelDownloadUrl(earthMode && trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1
+          ? selectedUploadedModel?.validation_report?.datasets?.[EARTH_3HOURLY_DATASET_ID]?.schema === EARTH_3HOURLY_FULL_GRID_SCHEMA ? 'earth-3hourly-fullgrid-template' : 'earth-3hourly-template' : 'template'),
         earthDatasetAvailability: earthAvailability,
         datasetCatalogError,
         earthUploadedInlineError,
@@ -2238,8 +2265,8 @@ export default function ModelTrainingPage() {
       actions={{
         onModelNameChange: handleModelNameChange,
         onTrainingDatasetChange: handleTrainingDatasetChange,
-        onModelSourceChange: setModelSource,
-        onSelectUploadedModel: setSelectedUploadedModelId,
+        onModelSourceChange: handleModelSourceChange,
+        onSelectUploadedModel: handleSelectUploadedModel,
         onUploadModel: handleUploadModel,
         onRevalidateModel: handleRevalidateModel,
         onDeleteUploadedModel: handleDeleteUploadedModel,

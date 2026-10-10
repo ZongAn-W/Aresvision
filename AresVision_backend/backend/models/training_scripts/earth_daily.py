@@ -40,6 +40,10 @@ from services.dataset_registry import DatasetRegistry  # noqa: E402
 from services.dataset_identity import DatasetRequestError, EARTH_DATASET_3HOURLY_ID  # noqa: E402
 from services.earth_dataset import (  # noqa: E402
     EarthOzoneWindows, EarthThreeHourlyWindows, build_threehour_training_cache,
+    fit_threehour_normalization, THREE_HOURLY_GRID_SHAPE,
+)
+from training_backbones.earth_3hourly_uploaded_contract import (  # noqa: E402
+    FULL_GRID_CONTRACT_SCHEMA, contract_profile,
 )
 from services.earth_training_artifact import (  # noqa: E402
     EarthArtifactError,
@@ -94,6 +98,15 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
 
 
+def _uses_full_grid(spec: dict) -> bool:
+    reference = spec.get('uploaded_model') or {}
+    full_grid = reference.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA
+    if full_grid and (spec['dataset_binding']['dataset_id'] != EARTH_DATASET_3HOURLY_ID
+                      or spec['hyperparameters'].get('model_source') != MODEL_SOURCE_UPLOADED):
+        raise EarthTrainingError('The full-grid contract requires an uploaded three-hour Earth model')
+    return full_grid
+
+
 def _build_loaders(
     spec: dict,
     registry: DatasetRegistry,
@@ -104,6 +117,11 @@ def _build_loaders(
 ):
     """Build the three split datasets sharing one training-fitted normalization."""
     binding = spec["dataset_binding"]
+    full_grid = _uses_full_grid(spec)
+    max_batch_size = contract_profile(FULL_GRID_CONTRACT_SCHEMA)['max_batch_size']
+    if full_grid and (type(batch_size) is not int or not 1 <= batch_size <= max_batch_size):
+        raise EarthTrainingError(f'Full-grid Earth training batch_size must be an integer between 1 and {max_batch_size}')
+    print('Earth preparation: loading verified dataset and checking task binding', flush=True)
     hyperparameters = normalize_earth_training_hyperparameters(
         spec["hyperparameters"], dataset_id=binding["dataset_id"]
     )
@@ -118,8 +136,14 @@ def _build_loaders(
     if "task_split" in spec:
         from services.earth_task_split import validate_earth_task_split
         validate_earth_task_split(task_split, release.dates, profile["window"], profile["horizon"], hyperparameters)
-    normalization = normalization_from_release(release, ["TO3", *selected], task_split=task_split)
     window_type = EarthThreeHourlyWindows if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else EarthOzoneWindows
+    if window_type is EarthThreeHourlyWindows:
+        normalization = fit_threehour_normalization(
+            release, ["TO3", *selected], task_split=task_split,
+            progress=lambda message: print(message, flush=True),
+        )
+    else:
+        normalization = normalization_from_release(release, ["TO3", *selected], task_split=task_split)
     splits = {
         name: window_type.from_release(
             release,
@@ -138,6 +162,7 @@ def _build_loaders(
         cache_path = build_threehour_training_cache(
             release, ["TO3", *selected], normalization,
             cache_root if cache_root is not None else EARTH_TRAINING_CACHE_DIR,
+            full_grid=full_grid, progress=lambda message: print(message, flush=True),
         )
         for dataset in splits.values():
             dataset.use_training_cache(cache_path)
@@ -155,7 +180,7 @@ def _build_loaders(
         split_ranges = task_split["ranges"]
     generator = torch.Generator()
     generator.manual_seed(seed)
-    wrapper = _SpatialTileDataset if window_type is EarthThreeHourlyWindows else _ArrayDataset
+    wrapper = _SpatialTileDataset if window_type is EarthThreeHourlyWindows and not full_grid else _ArrayDataset
     pin_memory = device is not None and device.type == 'cuda'
     train_loader = torch.utils.data.DataLoader(
         wrapper(splits["train"]),
@@ -179,6 +204,12 @@ def _build_loaders(
         num_workers=0,
         pin_memory=pin_memory,
     )
+    spatial_mode = 'spatial_tile' if wrapper is _SpatialTileDataset else 'full_grid'
+    print(
+        f'Earth preparation complete: spatial mode={spatial_mode}, '
+        f'train samples={len(train_loader.dataset)}, batches={len(train_loader)}',
+        flush=True,
+    )
     return {
         "release": release,
         "profile": profile,
@@ -191,6 +222,7 @@ def _build_loaders(
         "train_loader": train_loader,
         "validation_loader": validation_loader,
         "test_loader": test_loader,
+        "full_grid": full_grid,
     }
 
 
@@ -206,6 +238,13 @@ class _ArrayDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         inputs, targets = self.source[index]
         return torch.from_numpy(inputs), torch.from_numpy(targets)
+
+    def __getitems__(self, indices):
+        if not hasattr(self.source, 'read_windows'):
+            return [self[index] for index in indices]
+        requests = [(index, slice(None), slice(None)) for index in indices]
+        return [(torch.from_numpy(inputs), torch.from_numpy(targets))
+                for inputs, targets in self.source.read_windows(requests)]
 
 
 class _SpatialTileDataset(_ArrayDataset):
@@ -560,9 +599,14 @@ def run_training(
         "duration_seconds": round(time.time() - start_time, 3),
     }
     if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
-        run["memory_strategy"] = "normalized_memmap_spatial_tiles"
-        run["spatial_tile_shape"] = list(THREE_HOUR_TILE_SHAPE)
-        run["batch_unit"] = "spatial_tile"
+        if prepared["full_grid"]:
+            run["memory_strategy"] = "normalized_memmap_full_grid"
+            run["spatial_grid_shape"] = list(THREE_HOURLY_GRID_SHAPE)
+            run["batch_unit"] = "global_time_window"
+        else:
+            run["memory_strategy"] = "normalized_memmap_spatial_tiles"
+            run["spatial_tile_shape"] = list(THREE_HOUR_TILE_SHAPE)
+            run["batch_unit"] = "spatial_tile"
         run["missing_value_policy"] = "reject_selected_channel_missing_values"
     uploaded_block = None
     if model_source == MODEL_SOURCE_UPLOADED:
@@ -576,6 +620,7 @@ def run_training(
             "param_schema": uploaded_reference.get("param_schema") or {},
             "custom_model_params": uploaded_reference.get("custom_model_params") or {},
             "build_config": model_build_config,
+            "contract_schema": uploaded_reference.get("contract_schema"),
             "input_channel_order": order,
         }
     payload = build_checkpoint_payload(

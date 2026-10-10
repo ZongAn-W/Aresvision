@@ -162,17 +162,29 @@ class UserModelService:
             earth = report.get("earth")
         earth = earth if isinstance(earth, dict) else {}
         datasets = report.get("datasets") if isinstance(report.get("datasets"), dict) else {}
+        declaration = datasets.get(dataset_id) or {}
         available = os.path.isfile(package.storage_path or "")
         compatible = earth.get("compatible") is True and available and package.validation_status == "valid" and report.get("ok") is True
         code = earth.get("code")
         status = "available" if compatible else ("unavailable" if earth else "unknown")
         if dataset_id == "earth_merra2_3hourly_v1" and earth:
-            from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, EVAL_BATCH_POLICY
-            if (earth.get("contract_schema") != CONTRACT_SCHEMA or earth.get("dataset_id") != dataset_id
+            from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA, EVAL_BATCH_POLICY, contract_profile
+            try:
+                execution = contract_profile(earth.get('contract_schema'))
+            except ValueError:
+                execution = None
+            expected_horizon = earth.get('horizon', 24)
+            if (execution is None or earth.get("dataset_id") != dataset_id
+                    or earth.get('contract_schema') != declaration.get('schema')
                     or (earth.get("compatible") is True and earth.get("eval_batch_policy") != EVAL_BATCH_POLICY)
                     or earth.get("status") == "unknown"
                     or (earth.get("compatible") is True and (earth.get("status") != "available"
-                        or earth.get("output_shape") != [2, 24, 1, 24, 48]))):
+                        or earth.get("output_shape") != [2, expected_horizon, 1, *(execution or {}).get('shape', ())]))
+                    or (earth.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA
+                        and (earth.get('validation_scope') != 'declared_channels_probe_windows'
+                             or earth.get('batch_size') != 1
+                             or earth.get('window') not in declaration.get('window', [])
+                             or earth.get('horizon') not in declaration.get('horizon', [])))):
                 compatible, status, code = False, "unknown", "uploaded_model_compatibility_unknown"
         reasons = list(earth.get("errors") or [])
         if not available:
@@ -214,6 +226,9 @@ class UserModelService:
             "contract_schema": earth.get("contract_schema"),
             "eval_batch_policy": earth.get("eval_batch_policy"),
             "output_shape": earth.get("output_shape"),
+            "default_batch_size": 1 if earth.get('contract_schema') == 'aresvision_earth_3hourly_fullgrid_model_v2' else 8,
+            "max_batch_size": 64,
+            "spatial_input_shape": declaration.get('spatial_tile_shape') if dataset_id == 'earth_merra2_3hourly_v1' else None,
         }
 
     async def revalidate_package(self, package_id: str, user_id: int) -> UserModelPackage:

@@ -642,15 +642,27 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
         prediction = np.empty_like(reference)
         mean, scale = checkpoint.normalization["mean"][0], checkpoint.normalization["scale"][0]
         with torch.no_grad():
-            for lat in range(0, 240, 24):
-                for lon in range(0, 480, 48):
-                    tile = np.ascontiguousarray(inputs[None, :, :, lat:lat + 24, lon:lon + 48])
-                    output = earth_forward_for_model(
-                        model, torch.from_numpy(tile).to(resolved_device), model_source=checkpoint.model_source,
-                        horizon=horizon, height=24, width=48,
-                    )
-                    with np.errstate(over="ignore", invalid="ignore"):
-                        prediction[:, lat:lat + 24, lon:lon + 48] = output[0, :, 0].cpu().numpy() * scale + mean
+            full_grid = False
+            if checkpoint.model_source == MODEL_SOURCE_UPLOADED:
+                from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+                full_grid = contract_profile(checkpoint.model_config["contract_schema"])["full_grid"]
+            if full_grid:
+                output = earth_forward_for_model(
+                    model, torch.from_numpy(np.ascontiguousarray(inputs[None])).to(resolved_device),
+                    model_source=checkpoint.model_source, horizon=horizon, height=240, width=480,
+                )
+                with np.errstate(over="ignore", invalid="ignore"):
+                    prediction[:] = output[0, :, 0].cpu().numpy() * scale + mean
+            else:
+                for lat in range(0, 240, 24):
+                    for lon in range(0, 480, 48):
+                        tile = np.ascontiguousarray(inputs[None, :, :, lat:lat + 24, lon:lon + 48])
+                        output = earth_forward_for_model(
+                            model, torch.from_numpy(tile).to(resolved_device), model_source=checkpoint.model_source,
+                            horizon=horizon, height=24, width=48,
+                        )
+                        with np.errstate(over="ignore", invalid="ignore"):
+                            prediction[:, lat:lat + 24, lon:lon + 48] = output[0, :, 0].cpu().numpy() * scale + mean
         if not np.isfinite(prediction).all():
             raise EarthArtifactError("The Earth model produced non-finite DU predictions")
     except (EarthArtifactError, EarthModelBuildError, UploadedModelSourceError, ValueError, RuntimeError) as exc:

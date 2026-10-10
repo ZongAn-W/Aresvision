@@ -21,6 +21,7 @@ are read-only and shared with the overview API.
 from pathlib import Path
 import operator
 import json
+import time
 import uuid
 
 import numpy as np
@@ -36,6 +37,8 @@ THREE_HOURLY_DATASET_VERSION = 'v1'
 THREE_HOURLY_GRID_SHAPE = (240, 480)
 THREE_HOURLY_TILE_SHAPE = (24, 48)
 THREE_HOURLY_TILE_CACHE_LAYOUT = 'earth_spatial_tiles_v1'
+THREE_HOURLY_FULL_GRID_CACHE_LAYOUT = 'earth_full_grid_v1'
+THREE_HOURLY_CACHE_SCHEMA = 'aresvision_earth_training_cache_v1'
 THREE_HOURLY_TRAINING_PROFILE = {
     'target': 'TO3', 'target_unit': 'DU', 'window': 56, 'horizon': 24,
     'step_unit': 'hour', 'step': 3, 'grid_shape': [240, 480],
@@ -571,7 +574,7 @@ def _utc_timestamp(value):
     return np.datetime_as_string(np.datetime64(value, 's'), unit='s') + 'Z'
 
 
-def fit_threehour_normalization(release, channels=None, *, task_split=None):
+def fit_threehour_normalization(release, channels=None, *, task_split=None, progress=None):
     """Fit stable population statistics on training frames in chunks of at most 8.
 
     This scans one channel at a time and merges float64 chunk moments. It never
@@ -594,9 +597,13 @@ def fit_threehour_normalization(release, channels=None, *, task_split=None):
         if not np.array_equal(ds.time.values, dates):
             raise ValueError('Earth three-hour timestamps changed since verification')
         for channel in selected_channels:
+            last_progress = time.monotonic()
+            if progress is not None:
+                progress(f'Earth preparation: normalization {channel} 0/{stop - start} train frames')
             count, mean, moment = 0, 0.0, 0.0
             for offset in range(start, stop, 8):
-                values = _threehour_values(ds, channel, offset, min(offset + 8, stop)).astype('float64')
+                chunk_stop = min(offset + 8, stop)
+                values = _threehour_values(ds, channel, offset, chunk_stop).astype('float64')
                 chunk_count = values.size
                 chunk_mean = float(values.mean())
                 chunk_moment = float(values.var(ddof=0)) * chunk_count
@@ -605,6 +612,9 @@ def fit_threehour_normalization(release, channels=None, *, task_split=None):
                 moment += chunk_moment + delta * delta * count * chunk_count / total_count
                 mean += delta * chunk_count / total_count
                 count = total_count
+                if progress is not None and (chunk_stop == stop or time.monotonic() - last_progress >= 5):
+                    progress(f'Earth preparation: normalization {channel} {chunk_stop - start}/{stop - start} train frames')
+                    last_progress = time.monotonic()
             std = float(np.sqrt(max(moment / count, 0.0)))
             constant = std < MINIMUM_SCALE
             means.append(float(np.float32(mean)))
@@ -625,11 +635,12 @@ def fit_threehour_normalization(release, channels=None, *, task_split=None):
     }
 
 
-def build_threehour_training_cache(release, channels, normalization, cache_root):
+def build_threehour_training_cache(release, channels, normalization, cache_root, *, full_grid=False, progress=None):
     """Stream normalized fields to a unique disk map, without expanding windows.
 
-    Compressed global chunks are decoded once here, avoiding repeated full-field
-    decompression for every spatial tile. Only <=8 frames of one channel are read.
+    Compressed global chunks are decoded once here. Full-grid models use time-major
+    fields; tile models retain spatially contiguous tile storage. Only <=8 frames
+    of one channel are read.
     Interrupted caches are retained; source packages are always read-only.
     """
     from services.netcdf_read_lock import netcdf_read_lock
@@ -642,8 +653,12 @@ def build_threehour_training_cache(release, channels, normalization, cache_root)
     folder.mkdir()
     path = folder / 'normalized.npy'
     shape = (len(release.dates), len(order), 240, 480)
-    storage_shape = (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
+    layout = THREE_HOURLY_FULL_GRID_CACHE_LAYOUT if full_grid else THREE_HOURLY_TILE_CACHE_LAYOUT
+    storage_shape = shape if full_grid else (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
     mapped = np.lib.format.open_memmap(path, mode='w+', dtype='float32', shape=storage_shape)
+    last_progress = time.monotonic()
+    if progress is not None:
+        progress(f'Earth preparation: {layout} cache 0/{shape[0]} frames')
     try:
         with netcdf_read_lock(), xr.open_dataset(source_path, engine='netcdf4', mask_and_scale=False) as ds:
             if not np.array_equal(ds.time.values, release.dates):
@@ -653,19 +668,26 @@ def build_threehour_training_cache(release, channels, normalization, cache_root)
                 for index, channel in enumerate(order):
                     values = _threehour_values(ds, channel, start, stop)
                     values = ((values.astype('float64') - mean[index]) / scale[index]).astype('float32')
-                    tiles = values.reshape(stop - start, 10, 24, 10, 48)
-                    tiles = tiles.transpose(1, 3, 0, 2, 4).reshape(100, stop - start, 24, 48)
-                    mapped[:, start:stop, index] = tiles
+                    if full_grid:
+                        mapped[start:stop, index] = values
+                    else:
+                        tiles = values.reshape(stop - start, 10, 24, 10, 48)
+                        tiles = tiles.transpose(1, 3, 0, 2, 4).reshape(100, stop - start, 24, 48)
+                        mapped[:, start:stop, index] = tiles
+                if progress is not None and (stop == shape[0] or time.monotonic() - last_progress >= 5):
+                    progress(f'Earth preparation: {layout} cache {stop}/{shape[0]} frames')
+                    last_progress = time.monotonic()
         mapped.flush()
     finally:
         mapped._mmap.close()
     _threehour_path(release)
     (folder / 'metadata.json').write_text(json.dumps({
+        'schema': THREE_HOURLY_CACHE_SCHEMA, 'cache_version': 1,
         'dataset_id': THREE_HOURLY_DATASET_ID,
         'dataset_fingerprint': release.metadata.get('dataset_fingerprint'),
         'shape': list(shape), 'input_channel_order': order,
-        'layout': THREE_HOURLY_TILE_CACHE_LAYOUT,
-        'storage_shape': list(storage_shape), 'spatial_tile_shape': list(THREE_HOURLY_TILE_SHAPE),
+        'layout': layout, 'storage_shape': list(storage_shape),
+        **({'spatial_tile_shape': list(THREE_HOURLY_TILE_SHAPE)} if not full_grid else {}),
         'normalization': normalization,
     }, sort_keys=True, allow_nan=False), encoding='utf-8')
     return path
@@ -758,10 +780,18 @@ class EarthThreeHourlyWindows:
             raise ValueError('Three-hour training cache identity or normalization mismatch')
         layout = metadata.get('layout')
         storage_shape = shape
+        if metadata.get('schema') is not None and (metadata.get('schema') != THREE_HOURLY_CACHE_SCHEMA
+                                                   or metadata.get('cache_version') != 1):
+            raise ValueError('Unsupported three-hour training cache version')
         if layout == THREE_HOURLY_TILE_CACHE_LAYOUT:
             storage_shape = (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
             if (metadata.get('storage_shape') != list(storage_shape)
                     or metadata.get('spatial_tile_shape') != list(THREE_HOURLY_TILE_SHAPE)):
+                raise ValueError('Three-hour training cache storage layout mismatch')
+        elif layout == THREE_HOURLY_FULL_GRID_CACHE_LAYOUT:
+            if (metadata.get('schema') != THREE_HOURLY_CACHE_SCHEMA
+                    or metadata.get('cache_version') != 1
+                    or metadata.get('storage_shape') != list(storage_shape)):
                 raise ValueError('Three-hour training cache storage layout mismatch')
         elif layout is not None:
             raise ValueError('Unsupported three-hour training cache layout')

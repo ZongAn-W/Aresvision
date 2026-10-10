@@ -271,7 +271,7 @@ def evaluate_package_earth_compatibility(
 
 def _evaluate_three_hour_package(package, raw, validator, *, earth_probe=None):
     from services.user_model_validator import VALIDATION_TIMEOUT_CODE, validation_report_timed_out
-    from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, EVAL_BATCH_POLICY
+    from training_backbones.earth_3hourly_uploaded_contract import EVAL_BATCH_POLICY, contract_profile
 
     identity = dict(dataset_id=EARTH_3HOURLY_FEED_KEY,
                     display_name=getattr(package, "display_name", None), version=getattr(package, "version", None))
@@ -300,13 +300,19 @@ def _evaluate_three_hour_package(package, raw, validator, *, earth_probe=None):
             status="unknown" if unknown else "unavailable", code=code,
             declares_earth=declared, datasets=result.datasets, **identity,
         )
-    declared_horizons = (result.datasets.get(EARTH_3HOURLY_FEED_KEY) or {}).get('horizon', [24])
-    probe_horizon = (earth_probe or {}).get('horizon', 24 if 24 in declared_horizons else declared_horizons[0])
+    declaration = result.datasets.get(EARTH_3HOURLY_FEED_KEY) or {}
+    try:
+        execution = contract_profile(declaration.get('schema'))
+    except ValueError:
+        execution = None
+    declared_horizons = declaration.get('horizon', [24])
+    default_horizon = (execution or {}).get('probe_horizon', 24)
+    probe_horizon = (earth_probe or {}).get('horizon', default_horizon if default_horizon in declared_horizons else declared_horizons[0])
     proven = (result.ok is True and block.get("compatible") is True and block.get("status") == "available"
               and block.get("dataset_id") == EARTH_3HOURLY_FEED_KEY
-              and block.get("contract_schema") == CONTRACT_SCHEMA
+              and execution is not None and block.get("contract_schema") == execution['schema']
               and block.get("eval_batch_policy") == EVAL_BATCH_POLICY
-              and block.get("output_shape") == [2, probe_horizon, 1, 24, 48])
+              and block.get("output_shape") == [2, probe_horizon, 1, *(execution or {}).get('shape', ())])
     return EarthCompatibility(
         proven, list(block.get("errors") or []), warnings=list(result.warnings),
         declares_earth=EARTH_3HOURLY_FEED_KEY in result.datasets, datasets=result.datasets,

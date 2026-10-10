@@ -164,7 +164,12 @@ class TrainingService:
                                 "dataset_identity_status", "dataset_snapshot")},
                             json.loads(task.hyperparameters or "{}"), task.id,
                         )
-                        await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
+                        from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA
+                        if earth_artifact.model_config.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA:
+                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path,
+                                timeout_seconds=config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS)
+                        else:
+                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
                     except Exception as exc:
                         task.status = "failed"
                         task.metrics = json.dumps({"error_code": "invalid_earth_training_artifact", "error": str(exc)})
@@ -572,6 +577,9 @@ class TrainingService:
             payload_hypers["custom_model_params"] = dict(earth_reference.custom_model_params)
             if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
                 payload_hypers["_earth_uploaded_reference"] = earth_reference.checkpoint_reference()
+                from training_backbones.earth_3hourly_uploaded_contract import contract_schema_for_reference
+                payload_hypers["_earth_uploaded_contract_schema"] = contract_schema_for_reference(payload_hypers["_earth_uploaded_reference"])
+                payload_hypers["_earth_uploaded_reference"]["contract_schema"] = payload_hypers["_earth_uploaded_contract_schema"]
         if not earth_training:
             await self._resolve_transfer_source(
                 user_id=user_id,
@@ -700,6 +708,13 @@ class TrainingService:
                     or reference.get("version") != task.uploaded_model_version
                     or reference.get("content_hash") != raw_hypers.get("_uploaded_model_content_hash")):
                 raise DatasetRequestError("uploaded_model_reference_missing", "Queued task has no matching frozen model reference", status_code=409)
+            from training_backbones.earth_3hourly_uploaded_contract import contract_schema_for_reference
+            try:
+                schema = contract_schema_for_reference(reference)
+            except (ValueError, TypeError) as exc:
+                raise DatasetRequestError('uploaded_model_contract_invalid', str(exc), status_code=409) from exc
+            if raw_hypers.get('_earth_uploaded_contract_schema', schema) != schema:
+                raise DatasetRequestError('uploaded_model_contract_invalid', 'Frozen spatial contract disagrees with the model source', status_code=409)
         if task_split is not None:
             from services.earth_task_split import validate_earth_task_split
             try:
@@ -789,6 +804,14 @@ class TrainingService:
                 status_code=422,
             )
 
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA, contract_profile
+            report = json.loads(package.validation_report or '{}')
+            feed = (report.get('datasets') or {}).get(dataset_id) or {}
+            if feed.get('schema') == FULL_GRID_CONTRACT_SCHEMA and batch_size > contract_profile(FULL_GRID_CONTRACT_SCHEMA)['max_batch_size']:
+                raise DatasetRequestError('invalid_earth_training_parameters',
+                    f"Full-grid Earth training requires batch_size between 1 and {contract_profile(FULL_GRID_CONTRACT_SCHEMA)['max_batch_size']}; a batch counts complete global windows", status_code=422)
+
         # Earth compatibility is its own question: a model validated for Mars is not
         # thereby usable on the Earth feed.
         try:
@@ -821,11 +844,22 @@ class TrainingService:
                 + "; ".join(verdict.reasons or ["unsupported model"]), status_code=422,
             )
 
+        contract_schema = None
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+            contract_schema = (verdict.datasets.get(dataset_id) or {}).get('schema')
+            try:
+                contract_profile(contract_schema)
+            except (ValueError, TypeError) as exc:
+                raise DatasetRequestError('uploaded_model_contract_invalid',
+                    'The isolated Earth validator returned no supported spatial contract', status_code=422) from exc
+
         reference = build_reference(
             package=package,
             param_schema=param_schema,
             custom_model_params=resolved_params,
             embed_source=True,
+            contract_schema=contract_schema,
         )
         # The server must be able to prove the code it pins is the code it validated.
         resolve_source_text_strict(
@@ -1311,7 +1345,12 @@ class TrainingService:
                     if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
                         if earth_artifact.metrics["schema"] != EARTH_3HOURLY_METRICS_SCHEMA_V2:
                             raise EarthArtifactError("New Earth training requires the complete v2 metrics contract")
-                        await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
+                        from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA
+                        if earth_artifact.model_config.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA:
+                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path,
+                                timeout_seconds=config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS)
+                        else:
+                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
                 except Exception as exc:  # noqa: BLE001 - reported as a task failure
                     earth_artifact_error = exc
                     model_artifact_valid = False

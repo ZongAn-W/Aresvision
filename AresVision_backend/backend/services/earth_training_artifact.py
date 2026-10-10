@@ -498,6 +498,8 @@ def build_model_reference(
             "custom_model_params": _plain(dict(uploaded_model.get("custom_model_params") or {})),
             "build_config": _plain(dict(uploaded_model.get("build_config") or {})),
             "input_channel_order": list(uploaded_model.get("input_channel_order") or []),
+            **({"contract_schema": uploaded_model.get("contract_schema", model_config["contract_schema"])}
+               if "contract_schema" in model_config else {}),
         },
     }
     for key in ("package_id", "content_hash"):
@@ -577,10 +579,13 @@ def build_checkpoint_payload(
         implementation_id=profile["implementation_id"],
     )
     if three_hourly and model_source == MODEL_SOURCE_UPLOADED:
-        from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, IMPLEMENTATION_ID
-        model_config.update(architecture=EARTH_UPLOADED_ARCHITECTURE, implementation_id=IMPLEMENTATION_ID,
-                            contract_schema=CONTRACT_SCHEMA, spatial_tile_shape=[24, 48])
-        contract.update(uploaded_model_schema=CONTRACT_SCHEMA, spatial_tile_shape=[24, 48], dtype="float32")
+        from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, contract_profile
+        execution = contract_profile(getattr(model, "_aresvision_earth_3hourly_contract", CONTRACT_SCHEMA))
+        model_config.update(architecture=EARTH_UPLOADED_ARCHITECTURE,
+                            implementation_id=execution["implementation_id"],
+                            contract_schema=execution["schema"], spatial_tile_shape=list(execution["shape"]))
+        contract.update(uploaded_model_schema=execution["schema"],
+                        spatial_tile_shape=list(execution["shape"]), dtype="float32")
     model_ref = build_model_reference(
         model_source=model_source,
         model_config=model_config,
@@ -749,27 +754,39 @@ def validate_checkpoint_payload(
     expected_implementation = EARTH_3HOURLY_IMPLEMENTATION_ID
     if three_hourly and model_source == MODEL_SOURCE_UPLOADED:
         from training_backbones.earth_3hourly_uploaded_contract import (
-            CONTRACT_SCHEMA, IMPLEMENTATION_ID, build_config,
+            build_config, contract_profile, contract_schema_for_reference,
         )
         from services.uploaded_model_source import hash_source_bytes
-        expected_implementation = IMPLEMENTATION_ID
+        try:
+            execution = contract_profile(model_config.get("contract_schema"))
+        except (ValueError, TypeError) as exc:
+            raise EarthArtifactError(str(exc)) from exc
+        expected_implementation = execution["implementation_id"]
         if (model_config.get("architecture") != EARTH_UPLOADED_ARCHITECTURE
-                or model_config.get("contract_schema") != CONTRACT_SCHEMA
-                or model_config.get("spatial_tile_shape") != [24, 48]):
+                or model_config.get("spatial_tile_shape") != list(execution["shape"])):
             raise EarthArtifactError("Three-hour uploaded model schema or tile shape is invalid")
         if (type(uploaded.get("version")) is not int or uploaded["version"] < 1
                 or hash_source_bytes(uploaded["source_text"].encode("utf-8")) != uploaded["content_hash"]):
             raise EarthArtifactError("Three-hour uploaded source identity is invalid")
         try:
+            source_schema = contract_schema_for_reference({
+                **uploaded, "contract_schema": uploaded.get("contract_schema", execution["schema"]),
+            })
+        except (ValueError, TypeError) as exc:
+            raise EarthArtifactError(str(exc)) from exc
+        if source_schema != execution["schema"]:
+            raise EarthArtifactError("Three-hour uploaded source schema disagrees with the checkpoint")
+        try:
             expected_config = build_config(order, uploaded.get("custom_model_params"),
-                                           window=profile['window'], horizon=profile['horizon'])
+                                           window=profile['window'], horizon=profile['horizon'],
+                                           contract_schema=execution["schema"])
         except ValueError as exc:
             raise EarthArtifactError(str(exc)) from exc
         if uploaded.get("build_config") != expected_config:
             raise EarthArtifactError("Three-hour uploaded build config disagrees with the contract")
         training_contract = payload.get("training_contract") or {}
-        if (training_contract.get("uploaded_model_schema") != CONTRACT_SCHEMA
-                or training_contract.get("spatial_tile_shape") != [24, 48]
+        if (training_contract.get("uploaded_model_schema") != execution["schema"]
+                or training_contract.get("spatial_tile_shape") != list(execution["shape"])
                 or training_contract.get("dtype") != "float32"):
             raise EarthArtifactError("Three-hour uploaded execution contract is invalid")
     if three_hourly and (
@@ -895,6 +912,11 @@ def validate_checkpoint_payload(
         for key in ('window', 'horizon'):
             if key in run['hyperparameters'] and run['hyperparameters'][key] != profile[key]:
                 raise EarthArtifactError(f'Run {key} disagrees with the model config')
+    if three_hourly and model_source == MODEL_SOURCE_UPLOADED and execution["full_grid"]:
+        run_hypers = run.get("hyperparameters")
+        batch_size = run_hypers.get("batch_size") if isinstance(run_hypers, Mapping) else None
+        if type(batch_size) is not int or not 1 <= batch_size <= execution["max_batch_size"]:
+            raise EarthArtifactError("Full-grid checkpoints must save their supported training batch size")
     if three_hourly:
         for key in ("task_id", "best_epoch", "epochs_completed"):
             if type(run.get(key)) is not int or run[key] < 1:
@@ -1182,6 +1204,15 @@ def load_earth_training_artifact(
                 raise EarthArtifactError("Checkpoint model source does not match the task")
             if source == MODEL_SOURCE_UPLOADED:
                 uploaded = model_ref["uploaded_model"]
+                expected_contract = expected_hyperparameters.get("_earth_uploaded_contract_schema")
+                if expected_contract is not None and expected_contract != validated["model_config"].get("contract_schema"):
+                    raise EarthArtifactError("Checkpoint spatial execution contract does not match the task")
+                from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+                execution = contract_profile(validated["model_config"]["contract_schema"])
+                if execution["full_grid"]:
+                    expected_batch = expected_hyperparameters.get("batch_size")
+                    if expected_batch is not None and expected_batch != validated["run"]["hyperparameters"]["batch_size"]:
+                        raise EarthArtifactError("Checkpoint training batch size does not match the task")
                 for task_key, reference_key in (
                     ("_uploaded_model_id", "package_id"), ("_uploaded_model_version", "version"),
                     ("_uploaded_model_content_hash", "content_hash"), ("custom_model_params", "custom_model_params"),
@@ -1224,6 +1255,7 @@ def build_earth_model_from_checkpoint(
                 height=int(checkpoint.model_config.get("height", 36)),
                 width=int(checkpoint.model_config.get("width", 72)),
                 dataset_id=checkpoint.dataset_binding.get("dataset_id"),
+                contract_schema=checkpoint.model_config.get("contract_schema"),
             )
         except EarthModelBuildError as exc:
             raise EarthArtifactError(str(exc), code=exc.code) from exc
@@ -1237,12 +1269,13 @@ def build_earth_model_from_checkpoint(
         ) from exc
     model.eval()
     if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID and checkpoint.model_source == MODEL_SOURCE_UPLOADED:
-        from training_backbones.earth_3hourly_uploaded_contract import validate_eval_batch_independence
+        from training_backbones.earth_3hourly_uploaded_contract import contract_profile, validate_eval_batch_independence
+        execution = contract_profile(checkpoint.model_config["contract_schema"])
         try:
             validate_eval_batch_independence(
                 model, window=checkpoint.model_config["window"],
                 channels=checkpoint.model_config["input_channels"], horizon=checkpoint.model_config["horizon"],
-                batch_size=(checkpoint.run.get("hyperparameters") or {}).get("batch_size", 8),
+                batch_size=(checkpoint.run.get("hyperparameters") or {}).get("batch_size", 1 if execution["full_grid"] else 8),
             )
         except (ValueError, TypeError, RuntimeError) as exc:
             raise EarthArtifactError(str(exc)) from exc
@@ -1341,11 +1374,18 @@ def _verify_round_trip(path: Path, expected: Mapping[str, Any]) -> None:
     channels = int(expected["model_config"]["input_channels"])
     height = int(expected["model_config"]["height"])
     width = int(expected["model_config"]["width"])
+    batch_size = 2
     if expected.get("artifact_schema") == EARTH_3HOURLY_ARTIFACT_SCHEMA:
-        # Gridpoint temporal weights are independent of spatial tile dimensions.
-        height, width = min(height, 24), min(width, 48)
+        from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+        model_config = expected["model_config"]
+        execution = contract_profile(model_config["contract_schema"]) if "contract_schema" in model_config else None
+        if execution is not None and execution["full_grid"]:
+            batch_size = (expected.get("run", {}).get("hyperparameters") or {}).get("batch_size", 1)
+        else:
+            # Official gridpoint weights and v1 uploads support the existing tile probe.
+            height, width = min(height, 24), min(width, 48)
     generator = torch.Generator().manual_seed(20200101)
-    probe = torch.randn((2, window, channels, height, width), generator=generator)
+    probe = torch.randn((batch_size, window, channels, height, width), generator=generator)
     with torch.no_grad():
         first = _forward_payload_model(model, expected, probe)
         second = _forward_payload_model(reference, expected, probe)
@@ -1370,6 +1410,7 @@ def _reference_model_from_payload(payload: Mapping[str, Any]) -> torch.nn.Module
                 if payload.get("artifact_schema") == EARTH_3HOURLY_ARTIFACT_SCHEMA
                 else None
             ),
+            contract_schema=payload["model_config"].get("contract_schema"),
         )
     else:
         model = forecaster_from_config(payload["model_config"])

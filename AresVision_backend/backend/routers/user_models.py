@@ -33,6 +33,16 @@ UPLOADED_MODEL_DOWNLOAD_ASSETS = {
         "download_name": "aresvision_earth_3hourly_model_v1.md",
         "media_type": "text/markdown; charset=utf-8",
     },
+    "earth-3hourly-fullgrid-template": {
+        "path": REPO_ROOT / "docs" / "earth-3hourly-fullgrid-model-template.py",
+        "download_name": "aresvision_earth_3hourly_fullgrid_model_v2.py",
+        "media_type": "text/x-python; charset=utf-8",
+    },
+    "earth-3hourly-fullgrid-guide": {
+        "path": REPO_ROOT / "docs" / "earth-3hourly-fullgrid-model.md",
+        "download_name": "aresvision_earth_3hourly_fullgrid_model_v2.md",
+        "media_type": "text/markdown; charset=utf-8",
+    },
 }
 
 

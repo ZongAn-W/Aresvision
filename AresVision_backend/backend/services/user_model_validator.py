@@ -485,7 +485,7 @@ class UserModelValidator:
     @staticmethod
     def _validate_three_hour_module(module, datasets, param_schema, warnings, *, earth_probe=None):
         from training_backbones.earth_3hourly_uploaded_contract import (
-            CONTRACT_SCHEMA, EVAL_BATCH_POLICY, RESERVED_PARAMETERS, channel_orders, dry_run,
+            EVAL_BATCH_POLICY, RESERVED_PARAMETERS, channel_orders, contract_profile, dry_run,
         )
 
         model_spec = module.MODEL_SPEC
@@ -506,22 +506,26 @@ class UserModelValidator:
                 raise ValueError("; ".join(parameter_errors))
             orders = [earth_probe["input_channel_order"]] if earth_probe else channel_orders()
             feed = datasets[EARTH_3HOURLY_FEED_KEY]
-            window = (earth_probe or {}).get('window', 56 if 56 in feed['window'] else feed['window'][0])
-            horizon = (earth_probe or {}).get('horizon', 24 if 24 in feed['horizon'] else feed['horizon'][0])
+            execution = contract_profile(feed['schema'])
+            window = (earth_probe or {}).get('window', execution['probe_window'] if execution['probe_window'] in feed['window'] else feed['window'][0])
+            horizon = (earth_probe or {}).get('horizon', execution['probe_horizon'] if execution['probe_horizon'] in feed['horizon'] else feed['horizon'][0])
             if window not in feed['window'] or horizon not in feed['horizon']:
                 code = 'uploaded_model_contract_invalid'
                 raise ValueError(f'Model does not declare window={window}, horizon={horizon}')
             for order in orders:
                 shape = dry_run(module.build_model, order, params, window=window, horizon=horizon,
-                                batch_size=(earth_probe or {}).get("batch_size", 8))
+                                batch_size=(earth_probe or {}).get("batch_size", execution['default_batch_size']),
+                                contract_schema=feed['schema'])
         except Exception as exc:
             errors = [f"Earth three-hour dry-run failed: {exc}"]
         verdict = {
             "compatible": not errors, "status": "unavailable" if errors else "available",
             "code": code if errors else None, "errors": errors, "output_shape": shape,
-            "contract_schema": CONTRACT_SCHEMA, "dataset_id": EARTH_3HOURLY_FEED_KEY,
+            "contract_schema": datasets[EARTH_3HOURLY_FEED_KEY]['schema'], "dataset_id": EARTH_3HOURLY_FEED_KEY,
             "eval_batch_policy": EVAL_BATCH_POLICY if not errors else None,
             "window": locals().get('window'), "horizon": locals().get('horizon'),
+            "batch_size": (earth_probe or {}).get('batch_size', locals().get('execution', {}).get('default_batch_size')),
+            "validation_scope": "task_configuration" if earth_probe else "declared_channels_probe_windows",
         }
         # The legacy verdict is independent of the three-hour run.
         legacy = None
@@ -683,13 +687,15 @@ class UserModelValidator:
     @staticmethod
     def _validate_earth_3hourly_compatibility(*, build_model, model_spec, param_schema, feed):
         """Exercise the server's actual spatial-tile invocation."""
-        from training_backbones.earth_3hourly_uploaded_contract import channel_orders, dry_run
+        from training_backbones.earth_3hourly_uploaded_contract import channel_orders, contract_profile, dry_run
         try:
             params = {name: schema["default"] for name, schema in param_schema.items()}
+            execution = contract_profile(feed['schema'])
             for order in channel_orders():
                 shape = dry_run(build_model, order, params,
-                    window=56 if 56 in feed['window'] else feed['window'][0],
-                    horizon=24 if 24 in feed['horizon'] else feed['horizon'][0])
+                    window=execution['probe_window'] if execution['probe_window'] in feed['window'] else feed['window'][0],
+                    horizon=execution['probe_horizon'] if execution['probe_horizon'] in feed['horizon'] else feed['horizon'][0],
+                    batch_size=execution['default_batch_size'], contract_schema=feed['schema'])
             return True, [], shape
         except Exception as exc:  # noqa: BLE001 - stable upload verdict
             return False, [f"Earth three-hourly dry-run failed: {exc}"], None

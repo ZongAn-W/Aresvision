@@ -504,6 +504,7 @@ SERVER_UPLOADED_REFERENCE_FIELDS = frozenset({
     "source_available",
     "param_schema",
     "custom_model_params",
+    "contract_schema",
 })
 
 
@@ -538,6 +539,18 @@ def build_earth_training_spec(
         # runner build the official DLinear and then fail to load uploaded weights.
         normalized["model_source"] = "uploaded"
         normalized["model_architecture"] = EARTH_UPLOADED_ARCHITECTURE
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from training_backbones.earth_3hourly_uploaded_contract import (
+                contract_schema_for_reference, contract_profile,
+            )
+            try:
+                source_schema = contract_schema_for_reference(uploaded_model)
+            except (ValueError, TypeError) as exc:
+                raise DatasetRequestError('uploaded_model_contract_invalid', str(exc), status_code=409) from exc
+            execution = contract_profile(source_schema)
+            if normalized['batch_size'] > execution['max_batch_size']:
+                raise DatasetRequestError('invalid_earth_training_parameters',
+                    f"Full-grid Earth batch_size must be between 1 and {execution['max_batch_size']}", status_code=422)
     spec: dict[str, Any] = {
         "schema": EARTH_TRAINING_SPEC_SCHEMA,
         "task_id": int(task_id),
@@ -564,6 +577,8 @@ def build_earth_training_spec(
             for key, value in dict(uploaded_model).items()
             if key in SERVER_UPLOADED_REFERENCE_FIELDS
         }
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            spec['uploaded_model']['contract_schema'] = source_schema
     return spec
 
 

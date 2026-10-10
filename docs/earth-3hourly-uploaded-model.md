@@ -1,5 +1,7 @@
 # Earth 三小时上传模型 v1
 
+需要一次输入完整全球图时使用独立的[全图 v2 说明与模板](earth-3hourly-fullgrid-model.md)。v1 仍固定 24×48；v2 固定 240×480、batch 1–64（默认 1，可运行大小取决于模型与显存），训练/预测/诊断按各自冻结契约运行，不把旧权重自动升级。
+
 本模板仅适用于 `earth_merra2_3hourly_v1`，独立于日频 `earth_merra2` 声明及 Mars 模板。下载 [Python 模板](earth-3hourly-uploaded-model-template.py)，导出 `MODEL_SPEC` 和 `build_model(config)`。三小时声明的 schema 为 `aresvision_earth_3hourly_uploaded_model_v1`，声明字段必须完整、类型和值必须与模板一致；不接受旧 Earth 标签自动升级。
 
 ## 数据与调用

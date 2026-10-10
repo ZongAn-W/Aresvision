@@ -21,6 +21,7 @@ import { isUploadedModelValidationTimeout, UPLOADED_MODEL_VALIDATION_TIMEOUT } f
 export const EARTH_3HOURLY_DATASET_ID = TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1;
 export const EARTH_DATASET_ID = EARTH_3HOURLY_DATASET_ID;
 export const EARTH_3HOURLY_UPLOAD_SCHEMA = 'aresvision_earth_3hourly_uploaded_model_v1';
+export const EARTH_3HOURLY_FULL_GRID_SCHEMA = 'aresvision_earth_3hourly_fullgrid_model_v2';
 export const EARTH_MODEL_ARCHITECTURE = 'dlinear';
 /** 上传模型的架构标记；真正的代码由服务端固定的模型引用决定。 */
 export const EARTH_UPLOADED_ARCHITECTURE = 'uploaded';
@@ -236,7 +237,7 @@ export function readEarthUploadedModelCompatibility(compatibility) {
 
 /** 当前选中的上传模型是否可用于 Earth 训练；返回阻塞原因。 */
 export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId, compatibility, datasetId = EARTH_DATASET_ID,
-  windowValue, horizon } = {}) {
+  windowValue, horizon, batchSize } = {}) {
   if (modelSource !== EARTH_MODEL_SOURCE_UPLOADED) return null;
   const profile = getEarthTrainingProfile(datasetId);
   if (!profile.modelSources.includes(EARTH_MODEL_SOURCE_UPLOADED)) return 'dataset_training_configuration_not_supported';
@@ -248,7 +249,11 @@ export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId,
   if (profile.datasetId === EARTH_3HOURLY_DATASET_ID && verdict.dataset !== profile.datasetId) return 'earth_compatibility_unknown';
   if (!verdict.compatible) return verdict.reason || 'uploaded_model_not_earth_compatible';
   if (profile.datasetId === EARTH_3HOURLY_DATASET_ID
-    && (compatibility.status !== 'available' || verdict.contractSchema !== EARTH_3HOURLY_UPLOAD_SCHEMA)) return 'earth_compatibility_unknown';
+    && (compatibility.status !== 'available' || ![EARTH_3HOURLY_UPLOAD_SCHEMA, EARTH_3HOURLY_FULL_GRID_SCHEMA].includes(verdict.contractSchema))) return 'earth_compatibility_unknown';
+  if (verdict.contractSchema === EARTH_3HOURLY_FULL_GRID_SCHEMA
+      && batchSize !== undefined && (!Number.isInteger(Number(batchSize))
+        || Number(batchSize) < EARTH_PARAM_BOUNDS.batch_size.min
+        || Number(batchSize) > EARTH_PARAM_BOUNDS.batch_size.max)) return 'earth_full_grid_batch_invalid';
   const mismatches = [];
   if (verdict.dataset && verdict.dataset !== profile.datasetId) mismatches.push('checkpoint_dataset_incompatible');
   if (verdict.frequencyHours !== null && verdict.frequencyHours !== profile.frequencyHours) mismatches.push('checkpoint_frequency_incompatible');

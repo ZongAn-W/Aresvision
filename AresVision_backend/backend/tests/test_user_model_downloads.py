@@ -12,7 +12,8 @@ from routers import user_models  # noqa: E402
 def test_uploaded_model_download_assets_are_declared_and_exist():
     assets = user_models.get_uploaded_model_download_assets()
 
-    assert set(assets) == {"guide", "template", "earth-3hourly-guide", "earth-3hourly-template"}
+    assert set(assets) == {"guide", "template", "earth-3hourly-guide", "earth-3hourly-template",
+                           "earth-3hourly-fullgrid-guide", "earth-3hourly-fullgrid-template"}
     assert assets["guide"]["download_name"] == "aresvision_uploaded_model_guide.md"
     assert assets["template"]["download_name"] == "aresvision_uploaded_model_template.py"
 

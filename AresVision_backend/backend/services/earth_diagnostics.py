@@ -1,6 +1,6 @@
 """Bounded, reproducible post-training diagnostics on a task's Earth test split.
 
-Only one spatial tile and a bounded set of input windows are resident at once.
+V1 reads one spatial tile; full-grid v2 reads one complete window at a time.
 Physical metrics and the residual histogram cover every lead/grid element of
 the selected test windows. Scatter points are a further bounded sample. Saved
 full-test checkpoint metrics remain explicitly separate from both samples.
@@ -50,6 +50,14 @@ MAX_PFI_WINDOWS = 8
 TILE_SHAPE = (24, 48)
 BATCH_SIZE = 2
 RESIDUAL_DEFINITION = "prediction-reference"
+
+
+def _full_grid_contract(training_contract):
+    schema = training_contract.get("uploaded_model_schema")
+    if schema is None:
+        return False
+    from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+    return contract_profile(schema)["full_grid"]
 
 
 def _error(code: str, message: str, status: int = 409):
@@ -142,7 +150,9 @@ def build_earth_diagnostics_cache_key(*, task_id, checkpoint_sha256, dataset_bin
         "window": training_contract["window"], "horizon": training_contract["horizon"],
         "channels": training_contract["input_channel_order"], "normalization": normalization,
         "selected_indices": list(selected_indices), "parameters": parameters,
-        "tile_shape": list(TILE_SHAPE), "batch_size": BATCH_SIZE,
+        "tile_shape": [240, 480] if _full_grid_contract(training_contract) else list(TILE_SHAPE),
+        "batch_size": 1 if _full_grid_contract(training_contract) else BATCH_SIZE,
+        "uploaded_model_schema": training_contract.get("uploaded_model_schema"),
         "metric_policy": METRIC_POLICY,
     }
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -207,8 +217,16 @@ def _open_verified_dataset(release):
 
 def _read_tile(ds, dataset, selected, lat, lon):
     """Read at most one tile, with raw TO3 targets and task-normalized inputs."""
-    _threehour_path(dataset._release)
     height, width = min(TILE_SHAPE[0], len(dataset.lat) - lat), min(TILE_SHAPE[1], len(dataset.lon) - lon)
+    return _read_region(ds, dataset, selected, lat, lon, height, width)
+
+
+def _read_full_grid(ds, dataset, selected):
+    return _read_region(ds, dataset, selected, 0, 0, len(dataset.lat), len(dataset.lon))
+
+
+def _read_region(ds, dataset, selected, lat, lon, height, width):
+    _threehour_path(dataset._release)
     spatial = {"lat_slice": slice(lat, lat + height), "lon_slice": slice(lon, lon + width)}
     order = dataset.input_channels
     mean, scale = validate_normalization(dataset.normalization, order)
@@ -252,6 +270,12 @@ def _predict_tile(model, inputs, checkpoint, device):
 
 
 def _tile_batches(ds, dataset, selected, model, checkpoint, device):
+    if _full_grid_contract(checkpoint.training_contract):
+        for offset, index in enumerate(selected):
+            inputs, reference = _read_full_grid(ds, dataset, [index])
+            prediction = _predict_tile(model, inputs, checkpoint, device)
+            yield offset, 0, 0, prediction, reference
+        return
     for lat in range(0, len(dataset.lat), TILE_SHAPE[0]):
         for lon in range(0, len(dataset.lon), TILE_SHAPE[1]):
             for offset in range(0, len(selected), BATCH_SIZE):
@@ -457,6 +481,8 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
                       "scope": "process_local_bounded_snapshot"},
             "parameters": parameters,
         }
+        if _full_grid_contract(contract):
+            result["scatter"]["sampling"]["stream_order"] = "window_lead_lat_lon"
         resolved_cache.put(key, result)
         return result
     except DatasetRequestError:
@@ -479,6 +505,9 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
               "seed": seed, "repeats": repeats,
               "permutation": "whole_window_channel_derangement_shared_across_spatial_tiles",
               "interpretation": "Sensitivity of the current model on these sampled test windows; negative importance is retained."}
+    full_grid = _full_grid_contract(checkpoint.training_contract)
+    if full_grid:
+        common["permutation"] = "whole_global_window_channel_derangement"
     if len(selected) < 2:
         return {**common, "status": "unavailable", "reason": "At least two valid test windows are required for meaningful permutation.",
                 "reason_code": "earth_pfi_insufficient_windows", "items": [], "baseline_value": None,
@@ -490,25 +519,28 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
     accumulators = [[ErrorAccumulator(dataset_id=EARTH_DATASET_3HOURLY_ID, horizon=dataset.horizon)
                      for _ in mappings] for _ in dataset.input_channels]
     channel_varies = [False] * len(dataset.input_channels)
-    for lat in range(0, len(dataset.lat), TILE_SHAPE[0]):
-        for lon in range(0, len(dataset.lon), TILE_SHAPE[1]):
-            inputs, reference = _read_tile(ds, dataset, selected, lat, lon)
-            if recompute_baseline:
-                # A smaller PFI subset also needs its own batch composition.
-                # Arbitrary uploaded models can depend on other batch members.
-                for offset in range(0, len(selected), BATCH_SIZE):
-                    stop = min(offset + BATCH_SIZE, len(selected))
-                    baseline.update(_predict_tile(model, inputs[offset:stop], checkpoint, device), reference[offset:stop])
-            for channel, rows in enumerate(accumulators):
-                channel_varies[channel] |= bool(np.any(inputs[1:, :, channel] != inputs[:1, :, channel]))
-                for repeat, mapping in enumerate(mappings):
+    if full_grid:
+        _accumulate_full_grid_pfi(ds, dataset, selected, model, checkpoint, device,
+                                  baseline, recompute_baseline, mappings, accumulators, channel_varies)
+    else:
+        for lat in range(0, len(dataset.lat), TILE_SHAPE[0]):
+            for lon in range(0, len(dataset.lon), TILE_SHAPE[1]):
+                inputs, reference = _read_tile(ds, dataset, selected, lat, lon)
+                if recompute_baseline:
+                    # A smaller PFI subset also needs its own batch composition.
                     for offset in range(0, len(selected), BATCH_SIZE):
                         stop = min(offset + BATCH_SIZE, len(selected))
-                        permuted = inputs[offset:stop].copy()
-                        # All T,H,W positions come from the same source window.
-                        permuted[:, :, channel] = inputs[np.asarray(mapping[offset:stop]), :, channel]
-                        prediction = _predict_tile(model, permuted, checkpoint, device)
-                        rows[repeat].update(prediction, reference[offset:stop])
+                        baseline.update(_predict_tile(model, inputs[offset:stop], checkpoint, device), reference[offset:stop])
+                for channel, rows in enumerate(accumulators):
+                    channel_varies[channel] |= bool(np.any(inputs[1:, :, channel] != inputs[:1, :, channel]))
+                    for repeat, mapping in enumerate(mappings):
+                        for offset in range(0, len(selected), BATCH_SIZE):
+                            stop = min(offset + BATCH_SIZE, len(selected))
+                            permuted = inputs[offset:stop].copy()
+                            # All T,H,W positions come from the same source window.
+                            permuted[:, :, channel] = inputs[np.asarray(mapping[offset:stop]), :, channel]
+                            prediction = _predict_tile(model, permuted, checkpoint, device)
+                            rows[repeat].update(prediction, reference[offset:stop])
     baseline_rmse = float(baseline.result()["overall"]["rmse"])
     items = []
     for channel, rows, meaningful in zip(dataset.input_channels, accumulators, channel_varies):
@@ -536,6 +568,22 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
         result.update(reason_code="earth_pfi_identical_windows",
                       reason="Every input channel is identical across these test windows; meaningful permutation cannot be computed.")
     return result
+
+
+def _accumulate_full_grid_pfi(ds, dataset, selected, model, checkpoint, device,
+                              baseline, recompute_baseline, mappings, accumulators, channel_varies):
+    """Keep only the recipient/source global windows resident for each permutation."""
+    for offset, index in enumerate(selected):
+        inputs, reference = _read_full_grid(ds, dataset, [index])
+        if recompute_baseline:
+            baseline.update(_predict_tile(model, inputs, checkpoint, device), reference)
+        for repeat, mapping in enumerate(mappings):
+            source, _ = _read_full_grid(ds, dataset, [selected[mapping[offset]]])
+            for channel, rows in enumerate(accumulators):
+                channel_varies[channel] |= bool(np.any(source[:, :, channel] != inputs[:, :, channel]))
+                permuted = inputs.copy()
+                permuted[:, :, channel] = source[:, :, channel]
+                rows[repeat].update(_predict_tile(model, permuted, checkpoint, device), reference)
 
 
 # Backwards-compatible spelling for callers using the initial design name.

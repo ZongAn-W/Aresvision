@@ -1,9 +1,8 @@
 """Build the Earth forecaster for either model source.
 
-Earth supports two model sources: the platform's official DLinear and a user
-uploaded single-file model. Both are driven through the same narrow interface -
-``[B, 7, C, 36, 72] -> [B, 3, 1, 36, 72]`` - so the training loop, checkpoint and
-prediction path do not branch on the model type beyond this module.
+Earth supports the official DLinear and uploaded single-file models. Uploaded
+three-hour models use a versioned BTCHW interface: v1 spatial tiles or v2 complete
+global maps. The hash-verified source declaration chooses the build dimensions.
 
 The uploaded branch:
 
@@ -165,6 +164,7 @@ def build_uploaded_earth_model(
     height: int,
     width: int,
     dataset_id: str | None = None,
+    contract_schema: str | None = None,
 ) -> tuple[torch.nn.Module, dict[str, Any], tuple[str, ...]]:
     """Build the uploaded model for the Earth feed.
 
@@ -225,8 +225,16 @@ def build_uploaded_earth_model(
             )
         from services.user_model_validator import UserModelValidator
         from training_backbones.earth_3hourly_uploaded_contract import (
-            build_config, prepare_model, RESERVED_PARAMETERS,
+            build_config, contract_schema_from_spec, prepare_model, RESERVED_PARAMETERS,
         )
+        try:
+            source_contract_schema = contract_schema_from_spec(model_spec)
+        except ValueError as exc:
+            raise EarthModelBuildError(str(exc), code="uploaded_model_contract_invalid") from exc
+        if any(expected is not None and source_contract_schema != expected
+               for expected in (contract_schema, reference.get("contract_schema"))):
+            raise EarthModelBuildError("Stored Earth contract schema disagrees with verified source",
+                                       code="uploaded_model_contract_invalid")
         schema, errors = UserModelValidator._normalize_parameters(model_spec.get("parameters", {}))
         if errors or model_spec.get("auxiliary_inputs") or any(
                 k in RESERVED_PARAMETERS or k.startswith("_") for k in schema):
@@ -238,12 +246,14 @@ def build_uploaded_earth_model(
         params, errors = UserModelValidator.normalize_custom_params(schema, reference.get("custom_model_params"))
         if errors:
             raise EarthModelBuildError("; ".join(errors), code="invalid_earth_training_parameters")
-        config = build_config(order, params, window=window, horizon=horizon)
+        config = build_config(order, params, window=window, horizon=horizon,
+                              contract_schema=source_contract_schema)
         if reference.get("build_config") and reference["build_config"] != config:
             raise EarthModelBuildError("Stored three-hour build config disagrees with verified source",
                                        code="uploaded_model_contract_invalid")
         try:
-            model = prepare_model(build_model(config), window=window)
+            model = prepare_model(build_model(config), window=window,
+                                  contract_schema=source_contract_schema)
         except (ValueError, TypeError, RuntimeError) as exc:
             raise EarthModelBuildError(str(exc), code="uploaded_model_contract_invalid") from exc
         return model, config, ()
@@ -347,8 +357,8 @@ def earth_forward_for_model(
 ) -> torch.Tensor:
     """Run either model type and normalize the output contract.
 
-    Uploaded models are called through the shared contract runner, which enforces
-    that no auxiliary input is passed; the official DLinear keeps its zero time
+    Uploaded models are called through their declared contract runner, which
+    enforces the spatial shape; the official DLinear keeps its zero time
     placeholder (see :func:`training_backbones.earth_daily_model.earth_forward`).
     """
     if model_source == MODEL_SOURCE_OFFICIAL:
