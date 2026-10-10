@@ -42,7 +42,7 @@ export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false
 
   if (!ozoneData || typeof ozoneData.maxVal === 'undefined') return null;
 
-  const panelWidth = gestureEnabled ? 150 : 158;
+  const panelWidth = gestureEnabled ? 244 : 252;
 
   const pointsCount = ozoneData.points?.length || 0;
   const anomalyStats = showAnomaly ? buildAnomalyField(pointsToFieldData(ozoneData), {}) : null;
@@ -82,7 +82,7 @@ export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false
 
   return (
     <div
-      className="overview-globe-legend-compact overview-overlay-anchor"
+      className="overview-globe-legend-compact overview-overlay-anchor overview-science-legend"
       data-embedded={embedded ? 'true' : 'false'}
       style={{
         // 观测台画布已是全幅场景：图例相对画布左下角定位，不再按窗口减栏宽。
@@ -90,6 +90,7 @@ export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false
         bottom: `calc(var(--overview-overlay-gap) + 28px)`,
         left: 'var(--overview-overlay-gap)',
         width: `${panelWidth}px`,
+        maxWidth: 'calc(100% - 2 * var(--overview-overlay-gap))',
         zIndex: 1000,
         pointerEvents: 'none',
         transition: 'left 0.2s ease, bottom 0.2s ease, width 0.2s ease',
@@ -109,10 +110,8 @@ export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false
           <div style={{ minWidth: 0 }}>
             <div
               title={`${varLabel} (${unitLabel})`}
+              className="overview-science-legend__variable"
               style={{
-                color: C.ice60,
-                fontSize: 'calc(9px * var(--font-scale, 1))',
-                fontWeight: 800,
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -128,7 +127,7 @@ export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false
               borderRadius: 999,
               border: `1px solid ${C.border}`,
               color: C.mars,
-              fontSize: 'calc(8px * var(--font-scale, 1))',
+              fontSize: 'calc(12px * var(--font-scale, 1))',
               fontWeight: 800,
               fontFamily: 'var(--font-display)',
               flexShrink: 0,
@@ -151,8 +150,8 @@ export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 4,
-                    color: C.ice50,
-                    fontSize: 'calc(8px * var(--font-scale, 1))',
+                    color: 'var(--text-secondary)',
+                    fontSize: 'calc(12px * var(--font-scale, 1))',
                     fontWeight: 800,
                     opacity: active ? 1 : 0.34,
                     whiteSpace: 'nowrap',
@@ -174,26 +173,26 @@ export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false
                 background: diffGradient,
               }}
             />
-            <div style={{ display: 'flex', justifyContent: 'space-between', color: C.ice50, fontSize: 'calc(8px * var(--font-scale, 1))', fontWeight: 700 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 700 }}>
               <span>{isZh ? 'MCD 偏低' : 'MCD lower'}</span>
               <span>{isZh ? 'MCD 偏高' : 'MCD higher'}</span>
             </div>
             {validation ? (
               <>
-                <div style={{ color: C.ice50, fontSize: 'calc(8px * var(--font-scale, 1))', lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {isZh ? 'NOMAD 稀疏验证' : 'NOMAD sparse validation'} · Ls {formatMetric(validation.matched_ls, 1)}°
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }}>
                   {validationMetrics.map(([label, value]) => (
-                    <div key={label} style={{ padding: '4px', borderRadius: 6, background: 'rgba(255,255,255,0.04)', border: `1px solid ${C.border}` }}>
-                      <div style={{ color: C.ice30, fontSize: 'calc(7px * var(--font-scale, 1))', fontWeight: 700 }}>{label}</div>
-                      <div style={{ color: label === 'Bias' ? C.blue : C.ice, fontSize: 'calc(8px * var(--font-scale, 1))', fontWeight: 800, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+                    <div key={label} className="overview-science-legend__metric">
+                      <div style={{ color: C.ice30, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 700 }}>{label}</div>
+                      <div className="overview-science-legend__metric-value" title={String(value)} style={{ color: label === 'Bias' ? C.blue : C.ice }}>{value}</div>
                     </div>
                   ))}
                 </div>
               </>
             ) : (
-              <div style={{ color: C.ice40, fontSize: 'calc(8px * var(--font-scale, 1))', lineHeight: 1.35 }}>
+              <div style={{ color: C.ice40, fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.5 }}>
                 {isZh ? '当前 Ls 附近暂无 NOMAD 匹配点。' : 'No NOMAD match near the current Ls.'}
               </div>
             )}
@@ -210,31 +209,22 @@ export default function GlobeLegend({ ozoneData, sceneModel, showAnomaly = false
               }}
             />
 
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                fontSize: 'calc(8px * var(--font-scale, 1))',
-                color: C.ice,
-                fontWeight: 700,
-              }}
-            >
+            <div className="overview-science-legend__range">
               <span>{showAnomaly ? `−${formatMetric(convertByVariable(anomalyAbs, variable, settings.units))}` : minVal}</span>
               <span style={{ color: C.ice60 }}>{sceneModel?.legendMode === 'diff' || showAnomaly ? '0.000' : midVal}</span>
               <span>{showAnomaly ? `+${formatMetric(convertByVariable(anomalyAbs, variable, settings.units))}` : maxVal}</span>
             </div>
-            <div style={{ marginTop: 5, color: C.ice50, fontSize: 'calc(8px * var(--font-scale, 1))', lineHeight: 1.35 }}>
+            <div style={{ marginTop: 5, color: 'var(--text-secondary)', fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.5 }}>
               {showAnomaly
                 ? (isZh ? '距当前场空间加权均值的偏差；点位读数保留原始值。' : 'Spatial deviation from the current weighted field mean; point probes keep raw values.')
                 : (isZh ? '颜色表示当前场数值。' : 'Colour encodes the current field value.')}
             </div>
             {showWindVectors ? (
-              <div style={{ marginTop: 5, display: 'grid', gap: 4, color: C.ice50, fontSize: 'calc(8px * var(--font-scale, 1))' }}>
+              <div style={{ marginTop: 5, display: 'grid', gap: 4, color: 'var(--text-secondary)', fontSize: 'calc(12px * var(--font-scale, 1))' }}>
                 <span>{isZh ? '风矢量：m/s；箭头长度表示速度。' : 'Wind vectors: m/s; arrow length indicates speed.'}</span>
                 {windStatus === 'error' ? (
                   <>
-                    <span role="alert" style={{ color: C.marsLight }}>{windError || (isZh ? '风场加载失败。' : 'Wind fields failed to load.')}</span>
+                    <span role="alert" style={{ color: 'var(--status-warning)' }}>{windError || (isZh ? '风场加载失败。' : 'Wind fields failed to load.')}</span>
                     {onRetryWind ? <button type="button" onClick={onRetryWind} style={{ justifySelf: 'start', padding: '3px 6px', borderRadius: 5, border: `1px solid ${C.border}`, color: C.ice, background: 'transparent', cursor: 'pointer' }}>{isZh ? '重试' : 'Retry'}</button> : null}
                   </>
                 ) : windStatus === 'loading' ? <span>{isZh ? '正在加载风场…' : 'Loading wind fields…'}</span> : null}

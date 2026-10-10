@@ -28,6 +28,8 @@ export default function PredictDisplay({
   setFullscreen3D,
   TRIPTYCH_PANELS,
   adapter,
+  hasAvailableModels = false,
+  modelsLoading = false,
 }) {
   const t = useT();
   const { settings } = useSettings();
@@ -51,9 +53,51 @@ export default function PredictDisplay({
     fieldData, colorMode, kind, colorRange,
   });
   const fieldTitle = (kind) => adapter?.fieldTitle?.(kind, isZh) || t(`predict.panels.${kind}`);
+  const isEmpty = !loading && !truthField && !predField && !residField;
+
+  // Reuse the sidebar's existing selector without changing model selection or request state.
+  const openModelSelection = () => {
+    const section = document.getElementById('prediction-model-selection');
+    const selector = section?.querySelector('[aria-haspopup="listbox"]');
+    section?.scrollIntoView({ block: 'nearest' });
+    if (selector && !selector.disabled) {
+      selector.focus({ preventScroll: true });
+      if (selector.getAttribute('aria-expanded') !== 'true') selector.click();
+    } else {
+      section?.focus({ preventScroll: true });
+    }
+  };
+
+  if (isEmpty) {
+    return (
+      <div className="prediction-display prediction-display--empty" data-testid="prediction-display" data-empty="true">
+        <section className="prediction-display__empty" aria-label={isZh ? '预测准备' : 'Prepare prediction'}>
+          <div className="prediction-display__empty-copy">
+            <h3 className="prediction-display__empty-title">
+              {isZh ? '选择已完成模型，开始预测' : 'Select a completed model to start predicting'}
+            </h3>
+            <p className="prediction-display__empty-description">
+              {isZh ? '需要先选择具有有效输出窗口的训练模型' : 'Choose a trained model with a valid output horizon.'}
+            </p>
+          </div>
+          {modelsLoading ? (
+            <Button size="compact" disabled>{isZh ? '正在加载模型…' : 'Loading models…'}</Button>
+          ) : hasAvailableModels ? (
+            <Button size="compact" onClick={openModelSelection} className="prediction-display__empty-action">
+              {isZh ? '选择训练模型' : 'Select a model'}
+            </Button>
+          ) : (
+            <a href="#/training" className="ui-button ui-button--secondary ui-button--compact prediction-display__empty-action">
+              {isZh ? '去模型训练' : 'Go to Model Training'}
+            </a>
+          )}
+        </section>
+      </div>
+    );
+  }
 
   return (
-    <div className="prediction-display" data-testid="prediction-display" data-empty={!results && !loading}>
+    <div className="prediction-display" data-testid="prediction-display" data-empty="false">
       <SegmentedTabs
         items={VIEW_MODES}
         activeId={viewMode}
@@ -147,17 +191,6 @@ export default function PredictDisplay({
           </Panel>
         );
       })()}
-
-      {!results && !loading && (
-        <section className="prediction-display__empty" role="status">
-          <div className="prediction-display__empty-title">
-            {adapter?.emptyTitle || t('predict.initPrompt')}
-          </div>
-          <div className="prediction-display__empty-description">
-            {adapter?.emptyDescription || t('predict.initDesc')}
-          </div>
-        </section>
-      )}
     </div>
   );
 }

@@ -152,12 +152,11 @@ test('copy configuration restores uploaded-model custom params', () => {
   assert.match(block, /setModelSource\(config\.modelSource\)/);
   assert.match(block, /setSelectedUploadedModelId\(config\.selectedUploadedModelId\)/);
   // 回填后要登记来源模型，避免 schema 同步 effect 立刻把参数重置成默认值。
-  assert.match(block, /copiedCustomModelParamsRef\.current = config\.customModelParams/);
-  assert.match(pageSource, /const copiedCustomModelParamsRef = useRef\(''\)/);
-  assert.match(pageSource, /copiedCustomModelParamsRef\.current === selectedUploadedModelId/);
+  assert.match(block, /draftSessionRef\.current\.preserveCustomParams\(config\.trainingDataset, config\.selectedUploadedModelId\)/);
+  assert.match(pageSource, /draftSessionRef\.current\.syncCustomParams\(/);
   // 「新建实验」清空登记，回到正常默认参数流程。
   const createHandler = pageSource.slice(pageSource.indexOf('const handleCreateExperiment ='));
-  assert.match(createHandler.slice(0, createHandler.indexOf('const handleSelectTask')), /copiedCustomModelParamsRef\.current = ''/);
+  assert.match(createHandler.slice(0, createHandler.indexOf('const handleSelectTask')), /draftSessionRef\.current\.reset\(\)/);
 });
 
 test('uploaded model param form still receives state through the canvas and inspector', () => {

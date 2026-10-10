@@ -8,7 +8,7 @@
   <p><strong>Planetary Atmosphere Prediction & Experiment Platform</strong><br />面向多行星大气数据分析、模型训练与时空预测实验的平台</p>
 </div>
 
-[项目仓库](https://github.com/Kafuu7No/AresVision) · [自定义模型接入](docs/uploaded-model-training.md) · [Linux 部署](scripts/deploy/README_DEPLOY_CN.md) · [Windows 分发](scripts/release/README_CN.md)
+[项目仓库](https://github.com/ZongAn-W/Aresvision) · [自定义模型接入](docs/uploaded-model-training.md) · [Linux 部署](scripts/deploy/README_DEPLOY_CN.md) · [Windows 分发](scripts/release/README_CN.md)
 
 ## 项目简介
 
@@ -16,7 +16,9 @@ AstraAtmos（行星大气实验室）定位为行星大气预测实验平台，�
 
 产品原名为 AresVision（智绘赤星）。目录、仓库地址、启动脚本、`ARESVISION_*` 环境变量、数据库与浏览器存储键、数据格式标识沿用原名称以兼容已有部署；改名无需迁移数据或配置。
 
-前端视觉令牌与基础控件集中在 `frontend/src/index.css` 和 `frontend/src/components/ui/`；首页保留展示性，数据总览、训练和预测采用实色工作台。深浅主题、字号缩放及弹窗键盘焦点约定见[前端样式说明](frontend/README.md#界面样式与可访问性)。
+前端视觉令牌与基础控件集中在 `frontend/src/index.css` 和 `frontend/src/components/ui/`；深色模式的模型训练和预测分析复用首页星空背景，面板、输入和图表保留实色，数据总览仍采用实色工作台。浅色主题不显示星点，鼠标视差与地球交互仅作用于首页。深浅主题、字号缩放及弹窗键盘焦点约定见[前端样式说明](frontend/README.md#界面样式与可访问性)。
+
+桌面工作台中，单模型预测无结果时显示紧凑准备面板，提供选择模型或进入训练的入口，并在禁用预测按钮旁说明原因；结果出现后恢复原有图表与导出。训练固定运行条按实际高度预留正文空间，访客的实验登录主入口集中在底栏。数据总览以数据集、变量和时间读数为主，辅助文字不低于 12px；当前导航使用冰蓝文字和底部强调线。
 
 AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 字母、上扬的弧形大气流线与橙色观测点。全站导航、首页强调色、关于页、页脚与浏览器图标已统一使用该标志，深浅主题分别使用对应配色。品牌组件为 [BrandMark.jsx](frontend/src/components/BrandMark.jsx)，资产规范与文件清单见[标识设计与使用说明](assets/brand/astraatmos/README.md)，接入范围见[品牌接入方案](docs/plans/2026-09-24-atmospheric-a-brand-integration.md)。
 
@@ -24,7 +26,7 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 ## 快速接手：先读这一节
 
-2026-10-09 地球与火星单模型预测使用同一套[单模型预测工作台](docs/shared-single-model-prediction.md)：模型侧栏、参考/预测/残差三联图与单图、时间步、指标、诊断图表外壳及全屏操作共用组件；无模型或尚无指标数据时统一显示 `--`，实际 Earth 响应缺项仍显示“未提供”。行星适配层保留各自 API、时间轴、坐标、单位、评价范围和导出能力。Earth 每次运行完整任务 horizon，展示步只改变查看内容，保持 UTC/DU、独立手动抽样诊断、ΔRMSE PFI 和地球地图全屏；Mars 保持 Ls、训练步长上限、ΔR² PFI 与球面。验证包含前端测试/生产构建、合成浏览器桌面与 390px 交互，以及后端逐文件契约回归；既有 Mars 坐标失败单独列出，不代表真实训练精度或全分辨率浏览器性能验收。
+2026-10-10 地球与火星单模型预测使用同一套[单模型预测工作台](docs/shared-single-model-prediction.md)：模型侧栏、参考/预测/残差三联图与单图、时间步、指标、诊断图表外壳及全屏操作共用组件；无模型且无结果时显示紧凑准备面板，可进入模型选择或训练，已有结果但指标尚未取得时显示 `--`，实际 Earth 响应缺项仍显示“未提供”。行星适配层保留各自 API、时间轴、坐标、单位、评价范围和导出能力。Earth 每次运行完整任务 horizon，展示步只改变查看内容，保持 UTC/DU、独立手动抽样诊断、ΔRMSE PFI 和地球地图全屏；Mars 保持 Ls、训练步长上限、ΔR² PFI 与球面。验证包含前端测试/生产构建、合成浏览器桌面与 390px 交互，以及后端契约回归；既有 Mars 坐标失败单独列出，不代表真实训练精度或全分辨率浏览器性能验收。
 
 2026-10-09 地球训练链路补强了任务恢复和上传模型契约：新任务保存独立划分策略标记，缺失冻结划分时拒绝恢复及产物读取；兼容未带新标记但已有 task split 的任务，真正旧任务继续使用 manifest。上传模型的构建、训练与重载统一初始化为 CPU float32，再迁移到运行设备；eval 必须通过单样本/合批、顺序、其他样本及重复调用一致性检查，覆盖实际任务 batch size，且不能修改参数/缓冲区；checkpoint 加载权重后再次核验。旧上传校验报告缺少新验证证据时需重新校验。实现与边界见[任务级划分](docs/earth-task-splits.md)和[上传模型契约](docs/earth-3hourly-uploaded-model.md)。
 
@@ -36,7 +38,7 @@ Earth 官方 DLinear 与独立契约上传模型统一支持 MSE、RMSE、MAE、
 
 2026-10-08 地球训练新增[任务级自定义数据划分](docs/earth-task-splits.md)：官方 DLinear 与独立契约上传模型共用完整原始 UTC 三小时时间轴的连续划分，默认 70/20/10，三项均大于 0。先确定原始分区，再在分区内部生成完整窗口；各区至少包含输入窗口 + 输出窗口个时间步。服务器持久化请求比例、策略版本和实际边界，normalization 仅拟合当前任务 train，缓存检查任务划分。新 checkpoint 严格核对划分与指标；旧三小时任务继续使用发布 manifest，不自动迁移，日频仍停用。合成数据用于训练链路回归，未执行完整真实两年训练。
 
-文档最近核对日期：**2026-10-09**（本轮范围包含共用单模型预测工作台、地球训练、划分恢复及上传契约）。地球唯一活动数据集 `earth_merra2_3hourly_v1` 是 3 小时 UTC、240×480 全球五变量数据，官方 DLinear 与符合独立 v1 契约的上传模型均支持按任务配置输入/输出窗口（默认 56→24）训练和历史回测。上传兼容性按具体 dataset_id 校验，未知或 dry-run 失败不能训练；服务器固定数据身份和源码版本。实际模型调用使用 24×48 空间块、float32 BTCHW，上传模型不使用 Mars 字段或假设。训练只用 train split 拟合 normalization，产物发布前 strict reload。完整两年数据包已独立验证；已有合成训练/回测记录不代表真实训练结果或预测精度验收。入口见 [三小时专题](docs/earth-merra2-3hourly.md)及[独立上传契约与模板](docs/earth-3hourly-uploaded-model.md)。
+文档最近核对日期：**2026-10-10**（本轮范围包含共用单模型预测空状态、Earth/Mars 观测台文字与图例收口、训练草稿切换、Earth 训练回归及后端测试隔离）。地球唯一活动数据集 `earth_merra2_3hourly_v1` 是 3 小时 UTC、240×480 全球五变量数据，官方 DLinear 与符合独立 v1 契约的上传模型均支持按任务配置输入/输出窗口（默认 56→24）训练和历史回测。上传兼容性按具体 dataset_id 校验，未知或 dry-run 失败不能训练；服务器固定数据身份和源码版本。实际模型调用使用 24×48 空间块、float32 BTCHW，上传模型不使用 Mars 字段或假设。训练只用 train split 拟合 normalization，产物发布前 strict reload。完整两年数据包已独立验证；已有合成训练/回测记录不代表真实训练结果或预测精度验收。入口见 [三小时专题](docs/earth-merra2-3hourly.md)及[独立上传契约与模板](docs/earth-3hourly-uploaded-model.md)。
 
 Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定，固定支持 `earth_merra2_3hourly_v1`，见[生产默认值模板](AresVision_backend/backend/.env.production.example)。`ARESVISION_EARTH_MERRA2_3HOURLY_DIR` 应指向已验证的完整发布目录；三小时包缺失会显示不可用，不回退到日频。旧配置若将 `ARESVISION_DEFAULT_EARTH_DATASET_ID` 设为日频，应改为三小时或移除该项；日频默认值会在启动时明确拒绝。
 
@@ -100,8 +102,8 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 - 地球两侧观测轨沿用火星的读数卡片、细曲线、数值填充与播放按钮样式：左侧为日期滑块和面积加权全球均值，右侧为单点年变化，两轨共用日期轴，数值刻度各自独立（同火星口径，避免选点改变全球均值曲线形状）。三小时 UTC 日期与时间控件使用紧凑样式，两侧读数区随文字缩放预留同等高度，保持曲线对齐；高度不足时两侧观测轨同步纵向滚动。保留年份选择、闰日处理和从首日重播，窄屏两轨并排放在球体下方；实现见 [EarthObservationRail.jsx](frontend/src/pages/DataOverviewPage/workbench/EarthObservationRail.jsx)，填充取色见 [railCurveFill.js](frontend/src/pages/DataOverviewPage/workbench/railCurveFill.js)。
 - 支持手势交互、全屏展示及中英文界面。
 - 地球观测档首次打开或刷新时默认显示三维球体；“显示”面板可手动切换二维地图，WebGL 不可用时自动回退二维。三维底球使用随项目提供的 NASA Blue Marble 彩色影像，呈现海洋、陆地与冰雪，并可通过海岸线开关控制轮廓叠加；影像仅作地理参考，来源与许可见 [地球底图资源](frontend/public/earth/README.md)。
-- 三维球体图层可按需叠加五类分析辅助层：六级等值线、当前场相对球面面积加权均值的距平、由 U/V 场组成的风向量、太阳参考时刻对应的昼夜分界线，以及可调强度的地理参考底图。距平会同步替换球体和图例的显示场，原始点位读数与观测轨保持原值；地球数据是 UTC 日均值，昼夜线使用显式参考时刻作示意，火星使用 Ls 与本初子午线地方太阳时，均不代表新增的亚日观测数据。底图纹理是地理参照，不是地形高度数据；数据质量图层暂未开放。
-- 数据总览顶部可切换“火星 / 地球”，两者互斥挂载，共用行星观测台外壳。地球默认观测档：球体两侧分别为日期刻度与点位年变化。分析档默认展示“主题组合看板”：宽屏左侧选择主题、年份和适用变量/纬带，右侧一张主图与两张辅助图同屏展示季节变化、变量关系或空间诊断；每张图可放大，返回或按 Escape 回到原组合，窄屏顺序排列。左侧“单项深入分析”和右上“单项分析”保留原有全部图表与 AI 解读，火星主题与单项分别记住变量条件。逐日读数、点位序列、球体工具和播放放在观测档，切入分析暂停播放；仅火星单项昼夜变化显示 Ls 选择。图表加载失败提供保留条件的重试，空数据另行提示。控件位置、统计口径与能力边界见[共用分析工作台](docs/earth-analysis-workbench.md)。
+- 三维球体图层可按需叠加五类分析辅助层：六级等值线、当前场相对球面面积加权均值的距平、由 U/V 场组成的风向量、太阳参考时刻对应的昼夜分界线，以及可调强度的地理参考底图。距平会同步替换球体和图例的显示场，原始点位读数与观测轨保持原值；地球场使用 UTC 三小时数据，年度统计按完整 UTC 日聚合，昼夜线使用显式参考时刻作示意，火星使用 Ls 与本初子午线地方太阳时，均不代表新增的亚日观测数据。底图纹理是地理参照，不是地形高度数据；数据质量图层暂未开放。
+- 数据总览顶部可切换“火星 / 地球”，两者互斥挂载，共用行星观测台外壳。地球默认观测档：球体两侧分别为 UTC 时间刻度与点位时间序列。分析档默认展示“主题组合看板”：宽屏左侧选择主题、年份和适用变量/纬带，右侧一张主图与两张辅助图同屏展示季节变化、变量关系或空间诊断；每张图可放大，返回或按 Escape 回到原组合，窄屏顺序排列。左侧“单项深入分析”和右上“单项分析”保留原有全部图表与 AI 解读，火星主题与单项分别记住变量条件。逐时间步读数、点位序列、球体工具和播放放在观测档，切入分析暂停播放；仅火星单项昼夜变化显示 Ls 选择。图表加载失败提供保留条件的重试，空数据另行提示。控件位置、统计口径与能力边界见[共用分析工作台](docs/earth-analysis-workbench.md)。
 
 ### 数据管理
 
@@ -109,11 +111,11 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 - 支持 `.nc`、`.nc4`、`.netcdf` 文件上传、校验，以及数据贡献审核。
 - 区分默认数据、用户上传数据与管理员数据治理入口；训练使用服务器管理的数据集。
 - 包含 MCD 总览数据、NOMAD 网格数据和 MOLA 地形资源的构建脚本。
-- 提供 MERRA-2 地球臭氧日数据的小包构建、独立读取、预览和训练冒烟脚本；见 [地球小数据包](docs/earth-compact-dataset.md)。
+- 保留历史 MERRA-2 地球臭氧日数据小包的构建、独立读取、预览和训练冒烟脚本；日频运行入口已停用，见 [地球小数据包](docs/earth-compact-dataset.md)。
 - 提供独立的 Earth MERRA-2 三小时离线构建与验证脚本：SLV/RAD 五变量连续三个小时真实平均、01:30 等 UTC 中心标签、全球 240×480 保守球面重网格和显式缺失掩码；数据写入 Git checkout 外的目录，支持 7–30 天 smoke 与完整两年处理。产品已接入注册、分块校验、官方 DLinear / 独立契约上传模型训练与历史回测 API，总览已适配 UTC timestamp、服务端 60×120 面积降采样地图、原生点位与后端日聚合；训练/预测前端已支持 56→24 与 UTC 回测，见 [三小时数据构建、训练与历史回测](docs/earth-merra2-3hourly.md)。
 - 服务器数据集目录：`GET /api/datasets` 列出三个活动数据集（`openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1`）及三小时默认 Earth ID；详情返回元数据、版本、发布指纹、可用状态和能力声明。日频详情返回 409 `dataset_retired`；缺少三小时包不阻断启动，也不回退到日频。约定与状态解释见[数据集注册表](docs/dataset-registry.md)。
-- 数据总览支持“火星 / 地球”切换：地球场景按真实日期查看 MERRA-2 五个变量的三维全球球体、逐日播放、点位时间序列与全球单元面积加权均值，见 [二维地球数据总览](docs/earth-overview.md) 与 [共用分析工作台](docs/earth-analysis-workbench.md)。
-- 地球年度分析按 2020、2021 分开计算，覆盖季节结构、年内变化、季节极值、环境因子、辐射/温度与臭氧关系、变量相关、空间距平与极区统计；昼夜变化卡片固定显示“日平均数据没有日内采样”的能力说明，不请求火星昼夜接口。
+- 数据总览支持“火星 / 地球”切换：地球场景按 UTC 三小时时间步查看 MERRA-2 五个变量的三维全球球体、播放、点位时间序列与全球单元面积加权均值，见 [二维地球数据总览](docs/earth-overview.md) 与 [共用分析工作台](docs/earth-analysis-workbench.md)。
+- 地球年度分析按 2020、2021 分开计算，覆盖季节结构、年内变化、季节极值、环境因子、辐射/温度与臭氧关系、变量相关、空间距平与极区统计；年度结果由三小时源聚合为完整 UTC 日均。昼夜分析尚未接入，卡片显示能力说明，不请求火星昼夜接口。
 - 后续扩展见 [火星 / 地球共用分析工作台方案](docs/plans/2026-09-23-earth-shared-analysis-workbench.md)；其首期范围（共用工作台、三维地球、年度分析、极区、图表 AI 解读）已实现，手势交互与跨星球数值比较仍属后续计划。
 
 ### 模型训练
@@ -256,6 +258,8 @@ AresVision/
 
 训练默认值保存在当前浏览器的 `aresvision_settings`。修改有效默认值后，当前实验草稿中尚未手动修改的字段即时同步；手动编辑过的字段与「复制配置」载入的参数保留原值，点击「新建实验」重新应用全部默认值。数据分区比例作为一组同步，必须完整合计 100%；Earth 要求三项均大于 0，Mars 默认验证比例为 0 时 Earth 回退 70/20/10。Earth 窗口默认值在进入或新建实验时应用，已挂载草稿的窗口及禁用迁移学习不随通用默认值重写。已创建任务不被改写，详见[训练默认值](docs/experiment-center.md#35-2026-10-01-设置训练默认值)。
 
+训练页的 [trainingDraftSession.js](frontend/src/pages/ModelTrainingPage/trainingDraftSession.js) 集中管理 Earth/Mars 场景草稿切换与上传参数保留。两个 Mars 数据集共用 Mars 草稿，往返 Earth 均恢复模型、通道、窗口、比例、结构和迁移来源；重复选择当前数据集不改写快照。Earth 暂停 Mars 迁移，切回后保留原结构以便解除迁移锁定。同一上传模型在两个场景可保留不同参数，复制/恢复/编辑的值不被延迟或等价 schema 重置；手动换模型应用其默认参数。“复制配置”和“新建实验”清除旧场景快照。草稿仅保存在当前页面会话，名称、轮次、批大小和学习率等通用字段仍共享，不新增后端实验实体。
+
 实验目录按最近、排队、运行、完成、失败与已取消任务分组，支持搜索、按需展开的标签筛选及排序；实验矩阵复用同一任务快照，提供固定关键列、可选属性列和账号隔离的浏览器列配置。配置检查器按四个配置分区呈现现有就绪阻塞原因。目录的“字段”完整度仅反映历史元数据可读取程度，不能替代训练校验；页面没有持久化草稿任务。展示交互和边界详见 [实验中心说明](docs/experiment-center.md)。
 
 训练结果的“训练参数”摘要会在上传模型任务中展示训练时固定的自定义模型名称、版本和原始文件名（历史任务缺少某项元数据时按可用字段降级展示）。
@@ -321,9 +325,9 @@ Mars 的 `selected_channels`（包括检查点的 `training_contract.selected_ch
 
 1. `#/overview` 顶部持有 `planet` 选择，按钮按“地球 / 火星”排列，首次进入或刷新默认地球；火星与地球**互斥挂载**，地球不加载火星三维背景、纹理、摄像头或查询组件。
 2. 页面同时持有 `observatoryView`（`observe` / `analyze`）与 `openPanel`（`null` / `source` / `layers` / `display` / `point`）两个界面状态；布局状态不进入后端请求 key，刷新回到默认观测档。两个星球都经 `OverviewShell` 组装条件栏、画布、时间轨道与分析区；差异全部由 adapter 与星球专属槽位声明，共用组件不读取任何星球数据。
-3. 分析区由 `AnalysisDock` 承载主题、条件和组合/单项入口；`AnalysisBoard` 共用三图排布与放大交互。Earth controller 按主题复用一份年度 suite 或空间响应；Mars 看板请求当前主题所需的热力图，用请求身份拒绝过期响应。放大不触发请求。Mars 用 `MarsAnalysisProvider` 分别保存主题与单项的变量/纬带，`MarsAnalysisConditions` 在左栏展示适用条件。失败可重试、空数据单独显示，Earth 昼夜单项展示能力原因。看板变化曲线展示所选变量原始单位；单项“年内全球变化”保留多变量 Z-score/原始单位比较。Earth 点位与逐日数据统一由观测档承载，单项分析保留按需展开的 AI 解读。
+3. 分析区由 `AnalysisDock` 承载主题、条件和组合/单项入口；`AnalysisBoard` 共用三图排布与放大交互。Earth controller 按主题复用一份年度 suite 或空间响应；Mars 看板请求当前主题所需的热力图，用请求身份拒绝过期响应。放大不触发请求。Mars 用 `MarsAnalysisProvider` 分别保存主题与单项的变量/纬带，`MarsAnalysisConditions` 在左栏展示适用条件。失败可重试、空数据单独显示，Earth 昼夜单项展示能力原因。看板变化曲线展示所选变量原始单位；单项“年内全球变化”保留多变量 Z-score/原始单位比较。Earth 点位与三小时时间序列统一由观测档承载，单项分析保留按需展开的 AI 解读。
 4. 地球先查 `GET /api/datasets` 读取服务端三小时 Earth ID，再由 `earthOverviewAdapter` 查描述符；分析 context、区域场、区域序列与点位序列都使用同一数据集 ID。旧日频任务仅保留历史身份、指标和产物，不能继续运行。
-5. 年度分析走 Earth 专用接口 `/api/analysis/earth/overview/*`：`useEarthResearch`/`earthResearchClient` 按 `(fingerprint, year[, variable])` 去重缓存，多张卡片共享一次请求，逐日播放不重发年度数据。
+5. 年度分析走 Earth 专用接口 `/api/analysis/earth/overview/*`：`useEarthResearch`/`earthResearchClient` 按 `(fingerprint, year[, variable])` 去重缓存，多张卡片共享一次请求，观测时间步播放不重发年度数据。
 6. `SphericalFieldCanvas` 接收显式 `planet`/`field`/`geometry`/`selection`/`lighting` 与共享粒子视觉参数：地球用 v2 真实单元边界采样 2592 个单元粒子（不跨经度接缝、封盖两极），默认自动旋转，并按当前场值更新粒子径向高度；火星保持原有纹理、粒子与太阳光照；两者共享相机、粒子密度/尺寸、面板锚点与暗/亮 surface 语义。画布尺寸只由外壳实测的窗格决定，模式切换不重建三维实例。
 7. 切星球时按固定顺序重置：取消旧星球请求 → 清空场/曲线/播放/选点 → 载入新星球默认变量与时间 → 重置相机与几何；回包需同时通过 epoch、通道 token 与请求身份检查。
 8. 日期、变量与点位选择保存在页面层，Earth → Mars → Earth 保留各自选择；火星手势选点按画布真实矩形（`sceneRef.getBoundingClientRect()`）映射，不再按窗口宽度减栏宽推算。
@@ -428,32 +432,30 @@ Earth 三小时发布覆盖 2020–2021 年，共 5848 个 UTC 时间步，240×
 
 ### 2. 启动后端
 
-从仓库根目录进入后端，创建虚拟环境：
+Windows 当前工作区固定使用 Conda 环境 `AresVision` 的解释器，不要为后端另建 `.venv` 或调用系统 Python。PowerShell 从仓库根目录执行：
+
+```powershell
+conda activate AresVision
+$AresVisionPython = Join-Path $env:CONDA_PREFIX 'python.exe'
+Set-Location AresVision_backend/backend
+```
+
+若环境尚未安装项目依赖：
+
+```powershell
+& $AresVisionPython -m pip install -r requirements.txt
+```
+
+Linux / macOS 可在后端目录使用项目虚拟环境：
 
 ```bash
 cd AresVision_backend/backend
 python -m venv .venv
-```
-
-Windows PowerShell 激活：
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-Linux / macOS 激活：
-
-```bash
 source .venv/bin/activate
-```
-
-安装依赖：
-
-```bash
 python -m pip install -r requirements.txt
 ```
 
-将后端目录中的 `.env.example` 复制为 `.env`（已有配置时保留原文件）：
+若后端目录中没有 `.env`，先从模板复制（已有配置时保留原文件）：
 
 ```powershell
 # Windows PowerShell
@@ -465,7 +467,13 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-按下文填写配置，然后在该目录启动：
+Windows 当前工作区启动命令：
+
+```powershell
+& $AresVisionPython -m uvicorn main:app --reload --reload-dir . --host 0.0.0.0 --port 8000
+```
+
+Linux / macOS 启动命令：
 
 ```bash
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
@@ -478,7 +486,7 @@ python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 ### 3. 启动前端
 
-另开一个终端，从仓库根目录执行：
+开发模式另开终端，从仓库根目录执行：
 
 ```bash
 cd frontend
@@ -488,9 +496,24 @@ npm run dev
 
 访问 <http://localhost:5173>。Vite 将 `/api` 请求代理到 `http://localhost:8000`，开发时需同时运行前后端。
 
+生产模式先构建前端，再从仓库根目录启动零依赖静态服务：
+
+```powershell
+cd frontend
+npm ci
+npm run build
+cd ..
+$env:ROOT = 'frontend\dist'
+$env:PORT = '5173'
+$env:API_PORT = '8000'
+node scripts\serve-prod.mjs
+```
+
+源码修改后必须重新执行 `npm run build`，再重启生产服务。启动后至少验证后端 `/health`、前端首页以及前端代理 `/api/datasets` 都返回 200；`/health` 仅表示服务存活，不验证数据、权重或外部 AI 接口。
+
 ### Windows 一键启动
 
-工作区根目录提供 `start-aresvision.cmd` / `start-aresvision.ps1`，可一次启动后端和前端并打开浏览器。默认使用生产前端服务：它从 `frontend/dist` 提供静态文件，并将 `/api` 转发到后端 `8000` 端口；修改前端源码后先在 `frontend/` 执行 `npm run build`。需要热更新时使用：
+当前工作区的仓库父目录提供 `start-aresvision.cmd` / `start-aresvision.ps1`，可一次启动后端和前端并打开浏览器；这些是工作区配套脚本，不随 Git 仓库分发。请从工作区根目录（仓库父目录）运行。默认使用生产前端服务：它从 `frontend/dist` 提供静态文件，并将 `/api` 转发到后端 `8000` 端口。需要热更新时使用：
 
 ```powershell
 .\start-aresvision.ps1 -FrontendMode Dev
@@ -568,6 +591,8 @@ python -m pytest tests
 
 测试覆盖数据读取与对齐、模型接入、训练配置、预测步长、缓存隔离、请求一致性及前端交互逻辑。运行所需数据或依赖以各测试为准。首页交互工具函数测试为 `frontend/src/pages/HomePage/homePointerInteraction.test.js`，覆盖指针坐标归一化、分层视差幅度与边界、鼠标/触控笔/触屏判断、`prefers-reduced-motion`、地球水平与垂直旋转限制、惯性阻尼与键盘按键映射。
 
+训练草稿的转换序列与最终提交内容由 `frontend/src/pages/ModelTrainingPage/trainingDraftSession.test.js` 验证；[浏览器草稿回归](scripts/audit/training-draft/browser-check.js) 在隔离会话替换全部 API 与 WebSocket，检查两个 Mars 数据集往返、同模型分场景参数、重复选择、窗口/步长恢复、迁移撤销、复制/新建重置、390px 和拦截提交载荷，不创建真实训练任务。运行方式见[实验中心草稿约定](docs/experiment-center.md#训练草稿切换与参数保留)。
+
 训练执行准备与恢复回归为 `tests/test_training_queue_recovery.py`：使用临时 SQLite、真实任务/权重/上传模型查询和子进程替身，覆盖官方/上传 Mars 的两种迁移来源、新建队列与实例重建、依赖缺失/失效/权限撤销、FIFO、队列取消及失败后继续。Earth 的启动参数测试改为通过同一准备入口，冻结划分/源码和产物门禁仍由三小时与任务划分测试验证。使用工作区规定的 conda 解释器逐文件运行，并指定仓库外新的英文 `--basetemp`；这些回归不代表真实模型训练或精度验收。
 
 NetCDF 并发读锁由 `tests/test_netcdf_read_lock_contract.py` 覆盖：断言官方模型、上传模型与 MOLA 地形三处共用同一把进程级锁、两个加载器并发执行时 `Dataset` 打开区间不重叠、锁被占用时上传模型读取会等待，并静态检查每个 `Dataset` 构造点都包在 `netcdf_read_lock()` 内。`tests/test_inference_netcdf_thread_safety.py` 覆盖官方模型数据准备路径的串行化。
@@ -582,7 +607,7 @@ Mars 数据身份回归见 `tests/test_mars_dataset_identity.py`：直接断言�
 
 Mars 坐标回归见 `tests/test_mars_prediction_coordinates.py`：以北高南低的纬度梯度验证两种数据集、官方/上传模型与新/旧权重，逐项检查三类空间场的坐标和值，另覆盖缺失/非法坐标及缓存策略。前端 `frontend/src/pages/PredictPage/marsPredictionGrid.test.js` 验证真实轴的绘图位置、非均匀经度、三维坐标传递和无坐标时不生成替代标签。
 
-数据集注册相关测试为 `tests/test_dataset_identity.py`、`tests/test_dataset_registry.py`、`tests/test_dataset_routes.py`、`tests/test_training_dataset_identity_migration.py` 和 `tests/test_training_dataset_identity.py`；地球总览与分析为 `tests/test_earth_overview_service.py`、`tests/test_earth_overview_routes.py`、`tests/test_earth_research_service.py` 与 `tests/test_earth_research_routes.py`。共用工作台前端测试位于 `frontend/src/pages/DataOverviewPage/workbench/` 与 `frontend/src/pages/DataOverviewPage/EarthOverview/`。`tests/conftest.py` 提供显式引用的临时 Earth 发布 fixture（`earth_release`、`earth_spatial_release`、`earth_global_release`），不读取生产数据；该文件在 Windows 上把 `tempfile` 临时目录的 POSIX 权限位从 `0o700` 放宽到 `0o777`（POSIX 行为不变），否则受限文件策略会拒绝写入 `tmp_path`。这些测试需要新的纯英文临时目录（`--basetemp`），并应避免在同一 pytest 会话中一次性收集全部测试文件：`tests/test_trained_model_predict_contract.py` 通过 `sys.path` 注入模块桩后，同一会话内再收集 `tests/test_uploaded_training_contract.py` 会报 `ImportError: cannot import name ... from 'database.models' (unknown location)`，两者分开运行均通过。
+数据集注册相关测试为 `tests/test_dataset_identity.py`、`tests/test_dataset_registry.py`、`tests/test_dataset_routes.py`、`tests/test_training_dataset_identity_migration.py` 和 `tests/test_training_dataset_identity.py`；地球总览与分析为 `tests/test_earth_overview_service.py`、`tests/test_earth_overview_routes.py`、`tests/test_earth_research_service.py` 与 `tests/test_earth_research_routes.py`。共用工作台前端测试位于 `frontend/src/pages/DataOverviewPage/workbench/` 与 `frontend/src/pages/DataOverviewPage/EarthOverview/`。`tests/conftest.py` 提供显式引用的临时 Earth 发布 fixture（`earth_release`、`earth_spatial_release`、`earth_global_release`），不读取生产数据；该文件在 Windows 上把 `tempfile` 临时目录的 POSIX 权限位从 `0o700` 放宽到 `0o777`（POSIX 行为不变），否则受限文件策略会拒绝写入 `tmp_path`。这些测试需要新的纯英文临时目录（`--basetemp`）。预测契约、旧权重和训练数据加载测试已移除全局依赖模块替换；上传训练测试的依赖替身由 fixture 自动恢复，可在同一会话组合运行。训练身份夹具使用当前 ORM 表结构、真实临时用户/上传包，并明确区分日频 409 `dataset_retired` 与三小时缺包 503；历史无身份行的迁移仍由独立迁移测试覆盖。组合命令和本轮范围见[后端测试隔离](docs/backend-test-isolation.md)，全库收集成功不等同于全量执行通过。
 
 三小时发布协议与目录测试为 `tests/test_earth_3hourly_data_contract.py`、`tests/test_earth_3hourly_registry.py`；训练契约、惰性窗口、checkpoint 和 runner/service 测试见 `tests/test_earth_3hourly_training_contract.py`、`tests/test_earth_3hourly_training_data.py`、`tests/test_earth_3hourly_artifact.py`、`tests/test_earth_3hourly_training_runner.py`、`tests/test_earth_3hourly_training_service.py`。先运行 smoke，再分文件运行训练链路回归，命令与实际范围见 [三小时数据构建与训练](docs/earth-merra2-3hourly.md#官方-dlinear-后端训练)。
 

@@ -11,15 +11,7 @@ import C from '../../../constants/colors';
 
 export function PanelSectionLabel({ children }) {
   return (
-    <div
-      style={{
-        color: C.ice50,
-        fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))',
-        fontWeight: 700,
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-      }}
-    >
+    <div className="observatory-section-label">
       {children}
     </div>
   );
@@ -27,11 +19,12 @@ export function PanelSectionLabel({ children }) {
 
 export function FieldRow({ label, value }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 8, alignItems: 'baseline' }}>
-      <span style={{ color: C.ice45, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))' }}>{label}</span>
+    <div className="observatory-field-row">
+      <span className="observatory-field-row__label">{label}</span>
       <span
         data-field-label={label}
-        style={{ color: C.ice80, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6, wordBreak: 'break-word' }}
+        className="observatory-field-row__value"
+        title={typeof value === 'string' ? value : undefined}
       >
         {value || '--'}
       </span>
@@ -43,14 +36,7 @@ export function PanelCard({ children, testId = null }) {
   return (
     <div
       data-panel-card={testId || undefined}
-      style={{
-        display: 'grid',
-        gap: 10,
-        padding: '12px',
-        borderRadius: 'var(--overview-card-radius)',
-        border: '1px solid var(--overview-hairline)',
-        background: 'var(--overview-elevated)',
-      }}
+      className="observatory-panel-section"
     >
       {children}
     </div>
@@ -58,35 +44,21 @@ export function PanelCard({ children, testId = null }) {
 }
 
 export function PanelSelect({ label, value, onChange, options, disabled = false, isLight = false }) {
-  const optionBg = isLight ? '#ffffff' : '#111827';
-  const optionColor = isLight ? '#17212f' : '#f5f7fb';
+  const selectedOption = options.find((option) => String(option.value) === String(value));
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <span style={{ color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600 }}>{label}</span>
+    <label className="observatory-panel-select">
+      <span>{label}</span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
-        style={{
-          width: '100%',
-          padding: '10px 12px',
-          borderRadius: 'var(--overview-control-radius)',
-          border: `1px solid ${C.borderStrong}`,
-          background: isLight ? 'rgba(255,255,255,0.94)' : C.bgCardStrong,
-          color: C.ice,
-          fontSize: 'calc(12px * var(--font-scale, 1))',
-          fontWeight: 600,
-          outline: 'none',
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.72 : 1,
-        }}
+        title={selectedOption?.detail || selectedOption?.label || label}
       >
         {options.map((option) => (
           <option
             key={option.value}
             value={option.value}
             title={option.detail || option.label}
-            style={{ color: optionColor, background: optionBg }}
           >
             {option.label}
           </option>
@@ -99,14 +71,15 @@ export function PanelSelect({ label, value, onChange, options, disabled = false,
 export function SegmentedToggle({ value, onChange, options, disabled = false, isLight = false }) {
   return (
     <div
+      className="observatory-segmented-toggle"
       style={{
         display: 'grid',
         gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
         gap: 6,
         padding: 4,
         borderRadius: 'var(--overview-control-radius)',
-        background: isLight ? 'rgba(15,23,42,0.05)' : 'rgba(255,255,255,0.04)',
-        border: `1px solid ${isLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.08)'}`,
+        background: 'var(--surface-2)',
+        border: '1px solid var(--line-subtle)',
       }}
     >
       {options.map((option) => {
@@ -129,7 +102,9 @@ export function SegmentedToggle({ value, onChange, options, disabled = false, is
                 padding: '8px 10px',
                 background: active ? option.activeBg : 'transparent',
                 color: active ? option.activeColor : C.ice60,
-                fontSize: 'calc(11px * var(--font-scale, 1))',
+                fontSize: 'calc(12px * var(--font-scale, 1))',
+                lineHeight: 1.5,
+                letterSpacing: 0,
                 fontWeight: active ? 700 : 600,
                 cursor: optionDisabled ? 'not-allowed' : 'pointer',
                 opacity: optionDisabled ? 0.5 : 1,
@@ -147,21 +122,8 @@ export function SegmentedToggle({ value, onChange, options, disabled = false, is
 
 export function InlineSwitch({ label, checked, onChange, accent = C.blue, isLight = false }) {
   return (
-    <label
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10,
-        minHeight: 44,
-        padding: '10px 12px',
-        borderRadius: 'var(--overview-control-radius)',
-        border: `1px solid ${isLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.07)'}`,
-        background: isLight ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.03)',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ color: C.ice, fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.45 }}>{label}</span>
+    <label className="observatory-inline-switch">
+      <span>{label}</span>
       <span style={{ position: 'relative', width: 36, height: 20, flexShrink: 0 }}>
         <input
           type="checkbox"
@@ -175,8 +137,8 @@ export function InlineSwitch({ label, checked, onChange, accent = C.blue, isLigh
             position: 'absolute',
             inset: 0,
             borderRadius: 999,
-            background: checked ? `${accent}33` : (isLight ? 'rgba(15,23,42,0.12)' : 'rgba(255,255,255,0.10)'),
-            border: `1px solid ${checked ? accent : isLight ? 'rgba(15,23,42,0.12)' : 'rgba(255,255,255,0.10)'}`,
+            background: checked ? `color-mix(in srgb, ${accent} 20%, var(--surface-2))` : 'var(--surface-2)',
+            border: `1px solid ${checked ? accent : 'var(--line-strong)'}`,
             transition: 'all 0.2s ease',
           }}
         />
@@ -189,7 +151,7 @@ export function InlineSwitch({ label, checked, onChange, accent = C.blue, isLigh
             left: checked ? 18 : 3,
             top: 3,
             borderRadius: '50%',
-            background: checked ? accent : (isLight ? 'rgba(15,23,42,0.45)' : 'rgba(255,255,255,0.60)'),
+            background: checked ? accent : 'var(--text-muted)',
             transition: 'all 0.2s ease',
           }}
         />

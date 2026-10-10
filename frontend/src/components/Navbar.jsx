@@ -324,30 +324,6 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
     return () => window.removeEventListener(NOTIFICATION_REFRESH_EVENT, fetchUnreadCount);
   }, [fetchUnreadCount]);
 
-  const navLabelStyle = (isActive) => ({
-    fontSize: 'calc(12px * var(--font-scale, 1))',
-    fontWeight: isActive ? 600 : 500,
-    letterSpacing: 0,
-    fontFamily: 'var(--font-body)',
-    color: isActive ? C.brand : C.ice60,
-    transition: 'color 0.25s',
-  });
-
-  const navBtnStyle = (isActive) => ({
-    background: isActive ? 'var(--bg-muted)' : 'transparent',
-    border: '1px solid transparent',
-    boxShadow: isActive ? 'inset 0 -2px var(--brand-ice)' : 'none',
-    borderRadius: 'var(--radius-control)',
-    minHeight: 'var(--control-height)',
-    padding: '8px 12px',
-    cursor: 'pointer',
-    transition: 'all 0.25s',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 2,
-  });
-
   return (
     <nav
       aria-label={settings.language === 'zh' ? '主导航' : 'Main navigation'}
@@ -380,7 +356,7 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
           }}>
             AstraAtmos
           </div>
-          <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: C.ice60, letterSpacing: 0, lineHeight: 1.4 }}>
+          <div className="brand-home-button__subtitle">
             {t('nav.subtitle')}
           </div>
         </div>
@@ -392,11 +368,11 @@ export default function Navbar({ current, onChange, onOpenAdmin, onOpenFeedback,
           <button
             type="button"
             key={id}
+            className={`nav-link${current === id ? ' is-active' : ''}`}
             aria-current={current === id ? 'page' : undefined}
             onClick={() => onChange(id)}
-            style={navBtnStyle(current === id)}
           >
-            <span style={navLabelStyle(current === id)}>
+            <span>
               {id === 'explore'
                 ? (settings.language === 'zh' ? '数据管理' : 'Data Management')
                 : t(`nav.${id}`)}

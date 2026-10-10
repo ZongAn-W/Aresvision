@@ -1,7 +1,5 @@
 import importlib.util
 import sys
-import types
-import uuid
 from pathlib import Path
 
 import netCDF4
@@ -14,37 +12,6 @@ if str(BACKEND_DIR) not in sys.path:
 
 
 def _load_demo3_module():
-    scipy_module = types.ModuleType("scipy")
-    scipy_interpolate = types.ModuleType("scipy.interpolate")
-    scipy_interpolate.interp1d = lambda x, y, axis=0, bounds_error=False, fill_value=None: (
-        lambda target: np.stack([
-            np.interp(np.asarray(target, dtype=float), np.asarray(x, dtype=float), row)
-            for row in np.moveaxis(np.asarray(y, dtype=float), axis, 0).reshape(len(x), -1).T
-        ], axis=-1).reshape(np.asarray(target).shape + np.asarray(y).shape[1:])
-    )
-    sklearn_module = types.ModuleType("sklearn")
-    sklearn_metrics = types.ModuleType("sklearn.metrics")
-    sklearn_metrics.mean_squared_error = lambda y_true, y_pred: float(np.mean((np.asarray(y_true) - np.asarray(y_pred)) ** 2))
-    sklearn_metrics.r2_score = lambda y_true, y_pred: 1.0
-    sklearn_preprocessing = types.ModuleType("sklearn.preprocessing")
-
-    class StandardScaler:
-        def fit(self, values):
-            arr = np.asarray(values, dtype=float)
-            self.mean_ = arr.mean(axis=0, keepdims=True)
-            self.scale_ = arr.std(axis=0, keepdims=True) + 1e-6
-            return self
-
-        def transform(self, values):
-            return (np.asarray(values, dtype=float) - self.mean_) / self.scale_
-
-    sklearn_preprocessing.StandardScaler = StandardScaler
-    sys.modules["scipy"] = scipy_module
-    sys.modules["scipy.interpolate"] = scipy_interpolate
-    sys.modules["sklearn"] = sklearn_module
-    sys.modules["sklearn.metrics"] = sklearn_metrics
-    sys.modules["sklearn.preprocessing"] = sklearn_preprocessing
-
     script_path = BACKEND_DIR / "models" / "training_scripts" / "demo3.py"
     spec = importlib.util.spec_from_file_location("aresvision_demo3_training_loader", script_path)
     module = importlib.util.module_from_spec(spec)
@@ -111,34 +78,23 @@ def _write_raw_3h_mcd_file(path: Path, offset: float, *, include_dust: bool = Tr
 
 
 def test_official_training_loader_builds_tensors_from_mcd_overview(tmp_path):
-    workspace_tmp = BACKEND_DIR / ".test_tmp" / f"training_loader_{uuid.uuid4().hex}"
+    workspace_tmp = tmp_path
     overview_dir = workspace_tmp / "mcd_overview"
     first_file = overview_dir / "MCD_MY24_overview.nc"
     second_file = overview_dir / "MCD_MY25_overview.nc"
     _write_overview_file(first_file, 0.0)
     _write_overview_file(second_file, 10.0)
 
-    try:
-        demo3 = _load_demo3_module()
-
-        x_torch, ls_torch, y_torch, height, width = demo3.prepare_training_tensors(
-            openmars_dir=workspace_tmp / "openmars",
-            mcd_dir=workspace_tmp / "MCD",
-            mcd_overview_dir=overview_dir,
-            selected_channels=["U", "T"],
-            window=2,
-            horizon=2,
-            training_dataset="mcd_overview",
-        )
-    finally:
-        if first_file.exists():
-            first_file.unlink()
-        if second_file.exists():
-            second_file.unlink()
-        if overview_dir.exists():
-            overview_dir.rmdir()
-        if workspace_tmp.exists():
-            workspace_tmp.rmdir()
+    demo3 = _load_demo3_module()
+    x_torch, ls_torch, y_torch, height, width = demo3.prepare_training_tensors(
+        openmars_dir=workspace_tmp / "openmars",
+        mcd_dir=workspace_tmp / "MCD",
+        mcd_overview_dir=overview_dir,
+        selected_channels=["U", "T"],
+        window=2,
+        horizon=2,
+        training_dataset="mcd_overview",
+    )
 
     assert list(x_torch.shape) == [9, 2, 3, 2, 3]
     assert list(y_torch.shape) == [9, 2, 1, 2, 3]
@@ -212,34 +168,23 @@ def test_mars_file_without_year_metadata_fails_explicitly(tmp_path):
 
 
 def test_official_training_loader_builds_tensors_from_raw_3h_mcd_dataset(tmp_path):
-    workspace_tmp = BACKEND_DIR / ".test_tmp" / f"training_loader_raw_{uuid.uuid4().hex}"
+    workspace_tmp = tmp_path
     raw_dir = workspace_tmp / "MCD_Output_global_10m_ls_lst"
     first_file = raw_dir / "MCD_MY24_global_3h_5deg_10m_ls_lst.nc"
     second_file = raw_dir / "MCD_MY25_global_3h_5deg_10m_ls_lst.nc"
     _write_raw_3h_mcd_file(first_file, 0.0)
     _write_raw_3h_mcd_file(second_file, 2.0)
 
-    try:
-        demo3 = _load_demo3_module()
-
-        x_torch, ls_torch, y_torch, height, width = demo3.prepare_training_tensors(
-            openmars_dir=workspace_tmp / "openmars",
-            mcd_dir=workspace_tmp / "MCD",
-            mcd_overview_dir=raw_dir,
-            selected_channels=["U", "D", "T"],
-            window=2,
-            horizon=2,
-            training_dataset="mcd_overview",
-        )
-    finally:
-        if first_file.exists():
-            first_file.unlink()
-        if second_file.exists():
-            second_file.unlink()
-        if raw_dir.exists():
-            raw_dir.rmdir()
-        if workspace_tmp.exists():
-            workspace_tmp.rmdir()
+    demo3 = _load_demo3_module()
+    x_torch, ls_torch, y_torch, height, width = demo3.prepare_training_tensors(
+        openmars_dir=workspace_tmp / "openmars",
+        mcd_dir=workspace_tmp / "MCD",
+        mcd_overview_dir=raw_dir,
+        selected_channels=["U", "D", "T"],
+        window=2,
+        horizon=2,
+        training_dataset="mcd_overview",
+    )
 
     assert list(x_torch.shape) == [17, 2, 4, 36, 72]
     assert list(y_torch.shape) == [17, 2, 1, 36, 72]

@@ -20,7 +20,7 @@ export const OBSERVATORY_TOOL_KEYS = Object.freeze(['layers', 'point', 'display'
 /** 数据源按钮在条件栏左侧，仍使用同一份焦点注册与面板状态。 */
 export function ObservatorySourceButton({ label, openPanel, onOpenPanelChange }) {
   const { registerPanelButton } = useOverviewLayout();
-  return <ToolbarToolButton label={label} active={openPanel === 'source'}
+  return <ToolbarToolButton label={label} primary active={openPanel === 'source'}
     buttonRef={registerPanelButton('source')}
     onClick={() => onOpenPanelChange?.(openPanel === 'source' ? null : 'source')} />;
 }

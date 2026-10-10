@@ -33,13 +33,14 @@ function SectionTitle({ title, subtitle }) {
   );
 }
 
-function ActionButton({ children, secondary = false, disabled = false, onClick }) {
+function ActionButton({ children, secondary = false, disabled = false, onClick, describedBy }) {
   return (
     <Button
       onClick={onClick}
       disabled={disabled}
+      aria-describedby={describedBy}
       variant={secondary ? 'secondary' : 'primary'}
-      className="predict-sidebar__action"
+      className={`predict-sidebar__action${disabled ? ' is-disabled' : ''}`}
     >
       {children}
     </Button>
@@ -96,6 +97,7 @@ function TrainedModelDropdown({
         disabled={isDisabled}
         aria-haspopup="listbox"
         aria-expanded={open}
+        title={displayText}
         onClick={() => setOpen((valueNow) => !valueNow)}
         style={{
           width: '100%',
@@ -165,6 +167,7 @@ function TrainedModelDropdown({
                 type="button"
                 role="option"
                 aria-selected={active}
+                title={option.label}
                 onClick={() => {
                   onChange(option.id);
                   setOpen(false);
@@ -197,10 +200,10 @@ function TrainedModelDropdown({
                   <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'calc(var(--type-control) * var(--font-scale, 1))', fontWeight: 600 }}>
                     {option.label}
                   </span>
-                  <span style={{ display: 'block', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', lineHeight: 1.5 }}>
+                  <span style={{ display: 'block', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', lineHeight: 1.5 }}>
                     #{summary.taskId} · {summary.architecture} · {summary.inputChannelText}
                   </span>
-                  <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', lineHeight: 1.5 }}>
+                  <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', lineHeight: 1.5 }}>
                     {summary.modelSource} · W{summary.window || '--'} · H{summary.horizon || '--'} · {summary.dataSource}
                   </span>
                   <TagChips tags={option.task.tags} />
@@ -264,7 +267,8 @@ function ModelSourceControl({
 
 
   return (
-    <Panel className="prediction-panel">
+    <Panel id="prediction-model-selection" tabIndex={-1} className="prediction-panel prediction-model-selection"
+      aria-label={isZh ? '模型选择' : 'Model selection'}>
       <SectionTitle
         title={isZh ? '模型选择' : 'Models'}
         subtitle={
@@ -393,7 +397,7 @@ function ModelSourceControl({
             >
               {isZh ? '清空选择' : 'Clear selection'}
             </Button>
-            <span style={{ marginLeft: 'auto', color: compareSelection.canCompare ? 'var(--status-success)' : 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', fontWeight: 600 }}>
+            <span style={{ marginLeft: 'auto', color: compareSelection.canCompare ? 'var(--status-success)' : 'var(--text-secondary)', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', fontWeight: 600 }}>
               {isZh ? `已选 ${compareSelection.count}，筛选外 ${hiddenSelectedCount}` : `${compareSelection.count} selected, ${hiddenSelectedCount} hidden`}
             </span>
           </div>
@@ -440,10 +444,10 @@ function ModelSourceControl({
                     <span style={{ display: 'block', color: C.ice, fontSize: 'calc(var(--type-control) * var(--font-scale, 1))', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {summary.modelName}
                     </span>
-                    <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', lineHeight: 1.5, marginTop: 3 }}>
+                    <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', lineHeight: 1.5, marginTop: 3 }}>
                       #{summary.taskId} · {summary.architecture} · {summary.inputChannelText}
                     </span>
-                    <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', lineHeight: 1.5 }}>
+                    <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', lineHeight: 1.5 }}>
                       {summary.modelSource} · W{summary.window || '--'} · H{summary.horizon || '--'} · {summary.dataSource}
                     </span>
                     <TagChips tags={option.task.tags} />
@@ -548,6 +552,14 @@ export default function PredictSidebar({
   const isCompareMode = modelMode === PREDICT_MODEL_MODE_COMPARE;
   const compareSelection = getCompareSelectionState(selectedCompareTrainingTaskIds);
   const planetAdapter = adapter || createMarsPredictionAdapter({ isZh, horizonLimit: predictionHorizonLimit });
+  const disabledReason = loading ? null
+    : contextLoading ? (isZh ? '正在读取预测起点，请稍候' : 'Loading forecast origins; please wait')
+    : contextError ? (isZh ? '预测起点读取失败，请重试' : 'Forecast origins could not be loaded; please retry')
+    : isCompareMode && !compareSelection.canCompare ? (isZh ? '请至少选择两个已完成的训练模型' : 'Select at least two completed training models')
+    : predictionHorizonLimit == null ? (isZh ? '请选择已完成的训练模型' : 'Select a completed training model')
+    : predStep > predictionHorizonLimit ? (isZh ? '预测步长不能超过模型输出窗口' : 'The prediction horizon exceeds the model output window')
+    : runDisabled ? (isZh ? '请选择有效范围内的预测起点' : 'Select a forecast origin within the available range')
+    : null;
 
   return (
     <div className="predict-sidebar">
@@ -619,9 +631,10 @@ export default function PredictSidebar({
           </div>
         </div>
 
-        <div style={{ display: 'grid', gap: 10 }}>
+        <div className="predict-sidebar__actions">
           <ActionButton
             onClick={handlePredict}
+            describedBy={disabledReason ? 'prediction-run-disabled-reason' : undefined}
             disabled={loading || runDisabled
               || predictionHorizonLimit == null
               || predStep > predictionHorizonLimit
@@ -632,6 +645,9 @@ export default function PredictSidebar({
               t('predict.runningBtn')
             ) : isCompareMode ? (isZh ? '开始对比' : 'Start comparison') : t('predict.runBtn')}
           </ActionButton>
+          {disabledReason ? <p id="prediction-run-disabled-reason" className="predict-sidebar__disabled-reason" role="status">
+            {disabledReason}
+          </p> : null}
           {onReloadContext ? <ActionButton secondary onClick={onReloadContext} disabled={loading || contextLoading}>
             {isZh ? '刷新起点范围' : 'Reload origin range'}
           </ActionButton> : null}

@@ -2,7 +2,6 @@ import asyncio
 import importlib
 import json
 import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,41 +12,13 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 
-def install_service_import_stubs():
-    if "netCDF4" not in sys.modules:
-        netcdf4 = types.ModuleType("netCDF4")
-        netcdf4.Dataset = object
-        sys.modules["netCDF4"] = netcdf4
-
-    engine = types.ModuleType("database.engine")
-    engine.async_session_maker = None
-    sys.modules["database.engine"] = engine
-
-    models = types.ModuleType("database.models")
-    models.ModelTrainingTask = object
-    models.PredictionAnalysisCache = object
-    sys.modules["database.models"] = models
-
-    metrics = types.ModuleType("core.metrics")
-    metrics.compute_error_distribution = lambda *args, **kwargs: {}
-    metrics.compute_metrics = lambda *args, **kwargs: {
-        "overall": {"step": 0},
-        "per_step": [],
-    }
-    metrics.compute_test_set_metrics = lambda truth, pred, horizon=None: {
-        "overall": {"step": 0},
-        "per_step": [
-            {"step": step + 1}
-            for step in range(int(horizon or truth.shape[1]))
-        ],
-    }
-    sys.modules["core.metrics"] = metrics
-
-
 def load_inference_module():
-    install_service_import_stubs()
-    sys.modules.pop("services.inference_service", None)
     return importlib.import_module("services.inference_service")
+
+
+class UncachedAnalysis:
+    async def get_or_compute(self, *, compute, **kwargs):
+        return await compute()
 
 
 def build_legacy_task(tmp_path: Path):
@@ -104,7 +75,7 @@ def test_inference_service_uses_central_mcd_directory(tmp_path, monkeypatch):
     expected = tmp_path / "mcd"
     monkeypatch.setattr(inference_module, "MCD_DIR", expected)
 
-    service = inference_module.InferenceService()
+    service = inference_module.InferenceService(analysis_cache=UncachedAnalysis())
 
     assert service.mcd_dir == expected
 
@@ -112,7 +83,7 @@ def test_inference_service_uses_central_mcd_directory(tmp_path, monkeypatch):
 def test_predict_task_supports_legacy_official_weights(tmp_path):
     inference_module = load_inference_module()
     task, hypers = build_legacy_task(tmp_path)
-    service = inference_module.InferenceService()
+    service = inference_module.InferenceService(analysis_cache=UncachedAnalysis())
 
     async def fake_prepare_task_prediction_context(
         task_id,
@@ -124,7 +95,7 @@ def test_predict_task_supports_legacy_official_weights(tmp_path):
         return task, hypers, {}, None
 
     service._prepare_task_prediction_context = fake_prepare_task_prediction_context
-    service._prepare_data = lambda used_mcd_vars, window, horizon, data_dirs=None: stub_prediction_data()
+    service._prepare_data = lambda used_mcd_vars, window, horizon, **kwargs: stub_prediction_data()
     # The legacy loader normally supplies these axes with its window metadata.
     service._last_prepared_window_metadata = {
         "latitude": torch.linspace(87.5, -87.5, 8).numpy(),
@@ -151,7 +122,7 @@ def test_predict_task_supports_legacy_official_weights(tmp_path):
 def test_task_test_set_metrics_supports_legacy_official_weights(tmp_path):
     inference_module = load_inference_module()
     task, hypers = build_legacy_task(tmp_path)
-    service = inference_module.InferenceService()
+    service = inference_module.InferenceService(analysis_cache=UncachedAnalysis())
 
     async def fake_prepare_task_prediction_context(
         task_id,
@@ -163,7 +134,7 @@ def test_task_test_set_metrics_supports_legacy_official_weights(tmp_path):
         return task, hypers, {}, None
 
     service._prepare_task_prediction_context = fake_prepare_task_prediction_context
-    service._prepare_data = lambda used_mcd_vars, window, horizon, data_dirs=None: stub_prediction_data()
+    service._prepare_data = lambda used_mcd_vars, window, horizon, **kwargs: stub_prediction_data()
 
     result = asyncio.run(
         service.task_test_set_metrics(

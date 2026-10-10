@@ -1,44 +1,16 @@
 import React from 'react';
-import C from '../../constants/colors';
 import { useT } from '../../i18n';
 import { useSettings } from '../../contexts/SettingsContext';
 import { useDataOverview } from '../../contexts/DataOverviewContext';
 import { formatTimelineLs } from './timelineFormatting.js';
 
-function StatusItem({ label, value, valueColor = C.ice }) {
+function StatusItem({ label, value, valueColor = 'var(--text-secondary)' }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '7px 10px',
-        borderRadius: 999,
-        background: C.bgMuted,
-        border: `1px solid ${C.border}`,
-        minWidth: 0,
-      }}
-    >
-      <span
-        style={{
-          color: C.ice50,
-          fontSize: 'calc(10px * var(--font-scale, 1))',
-          fontWeight: 600,
-          whiteSpace: 'nowrap',
-        }}
-      >
+    <div className="overview-status-item" title={`${label}: ${value}`}>
+      <span className="overview-status-item__label">
         {label}
       </span>
-      <span
-        style={{
-          color: valueColor,
-          fontSize: 'calc(11px * var(--font-scale, 1))',
-          fontWeight: 700,
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-        }}
-      >
+      <span className="overview-status-item__value" style={{ color: valueColor }}>
         {value}
       </span>
     </div>
@@ -48,7 +20,6 @@ function StatusItem({ label, value, valueColor = C.ice }) {
 export default function TopStatusBar({ embedded = false }) {
   const t = useT();
   const { settings } = useSettings();
-  const isLight = settings?.theme === 'light';
   const isZh = settings?.language !== 'en';
   const { globalTimeLs, selectedCoordinate, sourceMeta } = useDataOverview();
 
@@ -90,10 +61,8 @@ export default function TopStatusBar({ embedded = false }) {
         gap: 12,
         padding: '6px 10px',
         borderRadius: 10,
-        background: isLight
-          ? 'linear-gradient(180deg, rgba(255,255,255,0.90) 0%, rgba(255,255,255,0.62) 100%)'
-          : 'linear-gradient(180deg, rgba(10,14,20,0.86) 0%, rgba(10,14,20,0.52) 100%)',
-        border: `1px solid ${C.border}`,
+        background: 'color-mix(in srgb, var(--surface-1) 92%, transparent)',
+        borderBottom: '1px solid var(--line-subtle)',
         backdropFilter: 'blur(10px)',
         WebkitBackdropFilter: 'blur(10px)',
         zIndex: 1200,
@@ -104,9 +73,7 @@ export default function TopStatusBar({ embedded = false }) {
         left: 0,
         right: 0,
         height: '56px',
-        background: isLight
-          ? 'linear-gradient(180deg, rgba(255,255,255,0.94) 0%, rgba(255,255,255,0.76) 72%, rgba(255,255,255,0.22) 100%)'
-          : 'linear-gradient(180deg, rgba(10,14,20,0.92) 0%, rgba(10,14,20,0.74) 72%, rgba(10,14,20,0.18) 100%)',
+        background: 'color-mix(in srgb, var(--surface-1) 92%, transparent)',
         backdropFilter: 'blur(14px)',
         WebkitBackdropFilter: 'blur(14px)',
         zIndex: 2000,
@@ -115,39 +82,28 @@ export default function TopStatusBar({ embedded = false }) {
         justifyContent: 'space-between',
         gap: 16,
         padding: '0 20px',
-        borderBottom: `1px solid ${isLight ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.06)'}`,
+        borderBottom: '1px solid var(--line-subtle)',
         pointerEvents: 'none',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '8px 12px',
-            borderRadius: 999,
-            background: C.bgMuted,
-            border: `1px solid ${C.border}`,
-          }}
-        >
+        <div className="overview-status-brand">
           <span
             style={{
               width: 8,
               height: 8,
               borderRadius: '50%',
-              background: C.mars,
-              boxShadow: isLight ? 'none' : '0 0 0 4px rgba(199,91,57,0.12)',
+              background: 'var(--brand-accent)',
               flexShrink: 0,
             }}
           />
           <span
             style={{
-              color: C.ice,
+              color: 'var(--text-primary)',
               fontSize: 'calc(12px * var(--font-scale, 1))',
               fontWeight: 800,
               fontFamily: 'var(--font-display)',
-              letterSpacing: '-0.01em',
+              letterSpacing: 0,
             }}
           >
             AstraAtmos
@@ -157,13 +113,12 @@ export default function TopStatusBar({ embedded = false }) {
         <StatusItem
           label={isZh ? '太阳黄经' : 'Solar longitude'}
           value={`${displayedTimelineLs}°`}
-          valueColor={C.mars}
+          valueColor="var(--brand-ice)"
         />
 
         <StatusItem
           label={isZh ? '季节' : 'Season'}
           value={seasonName}
-          valueColor={C.green}
         />
       </div>
 
@@ -171,7 +126,7 @@ export default function TopStatusBar({ embedded = false }) {
         <StatusItem
           label={isZh ? '焦点' : 'Focus'}
           value={focusValue}
-          valueColor={selectedCoordinate ? C.mars : C.blue}
+          valueColor={selectedCoordinate ? 'var(--brand-ice)' : 'var(--text-secondary)'}
         />
 
         <StatusItem
@@ -182,7 +137,7 @@ export default function TopStatusBar({ embedded = false }) {
         <StatusItem
           label={isZh ? '数据源' : 'Source'}
           value={sourceLabel}
-          valueColor={isUserMcd ? C.blue : C.ice}
+          valueColor={isUserMcd ? 'var(--brand-ice)' : 'var(--text-secondary)'}
         />
       </div>
     </div>

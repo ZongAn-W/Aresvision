@@ -2,6 +2,10 @@
 .predict-sidebar__title { color: var(--text-primary); font: 700 calc(16px * var(--font-scale, 1))/1.3 var(--font-display); letter-spacing: 0; }
 .predict-sidebar__description { margin-top: 6px; color: var(--text-secondary); font-size: calc(var(--type-helper) * var(--font-scale, 1)); line-height: 1.5; overflow-wrap: anywhere; }
 .predict-sidebar__action { width: 100%; }
+.predict-sidebar__actions { display: grid; gap: 10px; }
+.predict-sidebar__disabled-reason { margin: -2px 0 0; font-size: calc(var(--type-helper) * var(--font-scale, 1)); line-height: 1.5; color: var(--text-secondary); letter-spacing: 0; }
+.prediction-model-selection { scroll-margin-top: 90px; }
+.prediction-model-selection:focus-visible { outline: 2px solid var(--brand-ice); outline-offset: 3px; }
 .predict-sidebar .prediction-panel { overflow: visible; }
 .predict-sidebar input:not([type="checkbox"]):not([type="range"]) { border-color: var(--line-default) !important; border-radius: var(--radius-control); background: var(--surface-2) !important; font-variant-numeric: tabular-nums; }
 .predict-sidebar input:focus-visible { border-color: var(--line-active) !important; outline: 3px solid color-mix(in srgb, var(--line-active) 22%, transparent); outline-offset: 2px; }

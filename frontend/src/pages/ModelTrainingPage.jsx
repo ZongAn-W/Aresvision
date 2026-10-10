@@ -33,7 +33,6 @@ import {
   getModelStructureParamLabel,
   getTransferFreezeModes,
   isRecurrentArchitecture,
-  sanitizeTrainingDataset,
   TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1,
   TRAINING_DATASET_EARTH_MERRA2_V2,
   TRAINING_DATASET_MCD_OVERVIEW,
@@ -46,13 +45,10 @@ import {
 import {
   EARTH_CHANNEL_META,
   EARTH_CHANNEL_ORDER,
-  EARTH_HORIZON,
   EARTH_MODEL_ARCHITECTURE,
-  EARTH_MODEL_SOURCE,
   EARTH_MODEL_SOURCE_OFFICIAL,
   EARTH_MODEL_SOURCE_UPLOADED,
   EARTH_OPTIONAL_CHANNELS,
-  EARTH_WINDOW,
   EARTH_3HOURLY_DATASET_ID,
   getEarthTrainingProfile,
   isEarthTrainingDataset,
@@ -61,14 +57,12 @@ import {
   normalizeEarthSplitRatios,
   describeEarthTaskSplits,
   getEarthSplitDefaults,
-  captureTrainingDraft,
   getEarthUploadedSelectionBlocker,
   classifyEarthTrainingError,
   readEarthDatasetAvailability,
   readEarthUploadedModelCompatibility,
-  resolveEarthTrainingRestore,
-  resolveMarsTrainingRestore,
 } from './ModelTrainingPage/earthTrainingConfig';
+import { createTrainingDraftSession } from './ModelTrainingPage/trainingDraftSession';
 import { fetchDatasets } from '../services/datasets';
 import {
   buildCustomModelParams,
@@ -200,10 +194,8 @@ export default function ModelTrainingPage() {
   // 数据集目录：训练数据集选项与 Earth 可用性都来自服务器 registry。
   const [datasetCatalog, setDatasetCatalog] = useState([]);
   const [datasetCatalogError, setDatasetCatalogError] = useState('');
-  // 切到 Earth 前的火星表单快照：切回火星时恢复，避免丢失用户已经填好的配置。
-  const marsSnapshotRef = useRef(null);
-  // Earth 场景自己的草稿：在 Earth 上选的上传模型与自定义参数切回时也保留。
-  const earthSnapshotRef = useRef(null);
+  const draftSessionRef = useRef(null);
+  if (!draftSessionRef.current) draftSessionRef.current = createTrainingDraftSession();
   // 当前选中上传模型的 Earth 兼容性结论（来自服务端上传校验的 Earth dry-run）。
   const [earthUploadedStatus, setEarthUploadedStatus] = useState(null);
   const [earthUploadedLoading, setEarthUploadedLoading] = useState(false);
@@ -698,9 +690,6 @@ export default function ModelTrainingPage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [architecturePickerOpen, setArchitecturePickerOpen] = useState(false);
   const transferStructureSnapshotRef = useRef(null);
-  const restoredCustomModelParamsRef = useRef(null);
-  // 「复制配置」带回自定义参数时登记的来源上传模型 ID。
-  const copiedCustomModelParamsRef = useRef('');
   // 专家参数页签由页面控制器持有，检查器的「编辑自定义参数」可以直接切页。
   const [expertTab, setExpertTab] = useState('');
   // 底部运行条实测高度：目录/检查器的 max-height 与运行条占位块都用它，
@@ -740,8 +729,7 @@ export default function ModelTrainingPage() {
    * 配置的上传模型与自定义参数不会被火星表单覆盖，反之亦然。
    */
   const handleTrainingDatasetChange = useCallback((nextDataset) => {
-    const normalized = sanitizeTrainingDataset(nextDataset, { allowEarth: true });
-    const currentDraft = captureTrainingDraft({
+    const next = draftSessionRef.current.switchDataset({
       trainingDataset,
       modelSource,
       selectedUploadedModelId,
@@ -752,49 +740,40 @@ export default function ModelTrainingPage() {
       transferEnabled,
       selectedChannels,
       customModelParams, trainRatio, validationRatio, testRatio,
-    });
-    if (isEarthTrainingDataset(normalized)) {
-      marsSnapshotRef.current = currentDraft;
-      const restore = resolveEarthTrainingRestore(earthSnapshotRef.current);
-      setTrainingDataset(normalized);
-      setModelSource(restore ? restore.modelSource : EARTH_MODEL_SOURCE);
-      setSelectedUploadedModelId(restore ? restore.selectedUploadedModelId : '');
-      setModelArchitecture(restore ? restore.modelArchitecture : EARTH_MODEL_ARCHITECTURE);
-      setUseSphere(false);
-      const earthProfile = getEarthTrainingProfile(normalized);
-      setWindow(restore ? restore.windowValue : trainingDefaults.window);
-      setHorizon(restore ? restore.horizon : trainingDefaults.horizon);
-      const defaults = getEarthSplitDefaults(trainingDefaults);
-      setTrainRatio(restore ? restore.trainRatio : defaults.trainRatio);
-      setValidationRatio(restore ? restore.validationRatio : defaults.validationRatio);
-      setTestRatio(restore ? restore.testRatio : defaults.testRatio);
-      setTransferEnabled(false);
-      setSelectedChannels(restore ? restore.selectedChannels : [...EARTH_OPTIONAL_CHANNELS]);
-      setCustomModelParams(restore ? restore.customModelParams : {});
-      setCopyConfigWarnings([]);
-      return;
-    }
-    if (earthMode) earthSnapshotRef.current = currentDraft;
-    const restore = resolveMarsTrainingRestore(marsSnapshotRef.current);
-    marsSnapshotRef.current = null;
-    setTrainingDataset(normalized);
-    setTrainRatio(restore ? restore.trainRatio : trainingDefaults.trainRatio);
-    setValidationRatio(restore ? restore.validationRatio : trainingDefaults.validationRatio);
-    setTestRatio(restore ? restore.testRatio : trainingDefaults.testRatio);
-    if (normalized === TRAINING_DATASET_OPENMARS_MCD && restore) {
-      setModelSource(restore.modelSource);
-      setSelectedUploadedModelId(restore.selectedUploadedModelId);
-      setModelArchitecture(restore.modelArchitecture);
-      setUseSphere(restore.useSphere);
-      setWindow(restore.windowValue);
-      setHorizon(restore.horizon);
-      setTransferEnabled(restore.transferEnabled);
-      setSelectedChannels(restore.selectedChannels);
-      setCustomModelParams(restore.customModelParams || {});
-    }
+      hiddenDims, stlstmLayers, architectureParamsByModel,
+      transferSourceType, transferSourceTaskId, selectedTrainingWeightId,
+      transferFreezeMode, finetuneLearningRate,
+      transferStructureSnapshot: transferStructureSnapshotRef.current,
+      editedDefaultFields: [...editedTrainingDefaultFieldsRef.current],
+    }, nextDataset, trainingDefaults);
+    if (!next) return;
+    editedTrainingDefaultFieldsRef.current = new Set(next.editedDefaultFields);
+    transferStructureSnapshotRef.current = next.transferStructureSnapshot;
+    setTrainingDataset(next.trainingDataset);
+    setModelSource(next.modelSource);
+    setSelectedUploadedModelId(next.selectedUploadedModelId);
+    setModelArchitecture(next.modelArchitecture);
+    setUseSphere(next.useSphere);
+    setWindow(next.windowValue);
+    setHorizon(next.horizon);
+    setTrainRatio(next.trainRatio);
+    setValidationRatio(next.validationRatio);
+    setTestRatio(next.testRatio);
+    setTransferEnabled(next.transferEnabled);
+    setSelectedChannels(next.selectedChannels);
+    setCustomModelParams(next.customModelParams);
+    setCustomModelParamErrors({});
+    setHiddenDims(next.hiddenDims);
+    setStlstmLayers(next.stlstmLayers);
+    setArchitectureParamsByModel(next.architectureParamsByModel);
+    setTransferSourceType(next.transferSourceType);
+    setTransferSourceTaskId(next.transferSourceTaskId);
+    setSelectedTrainingWeightId(next.selectedTrainingWeightId);
+    setTransferFreezeMode(next.transferFreezeMode);
+    setFinetuneLearningRate(next.finetuneLearningRate);
+    setCopyConfigWarnings([]);
   }, [
     customModelParams,
-    earthMode,
     horizon,
     modelArchitecture,
     modelSource,
@@ -804,6 +783,9 @@ export default function ModelTrainingPage() {
     transferEnabled,
     useSphere,
     window_, trainRatio, validationRatio, testRatio, trainingDefaults,
+    hiddenDims, stlstmLayers, architectureParamsByModel,
+    transferSourceType, transferSourceTaskId, selectedTrainingWeightId,
+    transferFreezeMode, finetuneLearningRate,
   ]);
 
   // 目录在训练页挂载时读取一次；失败只提示，不影响火星训练。
@@ -1291,13 +1273,8 @@ export default function ModelTrainingPage() {
     horizon,
   });
 
-  const applyTransferStructureState = (structure, { restoring = false } = {}) => {
-    if (restoring && structure.selectedUploadedModelId !== selectedUploadedModelId) {
-      restoredCustomModelParamsRef.current = {
-        modelId: structure.selectedUploadedModelId,
-        params: captureTransferStructureSnapshot(structure.customModelParams),
-      };
-    }
+  const applyTransferStructureState = (structure) => {
+    draftSessionRef.current.preserveCustomParams(trainingDataset, structure.selectedUploadedModelId);
     setModelSource(structure.modelSource);
     setSelectedUploadedModelId(structure.selectedUploadedModelId);
     setCustomModelParams(captureTransferStructureSnapshot(structure.customModelParams));
@@ -1315,7 +1292,7 @@ export default function ModelTrainingPage() {
   const restoreTransferStructureSnapshot = () => {
     const snapshot = transferStructureSnapshotRef.current;
     if (!snapshot) return;
-    applyTransferStructureState(snapshot, { restoring: true });
+    applyTransferStructureState(snapshot);
     transferStructureSnapshotRef.current = null;
   };
 
@@ -1471,25 +1448,13 @@ export default function ModelTrainingPage() {
   }, [user]);
 
   useEffect(() => {
-    // 「复制配置」刚回填的参数属于上传模型，不能被 schema 同步重置成默认值；
-    // 用户手动切换上传模型时才清除这条登记。
-    if (copiedCustomModelParamsRef.current
-      && copiedCustomModelParamsRef.current === selectedUploadedModelId) {
-      return;
-    }
-    copiedCustomModelParamsRef.current = '';
-
-    const restored = restoredCustomModelParamsRef.current;
-    if (restored && restored.modelId === selectedUploadedModelId) {
-      setCustomModelParams(captureTransferStructureSnapshot(restored.params));
-      setCustomModelParamErrors({});
-      restoredCustomModelParamsRef.current = null;
-      return;
-    }
-    if (transferStructureLocked) return;
-    setCustomModelParams(createDefaultCustomModelParams(selectedUploadedParamSchema));
+    const params = draftSessionRef.current.syncCustomParams(
+      trainingDataset, selectedUploadedModelId, selectedUploadedParamSchema,
+      customModelParams, transferStructureLocked,
+    );
+    setCustomModelParams(params);
     setCustomModelParamErrors({});
-  }, [selectedUploadedModelId, selectedUploadedParamSchema]);
+  }, [trainingDataset, selectedUploadedModelId, selectedUploadedParamSchema, transferStructureLocked]);
 
   useEffect(() => {
     if (!transferStructureLocked || hasTransferSourceTask(completedTransferTasks, transferSourceTaskId)) return;
@@ -1638,6 +1603,7 @@ export default function ModelTrainingPage() {
   };
 
   const handleCustomModelParamChange = (key, value) => {
+    draftSessionRef.current.preserveCustomParams(trainingDataset, selectedUploadedModelId);
     setCustomModelParams((previous) => ({ ...previous, [key]: value }));
     setCustomModelParamErrors((previous) => {
       if (!previous[key]) return previous;
@@ -1705,7 +1671,9 @@ export default function ModelTrainingPage() {
     changeView('config');
     restoreTransferStructureSnapshot();
     transferStructureSnapshotRef.current = null;
-    copiedCustomModelParamsRef.current = '';
+    draftSessionRef.current.reset();
+    setCustomModelParams(createDefaultCustomModelParams(selectedUploadedParamSchema));
+    setCustomModelParamErrors({});
     setCustomModelName('');
     setModelNameError('');
     setNewTaskTagIds([]);
@@ -2108,18 +2076,17 @@ export default function ModelTrainingPage() {
     restoreTransferStructureSnapshot();
     transferStructureSnapshotRef.current = null;
 
+    draftSessionRef.current.reset();
+    draftSessionRef.current.preserveCustomParams(config.trainingDataset, config.selectedUploadedModelId);
+
     setCustomModelName(config.customModelName);
     setModelNameError('');
     setNewTaskTagIds(config.tagIds.filter((id) => tagState.tags.some((tag) => tag.id === id)));
     setTrainingDataset(config.trainingDataset);
     setModelSource(config.modelSource);
     setSelectedUploadedModelId(config.selectedUploadedModelId);
-    // 上传模型的自定义参数必须一起回填；同时登记来源模型，避免下面的
-    // schema 同步 effect 把刚复制进来的参数重置成默认值。
+    // 同一草稿模块保护复制、场景恢复与迁移恢复的参数。
     setCustomModelParams(cloneExperimentConfigValue(config.customModelParams));
-    copiedCustomModelParamsRef.current = config.customModelParams
-      ? config.selectedUploadedModelId || ''
-      : '';
     setCustomModelParamErrors({});
     setSelectedChannels([...config.selectedChannels]);
     setModelArchitecture(config.modelArchitecture);
@@ -2452,17 +2419,15 @@ export default function ModelTrainingPage() {
         minHeight: '100vh',
       }}
     >
-      <div
+      {isLight ? <div
         style={{
           position: 'absolute',
           inset: '48px 0 auto',
           height: 320,
           pointerEvents: 'none',
-          background: isLight
-            ? 'radial-gradient(circle at 12% 10%, rgba(74,158,255,0.12), transparent 32%), radial-gradient(circle at 84% 0%, rgba(199,91,57,0.10), transparent 28%)'
-            : 'radial-gradient(circle at 12% 10%, rgba(74,158,255,0.10), transparent 32%), radial-gradient(circle at 84% 0%, rgba(199,91,57,0.10), transparent 28%)',
+          background: 'radial-gradient(circle at 12% 10%, rgba(74,158,255,0.12), transparent 32%), radial-gradient(circle at 84% 0%, rgba(199,91,57,0.10), transparent 28%)',
         }}
-      />
+      /> : null}
 
       <ExperimentCenterShell
         view={view}

@@ -1339,6 +1339,7 @@ export default function PredictPage() {
                 onSelectDay={setEarthDay}
                 taskOptions={earthTaskOptions}
                 selectedTaskId={earthTaskId}
+                modelsLoading={trainingTasksLoading}
               />
             </>
           ) : null}
@@ -1346,6 +1347,7 @@ export default function PredictPage() {
           {analysisVisibility.predictionFields ? (
           <SingleModelWorkbench key={`${predictScope}:mars:${selectedTrainingTaskId}`}
             adapter={marsAdapter} result={activeResults} metrics={activeMetrics} metricsLoading={metricsLoading}
+            hasAvailableModels={trainingModelOptions.length > 0} modelsLoading={trainingTasksLoading}
             viewMode={viewMode} setViewMode={setViewMode}
             fullscreen={fullscreen3D} onFullscreenChange={setFullscreen3D}
             loading={loading} activeStep={activeHorizon} onStepChange={setActiveHorizon}

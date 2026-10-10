@@ -318,7 +318,7 @@ conda run -n AresVision python -m pytest `
   -q --basetemp "$earthTrainingTemp"
 ```
 
-**请逐文件运行**：本仓库部分既有测试会替换 `sys.modules`（例如 `tests/test_training_model_zoo.py` 把 `database.models` 换成普通对象），同一进程内混跑会让后续文件的导入失败。这不是本功能引入的问题，按文件运行即可避免。
+本节命令采用逐文件回归便于定位；原先全局 `sys.modules` 替换导致的预测/上传训练组合导入问题已修复，相关文件可组合运行。组合范围、临时目录要求及全库收集与执行的区别见[后端测试隔离](backend-test-isolation.md)。
 
 真实端到端验收（需要后端运行在 8000 端口）：
 

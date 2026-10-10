@@ -1,9 +1,9 @@
-import asyncio
 import json
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -158,7 +158,7 @@ class FakeTrainingWeightFile:
         self.deleted_at = None
 
 
-async def test_training_weight_service_stores_valid_weight_and_rejects_bad_extension():
+async def test_training_weight_service_stores_valid_weight_and_rejects_bad_extension(tmp_path):
     from services import training_weight_service
 
     class FakeTorch:
@@ -167,9 +167,9 @@ async def test_training_weight_service_stores_valid_weight_and_rejects_bad_exten
             return {"layer.weight": object()}
 
     fake_sessionmaker = FakeSessionMaker()
-    with patch.object(training_weight_service, "torch", FakeTorch), tempfile.TemporaryDirectory(prefix="aresvision_weight_test_") as temp_dir:
+    with patch.object(training_weight_service, "torch", FakeTorch):
         service = training_weight_service.TrainingWeightService(
-            storage_root=Path(temp_dir),
+            storage_root=tmp_path,
             sessionmaker=fake_sessionmaker,
         )
 
@@ -215,11 +215,12 @@ def _transfer_request_hypers():
     }
 
 
-async def test_transfer_source_rejects_incomplete_source_task():
+async def test_transfer_source_rejects_incomplete_source_task(monkeypatch):
     TrainingService = import_training_service()
-    training_module = sys.modules["services.training_service"]
-    training_module.async_session_maker = FakeTransferSessionMaker(
-        FakeTransferTask(status="running")
+    from services import training_service as training_module
+    monkeypatch.setattr(
+        training_module, "async_session_maker",
+        FakeTransferSessionMaker(FakeTransferTask(status="running")),
     )
     service = TrainingService()
 
@@ -235,24 +236,24 @@ async def test_transfer_source_rejects_incomplete_source_task():
         raise AssertionError("Expected incomplete source task to be rejected")
 
 
-async def test_transfer_source_task_injects_weight_path_for_compatible_completed_task():
+async def test_transfer_source_task_injects_weight_path_for_compatible_completed_task(monkeypatch, tmp_path):
     TrainingService = import_training_service()
-    training_module = sys.modules["services.training_service"]
-    with tempfile.TemporaryDirectory(prefix="aresvision_transfer_source_") as temp_dir:
-        source_path = Path(temp_dir) / "source.pth"
-        source_path.write_bytes(b"weights")
-        training_module.async_session_maker = FakeTransferSessionMaker(
-            FakeTransferTask(output_model_path=str(source_path))
-        )
-        service = TrainingService()
+    from services import training_service as training_module
+    source_path = tmp_path / "source.pth"
+    source_path.write_bytes(b"weights")
+    monkeypatch.setattr(
+        training_module, "async_session_maker",
+        FakeTransferSessionMaker(FakeTransferTask(output_model_path=str(source_path))),
+    )
+    service = TrainingService()
 
-        env = await service._resolve_transfer_source(
-            user_id=3,
-            hyperparameters=_transfer_request_hypers(),
-            training_weight_service=None,
-        )
+    env = await service._resolve_transfer_source(
+        user_id=3,
+        hyperparameters=_transfer_request_hypers(),
+        training_weight_service=None,
+    )
 
-        assert env == {"ARESVISION_TRANSFER_WEIGHT_PATH": str(source_path)}
+    assert env == {"ARESVISION_TRANSFER_WEIGHT_PATH": str(source_path)}
 
 
 async def test_uploaded_training_contract():
@@ -316,7 +317,7 @@ def test_official_entrypoint_strips_uploaded_private_fields():
     assert "custom_model_params" not in hypers
 
 
-async def test_training_route_maps_permission_error_to_403():
+async def test_training_route_maps_permission_error_to_403(monkeypatch):
     training = import_training_router()
 
     class PermissionDeniedTrainingService:
@@ -337,26 +338,13 @@ async def test_training_route_maps_permission_error_to_403():
         "dataset_id": None,
     })()
     current_user = type("User", (), {"id": 3})()
-    original_service = training.training_service
-    training.training_service = PermissionDeniedTrainingService()
+    monkeypatch.setattr(training, "training_service", PermissionDeniedTrainingService())
 
-    try:
-        try:
-            await training.start_training(req, request, current_user)
-        except training.HTTPException as exc:
-            assert exc.status_code == 403
-            assert exc.detail == "No permission to access this uploaded model"
-        else:
-            raise AssertionError("Expected HTTPException")
-    finally:
-        training.training_service = original_service
+    with pytest.raises(training.HTTPException) as error:
+        await training.start_training(req, request, current_user)
+    assert error.value.status_code == 403
+    assert error.value.detail == "No permission to access this uploaded model"
 
 
 if __name__ == "__main__":
-    asyncio.run(test_training_weight_service_stores_valid_weight_and_rejects_bad_extension())
-    asyncio.run(test_transfer_source_rejects_incomplete_source_task())
-    asyncio.run(test_transfer_source_task_injects_weight_path_for_compatible_completed_task())
-    asyncio.run(test_uploaded_training_contract())
-    test_official_entrypoint_strips_uploaded_private_fields()
-    asyncio.run(test_training_route_maps_permission_error_to_403())
-    print("uploaded training contract tests passed")
+    raise SystemExit(pytest.main([__file__, "--asyncio-mode=auto"]))

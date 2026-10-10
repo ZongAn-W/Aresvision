@@ -251,7 +251,7 @@ export default function ObservatoryTimelineRail({
           <span>{total}</span>
         </div>
         <div className="observatory-rail__global">
-          <span className="observatory-rail__global-label">
+          <span className="observatory-rail__global-label" title={variableLabel || (isZh ? '全球均值' : 'Global mean')}>
             {variableLabel || (isZh ? '全球均值' : 'Global mean')}
           </span>
           <span className="observatory-rail__global-value" data-rail-value={Number.isFinite(seriesValue) ? seriesValue : ''}>

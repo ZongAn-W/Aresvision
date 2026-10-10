@@ -80,7 +80,11 @@ async (page) => {
   await page.locator('[data-prediction-origin="earth"]').waitFor();
   await page.waitForFunction(()=>!document.querySelector('input[data-prediction-origin="earth"]').disabled);
   check(requests.length===0,'no inference or diagnostics on Earth mount');
-  check(await page.locator('input[aria-label="预测步长"]').getAttribute('readonly')!==null,'Earth horizon is read-only');
+  check(await page.locator('.predict-sidebar input[aria-label="预测步长"]').getAttribute('readonly')!==null,'Earth horizon is read-only');
+  check(await earth.locator('.prediction-display--empty').count()===1 && await earth.locator('.prediction-display__card').count()===0,'Earth without results uses one compact guide');
+  await earth.getByRole('button',{name:'选择训练模型',exact:true}).click();
+  check(await page.locator('[role="listbox"]').isVisible() && requests.length===0,'empty guide opens the existing model selector without inference');
+  await page.keyboard.press('Escape');
   await run.click();
   await earth.locator('.prediction-earth-field').first().waitFor();
   check(requests[0].params.training_task_id===99041 && !('horizon' in requests[0].params),'Earth request runs full horizon');
@@ -176,12 +180,11 @@ async (page) => {
   await page.waitForFunction(()=>document.querySelectorAll('.prediction-earth-field').length===0);
   check(await page.locator('.prediction-earth-field').count()===0,'logout clears private prediction');
   await page.getByRole('button', { name: '地球', exact: true }).click(); await earth.waitFor();
-  const emptyEarth = await earth.locator('.prediction-metric-value').allTextContents();
-  check(emptyEarth.length === 6 && emptyEarth.every(value => value === '--'), 'Earth without a model uses neutral metric placeholders');
+  check(await earth.locator('.prediction-display--empty').count() === 1 && await earth.locator('.prediction-metric-value').count() === 0, 'Earth without a model uses a guide without empty metric cards');
+  check(await earth.getByRole('link', { name: '去模型训练', exact: true }).getAttribute('href') === '#/training', 'Earth no-model guide leads to existing training');
   check(await earth.locator('[data-earth-reference-note]').count() === 0, 'Earth reference explanation is absent before a forecast');
   await page.getByRole('button', { name: '火星', exact: true }).click(); await mars.waitFor();
-  const emptyMars = await mars.locator('.prediction-metric-value').allTextContents();
-  check(emptyMars.length === 4 && emptyMars.every(value => value === '--'), 'Earth and Mars use the same no-model metric placeholder');
+  check(await mars.locator('.prediction-display--empty').count() === 1 && await mars.locator('.prediction-metric-value').count() === 0, 'Mars uses the same compact no-model guide');
   check(errors.length===0,`browser runtime errors: ${errors.join('; ')}`);
   return {synthetic:true,passed:checks.length,checks,errors,requests:requests.length};
 }

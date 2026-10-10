@@ -68,6 +68,37 @@
   outline-offset: 4px;
 }
 
+.brand-home-button__subtitle {
+  font-size: calc(var(--type-helper) * var(--font-scale));
+  color: var(--text-secondary);
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 500;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms, box-shadow 150ms;
+}
+
+.nav-link.is-active {
+  background: var(--surface-2);
+  color: var(--brand-ice);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--brand-ice);
+}
+
 .nav-user-button { min-height: var(--control-height); border-radius: var(--radius-control) !important; border-color: var(--line-subtle) !important; }
 .nav-notification-button { width: 40px; height: 40px; justify-content: center; padding: 0 !important; }
 .nav-user-button:hover, .home-nav__links > button:hover { background: var(--bg-muted-strong) !important; }

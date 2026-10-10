@@ -20,7 +20,11 @@
 
 样式由 [singleModelWorkbench.css](../frontend/src/pages/PredictPage/singleModelWorkbench.css)、[predictionDisplay.css](../frontend/src/pages/PredictPage/predictionDisplay.css) 和 [predictionCharts.css](../frontend/src/pages/PredictPage/predictionCharts.css) 提供。桌面模型侧栏与结果并排，窄屏上下排列；三联图在空间不足时纵向显示，时间步区和详细指标表分别滚动，全屏在移动端纵向布局。主题、色带、单位偏好和数值精度来自现有设置；Earth 的目标单位始终固定 DU。
 
-尚未选择模型或取得指标数据时，两种行星的指标卡均显示 `--`；Earth 实际指标响应中的缺失项仍显示“未提供”，避免把缺失值当作零。地球参考场与评价口径说明只在已有预测结果时出现。
+深色预测分析页复用首页 `--bg-gradient` 与既有 `StarField`，侧栏、准备面板、输入和图表保留实色；浅色主题不显示星点，首页鼠标视差与地球交互不延伸到预测页。
+
+无有效场结果且未运行预测时，共用展示区以 `prediction-display--empty` 显示约 140px、12px 圆角的单层引导面板，不渲染三张空结果卡片和空图导出/切换工具。有可选模型时，入口定位并打开侧栏已有模型选择器；没有可选模型时，入口进入现有 `#/training`。加载模型期间入口显示加载状态，禁用的预测按钮旁说明原因并使用 `aria-describedby` 关联，不自动选择模型或发送预测请求。
+
+无模型、无结果、无指标数据时不展示空指标或诊断占位；指标区域展示但尚未取得数据时显示 `--`。Earth 实际指标响应中的缺失项仍显示“未提供”，避免把缺失值当作零。真实结果恢复参考/预测/残差图表及原有全屏、时间步和导出；地球参考场与评价口径说明只在已有预测结果时出现。
 
 ## 行星适配层
 

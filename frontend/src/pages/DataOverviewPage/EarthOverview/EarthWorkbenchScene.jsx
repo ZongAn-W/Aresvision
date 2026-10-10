@@ -177,11 +177,12 @@ function EarthWorkbenchSceneContent({
   }, [datasetId]);
 
   const datasetSelector = (
-    <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+    <label className="observatory-dataset-selector">
       <span>{isZh ? 'Earth 数据集' : 'Earth dataset'}</span>
-      <select value={datasetId} onChange={(event) => { controller.clearPoint(); controller.retrySource(); setDatasetId(event.target.value); }} aria-label={isZh ? 'Earth 数据集' : 'Earth dataset'}>
+      <select className="observatory-native-select" value={datasetId} onChange={(event) => { controller.clearPoint(); controller.retrySource(); setDatasetId(event.target.value); }} aria-label={isZh ? 'Earth 数据集' : 'Earth dataset'}
+        title={datasets.find(item => item.dataset_id === datasetId)?.display_name || datasetId}>
         {datasets.map((item) => (
-          <option key={item.dataset_id} value={item.dataset_id}>
+          <option key={item.dataset_id} value={item.dataset_id} title={item.display_name}>
             {item.display_name}{item.availability !== 'available' ? ` · ${item.availability}` : ''}
           </option>
         ))}
@@ -425,8 +426,8 @@ function EarthWorkbenchSceneContent({
           justifyItems: 'center',
           gap: 4,
           height: '100%',
-          color: C.ice50,
-          fontSize: 'calc(11px * var(--font-scale, 1))',
+          color: 'var(--text-secondary)',
+          fontSize: 'calc(12px * var(--font-scale, 1))',
           textAlign: 'center',
           padding: '0 12px',
         }}
@@ -517,7 +518,7 @@ function EarthWorkbenchSceneContent({
 
   const dataFieldLegend = displayField ? (
     <div
-      className="overview-overlay-anchor overview-earth-legend"
+      className="overview-overlay-anchor overview-earth-legend overview-science-legend"
       role="group"
       aria-label={`${variableLabel(displayField.variable, isZh)} (${displayField.unit}) · ${displayField.value}. ${isZh
         ? '未着色区域没有数据；颜色只表示数值，不表示高度。'
@@ -527,14 +528,15 @@ function EarthWorkbenchSceneContent({
         right: 'var(--overview-overlay-gap)',
         bottom: 'var(--overview-overlay-gap)',
         zIndex: 1150,
-        width: 'max-content',
+        width: 252,
+        maxWidth: 'calc(100% - 2 * var(--overview-overlay-gap))',
         minWidth: 158,
         pointerEvents: 'none',
       }}
     >
       <GlowCard style={{ padding: '8px', background: 'var(--overview-panel-bg-strong)', border: '1px solid var(--overview-panel-border)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <div style={{ color: C.ice60, fontSize: 'calc(9px * var(--font-scale, 1))', fontWeight: 800, whiteSpace: 'nowrap' }}>
+          <div className="overview-science-legend__variable" title={`${variableLabel(displayField.variable, isZh)} (${displayField.unit})`}>
             <span data-earth-legend="variable">{variableLabel(displayField.variable, isZh)}</span>
             {' ('}<span data-earth-legend="units">{displayField.unit}</span>{')'}
           </div>
@@ -547,7 +549,7 @@ function EarthWorkbenchSceneContent({
               borderRadius: 999,
               border: `1px solid ${C.border}`,
               color: C.mars,
-              fontSize: 'calc(8px * var(--font-scale, 1))',
+              fontSize: 'calc(12px * var(--font-scale, 1))',
               fontWeight: 800,
               fontFamily: 'var(--font-display)',
               flexShrink: 0,
@@ -567,18 +569,18 @@ function EarthWorkbenchSceneContent({
             marginBottom: 5,
           }}
         />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 'calc(8px * var(--font-scale, 1))', color: C.ice, fontWeight: 700 }}>
+        <div className="overview-science-legend__range">
           <span>{showAnomaly ? `−${formatEarthNumber(Math.abs(displayField.colorRange.min), 3)}` : formatEarthNumber(displayField.colorRange.min, 3)}</span>
           <span style={{ color: C.ice60 }}>{showAnomaly ? '0' : formatEarthNumber((displayField.colorRange.min + displayField.colorRange.max) / 2, 3)}</span>
           <span>{showAnomaly ? `+${formatEarthNumber(displayField.colorRange.max, 3)}` : formatEarthNumber(displayField.colorRange.max, 3)}</span>
         </div>
-        <div style={{ marginTop: 5, color: C.ice50, fontSize: 'calc(8px * var(--font-scale, 1))', lineHeight: 1.35 }}>
+        <div style={{ marginTop: 5, color: 'var(--text-secondary)', fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.5 }}>
           {showAnomaly
             ? (isZh ? '距当前场面积加权均值的空间偏差；原始值仍保留在点位探查。' : 'Spatial deviation from the current area-weighted field mean; point probes keep raw values.')
             : (isZh ? '未着色区域没有数据；颜色表示数值。' : 'Uncoloured areas have no data; colour encodes value.')}
         </div>
         {showWindVectors && windStatus === 'error' ? (
-          <div role="alert" style={{ marginTop: 6, display: 'grid', gap: 4, color: C.marsLight, fontSize: 'calc(8px * var(--font-scale, 1))' }}>
+          <div role="alert" style={{ marginTop: 6, display: 'grid', gap: 4, color: 'var(--status-warning)', fontSize: 'calc(12px * var(--font-scale, 1))' }}>
             <span>{windError || (isZh ? '风场加载失败。' : 'Wind fields failed to load.')}</span>
             <button type="button" onClick={() => setWindRetry((value) => value + 1)} style={{ justifySelf: 'start', padding: '3px 6px', borderRadius: 5, border: `1px solid ${C.border}`, color: C.ice, background: 'transparent', cursor: 'pointer' }}>
               {t('earthOverview.actions.retry')}
@@ -740,7 +742,7 @@ function EarthWorkbenchSceneContent({
             onChange={() => setShowSurfaceTexture((value) => !value)}
             isLight={isLight}
           />
-          <label style={{ display: 'grid', gap: 6, color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+          <label style={{ display: 'grid', gap: 6, color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))' }}>
             <span>{t('observatory.layerPanel.baseMapStrength')} · {Math.round(baseMapStrength * 100)}%</span>
             <input type="range" min="0" max="1" step="0.05" value={baseMapStrength}
               aria-label={t('observatory.layerPanel.baseMapStrength')}
@@ -770,7 +772,7 @@ function EarthWorkbenchSceneContent({
             onChange={() => setShowTerminator((value) => !value)}
             isLight={isLight}
           />
-          <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.55 }}>
+          <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.55 }}>
             {t('observatory.layerPanel.overlayHint')}
           </p>
         </PanelCard>
@@ -824,7 +826,7 @@ function EarthWorkbenchSceneContent({
               </PanelButton>
             </>
           ) : (
-            <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6 }}>
+            <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.6 }}>
               {t('observatory.point.empty')}
             </p>
           )}

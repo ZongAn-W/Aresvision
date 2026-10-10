@@ -35,16 +35,14 @@ test('训练页只提供三小时 Earth 数据集选项', () => {
 test('切换数据集走 Earth 专用换挡逻辑，而不是原始 setter', () => {
   assert.match(pageSource, /onTrainingDatasetChange: handleTrainingDatasetChange/);
   assert.match(pageSource, /const handleTrainingDatasetChange = useCallback/);
-  // 草稿快照函数已在早前提交中改名（旧断言停留在 captureMarsTrainingSnapshot）。
-  assert.match(pageSource, /captureTrainingDraft\(/);
-  assert.match(pageSource, /resolveMarsTrainingRestore\(marsSnapshotRef\.current\)/);
-  // Earth 生效时切到规范通道顺序与 profile 窗口；有 Earth 草稿时优先恢复草稿通道。
-  assert.match(pageSource, /setWindow\(restore \? restore\.windowValue : trainingDefaults\.window\)/);
-  assert.match(pageSource, /setHorizon\(restore \? restore\.horizon : trainingDefaults\.horizon\)/);
+  // 行为由 trainingDraftSession.test.js 和浏览器真实切换回归验证；这里只守接线。
+  assert.match(pageSource, /draftSessionRef\.current\.switchDataset\(/);
+  assert.match(pageSource, /setWindow\(next\.windowValue\)/);
+  assert.match(pageSource, /setHorizon\(next\.horizon\)/);
   assert.match(pageSource, /datasetId: trainingDataset/);
   assert.match(
     pageSource,
-    /setSelectionChannels|setSelectedChannels\(restore \? restore\.selectedChannels : \[\.\.\.EARTH_OPTIONAL_CHANNELS\]\)/,
+    /setSelectedChannels\(next\.selectedChannels\)/,
   );
 });
 

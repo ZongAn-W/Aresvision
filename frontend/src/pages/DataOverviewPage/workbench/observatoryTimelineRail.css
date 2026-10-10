@@ -8,12 +8,12 @@
  */
 
 .observatory-rail {
-  --overview-rail-line: rgba(154, 217, 239, 0.28);
-  --overview-rail-line-soft: rgba(154, 217, 239, 0.14);
-  --overview-rail-surface: rgba(8, 12, 20, 0.34);
-  --overview-rail-ink: var(--text);
+  --overview-rail-line: var(--line-default);
+  --overview-rail-line-soft: var(--line-subtle);
+  --overview-rail-surface: var(--surface-1);
+  --overview-rail-ink: var(--text-primary);
   --overview-rail-ink-dim: var(--text-secondary);
-  --overview-rail-accent: var(--overview-accent, #9ad9ef);
+  --overview-rail-accent: var(--brand-ice);
   position: relative;
   box-sizing: border-box;
   width: 100%;
@@ -24,13 +24,16 @@
   gap: 10px;
   padding: 12px 12px 14px;
   overflow: hidden;
+  line-height: 1.5;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .overview-shell.is-light .observatory-rail {
-  --overview-rail-line: rgba(35, 99, 135, 0.34);
-  --overview-rail-line-soft: rgba(35, 99, 135, 0.16);
-  --overview-rail-surface: rgba(255, 255, 255, 0.55);
-  --overview-rail-accent: var(--overview-accent, #236387);
+  --overview-rail-line: var(--line-default);
+  --overview-rail-line-soft: var(--line-subtle);
+  --overview-rail-surface: var(--surface-1);
+  --overview-rail-accent: var(--brand-ice);
 }
 
 /* ── 年份与年内进度 ─────────────────────────────────────────────── */
@@ -64,7 +67,8 @@
   -webkit-backdrop-filter: blur(8px);
   color: var(--overview-rail-ink);
   font-family: var(--font-body);
-  font-size: calc(11px * var(--font-scale, 1));
+  font-size: calc(14px * var(--font-scale, 1));
+  line-height: 1.5;
   font-weight: 700;
   cursor: pointer;
 }
@@ -98,8 +102,8 @@
   display: grid;
   gap: 3px;
   padding: 8px;
-  border-radius: 8px;
-  border: 1px solid var(--overview-rail-line-soft);
+  border-radius: 12px;
+  border: 1px solid var(--line-default);
   background: var(--overview-rail-surface);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -137,7 +141,7 @@
 }
 
 .observatory-rail__global-label {
-  color: var(--overview-rail-ink-dim);
+  color: var(--text-primary);
   font-size: calc(var(--type-helper) * var(--font-scale, 1));
   font-weight: 700;
   /* 变量名可能比一栏宽（例如「臭氧柱总量」「10 米纬向风」），必须截断而不是顶出栏外 */
@@ -150,14 +154,14 @@
 .observatory-rail__global-value {
   color: var(--overview-rail-accent);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace);
-  font-size: calc(13px * var(--font-scale, 1));
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .observatory-rail__status {
-  color: var(--overview-warn, #f19a78);
+  color: var(--overview-warn);
   font-size: calc(var(--type-helper) * var(--font-scale, 1));
   font-weight: 700;
 }
@@ -259,7 +263,7 @@
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace);
   font-size: calc(var(--type-helper) * var(--font-scale, 1));
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0.72;
@@ -371,7 +375,7 @@
   color: var(--overview-rail-ink-dim);
   font-size: calc(var(--type-helper) * var(--font-scale, 1));
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -457,7 +461,7 @@
 
 /* 当前展示日期：整条横标，两轨共用同一日期语义 */
 .observatory-rail__point-marker {
-  stroke: var(--overview-warn, #f19a78);
+  stroke: var(--overview-warn);
   stroke-width: 1;
   stroke-dasharray: 3 2;
   vector-effect: non-scaling-stroke;
@@ -468,13 +472,11 @@
   flex: 0 0 auto;
   color: var(--overview-rail-ink-dim);
   font-size: calc(var(--type-helper) * var(--font-scale, 1));
-  line-height: 1.4;
-  opacity: 0.75;
-  /* 一栏放不下整句，截断而不是顶出栏外 */
+  line-height: 1.5;
+  /* Auxiliary explanations wrap instead of dropping their meaning. */
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* ── 右栏占位（尚未选择点位）───────────────────────────────────── */
@@ -506,5 +508,4 @@
   color: var(--overview-rail-ink-dim);
   font-size: calc(var(--type-helper) * var(--font-scale, 1));
   line-height: 1.6;
-  opacity: 0.85;
 }

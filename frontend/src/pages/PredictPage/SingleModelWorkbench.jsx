@@ -10,6 +10,7 @@ import PredictStatus from './PredictStatus';
 /** The common single-model layout owns view/fullscreen state, independent of API state. */
 export default function SingleModelWorkbench({ adapter, result, loading, metrics, metricsLoading,
   metricPresentation, activeStep = 0, onStepChange, identityKey, error, onRetry, children,
+  hasAvailableModels = false, modelsLoading = false,
   viewMode: controlledView, setViewMode: onViewChange,
   fullscreen: controlledFullscreen, onFullscreenChange }) {
   const t = useT();
@@ -33,12 +34,13 @@ export default function SingleModelWorkbench({ adapter, result, loading, metrics
         ? (settings.language === 'en' ? 'Reference' : '参考') : t(`predict.viewModes.${id}`) }))}
       activeHorizon={step} setActiveHorizon={onStepChange} loading={loading}
       truthField={truthField} predField={predField} residField={residField}
-      stepLabel={() => ''} TRIPTYCH_PANELS={panels} setFullscreen3D={setFullscreen} />
-    <PredictMetrics metrics={metrics} loading={metricsLoading || loading} presentation={metricPresentation || adapter.presentation.metrics}
-      modelMode="trained" precision={settings.precision} ozoneUnit={settings.units.ozone} />
+      stepLabel={() => ''} TRIPTYCH_PANELS={panels} setFullscreen3D={setFullscreen}
+      hasAvailableModels={hasAvailableModels} modelsLoading={modelsLoading} />
+    {result || metrics || metricsLoading || loading ? <PredictMetrics metrics={metrics} loading={metricsLoading || loading} presentation={metricPresentation || adapter.presentation.metrics}
+      modelMode="trained" precision={settings.precision} ozoneUnit={settings.units.ozone} /> : null}
     {adapter.secondaryMetrics ? <PredictMetrics metrics={adapter.secondaryMetrics.data} loading={adapter.secondaryMetrics.loading}
       presentation={adapter.secondaryMetrics.presentation} precision={settings.precision} /> : null}
-    {children}
+    {hasAvailableModels || result || loading ? children : null}
     <PredictFullscreenHUD fullscreen3D={fullscreen} setFullscreen3D={setFullscreen} adapter={adapter}
       results={result} activeHorizon={step} truthField={truthField}
       precision={settings.precision} ozoneUnit={settings.units.ozone} />

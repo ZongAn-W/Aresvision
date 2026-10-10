@@ -17,9 +17,9 @@
   /* 侧栏 sticky 的公共参数：全站导航 70px 固定定位，训练页顶部留白 104px，
      86px 是侧栏贴住导航下沿且不跳动的位置。 */
   --experiment-sticky-top: 86px;
-  /* 运行条高度（普通字号下约 64px）与它到视口底部的净空，
+  /* 运行条高度（普通字号下约 56px）与它到视口底部的净空，
      目录 / 检查器的 max-height 必须扣除它们。 */
-  --experiment-run-bar-height: 64px;
+  --experiment-run-bar-height: 56px;
   --experiment-run-bar-gap: var(--experiment-run-bar-measured, 72px);
   --experiment-line: var(--line-subtle);
   --experiment-line-strong: var(--line-strong);
@@ -1641,7 +1641,7 @@ input[type='number']::-webkit-inner-spin-button {
   padding: 0;
   border: 0;
   background: transparent;
-  color: #79bbff;
+  color: var(--brand-ice);
   font-family: var(--font-body);
   font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-weight: 700;
@@ -1678,15 +1678,15 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .experiment-inspector-readiness-row[data-ok='true'] .experiment-inspector-check {
-  background: rgba(99, 232, 191, 0.14);
-  border: 1px solid rgba(99, 232, 191, 0.45);
-  color: #63e8bf;
+  background: color-mix(in srgb, var(--status-success) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-success) 45%, transparent);
+  color: var(--status-success);
 }
 
 .experiment-inspector-readiness-row[data-ok='false'] .experiment-inspector-check {
-  background: #f19a78;
-  border: 1px solid #f19a78;
-  color: #1b0d07;
+  background: var(--status-warning);
+  border: 1px solid var(--status-warning);
+  color: var(--surface-1);
 }
 
 .experiment-inspector-blockers {
@@ -1714,8 +1714,8 @@ input[type='number']::-webkit-inner-spin-button {
   width: 16px;
   height: 16px;
   border-radius: 999px;
-  background: #f19a78;
-  color: #1b0d07;
+  background: var(--status-danger);
+  color: var(--surface-1);
   font-size: calc(var(--experiment-text-tiny) * var(--font-scale, 1));
   font-weight: 900;
 }
@@ -1729,7 +1729,7 @@ input[type='number']::-webkit-inner-spin-button {
   padding: 0;
   border: 0;
   background: transparent;
-  color: #79bbff;
+  color: var(--brand-ice);
   font-family: var(--font-body);
   font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   font-weight: 700;
@@ -1743,8 +1743,8 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-inspector-note {
   padding: 10px;
-  border-left: 2px solid #b39bff;
-  background: rgba(179, 155, 255, 0.07);
+  border-left: 1px solid var(--line-strong);
+  background: var(--surface-2);
   color: var(--text-60);
   font-size: calc(var(--experiment-text-helper) * var(--font-scale, 1));
   line-height: 1.6;
@@ -1768,9 +1768,9 @@ input[type='number']::-webkit-inner-spin-button {
   flex-direction: column;
   gap: 4px;
   padding: 9px max(var(--experiment-side-pad), calc(50vw - var(--experiment-max-width) / 2));
-  border-top: 1px solid rgba(121, 187, 255, 0.22);
-  background: rgba(4, 12, 21, 0.94);
-  backdrop-filter: blur(18px);
+  border-top: 1px solid var(--line-subtle);
+  background: color-mix(in srgb, var(--surface-0) 94%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .experiment-run-bar-main {
@@ -1798,15 +1798,15 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .experiment-run-bar-state[data-run-state='ready'] {
-  color: #63e8bf;
+  color: var(--status-success);
 }
 
 .experiment-run-bar-state[data-run-state='blocked'] {
-  color: #f19a78;
+  color: var(--text-secondary);
 }
 
 .experiment-run-bar-state[data-run-state='guest'] {
-  color: var(--text-60);
+  color: var(--text-muted);
 }
 
 .experiment-run-bar-dot {
@@ -1840,8 +1840,8 @@ input[type='number']::-webkit-inner-spin-button {
   padding: 11px 20px;
   border: none;
   border-radius: 11px;
-  background: #f19a78;
-  color: #07121b;
+  background: var(--brand-accent);
+  color: var(--brand-on-primary);
   font-family: var(--font-body);
   font-size: calc(var(--experiment-text-value) * var(--font-scale, 1));
   font-weight: 700;
@@ -1850,7 +1850,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .experiment-run-bar-start:hover:not(:disabled) {
-  background: #ffae8d;
+  background: var(--brand-accent);
   transform: translateY(-1px);
 }
 
@@ -1867,12 +1867,12 @@ input[type='number']::-webkit-inner-spin-button {
 
 .experiment-run-bar[data-run-state='guest'] .experiment-run-bar-start:not(:disabled) {
   background: var(--experiment-surface-2);
-  border: 1px solid rgba(241, 154, 120, 0.42);
-  color: #f19a78;
+  border: 1px solid color-mix(in srgb, var(--brand-accent) 42%, transparent);
+  color: var(--brand-accent);
 }
 
 .experiment-run-bar[data-run-state='guest'] .experiment-run-bar-start:not(:disabled):hover {
-  background: rgba(241, 154, 120, 0.14);
+  background: color-mix(in srgb, var(--brand-accent) 8%, var(--surface-2));
 }
 
 /* --- 实验目录 ------------------------------------------------------------ */
@@ -3090,15 +3090,15 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   .experiment-inspector-readiness-row[data-ok='true'] .experiment-inspector-check {
-    background: rgba(99, 232, 191, 0.14);
-    border: 1px solid rgba(99, 232, 191, 0.45);
-    color: #63e8bf;
+    background: color-mix(in srgb, var(--status-success) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--status-success) 45%, transparent);
+    color: var(--status-success);
   }
 
   .experiment-inspector-readiness-row[data-ok='false'] .experiment-inspector-check {
-    background: #f19a78;
-    border-color: #f19a78;
-    color: #1b0d07;
+    background: var(--status-warning);
+    border-color: var(--status-warning);
+    color: var(--surface-1);
   }
 
   .experiment-inspector-readiness-row[data-ok='false'] {
@@ -3424,12 +3424,8 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 /* Training console visual finish. Keep the existing grid, sticky rules and states. */
-body:has(.model-training-page) {
+[data-theme='light'] body:has(.model-training-page) {
   background: color-mix(in srgb, var(--bg-elevated) 88%, var(--bg));
-}
-
-body:has(.model-training-page) .star-field {
-  display: none;
 }
 
 .experiment-center-title,
@@ -3891,7 +3887,7 @@ body:has(.model-training-page) .star-field {
 
 .experiment-center-button-primary,
 .experiment-run-bar-start {
-  background: var(--brand-orange, #f19a78);
+  background: var(--brand-accent);
   font-weight: 700;
 }
 
@@ -3977,19 +3973,21 @@ body:has(.model-training-page) .star-field {
 
 .experiment-inspector-state[data-inspector-state='blocked'],
 .experiment-run-bar-state[data-run-state='blocked'] {
-  color: var(--status-warning, #e6a17f);
+  color: var(--text-secondary);
 }
 
 .experiment-inspector-issue-mark {
-  background: var(--status-danger, #f07b78);
+  background: var(--status-danger);
 }
 
 .experiment-run-bar {
   gap: 8px;
-  padding-block: 12px;
-  border-top-color: var(--line-default, var(--experiment-line));
-  background: var(--surface-0, rgba(4, 12, 21, 0.96));
-  backdrop-filter: none;
+  min-height: var(--experiment-run-bar-height);
+  padding-block: 7px;
+  border-top-color: var(--line-subtle);
+  background: color-mix(in srgb, var(--surface-0) 94%, transparent);
+  box-shadow: 0 -4px 18px color-mix(in srgb, var(--surface-0) 38%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .experiment-run-bar-main,
@@ -4000,11 +3998,13 @@ body:has(.model-training-page) .star-field {
 .experiment-run-bar-start {
   border-radius: var(--radius-control, 8px);
   border: 1px solid transparent;
+  color: var(--brand-on-primary);
+  line-height: 1.5;
 }
 
 .experiment-run-bar-state,
 .experiment-run-bar-note {
-  font-size: calc(var(--type-body, 14px) * var(--font-scale, 1));
+  font-size: calc(var(--type-helper) * var(--font-scale, 1));
 }
 
 .experiment-inspector-body,
@@ -4163,7 +4163,34 @@ body:has(.model-training-page) .star-field {
 }
 
 .experiment-inspector-group-title {
+  font-size: calc(var(--type-body) * var(--font-scale, 1));
   font-weight: 600;
+}
+
+.experiment-inspector-summary,
+.experiment-inspector-badge,
+.experiment-inspector-group-body .experiment-inspector-readiness-row {
+  font-size: calc(var(--type-helper) * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.experiment-inspector-group-body .experiment-inspector-value {
+  color: var(--text-primary);
+  font-size: calc(var(--type-body) * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.experiment-inspector-blockers li.is-guest {
+  display: block;
+  color: var(--text-muted);
+  font-size: calc(var(--type-helper) * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.experiment-canvas-footnote {
+  color: var(--text-muted);
+  font-size: calc(var(--type-helper) * var(--font-scale, 1));
+  line-height: 1.5;
 }
 
 .experiment-inspector-group .experiment-inspector-blockers li {
@@ -4176,8 +4203,8 @@ body:has(.model-training-page) .star-field {
 }
 
 .experiment-inspector-state[data-inspector-state='blocked'] {
-  border-color: color-mix(in srgb, var(--status-warning) 28%, transparent);
-  background: color-mix(in srgb, var(--status-warning) 7%, transparent);
+  border-color: var(--line-default);
+  background: var(--surface-2);
 }
 
 .experiment-inspector-state[data-inspector-state='guest'] {
@@ -4265,12 +4292,12 @@ body:has(.model-training-page) .star-field {
 }
 
 .experiment-run-bar[data-run-state='guest'] .experiment-run-bar-start:not(:disabled) {
-  border-color: color-mix(in srgb, var(--brand-orange) 42%, transparent);
-  color: var(--brand-orange);
+  border-color: color-mix(in srgb, var(--brand-accent) 42%, transparent);
+  color: var(--brand-accent);
 }
 
 .experiment-run-bar[data-run-state='guest'] .experiment-run-bar-start:not(:disabled):hover {
-  background: color-mix(in srgb, var(--brand-orange) 8%, var(--surface-2));
+  background: color-mix(in srgb, var(--brand-accent) 8%, var(--surface-2));
 }
 
 .experiment-center :is(input, select) {
@@ -4462,6 +4489,18 @@ body:has(.model-training-page) .star-field {
 .experiment-earth-channels li[data-locked='true'] {
   background: color-mix(in srgb, var(--brand-ice) 8%, var(--surface-2));
   box-shadow: inset 2px 0 0 var(--brand-ice);
+}
+
+@media (min-width: 901px) {
+  /* 初次测量前也预留净空；外壳继续根据真实底栏高度调整 padding。 */
+  .experiment-center-grid[data-view='config'] {
+    padding-bottom: calc(var(--experiment-run-bar-height) + 24px);
+  }
+
+  .experiment-run-bar-start {
+    min-height: 40px;
+    padding-block: 6px;
+  }
 }
 
 @media (min-width: 901px) and (max-width: 1180px), (max-width: 900px) {

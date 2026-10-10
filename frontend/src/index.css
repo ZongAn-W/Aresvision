@@ -183,10 +183,20 @@ textarea {
   letter-spacing: 0;
 }
 
-body:has(.atmos-home) { background-image: var(--bg-gradient); }
-body:has(.experiment-center) .star-field,
-body:has(.prediction-page) .star-field,
+body:has(.atmos-home),
+[data-theme="dark"] body:has(.model-training-page),
+[data-theme="dark"] body:has(.prediction-page) { background-image: var(--bg-gradient); }
 body:has(.overview-shell) .star-field { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .star-field > div { animation: none !important; }
+}
+
+@media (min-width: 901px) {
+  body:has(.overview-shell--with-rail) .settings-fab {
+    left: calc(50% - 20px);
+  }
+}
 
 ::selection { color: var(--text-primary); background: color-mix(in srgb, var(--brand-ice) 28%, var(--surface-1)); }
 input, textarea { caret-color: var(--brand-ice); }

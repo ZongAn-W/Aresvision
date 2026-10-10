@@ -32,21 +32,6 @@ function marsVariableOptions(isZh) {
   }));
 }
 
-function toolbarSelectStyle(isLight) {
-  return {
-    minWidth: 0,
-    maxWidth: 170,
-    padding: '7px 10px',
-    borderRadius: 'var(--overview-control-radius)',
-    border: `1px solid ${C.borderStrong}`,
-    background: isLight ? 'rgba(255,255,255,0.94)' : C.bgCardStrong,
-    color: C.ice,
-    fontSize: 'calc(12px * var(--font-scale, 1))',
-    fontWeight: 600,
-    cursor: 'pointer',
-  };
-}
-
 /** 两档复用同一个年份控件：观测时位于顶部，分析时位于左侧条件栏。 */
 export function MarsYearSelect({ showLabel = false }) {
   const { settings } = useSettings();
@@ -63,8 +48,8 @@ export function MarsYearSelect({ showLabel = false }) {
         onChange={(event) => setMarsYear(Number(event.target.value))}
         disabled={isSwitchingSource}
         aria-label={label}
-        title={label}
-        style={toolbarSelectStyle(isLight)}
+        title={`${label}: MY ${marsYear}`}
+        className="observatory-native-select"
       >
         {(availableMarsYears || []).map((year) => (
           <option key={year} value={String(year)}>{`MY ${year}`}</option>
@@ -123,8 +108,9 @@ export function MarsAnalysisConditions({ cardKey }) {
         <label>
           <span>{isZh ? '分析变量' : 'Variable'}</span>
           <select aria-label={isZh ? '分析变量' : 'Variable'} value={variable}
-            onChange={event => setVariable(event.target.value)} disabled={isSwitchingSource} style={toolbarSelectStyle(isLight)}>
-            {variables.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            title={variables.find(option => option.value === variable)?.label}
+            onChange={event => setVariable(event.target.value)} disabled={isSwitchingSource} className="observatory-native-select">
+            {variables.map(option => <option key={option.value} value={option.value} title={option.label}>{option.label}</option>)}
           </select>
         </label>
       ) : null}
@@ -132,7 +118,7 @@ export function MarsAnalysisConditions({ cardKey }) {
         <label>
           <span>{isZh ? '分析范围' : 'Area'}</span>
           <select aria-label={isZh ? '分析范围' : 'Area'} value={band}
-            onChange={event => setBand(event.target.value)} disabled={isSwitchingSource} style={toolbarSelectStyle(isLight)}>
+            onChange={event => setBand(event.target.value)} disabled={isSwitchingSource} className="observatory-native-select">
             {MARS_ANALYSIS_BANDS.map(option => <option key={option.id} value={option.id}>{isZh ? option.zh : option.en}</option>)}
           </select>
         </label>
@@ -165,11 +151,11 @@ export function MarsObservatoryToolbarSlots({ sceneSwitch, onOpenPanel, openPane
           value={globeVariable}
           onChange={(event) => setGlobeVariable(event.target.value)}
           aria-label={t('observatory.dataSource.variable')}
-          title={t('observatory.dataSource.variable')}
-          style={toolbarSelectStyle(isLight)}
+          title={marsVariableOptions(isZh).find(option => option.value === globeVariable)?.label || t('observatory.dataSource.variable')}
+          className="observatory-native-select"
         >
           {marsVariableOptions(isZh).map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
+            <option key={option.value} value={option.value} title={option.label}>{option.label}</option>
           ))}
         </select>
       </label>
@@ -348,12 +334,12 @@ export function useMarsObservatoryPanels() {
           accent="#f97316"
         />
         {loading || isSwitchingSource ? (
-          <div style={{ color: C.ice50, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.5 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.5 }}>
             {t('observatory.dataSource.loading')}
           </div>
         ) : null}
         {!loading && sourceMessage ? (
-          <div style={{ color: C.ice50, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.55 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.55 }}>
             {sourceMessage}
           </div>
         ) : null}
@@ -477,7 +463,7 @@ export function useMarsObservatoryPanels() {
             isLight={isLight}
           />
           {!anomalyAllowed ? (
-            <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.45 }}>
+            <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.5 }}>
               {t('observatory.layerPanel.anomalySingleMcdHint')}
             </p>
           ) : null}
@@ -493,7 +479,7 @@ export function useMarsObservatoryPanels() {
             onChange={() => setShowTerminator((value) => !value)}
             isLight={isLight}
           />
-          <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(10px * var(--font-scale, 1))', lineHeight: 1.55 }}>
+          <p style={{ margin: 0, color: C.ice45, fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.55 }}>
             {t('observatory.layerPanel.overlayHint')}
           </p>
         </PanelCard>
@@ -527,7 +513,7 @@ export function useMarsObservatoryPanels() {
       <>
         <PanelSectionLabel>{t('observatory.tools.pointTitle')}</PanelSectionLabel>
         <PanelCard>
-          <p style={{ margin: 0, color: C.ice60, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.65 }}>
+          <p style={{ margin: 0, color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.65 }}>
             {isZh
               ? '点击球面会暂停播放，右侧显示最近网格点的全年曲线，与左侧全球均值共用 Ls 时间轴，但数值刻度各用本轨极值（两轨形状可直接比起伏，不能比绝对高度）。点位详细对比仍可在单项分析中查看。'
               : 'Click the globe to pause playback and show the nearest grid point’s annual curve on the right. It shares the Ls axis with the global mean on the left, while each rail scales to its own value range, so compare shape rather than absolute height. Detailed comparisons remain available in individual analysis.'}
