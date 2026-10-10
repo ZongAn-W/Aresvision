@@ -22,7 +22,7 @@ from services.earth_training_artifact import (
 )
 from services.earth_training_contract import build_earth_training_spec
 from services.earth_task_split import build_earth_task_split
-from services.user_model_validator import UserModelValidator, UserModelValidationResult
+from services.user_model_validator import UserModelValidator, UserModelValidationResult, VALIDATION_TIMEOUT_CODE
 from services.user_model_service import UserModelService
 from training_backbones.earth_3hourly_uploaded_contract import (
     DATASET_ID, CONTRACT_SCHEMA, EVAL_BATCH_POLICY, FEED, channel_orders, forward,
@@ -258,7 +258,47 @@ def test_top_level_timeout_never_executes_in_parent(tmp_path):
                               content_hash=hashlib.sha256(source.encode()).hexdigest())
     Path(package.storage_path).write_bytes(source.encode("utf-8"))
     verdict = evaluate_package_earth_compatibility(package, UserModelValidator(timeout_seconds=4), dataset_id=DATASET_ID)
-    assert not verdict.compatible and verdict.code == "uploaded_model_compatibility_unknown"
+    assert not verdict.compatible and verdict.status == "unknown"
+    assert verdict.code == VALIDATION_TIMEOUT_CODE
+    assert "timed out after 4 seconds" in verdict.reasons[0]
+
+
+@pytest.mark.parametrize("errors,result_code,status,expected", [
+    (["budget exceeded"], VALIDATION_TIMEOUT_CODE, "unknown", VALIDATION_TIMEOUT_CODE),
+    (["User model validation timed out after 30.0 seconds"], None, "unknown", VALIDATION_TIMEOUT_CODE),
+    (["User model validation process exited without a result: 1"], None, "unknown", "uploaded_model_compatibility_unknown"),
+    (["model forward timeout is unsupported"], None, "unavailable", "uploaded_model_contract_invalid"),
+])
+def test_three_hour_gate_keeps_timeout_and_abnormal_exit_blocked(tmp_path, errors, result_code, status, expected):
+    source = TEMPLATE.read_bytes()
+    path = tmp_path / "uploaded.source"
+    path.write_bytes(source)
+    package = SimpleNamespace(storage_path=str(path), display_name="ThreeHour", version=1,
+                              content_hash=hashlib.sha256(source).hexdigest())
+    class Validator:
+        def validate_file(self, *args, **kwargs):
+            return UserModelValidationResult(ok=False, errors=errors, code=result_code)
+    verdict = evaluate_package_earth_compatibility(package, Validator(), dataset_id=DATASET_ID)
+    assert verdict.compatible is False
+    assert verdict.status == status and verdict.code == expected
+    assert verdict.reasons == errors
+
+
+@pytest.mark.parametrize("source_state,expected", [
+    ("missing", "uploaded_model_missing"), ("tampered", "uploaded_model_tampered"),
+])
+def test_three_hour_gate_source_errors_take_priority_over_validation(tmp_path, source_state, expected):
+    source = TEMPLATE.read_bytes()
+    path = tmp_path / "uploaded.source"
+    if source_state == "tampered":
+        path.write_bytes(source + b"\n# changed\n")
+    package = SimpleNamespace(storage_path=str(path), display_name="ThreeHour", version=1,
+                              content_hash=hashlib.sha256(source).hexdigest())
+    class Validator:
+        def validate_file(self, *args, **kwargs):
+            raise AssertionError("source integrity must be checked before validation")
+    verdict = evaluate_package_earth_compatibility(package, Validator(), dataset_id=DATASET_ID)
+    assert verdict.compatible is False and verdict.code == expected
 
 
 @pytest.fixture(scope="module")

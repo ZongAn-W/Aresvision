@@ -15,7 +15,9 @@ from sqlalchemy import func, select
 from config import MAX_USER_MODEL_SIZE_KB, USER_MODELS_DIR
 from database.engine import async_session_maker
 from database.models import UserModelPackage
-from services.user_model_validator import UserModelValidator
+from services.user_model_validator import (
+    UserModelValidator, VALIDATION_TIMEOUT_CODE, validation_report_timed_out,
+)
 
 
 class UserModelService:
@@ -185,7 +187,10 @@ class UserModelService:
             ]
             code = "uploaded_model_compatibility_unknown"
             if package.validation_status == "invalid":
-                status, code = "unavailable", "uploaded_model_contract_invalid"
+                status, code = (
+                    ("unknown", VALIDATION_TIMEOUT_CODE) if validation_report_timed_out(report)
+                    else ("unavailable", "uploaded_model_contract_invalid")
+                )
                 reasons = list(report.get("errors") or reasons)
         if available and hashlib.sha256(Path(package.storage_path).read_bytes()).hexdigest() != package.content_hash:
             compatible, status, code = False, "unavailable", "uploaded_model_tampered"

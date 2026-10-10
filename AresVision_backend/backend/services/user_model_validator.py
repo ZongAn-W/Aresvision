@@ -44,6 +44,17 @@ from training_backbones.uploaded_model_source_check import (
 
 
 EXPECTED_OUTPUT_SHAPE = [2, 3, 1, 8, 16]
+VALIDATION_TIMEOUT_CODE = "uploaded_model_validation_timeout"
+
+
+def validation_report_timed_out(report: dict[str, Any]) -> bool:
+    if report.get("code") == VALIDATION_TIMEOUT_CODE:
+        return True
+    errors = report.get("errors")
+    return isinstance(errors, list) and any(
+        isinstance(error, str) and error.startswith("User model validation timed out after ")
+        for error in errors
+    )
 
 #: Earth dry-run contract: the published global grid, the fixed 7 -> 3 window and
 #: both boundary channel counts (ozone only, and all five published channels). A
@@ -76,6 +87,7 @@ class UserModelValidationResult:
     earth_checked: bool = False
     earth_compatibilities: dict[str, Any] = field(default_factory=dict)
     mars_ok: bool | None = None
+    code: str | None = None
 
     def report_dict(self) -> dict[str, Any]:
         report = {
@@ -84,6 +96,8 @@ class UserModelValidationResult:
             "warnings": self.warnings,
             "output_shape": self.output_shape,
         }
+        if self.code is not None:
+            report["code"] = self.code
         if self.mars_ok is not None:
             report["mars"] = {"compatible": self.mars_ok}
         # Keep legacy reports unchanged for models without dataset declarations.
@@ -100,7 +114,7 @@ class UserModelValidationResult:
 
 
 class UserModelValidator:
-    def __init__(self, timeout_seconds: float | None = 30.0):
+    def __init__(self, timeout_seconds: float | None = config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS):
         self.timeout_seconds = timeout_seconds
 
     def validate_file(self_or_file_path, file_path: Path | None = None, *, earth_probe=None) -> UserModelValidationResult:
@@ -109,7 +123,7 @@ class UserModelValidator:
             timeout_seconds = self_or_file_path.timeout_seconds
         else:
             path = self_or_file_path
-            timeout_seconds = 30.0
+            timeout_seconds = config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS
 
         if path is None:
             raise TypeError("validate_file() missing required file_path")
@@ -136,9 +150,11 @@ class UserModelValidator:
         if process.is_alive():
             process.terminate()
             process.join(1)
+            result_queue.close()
             return UserModelValidationResult(
                 ok=False,
                 errors=[f"User model validation timed out after {timeout_seconds} seconds"],
+                code=VALIDATION_TIMEOUT_CODE,
             )
 
         try:
@@ -167,6 +183,7 @@ class UserModelValidator:
             earth_checked=bool(payload.get("earth_checked", False)),
             earth_compatibilities=dict(payload.get("earth_compatibilities", {})),
             mars_ok=payload.get("mars_ok"),
+            code=payload.get("code"),
         )
 
     @staticmethod
@@ -869,6 +886,7 @@ def _validation_payload(result: UserModelValidationResult) -> dict[str, Any]:
     """Serialize a validation result for the timeout child process queue."""
     return {
         "ok": result.ok,
+        "code": result.code,
         "errors": result.errors,
         "warnings": result.warnings,
         "display_name": result.display_name,

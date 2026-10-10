@@ -10,6 +10,8 @@
 
 **全球网格不是单次模型调用的空间尺寸。** 训练和预测沿用服务端 24×48 不重叠空间分块，共 100 块，再拼成全球输出。块间没有 halo、坐标、经纬度、时间 embedding 或额外位置输入；需要跨块空间上下文的模型不适用本版本。
 
+训练内部缓存按空间块连续存储，缓存物理布局不改变这里的 BTCHW float32 调用及完整空间覆盖。CUDA 加载使用页锁定内存和非阻塞传输，梯度有限性检查仍覆盖全部参数并保留异常拦截。布局、批量读取的身份复核和旧缓存兼容规则见[三小时训练缓存](earth-merra2-3hourly.md)。
+
 | 项目 | 实际契约 |
 | --- | --- |
 | 调用 | `model(x)`，不传额外参数；返回单个 `torch.Tensor` |
@@ -33,6 +35,8 @@
 
 上传沿用仓库的单文件大小、UTF-8、AST 导入/调用检查和隔离进程超时边界。该检查不是操作系统级不可信代码沙箱，部署时仍需遵循既有任务执行权限边界。
 
+上传、重新校验及创建任务前的模型 dry-run 默认使用 120 秒隔离进程预算，可通过后端 `.env` 的 `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` 设置正整数秒数；修改配置后重启后端。到期仍强制终止子进程，全部通道、前向、梯度及 eval 批次一致性检查保留。超时报告顶层 `code` 为 `uploaded_model_validation_timeout`，兼容性查询返回 `status=unknown`、`compatible=false` 和同一错误码，页面显示“校验超时，请重试”。上传包在重新校验成功前仍为 `validation_status=invalid`，禁止创建训练任务。旧报告只有 `User model validation timed out after ... seconds` 文本时也识别为超时，无需改写数据库。该预算不影响下文 checkpoint 完成门禁的独立 30 秒重载检查。
+
 上传 dry-run 检查全部 16 种通道组合、B=1/2、eval 前向、train 前向及 backward。在 backward 前后均用固定的不同样本核对单独与合批、交换顺序、更换其他成员和重复调用的输出，覆盖 B=2/3/默认8，采用 float32 容差 `rtol=1e-5, atol=1e-5`。创建任务时还覆盖实际请求 batch size；重载时使用保存的 batch 配置。探针拒绝 eval 修改参数或缓冲区，并在结束时恢复原值与各模块模式。依赖 batch 均值、`BatchNorm(track_running_stats=False)`、首次调用校准或 eval 计数缓冲区的模型会被拒绝。创建任务前再次在隔离进程中检查实际所选通道和自定义参数。成功报告保存 `eval_batch_policy=earth_eval_sample_independent_v1`；旧报告没有该证据时显示 unknown，需要重新校验。有限探针不能证明任意源码对全部输入都独立，CPU dry-run 通过也不代表任意 GPU 资源预算或模型收敛已验收。
 
 兼容性接口 `GET /api/user-models/{id}/earth-compatibility?dataset_id=earth_merra2_3hourly_v1` 返回具体数据集的 `status`、`compatible`、`code` 和 `reasons`：`available` 可用，`unavailable` 明确不兼容，`unknown` 未获得有效执行结论。未知、超时、失败均不能创建训练任务。日频的原接口默认值保留。
@@ -41,7 +45,8 @@
 | --- | --- |
 | `uploaded_model_not_earth_3hourly_compatible` | 未声明本三小时 feed |
 | `uploaded_model_contract_invalid` | spec、保留参数、保存配置或执行契约不合法 |
-| `uploaded_model_compatibility_unknown` | 无有效结论、隔离进程超时或异常退出 |
+| `uploaded_model_compatibility_unknown` | 无有效结论或隔离进程异常退出 |
+| `uploaded_model_validation_timeout` | 模型校验隔离进程超过配置时间上限；未知结论，可重新校验 |
 | `uploaded_model_earth_3hourly_dry_run_failed` | 构建、输出类型/形状/有限性或梯度校验失败 |
 | `invalid_earth_training_parameters` | 请求参数未通过 schema 或窗口范围与形状校验 |
 | `uploaded_model_missing` / `uploaded_model_tampered` | 源码缺失或摘要不匹配 |

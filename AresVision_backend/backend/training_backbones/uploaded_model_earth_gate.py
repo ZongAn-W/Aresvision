@@ -270,6 +270,7 @@ def evaluate_package_earth_compatibility(
 
 
 def _evaluate_three_hour_package(package, raw, validator, *, earth_probe=None):
+    from services.user_model_validator import VALIDATION_TIMEOUT_CODE, validation_report_timed_out
     from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, EVAL_BATCH_POLICY
 
     identity = dict(dataset_id=EARTH_3HOURLY_FEED_KEY,
@@ -286,12 +287,17 @@ def _evaluate_three_hour_package(package, raw, validator, *, earth_probe=None):
     if not block:
         declared = EARTH_3HOURLY_FEED_KEY in result.datasets
         unknown = not result.datasets and not result.errors
-        timed_out = any("timed out" in e or "without a result" in e for e in result.errors)
+        validation_timeout = validation_report_timed_out(result.report_dict())
+        unknown = unknown or validation_timeout or any("without a result" in e for e in result.errors)
+        if validation_timeout:
+            code = VALIDATION_TIMEOUT_CODE
+        elif unknown:
+            code = "uploaded_model_compatibility_unknown"
+        else:
+            code = "uploaded_model_contract_invalid" if declared or result.errors else "uploaded_model_not_earth_3hourly_compatible"
         return EarthCompatibility(
             False, list(result.errors) or ["No verified three-hour declaration and dry-run result"],
-            status="unknown" if unknown or timed_out else "unavailable",
-            code="uploaded_model_compatibility_unknown" if unknown or timed_out else (
-                "uploaded_model_contract_invalid" if declared or result.errors else "uploaded_model_not_earth_3hourly_compatible"),
+            status="unknown" if unknown else "unavailable", code=code,
             declares_earth=declared, datasets=result.datasets, **identity,
         )
     declared_horizons = (result.datasets.get(EARTH_3HOURLY_FEED_KEY) or {}).get('horizon', [24])

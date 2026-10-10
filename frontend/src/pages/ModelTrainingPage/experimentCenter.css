@@ -2881,6 +2881,17 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 @media (max-width: 520px) {
+  .experiment-uploaded-card[data-validation-status='timeout'] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .experiment-uploaded-status[data-validation-status='timeout'] {
+    justify-self: start;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .experiment-param-grid,
   .experiment-payload-bar,
   .experiment-expert-fields,
@@ -4370,6 +4381,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .experiment-uploaded-status[data-tone='warn'],
+.experiment-uploaded-status[data-validation-status='timeout'],
 .experiment-expert-tab-flag {
   color: var(--status-warning);
 }

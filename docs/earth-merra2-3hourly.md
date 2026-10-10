@@ -179,6 +179,10 @@ TO3 始终为首个输入和唯一输出；`selected_channels=[]` 表示只用 T
 
 缓存目录由 `ARESVISION_EARTH_TRAINING_CACHE_DIR` 配置，默认在 Git checkout 的工作区父目录 `earth_training_cache/`；每次训练生成独立目录，检查 fingerprint、通道和含任务策略/实际边界的 normalization 后以只读映射使用。完整两年五通道缓存约 12.55 GiB，TO3-only 约 2.51 GiB；默认 batch=8 的窗口/目标张量约 10.7 MiB，另有模型 activation 与系统文件页缓存。完成及中断的缓存均保留，不删除源包或旧缓存。
 
+新缓存采用 `layout=earth_spatial_tiles_v1`：物理数组为 `[100,time,C,24,48]`，metadata 的 `shape` 仍保存逻辑全球形状 `[time,C,240,480]`，另存 `storage_shape` 与 `spatial_tile_shape`。流式构建仍每次只解压最多 8 个时间步、一个通道，再按纬向优先的 100 个空间块重排写入；模型输入/目标及归一化数值不变。读取支持对齐空间块、跨块、反向/跨步切片及全球窗口；没有 `layout` 的旧全球缓存继续读取，未知 layout、错误物理形状、身份或统计量明确拒绝。运行中的任务不迁移已有缓存。
+
+PyTorch 批量取样通过 `EarthThreeHourlyWindows.read_windows` 在一批读取前后各核对一次源包签名，减少逐样本重复文件状态查询；期间源包变化会使整批失败。样本顺序、重复索引、训练 shuffle 及每轮全部窗口 × 100 块的覆盖保持不变。CUDA loader 使用 `pin_memory`，输入/目标以 `non_blocking` 传输，CPU 路径保持普通传输；未增加多进程 worker 或额外预取副本。每批全部非空梯度仍检查 NaN/Inf，但有限性标志在设备上合并后只同步一次，失败时保留首个异常参数名；没有放宽上传输出、梯度或 checkpoint 门禁。缓存调整不减少批次数，也不承诺端到端固定倍数提速或 100% GPU 利用率。
+
 三小时 checkpoint 使用独立 schema `aresvision_earth_forecast_checkpoint_3hourly_v1` 和实现 ID `aresvision_gridpoint_dlinear_3hourly_v1`；保存权重/完整网格模型配置、通道顺序及单位、任务 window/horizon（默认 56/24）、hour/step=3、UTC、`timestamp_rule=interval_center`、三小时平均与 90 分钟中心偏移（01:30…22:30）、独立任务划分策略、比例、原始索引/UTC/步数/窗口范围（旧策略保留发布分区）、归一化、数据版本/SHA/fingerprint 和任务身份。日频 checkpoint 不能绑定三小时任务，反向也拒绝，旧日频 schema 与加载行为保留。产物原子保存前严格重载，父进程验证成功后任务才 completed。
 
 新指标使用 `earth_training_metrics_3hourly_v2`，validation/test 的总体、每步 `by_lead` 与累计 `by_horizon` 均含 MSE/RMSE/MAE/R²/MAPE/SMAPE，单位分别为 DU²/DU/DU/无量纲/%/%。horizon 使用任务配置，累计为每 24 小时及最终 lead；总体/累计由全部 float64 误差和与稳定真值统计量计算，保持 `forecast_origin_lead_grid_uniform`。旧指标 v1 仍可读、可预测，缺项显示“未提供”；公式、零分母、恒定真值及严格门禁见[地球评价指标](earth-evaluation-metrics.md)。

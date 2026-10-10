@@ -63,6 +63,7 @@ import {
   readEarthUploadedModelCompatibility,
 } from './ModelTrainingPage/earthTrainingConfig';
 import { createTrainingDraftSession } from './ModelTrainingPage/trainingDraftSession';
+import { getUploadedModelValidationStatus, UPLOADED_MODEL_VALIDATION_TIMEOUT } from './ModelTrainingPage/uploadedModelValidation';
 import { fetchDatasets } from '../services/datasets';
 import {
   buildCustomModelParams,
@@ -459,6 +460,7 @@ export default function ModelTrainingPage() {
       uploadedModelValid: isZh ? '可训练' : 'Valid',
       uploadedModelInvalid: isZh ? '需修正' : 'Invalid',
       uploadedModelPending: isZh ? '校验中' : 'Pending',
+      uploadedModelTimeout: isZh ? '校验超时，请重试' : 'Validation timed out. Please retry.',
       uploadedModelReady: isZh ? '该模型已通过校验，可以训练。' : 'This model is ready for training.',
       uploadedModelUnnamed: isZh ? '未命名模型' : 'Unnamed model',
       uploadedModelNoFilename: isZh ? '未知文件' : 'Unknown file',
@@ -860,13 +862,17 @@ export default function ModelTrainingPage() {
   const earthUploadedInlineError = earthMode
     && modelSource === EARTH_MODEL_SOURCE_UPLOADED
     && !earthUploadedCompatibility.compatible
-    ? (earthUploadedCompatibility.reason === 'earth_compatibility_unknown'
+    ? (earthUploadedCompatibility.reason === UPLOADED_MODEL_VALIDATION_TIMEOUT
+        ? copy.uploadedModelTimeout
+        : earthUploadedCompatibility.reason === 'earth_compatibility_unknown'
         ? copy.earthCompatibilityUnknown : earthUploadedCompatibility.reason || copy.earthUploadedIncompatible)
     : '';
   const earthUploadedStatusLabel = earthMode && modelSource === EARTH_MODEL_SOURCE_UPLOADED
     ? (earthUploadedLoading
         ? copy.earthCompatibilityChecking
-        : (!earthUploadedCompatibility.known ? copy.earthCompatibilityUnknown : earthUploadedCompatibility.compatible ? copy.earthCompatible : copy.earthIncompatible))
+        : (earthUploadedCompatibility.reason === UPLOADED_MODEL_VALIDATION_TIMEOUT
+            ? copy.uploadedModelTimeout
+            : !earthUploadedCompatibility.known ? copy.earthCompatibilityUnknown : earthUploadedCompatibility.compatible ? copy.earthCompatible : copy.earthIncompatible))
     : '';
   const earthUploadedStatusTone = earthUploadedCompatibility.compatible ? 'ok' : 'error';
   const earthUploadedNotice = earthMode
@@ -945,6 +951,7 @@ export default function ModelTrainingPage() {
     () => uploadedModels.find((item) => item.id === selectedUploadedModelId) || null,
     [selectedUploadedModelId, uploadedModels]
   );
+  const selectedUploadedModelTimedOut = getUploadedModelValidationStatus(selectedUploadedModel) === 'timeout';
   const selectedUploadedParamSchema = useMemo(
     () => selectedUploadedModel?.param_schema || {},
     [selectedUploadedModel]
@@ -1047,7 +1054,9 @@ export default function ModelTrainingPage() {
     ? ''
     : !selectedUploadedModel
       ? ''
-      : selectedUploadedModel.validation_status !== 'valid'
+      : selectedUploadedModelTimedOut
+        ? copy.uploadedModelTimeout
+        : selectedUploadedModel.validation_status !== 'valid'
         ? `${copy.uploadModelInvalid} · ${copy.selectValidUploadedModel}`
         : '';
 
@@ -1070,7 +1079,7 @@ export default function ModelTrainingPage() {
       if (!selectedUploadedModel) {
         blockers.push({ code: 'model-missing', label: copy.inspectorMissingUploadedModel });
       } else if (selectedUploadedModel.validation_status !== 'valid') {
-        blockers.push({ code: 'model-invalid', label: copy.inspectorUploadedInvalid });
+        blockers.push({ code: 'model-invalid', label: selectedUploadedModelTimedOut ? copy.uploadedModelTimeout : copy.inspectorUploadedInvalid });
       }
       if (selectedUploadedModelInvalid) {
         blockers.push({ code: 'custom-params', label: copy.inspectorCustomParamsInvalid });
@@ -1098,7 +1107,9 @@ export default function ModelTrainingPage() {
     if (earthMode && earthUploadedBlocker) {
       const label = earthUploadedBlocker === 'uploaded_model_required'
         ? copy.inspectorMissingUploadedModel
-        : earthUploadedBlocker === 'earth_compatibility_unknown'
+        : earthUploadedBlocker === UPLOADED_MODEL_VALIDATION_TIMEOUT
+          ? copy.uploadedModelTimeout
+          : earthUploadedBlocker === 'earth_compatibility_unknown'
           ? (earthUploadedLoading ? copy.earthCompatibilityChecking : copy.earthCompatibilityUnknown)
           : earthUploadedBlocker;
       blockers.push({ code: 'earth-uploaded', label });
@@ -1108,6 +1119,7 @@ export default function ModelTrainingPage() {
   }, [
     copy.earthCompatibilityChecking,
     copy.earthCompatibilityUnknown,
+    copy.uploadedModelTimeout,
     copy.earthUnavailableFallback,
     earthAvailability.reason,
     earthAvailability.selectable,
@@ -1127,6 +1139,7 @@ export default function ModelTrainingPage() {
     modelSource,
     selectedScriptAvailable,
     selectedUploadedModel,
+    selectedUploadedModelTimedOut,
     selectedUploadedModelInvalid,
     transferStartBlocked,
     user,
@@ -1517,7 +1530,8 @@ export default function ModelTrainingPage() {
       setSelectedUploadedModelId(uploaded?.id || '');
       setModelSource('uploaded');
       showToast(
-        uploaded?.validation_status === 'valid' ? copy.uploadModelSuccess : copy.uploadModelInvalid,
+        uploaded?.validation_status === 'valid' ? copy.uploadModelSuccess
+          : getUploadedModelValidationStatus(uploaded) === 'timeout' ? copy.uploadedModelTimeout : copy.uploadModelInvalid,
         uploaded?.validation_status === 'valid' ? 'success' : 'error'
       );
     } catch (error) {
@@ -1534,7 +1548,8 @@ export default function ModelTrainingPage() {
       const updated = await revalidateUserModel(modelId);
       await refreshUploadedModels(updated?.id || modelId);
       showToast(
-        updated?.validation_status === 'valid' ? copy.revalidateModelSuccess : copy.uploadModelInvalid,
+        updated?.validation_status === 'valid' ? copy.revalidateModelSuccess
+          : getUploadedModelValidationStatus(updated) === 'timeout' ? copy.uploadedModelTimeout : copy.uploadModelInvalid,
         updated?.validation_status === 'valid' ? 'success' : 'error'
       );
     } catch (error) {
@@ -1752,12 +1767,13 @@ export default function ModelTrainingPage() {
       const uploadedEarth = modelSource === EARTH_MODEL_SOURCE_UPLOADED;
       if (uploadedEarth) {
         if (!selectedUploadedModel || selectedUploadedModel.validation_status !== 'valid') {
-          showToast(copy.selectValidUploadedModel, 'error');
+          showToast(selectedUploadedModelTimedOut ? copy.uploadedModelTimeout : copy.selectValidUploadedModel, 'error');
           return;
         }
         if (earthUploadedLoading || earthUploadedBlocker) {
           showToast(
-            earthUploadedCompatibility.reason || copy.earthUploadedIncompatible,
+            earthUploadedCompatibility.reason === UPLOADED_MODEL_VALIDATION_TIMEOUT
+              ? copy.uploadedModelTimeout : earthUploadedCompatibility.reason || copy.earthUploadedIncompatible,
             'error',
           );
           return;
@@ -1832,7 +1848,7 @@ export default function ModelTrainingPage() {
 
     if (modelSource === 'uploaded') {
       if (!selectedUploadedModel || selectedUploadedModel.validation_status !== 'valid') {
-        showToast(copy.selectValidUploadedModel, 'error');
+        showToast(selectedUploadedModelTimedOut ? copy.uploadedModelTimeout : copy.selectValidUploadedModel, 'error');
         return;
       }
 
@@ -2130,7 +2146,7 @@ export default function ModelTrainingPage() {
     : modelSource === 'uploaded'
       ? selectedUploadedModel?.validation_status === 'valid'
         ? copy.uploadedModelReady
-        : copy.selectValidUploadedModel
+        : selectedUploadedModelTimedOut ? copy.uploadedModelTimeout : copy.selectValidUploadedModel
     : scriptsLoading
       ? copy.presetLoading
       : scriptsError || (selectedScriptAvailable ? copy.presetMatched : copy.presetUnavailable);

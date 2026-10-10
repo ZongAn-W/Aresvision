@@ -1,13 +1,21 @@
+import json
+import multiprocessing
+import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from services import user_model_validator  # noqa: E402
-from services.user_model_validator import UserModelValidator  # noqa: E402
+from services.user_model_validator import (  # noqa: E402
+    UserModelValidator, UserModelValidationResult, VALIDATION_TIMEOUT_CODE,
+)
 
 
 VALID_MODEL_SOURCE = """
@@ -358,6 +366,7 @@ def test_select_options_must_be_non_empty_strings():
 
 
 def test_forward_timeout_fails():
+    previous_children = {child.pid for child in multiprocessing.active_children()}
     result = _validate_source_with_validator(
         VALID_MODEL_SOURCE.replace(
             "return last.unsqueeze(1).repeat(1, self.horizon, 1, 1, 1)",
@@ -368,10 +377,76 @@ def test_forward_timeout_fails():
     )
 
     assert result.ok is False
+    assert result.code == VALIDATION_TIMEOUT_CODE
+    assert result.report_dict()["code"] == VALIDATION_TIMEOUT_CODE
+    assert {child.pid for child in multiprocessing.active_children()} <= previous_children
     assert any(
         "timeout" in error.lower() or "timed out" in error.lower()
         for error in result.errors
     )
+
+
+@pytest.mark.parametrize("configured,expected", [(None, 120), ("240", 240)])
+def test_validation_budget_configuration_reaches_class_and_instance(configured, expected):
+    environment = os.environ.copy()
+    environment.pop("USER_MODEL_VALIDATION_TIMEOUT_SECONDS", None)
+    if configured is not None:
+        environment["USER_MODEL_VALIDATION_TIMEOUT_SECONDS"] = configured
+    probe = '''
+import json
+from pathlib import Path
+import dotenv
+dotenv.load_dotenv = lambda *args, **kwargs: None
+import config
+from services.user_model_validator import UserModelValidator, UserModelValidationResult
+budgets = []
+def validate(path, timeout_seconds, **kwargs):
+    budgets.append(timeout_seconds)
+    return UserModelValidationResult(ok=True)
+UserModelValidator._validate_file_with_timeout = staticmethod(validate)
+UserModelValidator.validate_file(Path("model.py"))
+UserModelValidator().validate_file(Path("model.py"))
+print(json.dumps({"configured": config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS, "budgets": budgets}))
+'''
+    completed = subprocess.run([sys.executable, "-c", probe], cwd=BACKEND_DIR, env=environment,
+                               capture_output=True, text=True, timeout=30)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {"configured": expected, "budgets": [expected, expected]}
+
+
+@pytest.mark.parametrize("configured", ["0", "-1", "invalid"])
+def test_validation_budget_configuration_rejects_invalid_values(configured):
+    environment = {**os.environ, "USER_MODEL_VALIDATION_TIMEOUT_SECONDS": configured}
+    probe = "import dotenv; dotenv.load_dotenv = lambda *args, **kwargs: None; import config"
+    completed = subprocess.run([sys.executable, "-c", probe], cwd=BACKEND_DIR, env=environment,
+                               capture_output=True, text=True, timeout=30)
+    assert completed.returncode != 0
+    assert "ValueError" in completed.stderr
+
+
+def test_explicit_budget_and_in_process_override_are_retained(monkeypatch):
+    calls = []
+    result = UserModelValidationResult(ok=True)
+    def isolated(path, budget, **kwargs):
+        calls.append((path, budget))
+        return result
+    def in_process(path, **kwargs):
+        calls.append((path, None))
+        return result
+    monkeypatch.setattr(UserModelValidator, "_validate_file_with_timeout", staticmethod(isolated))
+    monkeypatch.setattr(UserModelValidator, "_validate_file_in_process", staticmethod(in_process))
+    path = Path("model.py")
+    assert UserModelValidator(timeout_seconds=0.5).validate_file(path) is result
+    assert UserModelValidator(timeout_seconds=None).validate_file(path) is result
+    assert calls == [(path, 0.5), (path, None)]
+
+
+def test_timeout_code_survives_validation_payload_and_report():
+    result = UserModelValidationResult(ok=False, errors=["budget exceeded"], code=VALIDATION_TIMEOUT_CODE)
+    payload = user_model_validator._validation_payload(result)
+    assert payload["code"] == VALIDATION_TIMEOUT_CODE
+    assert UserModelValidationResult(**payload).report_dict()["code"] == VALIDATION_TIMEOUT_CODE
+    assert "code" not in UserModelValidationResult(ok=True).report_dict()
 
 
 if __name__ == "__main__":

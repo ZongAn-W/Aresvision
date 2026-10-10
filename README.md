@@ -543,11 +543,16 @@ node scripts\serve-prod.mjs
 | `TRAINING_PYTHON_PATH` | 训练子进程使用的 Python，默认使用后端当前解释器 |
 | `ARESVISION_MOLA_TOPOGRAPHY_PATH` | MOLA 地形 NetCDF 路径，默认使用平台地形资源 |
 | `ARESVISION_MAX_UPLOAD_SIZE_MB` | 数据上传大小上限，默认 512 MB |
+| `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` | 上传、重新校验及创建 Earth 任务前模型 dry-run 的隔离进程时间上限，默认 120 秒，须为正整数；超时终止子进程并显示“校验超时，请重试”，兼容性为未知且禁止训练 |
 | `ARESVISION_FRONTEND_DIST` | 指定后端托管的前端构建目录 |
 
 ## 自定义模型
 
+Earth 三小时新训练缓存按空间块连续存储（`earth_spatial_tiles_v1`），保持 24×48 模型调用、完整样本覆盖、float32 及任务划分/归一化约定。加载同一批次前后均复核源包签名，旧全球场缓存继续读取；CUDA 数据加载使用页锁定内存和非阻塞传输，全部梯度有限性检查合并为一次结果同步。缓存格式与兼容规则见[三小时训练专题](docs/earth-merra2-3hourly.md)。吞吐依赖机器、模型和数据访问模式，不承诺固定 GPU 利用率。
+
 Earth 三小时有独立的 [v1 上传说明](docs/earth-3hourly-uploaded-model.md)与[Python 模板](docs/earth-3hourly-uploaded-model-template.py)。训练页选中该数据集时下载对应模板，兼容性显示可用/不可用/未知及原因；Mars 使用原上传入口。新模型声明 `earth_merra2_3hourly_v1`，实际调用 `[B,window,C,24,48] → [B,horizon,1,24,48]`，拼回 240×480。服务器检查通道、单位、dtype、设备和反向传播，创建任务前再 dry-run 实际参数；checkpoint 保存独立契约、源码摘要、发布身份、任务划分与 normalization。上传模型历史回测完整窗口必须在同一任务分区内，旧任务仍按 manifest。
+
+模型校验默认最多等待 120 秒，所有执行检查保持完整。超时报告使用 `uploaded_model_validation_timeout`，显示“校验超时，请重试”，不会视为已证实不兼容，也不会允许训练；已有仅保存超时文本的旧报告按同一规则显示，可在“管理模型”中重新校验。该预算不改变 checkpoint 完成门禁的独立 30 秒重载检查。
 
 自定义模型文件需导出 `MODEL_SPEC` 和 `build_model(config)`。基本张量约定为：
 

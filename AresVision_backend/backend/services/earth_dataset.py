@@ -34,6 +34,8 @@ THREE_HOURLY_SCHEMA = 'aresvision_earth_3hourly_v1'
 THREE_HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1'
 THREE_HOURLY_DATASET_VERSION = 'v1'
 THREE_HOURLY_GRID_SHAPE = (240, 480)
+THREE_HOURLY_TILE_SHAPE = (24, 48)
+THREE_HOURLY_TILE_CACHE_LAYOUT = 'earth_spatial_tiles_v1'
 THREE_HOURLY_TRAINING_PROFILE = {
     'target': 'TO3', 'target_unit': 'DU', 'window': 56, 'horizon': 24,
     'step_unit': 'hour', 'step': 3, 'grid_shape': [240, 480],
@@ -640,7 +642,8 @@ def build_threehour_training_cache(release, channels, normalization, cache_root)
     folder.mkdir()
     path = folder / 'normalized.npy'
     shape = (len(release.dates), len(order), 240, 480)
-    mapped = np.lib.format.open_memmap(path, mode='w+', dtype='float32', shape=shape)
+    storage_shape = (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
+    mapped = np.lib.format.open_memmap(path, mode='w+', dtype='float32', shape=storage_shape)
     try:
         with netcdf_read_lock(), xr.open_dataset(source_path, engine='netcdf4', mask_and_scale=False) as ds:
             if not np.array_equal(ds.time.values, release.dates):
@@ -650,7 +653,9 @@ def build_threehour_training_cache(release, channels, normalization, cache_root)
                 for index, channel in enumerate(order):
                     values = _threehour_values(ds, channel, start, stop)
                     values = ((values.astype('float64') - mean[index]) / scale[index]).astype('float32')
-                    mapped[start:stop, index] = values
+                    tiles = values.reshape(stop - start, 10, 24, 10, 48)
+                    tiles = tiles.transpose(1, 3, 0, 2, 4).reshape(100, stop - start, 24, 48)
+                    mapped[:, start:stop, index] = tiles
         mapped.flush()
     finally:
         mapped._mmap.close()
@@ -659,6 +664,8 @@ def build_threehour_training_cache(release, channels, normalization, cache_root)
         'dataset_id': THREE_HOURLY_DATASET_ID,
         'dataset_fingerprint': release.metadata.get('dataset_fingerprint'),
         'shape': list(shape), 'input_channel_order': order,
+        'layout': THREE_HOURLY_TILE_CACHE_LAYOUT,
+        'storage_shape': list(storage_shape), 'spatial_tile_shape': list(THREE_HOURLY_TILE_SHAPE),
         'normalization': normalization,
     }, sort_keys=True, allow_nan=False), encoding='utf-8')
     return path
@@ -727,6 +734,7 @@ class EarthThreeHourlyWindows:
         dataset.target_channel_index = TARGET_CHANNEL_INDEX
         dataset.normalization = normalization
         dataset._normalized_map = None
+        dataset._normalized_cache_layout = None
         dataset.mean = mean.astype('float32')
         dataset.std = scale.astype('float32')
         return dataset
@@ -748,14 +756,38 @@ class EarthThreeHourlyWindows:
                 or metadata.get('normalization') != self.normalization
                 or metadata.get('shape') != list(shape)):
             raise ValueError('Three-hour training cache identity or normalization mismatch')
+        layout = metadata.get('layout')
+        storage_shape = shape
+        if layout == THREE_HOURLY_TILE_CACHE_LAYOUT:
+            storage_shape = (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
+            if (metadata.get('storage_shape') != list(storage_shape)
+                    or metadata.get('spatial_tile_shape') != list(THREE_HOURLY_TILE_SHAPE)):
+                raise ValueError('Three-hour training cache storage layout mismatch')
+        elif layout is not None:
+            raise ValueError('Unsupported three-hour training cache layout')
         mapped = np.load(path, mmap_mode='r', allow_pickle=False)
-        if mapped.shape != shape or mapped.dtype != np.dtype('float32'):
+        if mapped.shape != storage_shape or mapped.dtype != np.dtype('float32'):
             mapped._mmap.close()
             raise ValueError('Three-hour training cache shape or dtype mismatch')
         self._normalized_map = mapped
+        self._normalized_cache_layout = layout
+
+    def read_windows(self, requests):
+        """Verify the source before and after a batch of read-only cache slices."""
+        if self._normalized_map is None:
+            return [self.read_window(index, lat_slice=lat, lon_slice=lon)
+                    for index, lat, lon in requests]
+        _threehour_path(self._release)
+        windows = [self._read_window(index, lat_slice=lat, lon_slice=lon, verify_source=False)
+                   for index, lat, lon in requests]
+        _threehour_path(self._release)
+        return windows
 
     def read_window(self, index, *, lat_slice=slice(None), lon_slice=slice(None)):
         """Read exactly one temporal window, optionally limited to a spatial tile."""
+        return self._read_window(index, lat_slice=lat_slice, lon_slice=lon_slice, verify_source=True)
+
+    def _read_window(self, index, *, lat_slice, lon_slice, verify_source):
         from services.netcdf_read_lock import netcdf_read_lock
         index = operator.index(index)
         if index < 0 or index >= self.length:
@@ -769,9 +801,13 @@ class EarthThreeHourlyWindows:
         start = self._offset + index
         forecast, stop = start + self.window, start + self.window + self.horizon
         if self._normalized_map is not None:
-            _threehour_path(self._release)
-            inputs = np.array(self._normalized_map[start:forecast, :, lat_slice, lon_slice], copy=True)
-            targets = np.array(self._normalized_map[forecast:stop, :1, lat_slice, lon_slice], copy=True)
+            if verify_source:
+                _threehour_path(self._release)
+            if self._normalized_cache_layout == THREE_HOURLY_TILE_CACHE_LAYOUT:
+                inputs, targets = self._read_tile_cache(start, forecast, stop, latitude, longitude)
+            else:
+                inputs = np.array(self._normalized_map[start:forecast, :, lat_slice, lon_slice], copy=True)
+                targets = np.array(self._normalized_map[forecast:stop, :1, lat_slice, lon_slice], copy=True)
             if not np.isfinite(inputs).all() or not np.isfinite(targets).all():
                 raise ValueError('Three-hour training cache contains non-finite values')
             return inputs, targets
@@ -793,6 +829,33 @@ class EarthThreeHourlyWindows:
                     np.subtract(values, self.mean[channel_index], out=targets[:, 0])
                     np.divide(targets[:, 0], self.std[channel_index], out=targets[:, 0])
         _threehour_path(self._release)
+        return inputs, targets
+
+    def _read_tile_cache(self, start, forecast, stop, latitude, longitude):
+        tile_height, tile_width = THREE_HOURLY_TILE_SHAPE
+        if (len(latitude) == tile_height and len(longitude) == tile_width
+                and latitude[0] % tile_height == 0 and longitude[0] % tile_width == 0
+                and np.array_equal(latitude, latitude[0] + np.arange(tile_height))
+                and np.array_equal(longitude, longitude[0] + np.arange(tile_width))):
+            tile = int(latitude[0] // tile_height * 10 + longitude[0] // tile_width)
+            return (
+                np.array(self._normalized_map[tile, start:forecast], copy=True),
+                np.array(self._normalized_map[tile, forecast:stop, :1], copy=True),
+            )
+        inputs = np.empty((forecast - start, len(self.input_channels), len(latitude), len(longitude)), dtype='float32')
+        targets = np.empty((stop - forecast, 1, len(latitude), len(longitude)), dtype='float32')
+        # Arbitrary slices can cross tiles or reverse/skip coordinates.
+        for tile_row in np.unique(latitude // tile_height):
+            output_rows = np.flatnonzero(latitude // tile_height == tile_row)
+            local_rows = latitude[output_rows] % tile_height
+            for tile_column in np.unique(longitude // tile_width):
+                output_columns = np.flatnonzero(longitude // tile_width == tile_column)
+                local_columns = longitude[output_columns] % tile_width
+                tile = int(tile_row * 10 + tile_column)
+                history = self._normalized_map[tile, start:forecast]
+                future = self._normalized_map[tile, forecast:stop, :1]
+                inputs[:, :, output_rows[:, None], output_columns] = history[:, :, local_rows[:, None], local_columns]
+                targets[:, :, output_rows[:, None], output_columns] = future[:, :, local_rows[:, None], local_columns]
         return inputs, targets
 
     def denormalize_ozone(self, values):

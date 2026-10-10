@@ -100,6 +100,7 @@ def _build_loaders(
     batch_size: int,
     seed: int,
     cache_root: Optional[Path] = None,
+    device: Optional[torch.device] = None,
 ):
     """Build the three split datasets sharing one training-fitted normalization."""
     binding = spec["dataset_binding"]
@@ -155,11 +156,13 @@ def _build_loaders(
     generator = torch.Generator()
     generator.manual_seed(seed)
     wrapper = _SpatialTileDataset if window_type is EarthThreeHourlyWindows else _ArrayDataset
+    pin_memory = device is not None and device.type == 'cuda'
     train_loader = torch.utils.data.DataLoader(
         wrapper(splits["train"]),
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
+        pin_memory=pin_memory,
         generator=generator,
     )
     validation_loader = torch.utils.data.DataLoader(
@@ -167,12 +170,14 @@ def _build_loaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
+        pin_memory=pin_memory,
     )
     test_loader = torch.utils.data.DataLoader(
         wrapper(splits["test"]),
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
+        pin_memory=pin_memory,
     )
     return {
         "release": release,
@@ -230,6 +235,28 @@ class _SpatialTileDataset(_ArrayDataset):
         )
         return torch.from_numpy(inputs), torch.from_numpy(targets)
 
+    def __getitems__(self, indices):
+        if not hasattr(self.source, 'read_windows'):
+            return [self[index] for index in indices]
+        requests = []
+        for index in indices:
+            window, tile = divmod(index, len(self.tiles))
+            latitude, longitude = self.tiles[tile]
+            requests.append((window, latitude, longitude))
+        return [(torch.from_numpy(inputs), torch.from_numpy(targets))
+                for inputs, targets in self.source.read_windows(requests)]
+
+
+def _require_finite_gradients(model):
+    parameters = [(name, parameter) for name, parameter in model.named_parameters()
+                  if parameter.grad is not None]
+    if not parameters:
+        return
+    flags = torch.stack([torch.isfinite(parameter.grad).all() for _, parameter in parameters])
+    if not flags.all():
+        invalid = flags.detach().cpu().tolist().index(False)
+        raise EarthTrainingError(f"Non-finite gradient for {parameters[invalid][0]}")
+
 
 def _forward_batch(model, inputs, *, model_source, horizon):
     return earth_forward_for_model(
@@ -256,8 +283,8 @@ def _evaluate_split(
     total_loss_elements = 0
     with torch.no_grad():
         for inputs, targets in loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
+            inputs = inputs.to(device, non_blocking=device.type == 'cuda')
+            targets = targets.to(device, non_blocking=device.type == 'cuda')
             output = _forward_batch(model, inputs, model_source=model_source, horizon=horizon)
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during evaluation")
@@ -335,7 +362,7 @@ def run_training(
 
     seed_everything(seed)
     resolved_device = resolve_device(device)
-    prepared = _build_loaders(spec, registry, batch_size, seed, cache_root=cache_root)
+    prepared = _build_loaders(spec, registry, batch_size, seed, cache_root=cache_root, device=resolved_device)
     order = prepared["input_channel_order"]
     dataset_by_name = prepared["splits"]
     train_dataset = dataset_by_name["train"]
@@ -400,8 +427,8 @@ def run_training(
         loss_elements = 0
         total_batches = len(prepared["train_loader"])
         for batch_index, (inputs, targets) in enumerate(prepared["train_loader"], start=1):
-            inputs = inputs.to(resolved_device)
-            targets = targets.to(resolved_device)
+            inputs = inputs.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
+            targets = targets.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
             optimizer.zero_grad(set_to_none=True)
             output = _forward_batch(model, inputs, model_source=model_source, horizon=profile["horizon"])
             if not torch.isfinite(output).all():
@@ -410,9 +437,7 @@ def run_training(
             if not torch.isfinite(loss):
                 raise EarthTrainingError("Non-finite training loss")
             loss.backward()
-            for name, parameter in model.named_parameters():
-                if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
-                    raise EarthTrainingError(f"Non-finite gradient for {name}")
+            _require_finite_gradients(model)
             optimizer.step()
             elements = int(output.numel())
             running_loss += float(loss.item()) * elements

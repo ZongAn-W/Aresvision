@@ -16,6 +16,7 @@ import {
   sanitizePositiveInteger,
   sanitizePositiveNumber,
 } from './trainingParamSanitizers.js';
+import { isUploadedModelValidationTimeout, UPLOADED_MODEL_VALIDATION_TIMEOUT } from './uploadedModelValidation.js';
 
 export const EARTH_3HOURLY_DATASET_ID = TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1;
 export const EARTH_DATASET_ID = EARTH_3HOURLY_DATASET_ID;
@@ -209,14 +210,15 @@ export function readEarthUploadedModelCompatibility(compatibility) {
     return { known: false, compatible: false, reason: 'earth_compatibility_unknown' };
   }
   const reasons = Array.isArray(compatibility.reasons) ? compatibility.reasons.filter(Boolean) : [];
+  const timedOut = isUploadedModelValidationTimeout(compatibility);
   const contracts = compatibility.contract || compatibility.earth_contract
     || (compatibility.dataset_id === EARTH_3HOURLY_DATASET_ID
       || (!compatibility.dataset_id && compatibility.datasets?.earth_merra2_3hourly_v1)
       ? compatibility.datasets?.earth_merra2_3hourly_v1 : compatibility.datasets?.earth_merra2) || {};
   return {
-    known: compatibility.status !== 'unknown',
-    compatible: compatibility.compatible === true && compatibility.status !== 'unknown',
-    reason: reasons[0] || null,
+    known: !timedOut && compatibility.status !== 'unknown',
+    compatible: !timedOut && compatibility.compatible === true && compatibility.status !== 'unknown',
+    reason: timedOut ? UPLOADED_MODEL_VALIDATION_TIMEOUT : reasons[0] || null,
     reasons,
     warnings: Array.isArray(compatibility.warnings) ? compatibility.warnings : [],
     outputShape: Array.isArray(compatibility.output_shape) ? compatibility.output_shape : null,
@@ -241,6 +243,7 @@ export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId,
   if (!uploadedModelId) return 'uploaded_model_required';
   const verdict = readEarthUploadedModelCompatibility(compatibility);
   if (compatibility?.package_id && compatibility.package_id !== uploadedModelId) return 'earth_compatibility_unknown';
+  if (verdict.reason === UPLOADED_MODEL_VALIDATION_TIMEOUT) return UPLOADED_MODEL_VALIDATION_TIMEOUT;
   if (!verdict.known) return 'earth_compatibility_unknown';
   if (profile.datasetId === EARTH_3HOURLY_DATASET_ID && verdict.dataset !== profile.datasetId) return 'earth_compatibility_unknown';
   if (!verdict.compatible) return verdict.reason || 'uploaded_model_not_earth_compatible';

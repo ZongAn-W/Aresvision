@@ -1,10 +1,13 @@
 import asyncio
+import hashlib
+import json
 import sys
 import tempfile
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -16,6 +19,7 @@ from database.models import User  # noqa: E402
 from config import MAX_USER_MODEL_SIZE_KB  # noqa: E402
 from routers.user_models import _serialize_package  # noqa: E402
 from services.user_model_service import UserModelService  # noqa: E402
+from services.user_model_validator import VALIDATION_TIMEOUT_CODE  # noqa: E402
 
 
 VALID_MODEL = b"""
@@ -274,6 +278,72 @@ def test_serialize_package_normalizes_malformed_json_shapes():
     assert response.validation_report.errors == []
     assert response.validation_report.warnings == []
     assert response.validation_report.output_shape is None
+
+
+@pytest.mark.parametrize("code", [VALIDATION_TIMEOUT_CODE, None, 120, [], {}, False])
+def test_serialize_package_preserves_only_string_validation_codes(code):
+    package = SimpleNamespace(
+        id="package-id", user_id=1, display_name="TimedOutModel", version=1,
+        original_filename="model.py", content_hash="a" * 64, param_schema="{}",
+        description=None, validation_status="invalid", created_at=None, updated_at=None,
+        validation_report=json.dumps({"ok": False, "errors": ["budget exceeded"], "code": code}),
+    )
+    response = _serialize_package(package)
+    assert response.validation_report.ok is False
+    assert response.validation_report.errors == ["budget exceeded"]
+    assert response.validation_report.code == (code if isinstance(code, str) else None)
+
+
+def _cached_compatibility_package(tmp_path, report):
+    source = b"verified uploaded source"
+    path = tmp_path / "uploaded.source"
+    path.write_bytes(source)
+    return SimpleNamespace(
+        id="timed-out-package", user_id=1, display_name="TimedOutModel", version=1,
+        storage_path=str(path), content_hash=hashlib.sha256(source).hexdigest(),
+        validation_status="invalid", validation_report=json.dumps(report),
+    )
+
+
+@pytest.mark.parametrize("dataset_id", ["earth_merra2", "earth_merra2_3hourly_v1"])
+@pytest.mark.parametrize("report,status,code", [
+    ({"ok": False, "code": VALIDATION_TIMEOUT_CODE, "errors": ["budget exceeded"]},
+     "unknown", VALIDATION_TIMEOUT_CODE),
+    ({"ok": False, "errors": ["User model validation timed out after 30.0 seconds"]},
+     "unknown", VALIDATION_TIMEOUT_CODE),
+    ({"ok": False, "errors": ["model forward timeout is unsupported"]},
+     "unavailable", "uploaded_model_contract_invalid"),
+])
+def test_cached_timeout_is_unknown_and_real_validation_failure_unavailable(tmp_path, dataset_id, report, status, code):
+    package = _cached_compatibility_package(tmp_path, report)
+    service = UserModelService(storage_root=tmp_path / "storage")
+    async def get_package(*args):
+        return package
+    service.get_package_for_user = get_package
+    verdict = asyncio.run(service.get_earth_compatibility(package.id, 1, dataset_id=dataset_id))
+    assert verdict["compatible"] is False
+    assert verdict["status"] == status
+    assert verdict["code"] == code
+    assert verdict["reasons"] == report["errors"]
+
+
+@pytest.mark.parametrize("source_state,expected", [
+    ("missing", "uploaded_model_missing"), ("tampered", "uploaded_model_tampered"),
+])
+def test_cached_source_integrity_errors_take_priority_over_timeout(tmp_path, source_state, expected):
+    package = _cached_compatibility_package(tmp_path, {"ok": False, "code": VALIDATION_TIMEOUT_CODE,
+        "errors": ["User model validation timed out after 30.0 seconds"]})
+    if source_state == "missing":
+        package.storage_path = str(tmp_path / "never-created.source")
+    else:
+        Path(package.storage_path).write_bytes(b"changed uploaded source")
+    service = UserModelService(storage_root=tmp_path / "storage")
+    async def get_package(*args):
+        return package
+    service.get_package_for_user = get_package
+    verdict = asyncio.run(service.get_earth_compatibility(package.id, 1, dataset_id="earth_merra2_3hourly_v1"))
+    assert verdict["compatible"] is False and verdict["status"] == "unavailable"
+    assert verdict["code"] == expected
 
 
 async def _run_tests():

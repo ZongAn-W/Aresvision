@@ -13,6 +13,7 @@ import {
 } from './trainingParamSanitizers';
 import { EARTH_MODEL_ARCHITECTURE, EARTH_PARAM_BOUNDS, getEarthTrainingProfile, isEarthTrainingDataset, describeEarthTaskSplits } from './earthTrainingConfig';
 import { getExperimentArchitectureLabel } from './experimentCenterModel';
+import { getUploadedModelValidationStatus } from './uploadedModelValidation';
 import './experimentCenter.css';
 
 const OPEN_INTERVAL_FLOAT_FIELDS = new Set(['initial_history_weight', 'initial_translation_weight']);
@@ -169,6 +170,7 @@ export default function ExperimentConfigWorkspace({
     valid: copy.uploadedModelValid,
     invalid: copy.uploadedModelInvalid,
     pending: copy.uploadedModelPending,
+    timeout: copy.uploadedModelTimeout,
     ready: copy.uploadedModelReady,
     unnamed: copy.uploadedModelUnnamed,
     noFilename: copy.uploadedModelNoFilename,
@@ -217,12 +219,13 @@ export default function ExperimentConfigWorkspace({
   const taskSplitPreview = describeEarthTaskSplits(earthDatasetAvailability?.time,
     { trainRatio, validationRatio, testRatio }, windowValue, horizon);
   const uploadedModel = selectedUploadedModel;
-  const uploadedValidationStatus = uploadedModel?.validation_status || '';
+  const uploadedValidationStatus = getUploadedModelValidationStatus(uploadedModel);
   const uploadedStatusLabel = uploadedValidationStatus === 'valid'
     ? copy.uploadedModelValid
     : uploadedValidationStatus === 'pending'
       ? copy.uploadedModelPending
-      : copy.uploadedModelInvalid;
+      : uploadedValidationStatus === 'timeout'
+        ? copy.uploadedModelTimeout : copy.uploadedModelInvalid;
   const modelBlockState = isUploaded
     ? (uploadedModel
         ? (uploadedValidationStatus === 'valid' ? 'valid' : 'invalid')

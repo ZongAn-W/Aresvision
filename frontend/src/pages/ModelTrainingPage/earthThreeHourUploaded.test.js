@@ -6,6 +6,7 @@ import {
   getEarthUploadedSelectionBlocker, readEarthUploadedModelCompatibility,
   buildEarthTrainingHyperparameters,
 } from './earthTrainingConfig.js';
+import { UPLOADED_MODEL_VALIDATION_TIMEOUT } from './uploadedModelValidation.js';
 
 const selection = { modelSource: 'uploaded', uploadedModelId: 'm1', datasetId: EARTH_3HOURLY_DATASET_ID };
 const available = { package_id: 'm1', dataset_id: EARTH_3HOURLY_DATASET_ID, status: 'available', compatible: true,
@@ -27,6 +28,22 @@ test('unknown and unavailable remain distinct with concrete reasons', () => {
   const failed = { ...available, compatible: false, status: 'unavailable', reasons: ['wrong output dtype'] };
   assert.equal(readEarthUploadedModelCompatibility(failed).known, true);
   assert.equal(getEarthUploadedSelectionBlocker({ ...selection, compatibility: failed }), 'wrong output dtype');
+});
+
+test('validation timeouts keep compatibility unknown and training blocked with a retry reason', () => {
+  for (const timeout of [
+    { code: UPLOADED_MODEL_VALIDATION_TIMEOUT, status: 'unknown' },
+    { status: 'unavailable', reasons: ['User model validation timed out after 30.0 seconds'] },
+  ]) {
+    const compatibility = { ...available, ...timeout };
+    const verdict = readEarthUploadedModelCompatibility(compatibility);
+    assert.equal(verdict.known, false);
+    assert.equal(verdict.compatible, false);
+    assert.equal(verdict.reason, UPLOADED_MODEL_VALIDATION_TIMEOUT);
+    assert.equal(getEarthUploadedSelectionBlocker({ ...selection, compatibility }), UPLOADED_MODEL_VALIDATION_TIMEOUT);
+    assert.equal(getEarthUploadedSelectionBlocker({ ...selection,
+      compatibility: { ...compatibility, package_id: 'other-model' } }), 'earth_compatibility_unknown');
+  }
 });
 
 test('three-hour upload payload carries parameters and preserves server-owned identity', () => {

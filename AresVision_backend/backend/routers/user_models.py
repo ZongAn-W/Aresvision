@@ -90,6 +90,8 @@ def _normalize_validation_report(value: str | None) -> dict[str, Any]:
         "warnings": _normalize_string_list(parsed.get("warnings")),
         "output_shape": _normalize_output_shape(parsed.get("output_shape")),
     }
+    if isinstance(parsed.get("code"), str):
+        report["code"] = parsed["code"]
     # The Earth capability result is part of the upload contract now, so it must
     # survive serialization; the training page reads it before offering the model
     # for an Earth experiment. It is only published when the model opted in.

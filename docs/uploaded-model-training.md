@@ -345,6 +345,17 @@ MODEL_SPEC = {
 
 ## Validation Rules
 
+Upload, revalidation and the Earth pre-training dry-run use a bounded child process,
+with a default budget of 120 seconds. Set the positive integer
+`USER_MODEL_VALIDATION_TIMEOUT_SECONDS` in the backend environment and restart the
+backend to change it. All execution checks remain required. A timeout terminates
+the child and records `validation_report.code="uploaded_model_validation_timeout"`;
+the package stays invalid until revalidation succeeds. Earth compatibility reports
+`status="unknown"`, `compatible=false` and the same code, and the UI displays
+"Validation timed out. Please retry." Existing reports containing only the legacy
+timeout error text receive the same treatment. This budget is separate from the
+30-second checkpoint completion/reload gate.
+
 Version 1 accepts these import roots:
 
 - `torch`
