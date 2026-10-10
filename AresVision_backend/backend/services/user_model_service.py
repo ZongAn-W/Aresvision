@@ -149,6 +149,11 @@ class UserModelService:
         if dataset_id not in {"earth_merra2", "earth_merra2_daily_v1", "earth_merra2_daily_v2", "earth_merra2_3hourly_v1"}:
             raise ValueError("Unknown Earth dataset_id")
         package = await self.get_package_for_user(package_id, user_id)
+        return self.earth_compatibility_for_package(package, dataset_id=dataset_id)
+
+    @staticmethod
+    def earth_compatibility_for_package(package: UserModelPackage, *, dataset_id: str) -> dict:
+        """Read the upload proof and verify the source without executing the model."""
         try:
             report = json.loads(package.validation_report or "{}")
         except (TypeError, ValueError):

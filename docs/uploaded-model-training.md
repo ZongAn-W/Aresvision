@@ -108,6 +108,17 @@ Incomplete versioned checkpoints are rejected. See the
 
 ## Declaring Which Dataset Feeds a Model
 
+Active Earth training uses `earth_merra2_3hourly_v1` and its independent
+[v1 tile](earth-3hourly-uploaded-model.md) or
+[v2 full-grid](earth-3hourly-fullgrid-model.md) contract. Task creation reuses the
+compatibility report saved by upload or manual revalidation, verifies ownership,
+valid status, concrete dataset/schema evidence, source hash, parameter schema and
+batch range, then freezes the source/schema/parameters and queues the task. It no
+longer runs another dry-run for the task's actual windows, channels, batch or
+custom parameters. Runtime output/gradient checks and checkpoint strict reload
+remain required. The daily `earth_merra2` declaration and examples below document
+the historical, retired daily feed.
+
 By default an uploaded model is **Mars-only**. To train it on Earth MERRA-2 data it must
 opt in explicitly:
 
@@ -345,7 +356,7 @@ MODEL_SPEC = {
 
 ## Validation Rules
 
-Upload, revalidation and the Earth pre-training dry-run use a bounded child process,
+Upload and manual revalidation use a bounded child process,
 with a default budget of 120 seconds. Set the positive integer
 `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` in the backend environment and restart the
 backend to change it. All execution checks remain required. A timeout terminates
@@ -356,8 +367,10 @@ the package stays invalid until revalidation succeeds. Earth compatibility repor
 timeout error text receive the same treatment. This budget is separate from the
 30-second checkpoint completion/reload gate.
 
-Actual Earth full-grid v2 task configurations use the larger of the ordinary
-budget and `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` (default 300 seconds).
+Explicit `earth_probe` calls for Earth full-grid v2 configurations use the larger
+of the ordinary budget and `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`
+(default 300 seconds). This setting remains available for explicit probes; task
+creation reuses the saved upload report and does not use this budget.
 Upload short-window probes, Mars and v1 tile checks retain the ordinary budget;
 explicit validator timeouts remain authoritative. The process result is drained
 before joining its sender to avoid false timeouts for large reports. The process

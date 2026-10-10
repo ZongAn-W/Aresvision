@@ -64,6 +64,7 @@ from services.uploaded_model_source import (
 )
 from services.user_model_validator import UserModelValidator
 from training_backbones.uploaded_model_earth_gate import (
+    EarthCompatibility,
     evaluate_package_earth_compatibility,
 )
 from services.personal_data_source_service import PersonalDataSourceService
@@ -123,8 +124,7 @@ def _task_was_stopped(raw_metrics: Any) -> bool:
 
 class TrainingService:
     def __init__(self, earth_model_validator: Any | None = None):
-        # The uploaded-model EARTH compatibility dry-run is the same one the upload
-        # page runs, so it is shared rather than reimplemented. Injected in tests.
+        # Retained for legacy daily compatibility; three-hour tasks reuse upload proofs.
         self._earth_model_validator = earth_model_validator
         self._scheduler_started = False
         self._scheduler_task: asyncio.Task | None = None
@@ -806,14 +806,6 @@ class TrainingService:
                 status_code=422,
             )
 
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
-            from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA, contract_profile
-            report = json.loads(package.validation_report or '{}')
-            feed = (report.get('datasets') or {}).get(dataset_id) or {}
-            if feed.get('schema') == FULL_GRID_CONTRACT_SCHEMA and batch_size > contract_profile(FULL_GRID_CONTRACT_SCHEMA)['max_batch_size']:
-                raise DatasetRequestError('invalid_earth_training_parameters',
-                    f"Full-grid Earth training requires batch_size between 1 and {contract_profile(FULL_GRID_CONTRACT_SCHEMA)['max_batch_size']}; a batch counts complete global windows", status_code=422)
-
         # Earth compatibility is its own question: a model validated for Mars is not
         # thereby usable on the Earth feed.
         try:
@@ -832,18 +824,35 @@ class TrainingService:
                 status_code=422,
             )
 
-        verdict = await asyncio.to_thread(
-            evaluate_package_earth_compatibility, package, validator=self._earth_validator(),
-            dataset_id=dataset_id,
-            earth_probe={"input_channel_order": input_channel_order, "custom_model_params": resolved_params,
-                         "window": window, "horizon": horizon, "batch_size": batch_size,
-                         **({"contract_schema": feed.get("schema")}
-                            if feed.get("schema") == FULL_GRID_CONTRACT_SCHEMA else {})}
-            if dataset_id == EARTH_DATASET_3HOURLY_ID else None,
-        )
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from services.user_model_service import UserModelService
+            from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+
+            stored = await asyncio.to_thread(
+                UserModelService.earth_compatibility_for_package, package, dataset_id=dataset_id,
+            )
+            verdict = EarthCompatibility(
+                compatible=stored['compatible'], reasons=stored['reasons'],
+                warnings=stored['warnings'], datasets=stored['datasets'],
+                output_shape=stored['output_shape'], code=stored['code'],
+                dataset_id=dataset_id, status=stored['status'],
+            )
+            if (verdict.code == 'uploaded_model_compatibility_unknown'
+                    and dataset_id not in verdict.datasets):
+                verdict.code = 'uploaded_model_not_earth_3hourly_compatible'
+            if verdict.compatible:
+                maximum = contract_profile(stored['contract_schema'])['max_batch_size']
+                if not 1 <= batch_size <= maximum:
+                    raise DatasetRequestError('invalid_earth_training_parameters',
+                        f"Earth training requires batch_size between 1 and {maximum}", status_code=422)
+        else:
+            verdict = await asyncio.to_thread(
+                evaluate_package_earth_compatibility, package, validator=self._earth_validator(),
+                dataset_id=dataset_id,
+            )
         if not verdict.compatible:
             from services.user_model_validator import VALIDATION_TIMEOUT_CODE
-            prefix = ("Earth model validation did not finish for the requested configuration: "
+            prefix = ("Earth upload validation did not finish: "
                       if verdict.code == VALIDATION_TIMEOUT_CODE else
                       "The uploaded model is not compatible with this Earth dataset: ")
             raise DatasetRequestError(
@@ -859,7 +868,7 @@ class TrainingService:
                 contract_profile(contract_schema)
             except (ValueError, TypeError) as exc:
                 raise DatasetRequestError('uploaded_model_contract_invalid',
-                    'The isolated Earth validator returned no supported spatial contract', status_code=422) from exc
+                    'The Earth upload report contains no supported spatial contract', status_code=422) from exc
 
         reference = build_reference(
             package=package,
@@ -879,7 +888,7 @@ class TrainingService:
         warnings = list(verdict.warnings)
         if verdict.output_shape:
             warnings.append(
-                "Earth dry-run output shape: " + "x".join(str(v) for v in verdict.output_shape)
+                "Earth upload validation output shape: " + "x".join(str(v) for v in verdict.output_shape)
             )
         return reference, warnings
 

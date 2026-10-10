@@ -6,7 +6,7 @@
 
 ## 数据契约
 
-2026-10-09 训练链路契约补强：新任务的冻结划分缺失时拒绝队列恢复和产物读取，保留真正 legacy manifest 行为；上传模型统一 CPU float32 构建/重载，eval 单样本、B=2/3/实际任务批次必须保持一致且不改变参数/缓冲区。旧上传校验报告需重新校验，旧 checkpoint 加载实际权重后复核。细节及兼容边界见[任务划分](earth-task-splits.md)和[上传模型契约](earth-3hourly-uploaded-model.md)。
+2026-10-09 训练链路契约补强：新任务的冻结划分缺失时拒绝队列恢复和产物读取，保留真正 legacy manifest 行为；上传模型统一 CPU float32 构建/重载，上传探针与 checkpoint 加载实际权重后核对 eval 样本独立性，重载覆盖保存的任务批次且不改变参数/缓冲区。旧上传校验报告需重新校验。当时创建任务还运行实际配置 dry-run；当前 v1/v2 任务创建改为复用保存的上传兼容报告。细节及兼容边界见[任务划分](earth-task-splits.md)和[上传模型契约](earth-3hourly-uploaded-model.md)。
 
 本轮分文件回归共 415 passed、2 skipped：任务划分 103、训练服务 12、runner 12、artifact 39、上传契约 93、dtype 2、六指标 110、71→9 pipeline 2、诊断集成 15、预测路由 27；跳过的是官方模型不适用的上传源码检查。训练页配置/划分/指标前端测试 36 passed，文档文件链接与 Git diff 空白检查通过。验证使用合成发布及模型，未执行真实两年训练；保留既有 NumPy/FastAPI/Pydantic 依赖提示。
 
@@ -140,7 +140,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 
 已开放独立 `aresvision_earth_3hourly_uploaded_model_v1` 契约，绑定 `earth_merra2_3hourly_v1`。下载[专用模板](earth-3hourly-uploaded-model-template.py)，调用形状、通道轴、dtype、设备、单位、保留参数及错误码见[模板说明](earth-3hourly-uploaded-model.md)。日频/Mars 上传结论不继承，三小时专属模型也不会自动获得它们的资格。
 
-实际模型调用为 float32 `[B,56,C,24,48] → [B,24,1,24,48]`，C 是 TO3 加所选辅助变量的规范顺序；100 个无重叠块拼为 240×480。上传 dry-run 在有超时的隔离子进程中检查 16 个通道组合、B=1/2、eval/train 前向与 backward。创建任务前复查具体 dataset_id、实际通道与自定义参数；未知、失败或声明与执行不符不能写入训练任务。前端开放来源切换及自定义参数，显示可用/不可用/未知和原因，按数据集提供模板下载。
+实际 v1 模型调用为 float32 `[B,window,C,24,48] → [B,horizon,1,24,48]`，默认 56→24，C 是 TO3 加所选辅助变量的规范顺序；100 个无重叠块拼为 240×480。上传或手动重新校验的 dry-run 在有超时的隔离子进程中检查 16 个通道组合、B=1/2、eval/train 前向与 backward。v1/v2 创建任务复用保存的具体 dataset/schema 兼容报告，复查归属、valid 状态、报告证据、源码摘要、参数 schema 和 batch 范围，冻结源码/schema/参数后排队，不重复执行实际配置 dry-run；未知、失败或缺少验证证据不能写入训练任务。实际训练仍检查输出与梯度，完成前仍严格重载。前端开放来源切换及自定义参数，显示可用/不可用/未知和原因，按数据集提供模板下载。
 
 复用服务器 registry、任务级原始 UTC split、仅当前任务训练期 normalization、缺失拒绝、任务调度和训练/评估循环。上传代码不控制路径、版本、fingerprint、snapshot 或 normalization。队列保存冻结源码引用，重启恢复同一版本。上传 checkpoint 仍用独立三小时 artifact schema，另保存上传 implementation `aresvision_earth_3hourly_uploaded_runner_v1`、契约 schema、块尺寸、实际 build config 和源码摘要；重载核对它们并严格加载权重。任务完成前使用 30 秒超时的独立 CPU 进程重载并检查前向一致性，失败不能 completed。日频和 Mars checkpoint 不能冒充三小时产物。
 
@@ -336,7 +336,7 @@ foreach ($earthPredictionTest in $earthPredictionTests) {
 
 ## 上传链路验证
 
-2026-10-07 上传链路最终后端回归为 **435 passed、5 warnings，145.16 秒**，覆盖下列 17 个文件。新增上传契约测试含 80 项：严格 spec/类型/单位/轴、16 种通道组合、错误 dtype/形状/设备/梯度、具体 dataset_id 兼容性与稳定错误码、隔离超时、实际参数 dry-run、源码冻结与队列恢复、合成训练/验证/测试指标、checkpoint 身份及权重隔离、缺失原源码时嵌入副本的摘要核对、完成门禁的独立 CPU 重载，以及完整全球历史回测和跨 split 拒绝。模板的 CPU 与本机可用 CUDA 设备检查均执行通过。
+2026-10-07 上传链路最终后端回归为 **435 passed、5 warnings，145.16 秒**，覆盖下列 17 个文件。新增上传契约测试含 80 项：严格 spec/类型/单位/轴、16 种通道组合、错误 dtype/形状/设备/梯度、具体 dataset_id 兼容性与稳定错误码、隔离超时、当时创建任务流程的实际参数 dry-run、源码冻结与队列恢复、合成训练/验证/测试指标、checkpoint 身份及权重隔离、缺失原源码时嵌入副本的摘要核对、完成门禁的独立 CPU 重载，以及完整全球历史回测和跨 split 拒绝。模板的 CPU 与本机可用 CUDA 设备检查均执行通过。此处为历史验证记录；当前任务创建已取消重复的实际配置 dry-run。
 
 从 `AresVision_backend/backend/` 执行。每次调用创建唯一临时根目录，将 TEMP/TMP 和 pytest basetemp 均放在工作区根目录下；不要复用既有目录或 checkpoint：
 

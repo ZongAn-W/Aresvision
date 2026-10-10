@@ -102,30 +102,25 @@ def test_task_probe_rejects_frozen_contract_mismatch(full_package):
     assert 'Frozen spatial contract' in verdict.reasons[0]
 
 
-def test_task_timeout_is_unknown_not_proven_incompatible(full_package):
+def test_task_resolution_does_not_execute_a_configuration_probe(full_package):
     from services.training_service import TrainingService
-    from services.user_model_validator import UserModelValidationResult, VALIDATION_TIMEOUT_CODE
-    from services.dataset_identity import DatasetRequestError
     package, _ = full_package
     package.param_schema = '{}'
     class Packages:
         async def get_package_for_user(self, *args):
             return package
-    class TimedOut:
+    class UnexpectedValidator:
         def validate_file(self, *args, **kwargs):
-            assert kwargs['earth_probe']['contract_schema'] == FULL_GRID_CONTRACT_SCHEMA
-            return UserModelValidationResult(ok=False, code=VALIDATION_TIMEOUT_CODE,
-                errors=['User model validation timed out after 300 seconds'])
-    service = TrainingService(earth_model_validator=TimedOut())
-    with pytest.raises(DatasetRequestError) as error:
-        asyncio.run(service._resolve_earth_uploaded_model(
-            user_id=1, uploaded_model_id=package.id, user_model_service=Packages(),
-            custom_model_params={}, dataset_id=DATASET_ID, input_channel_order=['TO3'],
-            window=20, horizon=20, batch_size=1,
-        ))
-    assert error.value.code == VALIDATION_TIMEOUT_CODE
-    assert 'did not finish' in str(error.value)
-    assert 'not compatible' not in str(error.value)
+            pytest.fail('task resolution must use the stored upload verdict')
+    service = TrainingService(earth_model_validator=UnexpectedValidator())
+    reference, _ = asyncio.run(service._resolve_earth_uploaded_model(
+        user_id=1, uploaded_model_id=package.id, user_model_service=Packages(),
+        custom_model_params={}, dataset_id=DATASET_ID, input_channel_order=['TO3'],
+        window=20, horizon=20, batch_size=1,
+    ))
+    assert reference.contract_schema == FULL_GRID_CONTRACT_SCHEMA
+    assert reference.content_hash == package.content_hash
+    assert reference.source_text == Path(package.storage_path).read_bytes().decode('utf-8')
 
 
 @pytest.mark.parametrize('mutation', [
@@ -236,8 +231,7 @@ def test_executed_schema_is_frozen_for_nonliteral_model_declarations(tmp_path, s
     source = SOURCE.replace('MODEL_SPEC = SPEC', declaration).replace('(240,480)', repr(shape))
     path = tmp_path / 'dynamic_model.py'
     path.write_text(source, encoding='utf-8')
-    probe = {'input_channel_order': ['TO3'], 'custom_model_params': {}, 'window': 2, 'horizon': 1, 'batch_size': 1}
-    validation = UserModelValidator(timeout_seconds=None).validate_file(path, earth_probe=probe)
+    validation = UserModelValidator(timeout_seconds=None).validate_file(path)
     assert validation.ok, validation.errors
     with pytest.raises(ValueError):
         contract_schema_from_source(source)
@@ -247,15 +241,11 @@ def test_executed_schema_is_frozen_for_nonliteral_model_declarations(tmp_path, s
     class Packages:
         async def get_package_for_user(self, *args):
             return package
-    class ProvenValidator:
+    class UnexpectedValidator:
         def validate_file(self, *args, **kwargs):
-            expected_probe = dict(probe)
-            if schema == FULL_GRID_CONTRACT_SCHEMA:
-                expected_probe['contract_schema'] = FULL_GRID_CONTRACT_SCHEMA
-            assert kwargs['earth_probe'] == expected_probe
-            return validation
+            pytest.fail('dynamic declarations must retain the schema from upload validation')
     service = training_service.TrainingService()
-    service._earth_model_validator = ProvenValidator()
+    service._earth_model_validator = UnexpectedValidator()
     reference, _ = asyncio.run(service._resolve_earth_uploaded_model(user_id=1, uploaded_model_id=package.id,
         user_model_service=Packages(), custom_model_params={}, dataset_id=DATASET_ID,
         input_channel_order=['TO3'], window=2, horizon=1, batch_size=1))

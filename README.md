@@ -32,7 +32,9 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 2026-10-10 地球与火星单模型预测使用同一套[单模型预测工作台](docs/shared-single-model-prediction.md)：模型侧栏、参考/预测/残差三联图与单图、时间步、指标、诊断图表外壳及全屏操作共用组件；无模型且无结果时显示紧凑准备面板，可进入模型选择或训练，已有结果但指标尚未取得时显示 `--`，实际 Earth 响应缺项仍显示“未提供”。行星适配层保留各自 API、时间轴、坐标、单位、评价范围和导出能力。Earth 每次运行完整任务 horizon，展示步只改变查看内容，保持 UTC/DU、独立手动抽样诊断、ΔRMSE PFI 和地球地图全屏；Mars 保持 Ls、训练步长上限、ΔR² PFI 与球面。验证包含前端测试/生产构建、合成浏览器桌面与 390px 交互，以及后端契约回归；既有 Mars 坐标失败单独列出，不代表真实训练精度或全分辨率浏览器性能验收。
 
-2026-10-09 地球训练链路补强了任务恢复和上传模型契约：新任务保存独立划分策略标记，缺失冻结划分时拒绝恢复及产物读取；兼容未带新标记但已有 task split 的任务，真正旧任务继续使用 manifest。上传模型的构建、训练与重载统一初始化为 CPU float32，再迁移到运行设备；eval 必须通过单样本/合批、顺序、其他样本及重复调用一致性检查，覆盖实际任务 batch size，且不能修改参数/缓冲区；checkpoint 加载权重后再次核验。旧上传校验报告缺少新验证证据时需重新校验。实现与边界见[任务级划分](docs/earth-task-splits.md)和[上传模型契约](docs/earth-3hourly-uploaded-model.md)。
+Earth 三小时 v1/v2 上传模型创建任务时复用上传或手动重新校验保存的兼容报告，核对归属、valid 状态、具体 dataset/schema 的验证证据、源码 SHA-256、参数 schema 和 batch 范围后冻结配置并排队，不再按实际 window/horizon、通道、batch 和自定义参数重复执行隔离 dry-run。上传及手动重新校验的 dry-run、实际训练的输出/梯度检查和完成前 checkpoint 严格重载继续保留，见[上传模型契约](docs/earth-3hourly-uploaded-model.md)。
+
+2026-10-09 地球训练链路补强了任务恢复和上传模型契约：新任务保存独立划分策略标记，缺失冻结划分时拒绝恢复及产物读取；兼容未带新标记但已有 task split 的任务，真正旧任务继续使用 manifest。上传模型的构建、训练与重载统一初始化为 CPU float32，再迁移到运行设备；上传探针与 checkpoint 加载权重后核验 eval 单样本/合批、顺序、其他样本及重复调用一致性，重载覆盖保存的 batch size，且不能修改参数/缓冲区；当时的创建任务流程还包含实际配置 dry-run，该步骤现已取消。旧上传校验报告缺少新验证证据时需重新校验。实现与边界见[任务级划分](docs/earth-task-splits.md)和[上传模型契约](docs/earth-3hourly-uploaded-model.md)。
 
 Earth 官方 DLinear 与独立契约上传模型统一支持 MSE、RMSE、MAE、R²、MAPE、SMAPE。六项基于反归一化 TO3（DU），保持预测起点 × 提前步 × 格点等权；新任务/checkpoint 保存完整 v2 指标契约及单位，旧三小时 RMSE/MAE 产物继续读取和预测，缺项显示“未提供”。结果与矩阵默认读取完整测试集，验证集和本次回测分开标注；比较消费已保存 test 指标。训练结果页的 Earth `action=test` 和预测页共用测试分区诊断：默认 4 个窗口、5,000 个散点、40 个残差分箱、seed 42、PFI 3 次，DU 残差定义为 prediction-reference，PFI 为置换后 RMSE 减基线 RMSE 并保留负值；页面诊断图暂不开放科研导出。公式、流式统计、缓存与兼容规则见[地球评价指标](docs/earth-evaluation-metrics.md)和[地球训练后诊断](docs/earth-post-training-diagnostics.md)。验证使用合成数据，不代表真实精度验收。
 
@@ -79,6 +81,10 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 4. 修改完成后按“README 维护约定”同步文档，并报告实际执行的验证。
 
 快速导航：[功能](#主要功能) · [模块入口](#模块与代码入口) · [业务链路](#关键业务链路) · [功能边界](#当前功能边界) · [启动](#本地启动) · [测试](#测试与构建) · [排查](#常见问题与排查入口) · [维护约定](#readme-维护约定)
+
+## 比赛演示介绍页
+
+[AstraAtmos-demo.html](AstraAtmos-demo.html) 是独立比赛介绍页，品牌图形、地球影像、样式与演示控制均嵌入单文件，可复制到其他电脑后离线用浏览器打开。六个章节覆盖项目定位、实验链路、双星观测、可复核机制与技术栈、模型接入、现场演示路线，支持方向键切换章节与 F 键全屏。产品工作台入口默认指向本机 `http://127.0.0.1:5173`，使用这些入口前需启动应用并准备有效任务；介绍页示意读数不代表实时数据或预测精度。使用和内容边界见[比赛介绍页说明](docs/competition-introduction.md)。
 
 ## 主要功能
 
@@ -314,7 +320,7 @@ Mars 的 `selected_channels`（包括检查点的 `training_contract.selected_ch
 
 `training_dataset` 当前只允许 `openmars_mcd`、`mcd_overview` 与 `earth_merra2_3hourly_v1`。请求可用顶层 `dataset_id` 或旧字段 `hyperparameters.training_dataset` 指定；日频、两处冲突、未知 ID 和非字符串值在创建任务前拒绝。火星身份仍走 `demo3.py` 与上传模型 runner；**地球身份走独立的 `earth_daily.py`**（沿用文件名），实际使用任务配置的三小时窗口（默认 56→24）与任务级比例，客户端提交的 `model_script` 不决定执行代码。地球任务不能作为火星迁移来源，上传 Earth checkpoint 会被判为不兼容。
 
-地球的模型来源由 `model_source` 决定：`official` 用官方 DLinear；`uploaded` 时 `TrainingService` 在写任务前校验归属、valid 状态、所选 dataset_id 的兼容性及实际参数 dry-run，固定包 ID、版本、源码 SHA-256 和参数。三小时使用独立的 v1 分块契约或 v2 全图契约，不继承归档日频 `earth_merra2` 契约或 Mars 结论。三小时排队任务保存冻结源码和契约，重启后恢复同一模型；遗留日频队列在启动子进程前拒绝。`earth_model_source.py` 按契约重建模型，checkpoint 核对源码、build config、数据身份、窗口、单位和 normalization，再严格加载 state dict。
+地球的模型来源由 `model_source` 决定：`official` 用官方 DLinear；`uploaded` 时 `TrainingService` 在写任务前校验归属、valid 状态、保存报告中所选 dataset_id/schema 的兼容证据、源码 SHA-256、参数 schema 和 batch 范围，固定包 ID、版本、源码、schema 和参数后直接排队，不重复执行实际配置 dry-run。三小时使用独立的 v1 分块契约或 v2 全图契约，不继承归档日频 `earth_merra2` 契约或 Mars 结论。三小时排队任务保存冻结源码和契约，重启后恢复同一模型；遗留日频队列在启动子进程前拒绝。`earth_model_source.py` 按契约重建模型，checkpoint 核对源码、build config、数据身份、窗口、单位和 normalization，再严格加载 state dict。
 
 ### 数据集注册表与训练任务身份
 
@@ -403,7 +409,7 @@ NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，
 - **个人上传不是训练入口。** 当前训练请求固定使用服务器管理的数据源；预测的数据源校验也拒绝 `personal`。总览可使用上传来源，不代表同一来源可直接用于训练或预测。
 - **组合看板按主题组织真实图表。** Earth 全球和纬带统计使用后端单元面积权重；Mars 看板使用有效纬度行等权均值并明确标注，不能直接当作面积加权全球均值。观测档两条竖轨使用各自独立的数值刻度（共用日期/Ls 轴），因此左右曲线可直接比起伏、不能比绝对高度；需要绝对对比时用读数卡片或单项分析。关系图用于探索关联，恒定序列没有标准化值或相关系数；看板暂不提供跨图刷选、自由拖动或多图综合 AI，原有图表 AI 在单项分析中使用。
 - **火星观测曲线使用当前 MCD 主源。** 左轨复用点位接口中的全球有效网格等权均值，右轨使用最近有效网格点的全年序列，均按现有显示单位换算、保留缺测断点；OpenMARS/NOMAD 叠加或差值场不改变两轨数据来源。切换年份、变量或 MCD 来源会清除旧点位；当前读数注明实际采样 Ls，曲线不新增平滑或插值。
-- **上传兼容性按发布频率区分。** 三小时上传模型需完整声明新 schema，并通过所有允许通道组合及实际参数的隔离 dry-run。未知、失败、声明与执行不一致均拒绝训练。上传模型历史回测只开放完整 window+horizon 步落在同一任务分区的起点（旧任务继续按 manifest）；三小时官方模型保留原起点范围，日频任务不能回测。三小时空间块无跨块上下文；GPU 容量、任意用户网络收敛及真实数据训练精度尚未验收。其他边界见[独立上传契约](docs/earth-3hourly-uploaded-model.md)和[地球训练与历史预测](docs/earth-training.md)。
+- **上传兼容性按发布频率区分。** 三小时上传模型需完整声明新 schema，并在上传或手动重新校验时通过所有允许通道组合的隔离 dry-run。创建任务复用保存的具体 dataset/schema 兼容报告，不再次运行实际参数 dry-run；未知、失败、缺少验证证据或源码摘要不符均拒绝训练。保存报告不证明任意窗口、batch 和参数都能成功训练，实际运行仍检查输出和梯度，完成前严格重载。上传模型历史回测只开放完整 window+horizon 步落在同一任务分区的起点（旧任务继续按 manifest）；三小时官方模型保留原起点范围，日频任务不能回测。v1 空间块无跨块上下文；GPU 容量、任意用户网络收敛及真实数据训练精度尚未验收。其他边界见[独立上传契约](docs/earth-3hourly-uploaded-model.md)和[地球训练与历史预测](docs/earth-training.md)。
 - **首页交互只作用于装饰性预览。** 视差、地球拖拽旋转与惯性不读取数据、不请求分析接口，也不影响数据总览的三维球体、相机与时间轴；触屏触摸与粗指针设备按设计不提供拖拽与视差，键盘方向键与 Escape 面向桌面键盘场景。首页预览仍固定为地球，不承载任何测量结果。
 - **训练页是前端重组，没有新增实验实体。** `#/training` 的实验中心只重新组织已有训练能力的展示与入口：后端仍是 `ModelTrainingTask`、`TrainingModelTag`、`TrainingTaskTag`，未新增实验表、备注、收藏、实验组、自动结论或草稿持久化；「复制配置」把任务完整训练配置载入新建实验表单（实验名自动加“副本”后缀避免重名，上传模型实验连 `custom_model_params` 一起深拷贝回填），不自动开始训练；「去模型比较」按任务行星通过 `mode=trained_compare` 或 `mode=earth_compare` 进入比较模式并提示选择至少两个已完成模型，预测页仍无批量预选协议，因此不写入选中的任务；Earth 使用专用测试集指标比较接口。失败与停止原因来自任务 `metrics` JSON（后端不返回独立的错误字段）。目录只负责找到实验，参数详情、日志与维护动作都在中间工作区。目录与检查器使用 `position: sticky`，运行条使用 `position: fixed` 并 portal 到 body，避开页面外壳的 transform 过渡；实验矩阵实测可用视口高度后在表格内滚动，标签编辑复用 MUI Popper 在 body 定位。没有新增第二条训练提交路径。检查器只做摘要且**不做资源估算**：没有真实数据长度、切分与采样信息时不给样本数、显存或耗时。细节见[实验中心](docs/experiment-center.md)。
 - **标签按账号私有。** 管理员可用自己的标签整理可访问任务，其他用户看不到这些标记。删除标签只移除该标签及关联，保留训练记录、参数、日志和权重；标签功能不提供参数预设、多级文件夹或共享标签。
@@ -548,19 +554,19 @@ node scripts\serve-prod.mjs
 | `TRAINING_PYTHON_PATH` | 训练子进程使用的 Python，默认使用后端当前解释器 |
 | `ARESVISION_MOLA_TOPOGRAPHY_PATH` | MOLA 地形 NetCDF 路径，默认使用平台地形资源 |
 | `ARESVISION_MAX_UPLOAD_SIZE_MB` | 数据上传大小上限，默认 512 MB |
-| `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` | 上传、重新校验及创建 Earth 任务前模型 dry-run 的隔离进程时间上限，默认 120 秒，须为正整数；超时终止子进程并显示“校验超时，请重试”，兼容性为未知且禁止训练 |
-| `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` | 全图 Earth v2 实际任务配置 dry-run 的隔离进程预算，默认 300 秒、正整数，取其与通用预算的较大值；短窗口上传检查及 v1/Mars 保持通用预算，显式验证器超时仍优先 |
+| `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` | 上传与手动重新校验的模型 dry-run 隔离进程时间上限，默认 120 秒，须为正整数；超时终止子进程并显示“校验超时，请重试”，兼容性为未知且禁止训练；Earth 创建任务不再执行重复 dry-run |
+| `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` | 显式 `earth_probe` 调用中全图 Earth v2 配置 dry-run 的隔离进程预算，默认 300 秒、正整数，取其与通用预算的较大值；任务创建不使用此预算，短窗口上传检查及 v1/Mars 保持通用预算，显式验证器超时仍优先 |
 | `ARESVISION_FRONTEND_DIST` | 指定后端托管的前端构建目录 |
 
 ## 自定义模型
 
-Earth 上传模型可选[全图 v2 契约](docs/earth-3hourly-fullgrid-model.md)及[模板](docs/earth-3hourly-fullgrid-model-template.py)：一次接收完整 `[B,window,C,240,480]`，训练、验证、预测和诊断不切空间块，batch 为 1–64 个全球时间窗口，默认 1。v1 分块模型和已有任务继续兼容，不自动迁移权重。全图声明按实际 schema 校验并冻结，创建任务前检查实际窗口和所选 batch 的前向/反向；CPU 准入校验不保证显存容量，大 batch 也可能校验超时。缓存采用带版本的全图布局，准备阶段输出归一化/写入进度。完整数据训练精度和端到端吞吐须以具体任务验收。
+Earth 上传模型可选[全图 v2 契约](docs/earth-3hourly-fullgrid-model.md)及[模板](docs/earth-3hourly-fullgrid-model-template.py)：一次接收完整 `[B,window,C,240,480]`，训练、验证、预测和诊断不切空间块，batch 为 1–64 个全球时间窗口，默认 1。v1 分块模型和已有任务继续兼容，不自动迁移权重。全图声明按实际 schema 校验并冻结，创建任务复用上传兼容报告并校验参数范围，不额外执行实际窗口和 batch 的前向/反向探针；实际训练继续检查输出与梯度。CPU 上传校验不保证显存容量或任意配置可运行。缓存采用带版本的全图布局，准备阶段输出归一化/写入进度。完整数据训练精度和端到端吞吐须以具体任务验收。
 
 Earth 三小时官方和 v1 新训练缓存按空间块连续存储（`earth_spatial_tiles_v1`），保持 24×48 模型调用、完整样本覆盖、float32 及任务划分/归一化约定；v2 使用时间优先的全图缓存（`earth_full_grid_v1`）。加载同一批次前后均复核源包签名，旧全球场缓存继续读取；CUDA 数据加载使用页锁定内存和非阻塞传输，全部梯度有限性检查合并为一次结果同步。缓存格式与兼容规则见[三小时训练专题](docs/earth-merra2-3hourly.md)。吞吐依赖机器、模型和数据访问模式，不承诺固定 GPU 利用率。
 
-Earth 三小时有独立的 [v1 上传说明](docs/earth-3hourly-uploaded-model.md)与[Python 模板](docs/earth-3hourly-uploaded-model-template.py)。训练页选中该数据集时下载对应模板，兼容性显示可用/不可用/未知及原因；Mars 使用原上传入口。新模型声明 `earth_merra2_3hourly_v1`，实际调用 `[B,window,C,24,48] → [B,horizon,1,24,48]`，拼回 240×480。服务器检查通道、单位、dtype、设备和反向传播，创建任务前再 dry-run 实际参数；checkpoint 保存独立契约、源码摘要、发布身份、任务划分与 normalization。上传模型历史回测完整窗口必须在同一任务分区内，旧任务仍按 manifest。
+Earth 三小时有独立的 [v1 上传说明](docs/earth-3hourly-uploaded-model.md)与[Python 模板](docs/earth-3hourly-uploaded-model-template.py)。训练页选中该数据集时下载对应模板，兼容性显示可用/不可用/未知及原因；Mars 使用原上传入口。新模型声明 `earth_merra2_3hourly_v1`，实际调用 `[B,window,C,24,48] → [B,horizon,1,24,48]`，拼回 240×480。服务器在上传或手动重新校验时检查通道、单位、dtype、设备和反向传播，创建任务复用报告并冻结源码、schema 和参数；checkpoint 保存独立契约、源码摘要、发布身份、任务划分与 normalization。上传模型历史回测完整窗口必须在同一任务分区内，旧任务仍按 manifest。
 
-模型上传和短窗口校验默认最多等待 120 秒；全图 Earth v2 创建任务前按实际 window/horizon、通道、batch 和模型参数再次校验，默认使用 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS=300` 与通用预算的较大值。上传报告的绿色兼容不代表任意实际配置已经通过，完整 eval 独立性、前向/反向和梯度检查仍必须完成。超时报告使用 `uploaded_model_validation_timeout`，启动错误明确为实际配置校验未完成，不视为已证实不兼容，也不创建任务。隔离校验先读取结果再等待子进程退出，避免大报告塞满管道被误判超时；超时仍强制终止子进程。v1 checkpoint 保持独立 30 秒重载预算，v2 checkpoint 继续使用通用验证预算，未放宽重载门禁。细节见[全图 v2 准入](docs/earth-3hourly-fullgrid-model.md)。
+模型上传和手动重新校验默认最多等待 120 秒，检查 eval 独立性、前向/反向和梯度；Earth v1/v2 创建任务不再按实际 window/horizon、通道、batch 和模型参数重复执行隔离 dry-run。上传报告的绿色兼容不代表任意实际配置已经通过，运行失败仍由训练任务报告。显式 `earth_probe` 调用保留完整配置探针及 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS=300` 的全图预算。上传或显式探针超时报告使用 `uploaded_model_validation_timeout`，表示校验未完成，不视为已证实不兼容。隔离校验先读取结果再等待子进程退出，避免大报告塞满管道被误判超时；超时仍强制终止子进程。v1 checkpoint 保持独立 30 秒重载预算，v2 checkpoint 继续使用通用验证预算，未放宽重载门禁。细节见[全图 v2 准入](docs/earth-3hourly-fullgrid-model.md)。
 
 自定义模型文件需导出 `MODEL_SPEC` 和 `build_model(config)`。基本张量约定为：
 

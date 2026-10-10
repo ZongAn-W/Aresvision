@@ -37,11 +37,11 @@
 
 上传沿用仓库的单文件大小、UTF-8、AST 导入/调用检查和隔离进程超时边界。该检查不是操作系统级不可信代码沙箱，部署时仍需遵循既有任务执行权限边界。
 
-上传、重新校验及创建任务前的模型 dry-run 默认使用 120 秒隔离进程预算，可通过后端 `.env` 的 `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` 设置正整数秒数；修改配置后重启后端。到期仍强制终止子进程，全部通道、前向、梯度及 eval 批次一致性检查保留。超时报告顶层 `code` 为 `uploaded_model_validation_timeout`，兼容性查询返回 `status=unknown`、`compatible=false` 和同一错误码，页面显示“校验超时，请重试”。上传包在重新校验成功前仍为 `validation_status=invalid`，禁止创建训练任务。旧报告只有 `User model validation timed out after ... seconds` 文本时也识别为超时，无需改写数据库。该预算不影响下文 checkpoint 完成门禁的独立 30 秒重载检查。
+上传和手动重新校验的模型 dry-run 默认使用 120 秒隔离进程预算，可通过后端 `.env` 的 `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` 设置正整数秒数；修改配置后重启后端。创建任务不重复执行实际配置 dry-run。到期仍强制终止子进程，全部通道、前向、梯度及 eval 批次一致性检查保留。超时报告顶层 `code` 为 `uploaded_model_validation_timeout`，兼容性查询返回 `status=unknown`、`compatible=false` 和同一错误码，页面显示“校验超时，请重试”。上传包在重新校验成功前仍为 `validation_status=invalid`，禁止创建训练任务。旧报告只有 `User model validation timed out after ... seconds` 文本时也识别为超时，无需改写数据库。该预算不影响下文 checkpoint 完成门禁的独立 30 秒重载检查。
 
-全图 v2 的实际任务配置检查使用通用预算与 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`（默认 300 秒）的较大值，v1 分块及 Mars 不改变预算。上传短窗口报告通过后仍需检查实际窗口、batch、通道和模型参数；启动超时表示当前配置尚未完成验证，不是模型已经证实不兼容。隔离进程先读取完整报告再等待退出，避免大报告堵塞 Windows 管道；无结果、异常退出和真正超时继续拒绝，详见[全图 v2](earth-3hourly-fullgrid-model.md)。
+显式 `earth_probe` 调用仍可检查实际窗口、batch、通道和模型参数；全图 v2 使用通用预算与 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`（默认 300 秒）的较大值，v1 分块及 Mars 不改变预算。该配置保留用于显式探针，不参与任务创建。探针超时表示当前配置尚未完成验证，不是模型已经证实不兼容。隔离进程先读取完整报告再等待退出，避免大报告堵塞 Windows 管道；无结果、异常退出和真正超时继续拒绝，详见[全图 v2](earth-3hourly-fullgrid-model.md)。
 
-上传 dry-run 检查全部 16 种通道组合、B=1/2、eval 前向、train 前向及 backward。在 backward 前后均用固定的不同样本核对单独与合批、交换顺序、更换其他成员和重复调用的输出，覆盖 B=2/3/默认8，采用 float32 容差 `rtol=1e-5, atol=1e-5`。创建任务时还覆盖实际请求 batch size；重载时使用保存的 batch 配置。探针拒绝 eval 修改参数或缓冲区，并在结束时恢复原值与各模块模式。依赖 batch 均值、`BatchNorm(track_running_stats=False)`、首次调用校准或 eval 计数缓冲区的模型会被拒绝。创建任务前再次在隔离进程中检查实际所选通道和自定义参数。成功报告保存 `eval_batch_policy=earth_eval_sample_independent_v1`；旧报告没有该证据时显示 unknown，需要重新校验。有限探针不能证明任意源码对全部输入都独立，CPU dry-run 通过也不代表任意 GPU 资源预算或模型收敛已验收。
+上传 dry-run 检查全部 16 种通道组合、B=1/2、eval 前向、train 前向及 backward。在 backward 前后均用固定的不同样本核对单独与合批、交换顺序、更换其他成员和重复调用的输出，覆盖 B=2/3/默认8，采用 float32 容差 `rtol=1e-5, atol=1e-5`；重载时使用保存的 batch 配置。探针拒绝 eval 修改参数或缓冲区，并在结束时恢复原值与各模块模式。依赖 batch 均值、`BatchNorm(track_running_stats=False)`、首次调用校准或 eval 计数缓冲区的模型会被拒绝。成功报告保存 `eval_batch_policy=earth_eval_sample_independent_v1`；旧报告没有该证据时显示 unknown，需要重新校验。创建任务复用该报告，不再次执行实际所选通道、batch 和自定义参数的隔离探针。有限探针不能证明任意源码对全部输入都独立，CPU dry-run 通过也不代表任意任务配置、GPU 资源预算或模型收敛已验收。
 
 兼容性接口 `GET /api/user-models/{id}/earth-compatibility?dataset_id=earth_merra2_3hourly_v1` 返回具体数据集的 `status`、`compatible`、`code` 和 `reasons`：`available` 可用，`unavailable` 明确不兼容，`unknown` 未获得有效执行结论。未知、超时、失败均不能创建训练任务。日频的原接口默认值保留。
 
@@ -61,7 +61,7 @@
 
 ## 任务与 Checkpoint
 
-任务固定包 ID、版本、源码 SHA-256、自定义参数及服务器数据身份，重启队列后仍使用同一份源码。三小时 checkpoint schema 为 `aresvision_earth_forecast_checkpoint_3hourly_v1`；上传模型 implementation 为 `aresvision_earth_3hourly_uploaded_runner_v1`，同时保存独立模型契约版本、全球网格、空间块、通道/单位、步长、任务划分策略/请求比例/实际索引与 UTC 边界/步数及窗口数和 normalization；新策略缺失或不一致时拒绝，旧任务不迁移。
+创建任务先核对归属、valid 状态、保存报告中具体 dataset/schema 的兼容证据、源码 SHA-256、参数 schema 和合法 batch 范围，再固定包 ID、版本、源码、契约 schema、自定义参数及服务器数据身份并排队；不额外执行模型 dry-run。重启队列后仍使用同一份源码。实际训练继续检查输出类型/形状/有限 float32 和全部梯度有限性。三小时 checkpoint schema 为 `aresvision_earth_forecast_checkpoint_3hourly_v1`；上传模型 implementation 为 `aresvision_earth_3hourly_uploaded_runner_v1`，同时保存独立模型契约版本、全球网格、空间块、通道/单位、步长、任务划分策略/请求比例/实际索引与 UTC 边界/步数及窗口数和 normalization；新策略缺失或不一致时拒绝，旧任务不迁移。
 
 重载核对任务与数据集身份、嵌入源码摘要、声明、参数 schema 和 build config，再以 `strict=True` 加载 state dict，并对加载实际权重后的模型重复 eval 批次一致性检查。旧 checkpoint 不改写，但实际模型违反此检查时拒绝发布、诊断或回测。runner 在发布前检查重载与前向一致性；任务完成门禁另调度 30 秒超时的独立 CPU 进程复查权重及前向，超时或失败不能标记 completed。原源码文件不可用时使用摘要匹配的嵌入副本，并在预测 context 报告原文件状态。日频及 Mars checkpoint 不能通过三小时 schema/identity 检查。
 

@@ -36,30 +36,37 @@ silently reduces resolution, batch or precision when a task runs out of memory.
 Upload checks all 16 channel combinations on complete maps, using declared short
 windows 2->1 when available, otherwise the first declared values. Reports record
 `validation_scope=declared_channels_probe_windows`; admission is not proof for
-every time configuration. Creating each task separately checks its actual
-window/horizon, channel subset, batch and parameters, including backward, finite
-gradients and eval sample independence, including the requested batch rather than
-only the upload's small probes. This isolated CPU check does not guarantee CUDA
-memory capacity. Larger batches can take longer or exhaust memory during validation.
+every time configuration. Task creation reuses the report saved by upload or
+manual revalidation. It checks ownership, valid status, evidence for the concrete
+dataset/schema, the source hash, parameter schema and valid batch range, then
+freezes the source, schema and parameters and queues the task. It does not repeat
+an isolated dry-run for the task's actual window/horizon, channel subset, batch or
+parameters. Training still checks outputs and finite gradients, and checkpoint
+strict reload still checks eval sample independence with the saved batch.
+The upload's isolated CPU check does not guarantee CUDA memory capacity or that
+every task configuration can run.
 Upload/revalidation uses `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` (default 120
-seconds). The actual full-grid task probe uses the larger of that budget and
+seconds). Explicit `earth_probe` calls can still check a complete configuration;
+the full-grid probe uses the larger of that budget and
 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` (default 300 seconds); both must
-be positive integers. The server supplies the frozen schema from the upload
-report, and the child checks it against the executed model declaration. Explicit
+be positive integers. This full-grid budget is retained for explicit probes and
+is not used during task creation. The probe receives the frozen schema from the
+upload report and checks it against the executed model declaration. Explicit
 validator budgets, including short test timeouts and the in-process `None`
 override, keep their original semantics. Tile/Mars checks keep the ordinary
-budget. Unknown or failed checks prohibit training.
+budget. Unknown or failed saved upload reports prohibit training.
 
 An available upload report covers its declared short windows, not an arbitrary
-20->20 configuration or requested batch. A task-probe timeout is reported as
+20->20 configuration or requested batch. An explicit probe timeout is reported as
 `uploaded_model_validation_timeout`: the actual configuration has not finished
-validation, so no task is created; it is not proof of incompatibility. The parent
+validation; it is not proof of incompatibility. The parent
 drains the validation result before joining the child so reports larger than the
 Windows process pipe do not cause false timeouts. A result alone is insufficient:
 the child must exit successfully within the same deadline. Infinite model code
 and hung process exit still terminate at the deadline.
 
-2026-10-10 local isolated CPU admission measurements used the stored full-grid
+Historical 2026-10-10 isolated CPU admission measurements, made while task
+creation still ran a configuration probe, used the stored full-grid
 SimVP source with five channels, 20->20 and parameters 8/16/2/0.1. Batch 8
 completed in 45.46 seconds under the original 120-second budget; batch 32 timed
 out after 120.56 seconds, then passed the complete check in 234.64 seconds under
@@ -74,7 +81,8 @@ is smaller than the Windows pipe and does not establish that issue as its cause.
 Validation covered 158 upload/admission/tile-regression tests plus seven focused
 deadline/explicit-budget/report tests (partly overlapping). No real training was
 started; defaults still cannot guarantee that every full-grid configuration fits
-the validation budget or device memory.
+an explicit probe's validation budget or device memory. These measurements describe
+the previous admission flow; task creation now reuses the saved upload report.
 
 The server freezes the schema in the model reference and
 `_earth_uploaded_contract_schema`. Source, task, saved build configuration and

@@ -1,4 +1,4 @@
-"""Independent upload contract, isolated admission, synthetic training/backtesting."""
+"""Independent upload contract, cached task admission, synthetic training/backtesting."""
 
 import ast
 import asyncio
@@ -162,7 +162,7 @@ def test_standard_batch_norm_with_running_statistics_remains_compatible(tmp_path
     assert validation.ok, validation.errors
 
 
-def test_task_admission_checks_the_configured_eval_batch_size(service_environment, tmp_path):
+def test_task_creation_does_not_repeat_validation_for_the_requested_batch(service_environment, tmp_path):
     module, registry = service_environment
     package, validation = package_at(tmp_path, batch_dependent_source("batch_gt_eight"))
     assert validation.ok
@@ -171,13 +171,15 @@ def test_task_admission_checks_the_configured_eval_batch_size(service_environmen
             return package
     service = module.TrainingService()
     service._scheduler_started = True
-    service._earth_model_validator = UserModelValidator(timeout_seconds=None)
-    with pytest.raises(DatasetRequestError, match="sample-independent") as error:
-        asyncio.run(service.start_training(user_id=1, custom_model_name="batch 12 rejected", model_script="ignored.py",
-            model_source="uploaded", uploaded_model_id=package.id, dataset_id=DATASET_ID, dataset_registry=registry,
-            hyperparameters={"batch_size": 12}, user_model_service=Packages()))
-    assert error.value.code == "uploaded_model_earth_3hourly_dry_run_failed"
-    assert asyncio.run(service.get_all_tasks()) == []
+    class UnexpectedValidator:
+        def validate_file(self, *args, **kwargs):
+            pytest.fail("task creation must use the stored upload verdict")
+    service._earth_model_validator = UnexpectedValidator()
+    task = asyncio.run(service.start_training(user_id=1, custom_model_name="batch 12 queued", model_script="ignored.py",
+        model_source="uploaded", uploaded_model_id=package.id, dataset_id=DATASET_ID, dataset_registry=registry,
+        hyperparameters={"batch_size": 12}, user_model_service=Packages()))
+    assert task.status == "queued"
+    assert json.loads(task.hyperparameters)["batch_size"] == 12
 
 
 @pytest.mark.parametrize("mutation", ["calibration", "counter", "parameter"])
@@ -436,7 +438,10 @@ def test_task_creation_and_restart_pin_source_and_custom_parameters(service_envi
     package, _ = package_at(tmp_path)
     service = module.TrainingService()
     service._scheduler_started = True
-    service._earth_model_validator = UserModelValidator(timeout_seconds=None)
+    class UnexpectedValidator:
+        def validate_file(self, *args, **kwargs):
+            pytest.fail("task creation and recovery must not repeat upload validation")
+    service._earth_model_validator = UnexpectedValidator()
     user_models = UserModelService(storage_root=tmp_path / "storage", validator=UserModelValidator(timeout_seconds=None))
     async def get_package(*args):
         return package
@@ -451,6 +456,10 @@ def test_task_creation_and_restart_pin_source_and_custom_parameters(service_envi
     plan = asyncio.run(service._prepare_training_execution(task, dataset_registry=registry))
     queued = plan["earth_training_spec"]
     assert queued["uploaded_model"]["custom_model_params"] == {"bias": False}
+    assert queued["uploaded_model"]["content_hash"] == package.content_hash
+    assert queued["uploaded_model"]["source_text"] == TEMPLATE.read_text(encoding="utf-8")
+    assert queued["uploaded_model"]["param_schema"] == json.loads(package.param_schema)
+    assert queued["uploaded_model"]["contract_schema"] == CONTRACT_SCHEMA
     monkeypatch.setattr(service, "_default_dataset_registry", lambda: registry)
     restored = service._restore_3hourly_training_spec(task)
     assert restored["uploaded_model"] == queued["uploaded_model"]
@@ -472,7 +481,7 @@ def test_reserved_custom_parameters_are_rejected_before_a_task(service_environme
     assert asyncio.run(service.get_all_tasks()) == []
 
 
-def test_actual_custom_parameters_must_pass_isolated_training_probe(service_environment, tmp_path):
+def test_actual_custom_parameters_are_frozen_without_a_training_probe(service_environment, tmp_path):
     module, registry = service_environment
     source = TEMPLATE.read_text(encoding="utf-8").replace('return EarthThreeHourLinear(config)',
         'if not config["bias"]:\n        raise ValueError("selected bias rejected")\n    return EarthThreeHourLinear(config)')
@@ -482,11 +491,51 @@ def test_actual_custom_parameters_must_pass_isolated_training_probe(service_envi
         async def get_package_for_user(self, *args):
             return package
     service = module.TrainingService()
+    service._scheduler_started = True
+    task = asyncio.run(service.start_training(user_id=1, custom_model_name="stored actual parameters", model_script="ignored.py",
+        model_source="uploaded", uploaded_model_id=package.id, dataset_id=DATASET_ID, dataset_registry=registry,
+        hyperparameters={"custom_model_params": {"bias": False}}, user_model_service=Packages()))
+    hypers = json.loads(task.hyperparameters)
+    assert task.status == "queued" and hypers["custom_model_params"] == {"bias": False}
+    reference = hypers["_earth_uploaded_reference"]
+    assert reference["custom_model_params"] == {"bias": False}
+    assert reference["source_text"] == source
+    assert reference["content_hash"] == package.content_hash
+    assert reference["contract_schema"] == CONTRACT_SCHEMA
+
+
+@pytest.mark.parametrize("mutation,expected", [
+    ("missing", "uploaded_model_missing"),
+    ("tampered", "uploaded_model_tampered"),
+    ("unproven", "uploaded_model_compatibility_unknown"),
+    ("wrong_dataset", "uploaded_model_compatibility_unknown"),
+])
+def test_task_creation_still_requires_matching_source_and_upload_evidence(service_environment, tmp_path, mutation, expected):
+    module, registry = service_environment
+    package, validation = package_at(tmp_path)
+    if mutation == "missing":
+        package.storage_path = str(tmp_path / "missing.source")
+    elif mutation == "tampered":
+        Path(package.storage_path).write_text("changed", encoding="utf-8")
+    else:
+        report = validation.report_dict()
+        if mutation == "unproven":
+            report["earth_datasets"][DATASET_ID].pop("eval_batch_policy")
+        else:
+            report["earth_datasets"].pop(DATASET_ID)
+        package.validation_report = json.dumps(report)
+    class Packages:
+        async def get_package_for_user(self, *args):
+            return package
+    class UnexpectedValidator:
+        def validate_file(self, *args, **kwargs):
+            pytest.fail("invalid cached evidence must not trigger automatic model validation")
+    service = module.TrainingService(earth_model_validator=UnexpectedValidator())
     with pytest.raises(DatasetRequestError) as error:
-        asyncio.run(service.start_training(user_id=1, custom_model_name="failed actual parameters", model_script="ignored.py",
+        asyncio.run(service.start_training(user_id=1, custom_model_name="invalid cached upload", model_script="ignored.py",
             model_source="uploaded", uploaded_model_id=package.id, dataset_id=DATASET_ID, dataset_registry=registry,
-            hyperparameters={"custom_model_params": {"bias": False}}, user_model_service=Packages()))
-    assert error.value.code == "uploaded_model_earth_3hourly_dry_run_failed"
+            hyperparameters={}, user_model_service=Packages()))
+    assert error.value.code == expected
     assert asyncio.run(service.get_all_tasks()) == []
 
 
