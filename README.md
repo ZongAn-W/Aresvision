@@ -84,7 +84,7 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 
 ## 比赛演示介绍页
 
-[AstraAtmos-demo.html](AstraAtmos-demo.html) 是独立比赛介绍页，品牌图形、地球影像、样式与演示控制均嵌入单文件，可复制到其他电脑后离线用浏览器打开。六个章节覆盖项目定位、实验链路、双星观测、可复核机制与技术栈、模型接入、现场演示路线，支持方向键切换章节与 F 键全屏。产品工作台入口默认指向本机 `http://127.0.0.1:5173`，使用这些入口前需启动应用并准备有效任务；介绍页示意读数不代表实时数据或预测精度。使用和内容边界见[比赛介绍页说明](docs/competition-introduction.md)。
+[AstraAtmos-demo.html](AstraAtmos-demo.html) 是独立比赛介绍页，样式、Canvas 演示与控制逻辑内嵌在 HTML；Earth 与 Mars 纹理使用项目内的相对资源，离线打开无需安装依赖或启动后端，转移演示页时需同时保留 `frontend/public/earth/blue-marble-2048.png` 和 `frontend/public/mars_texture.jpg`。九个章节覆盖项目定位、实验链路、双星观测、观测/训练/诊断模拟、可复核机制、模型接入与现场演示路线，支持方向键切章、F 全屏、Space 暂停和 R 重置。产品工作台入口默认指向本机 `http://127.0.0.1:5173`，使用这些入口前需启动应用并准备有效任务；页面模拟读数不代表实时数据或预测精度。使用和内容边界见[比赛介绍页说明](docs/competition-introduction.md)。
 
 ## 主要功能
 

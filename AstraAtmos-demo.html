@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#071521">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%239ad9ef' d='M10 55 28 9q4-9 8 0l18 46H42L32 28 22 55z'/%3E%3Ccircle cx='54' cy='23' r='4' fill='%23f19a78'/%3E%3C/svg%3E">
   <meta name="description" content="AstraAtmos 行星大气实验室项目介绍与现场演示路线">
   <title>AstraAtmos · 行星大气实验室</title>
   <style>
@@ -264,9 +265,95 @@
       .footer-inner { display: block; }
       .footer-meta { margin-top: 16px; text-align: left; }
     }
+    /* interactive demo instruments */
+    .presentation-tools #mode-toggle { color: var(--ice); }
+    .hero { min-height: calc(100vh - 76px); display: grid; align-items: center; padding-top: 28px; padding-bottom: 30px; }
+    .hero-canvas { position: absolute; z-index: 1; inset: 8% 10%; width: 80%; height: 84%; touch-action: none; cursor: grab; }
+    #hero-canvas { transition: opacity .24s ease; }
+    .planet-transition #hero-canvas { opacity: .12; }
+    .hero-canvas:active { cursor: grabbing; }
+    .orbit-svg { position: relative; z-index: 2; pointer-events: none; }
+    .orbit-svg .planet { opacity: 0; }
+    .orbit-switch { position: absolute; z-index: 5; left: 50%; top: 50%; display: flex; gap: 6px; transform: translate(-50%, 138px); }
+    .orbit-switch button { padding: 6px 9px; border: 1px solid var(--line-strong); background: rgba(5,16,26,.82); color: var(--ink-soft); font: 10px var(--mono); cursor: pointer; }
+    .orbit-switch button.active { color: var(--night); background: var(--ice); border-color: var(--ice); }
+    .hero-readout { z-index: 4; }
+    .interactive-flow { display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 32px; }
+    .interactive-flow button { text-align: left; padding: 17px 14px 20px; min-height: 132px; border-right: 1px solid var(--line); color: var(--ink); position: relative; }
+    .interactive-flow button:last-child { border-right: 0; }
+    .interactive-flow button:hover, .interactive-flow button.active { background: rgba(154,217,239,.07); }
+    .interactive-flow button.active::after { content: ''; position: absolute; bottom: -1px; left: 14px; right: 14px; height: 2px; background: var(--ice); }
+    .interactive-flow small { color: var(--orange); font: 11px var(--mono); }
+    .interactive-flow strong { display: block; margin: 19px 0 5px; font-size: 17px; }
+    .interactive-flow span { color: var(--ink-dim); font-size: 11px; }
+    .interactive-flow-detail { display: grid; grid-template-columns: 1fr 1.2fr; gap: 20px; min-height: 78px; margin-top: 16px; padding: 13px 16px; border-left: 2px solid var(--ice); background: rgba(10,30,44,.52); }
+    .interactive-flow-detail p { margin: 3px 0 0; color: var(--ink-soft); font-size: 12px; }
+    .interactive-flow-detail ul { display: flex; flex-wrap: wrap; gap: 6px; align-content: start; margin: 0; padding: 0; list-style: none; }
+    .interactive-flow-detail li { border: 1px solid var(--line); padding: 4px 7px; color: var(--ink-dim); font: 10px var(--mono); }
+    .instrument { padding: 92px 0; border-top: 1px solid var(--line); background: rgba(2,10,17,.24); }
+    .instrument-head { display: flex; justify-content: space-between; gap: 30px; align-items: end; margin-bottom: 28px; }
+    .instrument-head h2 { margin: 0; font: 600 clamp(31px,4vw,54px)/1.05 var(--display); letter-spacing: -.05em; }
+    .instrument-head p { max-width: 390px; margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.8; }
+    .console-frame { border: 1px solid var(--line-strong); background: rgba(5,18,28,.72); padding: 16px; }
+    .console-meta { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line); color: var(--ink-dim); font: 10px var(--mono); letter-spacing: .1em; }
+    .console-body { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(230px,.65fr); gap: 22px; padding-top: 15px; }
+    .console-visual { min-width: 0; }
+    .variable-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .variable-picker button, .planet-picker button { border: 1px solid var(--line); padding: 6px 9px; background: transparent; color: var(--ink-soft); font: 10px var(--mono); }
+    .variable-picker button.active, .planet-picker button.active { border-color: var(--ice); color: var(--night); background: var(--ice); }
+    .map-frame { height: clamp(190px,28vw,320px); position: relative; border: 1px solid var(--line); background: #071823; }
+    .map-frame canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: manipulation; }
+    .map-probe { position: absolute; pointer-events: none; width: 15px; height: 15px; border: 1px solid var(--ice); transform: translate(-50%,-50%); }
+    .map-probe::before, .map-probe::after { content: ''; position: absolute; background: var(--ice); }
+    .map-probe::before { height: 1px; left: -5px; right: -5px; top: 6px; }
+    .map-probe::after { width: 1px; top: -5px; bottom: -5px; left: 6px; }
+    .instrument-range { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; margin-top: 11px; color: var(--ink-soft); font: 10px var(--mono); }
+    .instrument-range input, .sim-control input, .lead-control input { min-width: 0; width: 100%; accent-color: var(--ice); }
+    .line-plot { display: block; width: 100%; height: 105px; margin-top: 12px; border-top: 1px solid var(--line); }
+    .probe-readout { padding: 15px 0 0 17px; border-left: 1px solid var(--line); }
+    .probe-readout h3 { margin: 0; color: var(--ink-dim); font: 10px var(--mono); letter-spacing: .12em; }
+    .probe-number { margin: 14px 0 5px; font: 600 clamp(34px,4vw,52px)/1 var(--display); letter-spacing: -.06em; }
+    .probe-number small { color: var(--ice); font: 11px var(--mono); letter-spacing: 0; }
+    .probe-caption { color: var(--ink-soft); font-size: 12px; line-height: 1.8; }
+    .sim-label { display: inline-block; margin-top: 10px; color: var(--orange-soft); border: 1px solid rgba(241,154,120,.5); padding: 4px 7px; font: 10px var(--mono); }
+    .data-facts { margin-top: 25px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--ink-dim); font-size: 11px; line-height: 1.8; }
+    .sim-layout { display: grid; grid-template-columns: .75fr 1.25fr; gap: 44px; align-items: start; }
+    .sim-copy h2 { margin: 0 0 15px; font: 600 clamp(32px,4.5vw,58px)/1.04 var(--display); letter-spacing: -.06em; }
+    .sim-copy p { color: var(--ink-soft); font-size: 13px; line-height: 1.85; }
+    .sim-alert { border-left: 2px solid var(--orange); padding-left: 12px; color: var(--orange-soft); font-size: 12px; }
+    .sim-panel { border-block: 1px solid var(--line); padding: 18px 0; }
+    .sim-controls { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 15px; }
+    .sim-control { display: grid; gap: 7px; min-width: 0; }
+    .sim-control label { display: flex; justify-content: space-between; gap: 6px; color: var(--ink-soft); font: 10px var(--mono); }
+    .sim-control select { height: 36px; min-width: 0; width: 100%; border: 1px solid var(--line-strong); background: var(--night-2); color: var(--ink); padding: 0 8px; }
+    .sim-actions { display: flex; align-items: center; gap: 15px; margin-top: 17px; }
+    .start-demo { min-height: 39px; padding: 0 15px; background: var(--orange); color: #1a100d; font-weight: 650; }
+    .start-demo:disabled { opacity: .55; cursor: wait; }
+    .runtime { flex: 1; color: var(--ink-dim); font: 10px var(--mono); }
+    .runtime b { color: var(--ice2); font-weight: 500; }
+    .runtime-track { height: 3px; margin-top: 8px; background: rgba(154,217,239,.13); }
+    .runtime-track i { display: block; width: 0; height: 100%; background: var(--ice); transition: width .15s linear; }
+    .loss-chart, .compare-chart { display: block; width: 100%; height: 150px; margin-top: 16px; border: 1px solid var(--line); background: rgba(3,13,21,.48); }
+    .checkpoint-line { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--ink-dim); font: 10px var(--mono); }
+    .checkpoint-line i { width: 7px; height: 7px; border: 1px solid var(--ice); border-radius: 50%; }
+    .diagnostic-layout { display: grid; grid-template-columns: .65fr 1.35fr; gap: 38px; }
+    .field-triptych { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
+    .field-panel { min-width: 0; padding: 8px; border: 1px solid var(--line); background: #071722; }
+    .field-panel h3 { margin: 0 0 8px; color: var(--ink-soft); font: 10px var(--mono); letter-spacing: .08em; }
+    .field-panel canvas { width: 100%; height: auto; aspect-ratio: 1.5; display: block; }
+    .lead-control { display: grid; grid-template-columns: auto 1fr auto auto; gap: 11px; align-items: center; margin-top: 14px; color: var(--ink-soft); font: 10px var(--mono); }
+    .compare-button { border: 1px solid var(--line-strong); padding: 8px 10px; color: var(--ink-soft); font-size: 11px; white-space: nowrap; }
+    .compare-button.active { color: var(--ice2); border-color: var(--ice); }
+    .diagnostic-fixed-note { position: sticky; bottom: 10px; width: fit-content; margin: 22px 0 0 auto; padding: 7px 10px; border: 1px solid rgba(241,154,120,.55); background: #160f14; color: var(--orange-soft); font: 10px var(--mono); z-index: 4; }
+    .presentation [data-presentation-section]:not(.is-current) { opacity: .28; transition: opacity .35s ease; }
+    .presentation [data-presentation-section].is-current { opacity: 1; }
+    body.mars-theme { --ice: #f19a78; --ice-strong: #ffd5c3; --orange: #9ad9ef; --orange-soft: #c8effc; --line: rgba(241,154,120,.2); --line-strong: rgba(241,154,120,.43); background: radial-gradient(780px 460px at 78% 0%, rgba(241,154,120,.11), transparent 65%), linear-gradient(180deg,#140b10 0%,#201219 48%,#211720 100%); }
+    body.mars-theme .hero { transition: background-color .6s ease; }
+    @media (max-width:900px) { .console-body,.sim-layout,.diagnostic-layout { grid-template-columns: 1fr; } .probe-readout { border-left: 0; border-top: 1px solid var(--line); padding: 15px 0 0; } }
+    @media (max-width:680px) { .hero { min-height: calc(100svh - 66px); } .interactive-flow { grid-template-columns: repeat(5,minmax(122px,1fr)); overflow-x: auto; margin-right: -16px; } .interactive-flow button { min-height: 110px; padding: 13px 10px; } .interactive-flow-detail { grid-template-columns: 1fr; } .instrument-head { display: block; } .instrument-head p { margin-top: 13px; } .console-frame { padding: 10px; } .map-frame { height: 228px; } .sim-controls { grid-template-columns: 1fr; } .sim-actions { align-items: flex-start; flex-wrap: wrap; } .runtime { min-width: 170px; } .field-triptych { gap: 5px; } .field-panel { padding: 5px; } .lead-control { grid-template-columns: auto 1fr; } .lead-control .compare-button { grid-column: 1 / -1; justify-self: start; } .diagnostic-fixed-note { position: static; margin: 17px 0 0; } .presentation [data-presentation-section]:not(.is-current) { opacity: 1; } .presentation-tools #mode-toggle { display: inline-block !important; } }
   </style>
 </head>
-<body>
+<body class="presentation">
   <header class="topbar">
     <div class="shell topbar-inner">
       <a class="brand" href="#top" aria-label="返回 AstraAtmos 介绍页顶部">
@@ -286,6 +373,7 @@
           <button type="button" id="previous-section" aria-label="上一节">上一节</button>
           <span class="present-progress" id="section-counter" aria-live="polite">1 / 6</span>
           <button type="button" id="next-section" aria-label="下一节">下一节</button>
+          <button type="button" id="mode-toggle" aria-pressed="true">演示模式</button>
           <button type="button" id="fullscreen-toggle" aria-pressed="false">全屏</button>
         </div>
       </nav>
@@ -303,9 +391,10 @@
             <a class="button button-secondary" href="#demo">先看演示路线</a>
           </div>
           <p class="hero-footnote">从火星臭氧研究起步 · 现在同时支持 Earth MERRA-2 三小时数据</p>
-          <p class="keyboard-help">方向键切换章节 · F 全屏 · Esc 退出全屏</p>
+        <p class="keyboard-help">← / → 切章 · F 全屏 · Space 暂停 · R 重置</p>
         </div>
         <div class="orbit-stage" aria-label="行星大气数据流示意图">
+          <canvas class="hero-canvas" id="hero-canvas" aria-label="可拖拽的 Earth / Mars 旋转示意球体"></canvas>
           <svg class="orbit-svg" viewBox="0 0 600 540" role="img" aria-label="由地球、观测轨道和数据节点组成的 AstraAtmos 示意图">
             <defs>
               <radialGradient id="planetGrad" cx="32%" cy="25%">
@@ -337,9 +426,10 @@
               <text x="78" y="414">Ls / 218.4°</text>
             </g>
           </svg>
+          <div class="orbit-switch" aria-label="切换行星"><button type="button" class="active" data-planet="earth">EARTH</button><button type="button" data-planet="mars">MARS</button></div>
           <div class="hero-readout" aria-label="示例读数">
-            <div class="readout-label"><span>示意读数</span><span>非实时</span></div>
-            <div class="readout-value">312.4 <span>DU</span></div>
+            <div class="readout-label"><span id="hero-readout-label">示意读数</span><span>非实时</span></div>
+            <div class="readout-value" id="hero-readout-value">312.4 <span>DU</span></div>
             <svg class="readout-line" viewBox="0 0 180 28" aria-hidden="true"><polyline points="0,22 14,19 28,20 40,11 54,17 70,7 84,13 101,5 118,12 132,10 148,18 164,8 180,4"/></svg>
           </div>
         </div>
@@ -388,6 +478,14 @@
             <span class="flow-note">RMSE · MAE · R² · PFI</span>
           </article>
         </div>
+        <div class="interactive-flow" role="tablist" aria-label="交互式实验链路">
+          <button type="button" class="active" data-flow="data"><small>01 / INPUT</small><strong>数据</strong><span>来源与时间轴</span></button>
+          <button type="button" data-flow="observe"><small>02 / SIGNAL</small><strong>观测</strong><span>从全局到点位</span></button>
+          <button type="button" data-flow="train"><small>03 / MODEL</small><strong>训练</strong><span>配置与产物</span></button>
+          <button type="button" data-flow="predict"><small>04 / LEAD</small><strong>预测</strong><span>沿提前步查看</span></button>
+          <button type="button" data-flow="diagnose"><small>05 / CHECK</small><strong>诊断</strong><span>误差与敏感性</span></button>
+        </div>
+        <div class="interactive-flow-detail" id="flow-detail" aria-live="polite"><div><strong>数据接入</strong><p>先确认数据来源、分辨率与时间坐标，再进入实验。</p></div><ul><li>Earth MERRA-2 三小时</li><li>OpenMARS</li><li>MCD</li><li>NOMAD / O₃</li></ul></div>
       </div>
     </section>
 
@@ -428,6 +526,27 @@
           </article>
         </div>
       </div>
+    </section>
+
+    <section class="instrument" id="observe-demo" data-presentation-section>
+      <div class="shell">
+        <div class="instrument-head"><div><div class="section-kicker">03 / OBSERVATION SIMULATOR</div><h2>拖动时间，选择一个观测点。</h2></div><p>本地模拟器不调用后端。Earth 使用 UTC 三小时步长；Mars 使用 Ls。地图和曲线为示意场，读数不会被当作真实观测。</p></div>
+        <div class="console-frame">
+          <div class="console-meta"><span>OBSERVATION CONSOLE / LOCAL DEMO</span><div class="planet-picker"><button type="button" class="active" data-observe-planet="earth">EARTH</button> <button type="button" data-observe-planet="mars">MARS</button></div></div>
+          <div class="console-body">
+            <div class="console-visual"><div class="variable-picker" id="variable-picker" aria-label="观测变量"></div><div class="map-frame"><canvas id="observation-map" aria-label="可点选的示意观测图"></canvas><span class="map-probe" id="map-probe"></span></div><label class="instrument-range"><span id="time-kind">UTC</span><input type="range" id="observation-time" min="0" max="100" value="42"><output id="time-readout">2020-06-18 03:00</output></label><canvas class="line-plot" id="observation-series" aria-label="动态示意点位曲线"></canvas></div>
+            <aside class="probe-readout"><h3>PROBE / SELECTED CELL</h3><div class="probe-number" id="probe-value">312.4 <small>DU</small></div><div class="probe-caption"><span id="probe-variable">TO₃ · 总臭氧</span><br><span id="probe-time">UTC · 2020-06-18 03:00</span><br><span id="probe-location">24.0°N · 42.0°E</span></div><span class="sim-label">示意读数 / 非实时</span><div class="data-facts" id="data-facts">Earth MERRA-2 三小时数据<br>原生网格 240×480 · 总览通常降采样为 60×120<br>Earth 官方模型：DLinear</div></aside>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="instrument" id="training-demo" data-presentation-section>
+      <div class="shell sim-layout"><div class="sim-copy"><div class="section-kicker">04 / TRAINING SIMULATOR</div><h2>训练过程，按节奏展开。</h2><p>现场体验配置、阶段、loss 曲线和 checkpoint 时间线。动画持续约 10 秒，GPU / CPU 标签仅为演示状态。</p><div class="sim-alert">演示模拟，不会真的训练模型。展示耗时与 loss 曲线不代表真实训练或精度。</div></div><div class="sim-panel"><div class="sim-controls"><div class="sim-control"><label for="demo-model">MODEL</label><select id="demo-model"><option>DLinear</option><option>PredRNNv2</option><option>ConvLSTM</option><option>SimVP</option><option>Uploaded PyTorch Model</option></select></div><div class="sim-control"><label for="demo-window">WINDOW <output id="window-out">56</output></label><input id="demo-window" type="range" min="12" max="96" step="4" value="56"></div><div class="sim-control"><label for="demo-horizon">HORIZON <output id="horizon-out">24</output></label><input id="demo-horizon" type="range" min="6" max="48" step="3" value="24"></div></div><div class="sim-control" style="margin-top:14px"><label for="demo-epochs">EPOCHS <output id="epochs-out">24</output></label><input id="demo-epochs" type="range" min="8" max="60" step="4" value="24"></div><div class="sim-actions"><button class="start-demo" type="button" id="start-training">Start Demo</button><div class="runtime">STAGE / <b id="training-stage">Ready</b> · <span id="compute-state">CPU · IDLE</span><div class="runtime-track"><i id="training-progress"></i></div></div></div><canvas class="loss-chart" id="loss-chart" aria-label="synthetic demo loss 曲线"></canvas><div class="checkpoint-line"><i></i><span id="checkpoint-state">checkpoint timeline / standby</span></div></div></div>
+    </section>
+
+    <section class="instrument" id="diagnostic-demo" data-presentation-section>
+      <div class="shell"><div class="instrument-head"><div><div class="section-kicker">05 / PREDICTION DIAGNOSTICS</div><h2>参考、预测、残差，连续对照。</h2></div><p>合成场仅用于展示诊断交互。拖动 lead step 检查场图变化，打开模型对比查看两条误差曲线。</p></div><div class="diagnostic-layout"><div><p class="architecture-copy">诊断由 Reference、Prediction、Residual 组成，并可查看 RMSE / MAE / R² 与抽样范围下的 PFI 输入敏感性。PFI 不代表因果解释。</p><div class="diag-foot">合成演示不等于真实模型精度验收。</div></div><div><div class="field-triptych"><div class="field-panel"><h3>REFERENCE</h3><canvas id="field-reference" width="360" height="220"></canvas></div><div class="field-panel"><h3>PREDICTION</h3><canvas id="field-prediction" width="360" height="220"></canvas></div><div class="field-panel"><h3>RESIDUAL</h3><canvas id="field-residual" width="360" height="220"></canvas></div></div><div class="lead-control"><label for="lead-step">LEAD STEP</label><input id="lead-step" type="range" min="1" max="12" value="4"><output id="lead-out">04</output><button type="button" class="compare-button" id="compare-models">对比模型</button></div><canvas class="compare-chart" id="compare-chart" aria-label="synthetic demo 模型误差曲线"></canvas></div></div><div class="diagnostic-fixed-note">示例结果 / 非实时 / 非真实精度承诺</div></div>
     </section>
 
     <section class="architecture" id="reproducibility" data-presentation-section>
@@ -488,47 +607,290 @@
   </footer>
   <script>
     (() => {
-      const sections = [...document.querySelectorAll('[data-presentation-section]')];
-      const counter = document.getElementById('section-counter');
-      const previous = document.getElementById('previous-section');
-      const next = document.getElementById('next-section');
-      const fullscreen = document.getElementById('fullscreen-toggle');
-      let index = 0;
-      const renderCounter = () => { counter.textContent = `${index + 1} / ${sections.length}`; };
-      const go = (nextIndex) => {
-        index = Math.max(0, Math.min(sections.length - 1, nextIndex));
-        const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        sections[index].scrollIntoView({ behavior: reduced ? 'instant' : 'smooth', block: 'start' });
-        renderCounter();
-      };
-      previous.addEventListener('click', () => go(index - 1));
-      next.addEventListener('click', () => go(index + 1));
-      fullscreen.addEventListener('click', async () => {
+      'use strict';
+      const $ = (selector, root = document) => root.querySelector(selector);
+      const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+      const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const state = { planet: 'earth', variable: 'TO₃', rotation: 0, drag: false, lastX: 0, paused: false, running: false, started: 0, pausedAt: 0, pausedTotal: 0, compare: false, probe: { x: .42, y: .38 }, time: 42, epoch: 0, frame: 0 };
+      const earthTexture = new Image();
+      const marsTexture = new Image();
+      earthTexture.src = 'frontend/public/earth/blue-marble-2048.png';
+      marsTexture.src = 'frontend/public/mars_texture.jpg';
+
+      const sections = $$('[data-presentation-section]');
+      const counter = $('#section-counter');
+      const fullscreenButton = $('#fullscreen-toggle');
+      let sectionIndex = 0;
+      function updateCounter() {
+        counter.textContent = `${String(sectionIndex + 1).padStart(2, '0')} / ${String(sections.length).padStart(2, '0')}`;
+        sections.forEach((section, i) => section.classList.toggle('is-current', i === sectionIndex));
+      }
+      function goToSection(index) {
+        sectionIndex = Math.max(0, Math.min(sections.length - 1, index));
+        updateCounter();
+        sections[sectionIndex].scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+      }
+      $('#previous-section').addEventListener('click', () => goToSection(sectionIndex - 1));
+      $('#next-section').addEventListener('click', () => goToSection(sectionIndex + 1));
+      $('#mode-toggle').addEventListener('click', () => {
+        document.body.classList.toggle('presentation');
+        const active = document.body.classList.contains('presentation');
+        $('#mode-toggle').textContent = active ? '演示模式' : '自由浏览';
+        $('#mode-toggle').setAttribute('aria-pressed', String(active));
+      });
+      fullscreenButton.addEventListener('click', async () => {
         try {
-          if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
-          else await document.exitFullscreen?.();
-        } catch {
-          fullscreen.textContent = '请按 F11';
-          fullscreen.title = '浏览器未允许页面全屏，请使用浏览器的 F11 全屏';
-        }
+          if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+          else await document.exitFullscreen();
+        } catch { fullscreenButton.title = '浏览器未允许页面全屏，请使用浏览器全屏快捷键'; }
       });
       document.addEventListener('fullscreenchange', () => {
-        const active = Boolean(document.fullscreenElement);
-        fullscreen.textContent = active ? '退出全屏' : '全屏';
-        fullscreen.setAttribute('aria-pressed', String(active));
+        fullscreenButton.textContent = document.fullscreenElement ? '退出全屏' : '全屏';
+        fullscreenButton.setAttribute('aria-pressed', String(Boolean(document.fullscreenElement)));
       });
-      document.addEventListener('keydown', (event) => {
+      let scrollFrame = 0;
+      function trackCurrentSection() {
+        const anchor = 120;
+        let nearest = 0, bestDistance = Infinity;
+        sections.forEach((section, index) => {
+          const rect = section.getBoundingClientRect();
+          const distance = rect.top <= anchor && rect.bottom > anchor ? 0 : Math.min(Math.abs(rect.top - anchor), Math.abs(rect.bottom - anchor));
+          if (distance < bestDistance) { bestDistance = distance; nearest = index; }
+        });
+        sectionIndex = nearest;
+        updateCounter();
+      }
+      window.addEventListener('scroll', () => {
+        if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; trackCurrentSection(); });
+      }, { passive: true });
+
+      const flowInfo = {
+        data: ['数据接入', '确认数据来源、版本、分辨率与时间坐标，再开始观测和训练。', ['Earth MERRA-2 三小时', 'OpenMARS', 'MCD', 'NOMAD / O₃']],
+        observe: ['全球与点位', '三维球体、全球均值、点位曲线可沿各自行星的时间轴查看。', ['三维球体', '全球均值', '点位曲线', 'UTC / Ls']],
+        train: ['训练配置', 'Earth 官方模型为 DLinear；其他 Earth 模型通过 v1/v2 上传契约接入。此处只展示配置与流程，不会启动训练。', ['DLinear', 'PredRNNv2', 'ConvLSTM', 'SimVP', '上传 PyTorch 模型']],
+        predict: ['预测窗口', '沿 lead step 对齐参考与预测场；演示页中的场图均为合成示意。', ['Reference', 'Prediction', 'Lead step', '示意数据']],
+        diagnose: ['诊断回看', '并列检查残差和评价指标；PFI 仅描述抽样范围下的输入敏感性。', ['Residual', 'RMSE / MAE / R²', 'PFI', '非因果解释']]
+      };
+      $$('.interactive-flow button').forEach(button => button.addEventListener('click', () => {
+        $$('.interactive-flow button').forEach(item => item.classList.toggle('active', item === button));
+        const [title, description, tags] = flowInfo[button.dataset.flow];
+        $('#flow-detail').innerHTML = `<div><strong>${title}</strong><p>${description}</p></div><ul>${tags.map(tag => `<li>${tag}</li>`).join('')}</ul>`;
+      }));
+
+      const hero = $('#hero-canvas');
+      const heroContext = hero.getContext('2d');
+      function canvasSize(canvas) {
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        const ratio = Math.min(devicePixelRatio || 1, 2);
+        const width = Math.round(rect.width * ratio), height = Math.round(rect.height * ratio);
+        if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+        return { width: rect.width, height: rect.height, ratio };
+      }
+      let planetChange = 0;
+      function setPlanet(planet) {
+        const token = ++planetChange;
+        const applyPlanet = () => {
+          if (token !== planetChange) return;
+          state.planet = planet;
+          document.body.classList.toggle('mars-theme', planet === 'mars');
+          $$('[data-planet]').forEach(button => button.classList.toggle('active', button.dataset.planet === planet));
+          $('#hero-readout-label').textContent = planet === 'mars' ? '示意读数 / MARS O₃' : '示意读数 / EARTH TO₃';
+          $('#hero-readout-value').innerHTML = planet === 'mars' ? '1.84 <span>ppm</span>' : '312.4 <span>DU</span>';
+          $$('.orbit-svg text').forEach((item, index) => {
+            if (index === 0) item.textContent = planet === 'mars' ? 'Ls / 218.4°' : 'UTC / 03:00';
+            if (index === 1) item.textContent = planet === 'mars' ? 'O₃ / ppm' : 'TO₃ / DU';
+          });
+          drawHero(); drawObservation(); renderProbe();
+          document.body.classList.remove('planet-transition');
+        };
+        if (state.planet === planet || reducedMotion()) { applyPlanet(); return; }
+        document.body.classList.add('planet-transition');
+        setTimeout(applyPlanet, 120);
+      }
+      $$('[data-planet]').forEach(button => button.addEventListener('click', () => setPlanet(button.dataset.planet)));
+      function drawHero() {
+        const size = canvasSize(hero);
+        if (!size) return;
+        const { width, height, ratio } = size;
+        heroContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+        heroContext.clearRect(0, 0, width, height);
+        const radius = Math.min(width, height) * .34;
+        const image = state.planet === 'mars' ? marsTexture : earthTexture;
+        heroContext.save();
+        heroContext.translate(width / 2, height / 2);
+        heroContext.beginPath(); heroContext.arc(0, 0, radius, 0, Math.PI * 2); heroContext.clip();
+        heroContext.fillStyle = state.planet === 'mars' ? '#542e31' : '#0a3043';
+        heroContext.fillRect(-radius, -radius, radius * 2, radius * 2);
+        if (image.complete && image.naturalWidth) {
+          const imageWidth = radius * 2.1, imageHeight = radius * 2;
+          const offset = ((state.rotation % imageWidth) + imageWidth) % imageWidth - imageWidth / 2;
+          for (let x = offset - imageWidth; x < imageWidth; x += imageWidth) heroContext.drawImage(image, x, -imageHeight / 2, imageWidth, imageHeight);
+        }
+        const shade = heroContext.createRadialGradient(-radius * .35, -radius * .4, radius * .1, 0, 0, radius * 1.1);
+        shade.addColorStop(0, 'rgba(220,250,255,.10)'); shade.addColorStop(.7, 'rgba(2,13,23,.03)'); shade.addColorStop(1, 'rgba(2,9,16,.72)');
+        heroContext.fillStyle = shade; heroContext.fillRect(-radius, -radius, radius * 2, radius * 2);
+        heroContext.restore();
+        heroContext.strokeStyle = state.planet === 'mars' ? 'rgba(241,154,120,.8)' : 'rgba(154,217,239,.75)'; heroContext.lineWidth = 1;
+        heroContext.beginPath(); heroContext.arc(width / 2, height / 2, radius, 0, Math.PI * 2); heroContext.stroke();
+        $$('.orbit-dot').forEach((dot, i) => { const angle = state.rotation * .009 + i * 2.1; dot.style.transform = `translate(${Math.cos(angle) * 10}px, ${Math.sin(angle) * 7}px)`; });
+      }
+      hero.addEventListener('pointerdown', event => { state.drag = true; state.lastX = event.clientX; hero.setPointerCapture(event.pointerId); });
+      hero.addEventListener('pointermove', event => { if (state.drag) { state.rotation += (event.clientX - state.lastX) * .7; state.lastX = event.clientX; drawHero(); } });
+      ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(name => hero.addEventListener(name, () => { state.drag = false; }));
+
+      const map = $('#observation-map'), mapContext = map.getContext('2d'), series = $('#observation-series'), seriesContext = series.getContext('2d');
+      const earthVars = ['TO₃', 'U', 'V', 'Temperature', 'Dust', 'Radiation'];
+      const marsVars = ['O₃', 'Temperature', 'Dust'];
+      const units = { 'TO₃': 'DU', 'O₃': 'ppm', 'U': 'm/s', 'V': 'm/s', 'Temperature': 'K', 'Dust': 'a.u.', 'Radiation': 'W/m²' };
+      function variables() { return state.planet === 'mars' ? marsVars : earthVars; }
+      function renderVariables() {
+        if (!variables().includes(state.variable)) state.variable = variables()[0];
+        $('#variable-picker').innerHTML = variables().map(item => `<button type="button" class="${item === state.variable ? 'active' : ''}" data-variable="${item}">${item}</button>`).join('');
+        $$('#variable-picker button').forEach(button => button.addEventListener('click', () => { state.variable = button.dataset.variable; renderVariables(); renderProbe(); drawObservation(); }));
+        $$('#observe-demo [data-observe-planet]').forEach(button => button.classList.toggle('active', button.dataset.observePlanet === state.planet));
+      }
+      $$('#observe-demo [data-observe-planet]').forEach(button => button.addEventListener('click', () => setPlanet(button.dataset.observePlanet)));
+      function timeText() {
+        if (state.planet === 'mars') return `Ls ${(state.time * 3.6).toFixed(1)}°`;
+        const hour = String(Math.min(21, Math.floor(state.time / (101 / 8)) * 3)).padStart(2, '0');
+        return `2020-06-18 ${hour}:00`;
+      }
+      function sampleValue() {
+        const baseline = state.planet === 'mars'
+          ? (state.variable === 'O₃' ? 1.3 : state.variable === 'Temperature' ? 210 : .35)
+          : (state.variable === 'TO₃' ? 310 : state.variable === 'Temperature' ? 278 : state.variable === 'Radiation' ? 185 : state.variable === 'Dust' ? .3 : 0);
+        const amplitude = state.planet === 'mars' ? (state.variable === 'Temperature' ? 16 : .38) : (state.variable === 'Temperature' ? 14 : state.variable === 'U' || state.variable === 'V' ? 7 : state.variable === 'Dust' ? .12 : 24);
+        return baseline + Math.sin(state.time * .08 + state.probe.x * 5) * amplitude + Math.cos(state.probe.y * 6) * amplitude * .28;
+      }
+      function drawObservation() {
+        const size = canvasSize(map);
+        if (!size) return;
+        const { width, height, ratio } = size;
+        mapContext.setTransform(ratio, 0, 0, ratio, 0, 0); mapContext.clearRect(0, 0, width, height);
+        const palette = state.planet === 'mars' ? ['#321d25', '#713a43', '#ab5a50', '#df8866', '#ffd1b5'] : ['#092634', '#115468', '#268697', '#57b4ac', '#d4f6ef'];
+        const cols = 36, rows = 18;
+        for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+          const wave = (Math.sin(x * .38 + state.time * .055) + Math.cos(y * .56 - x * .08) + Math.sin((x + y) * .17)) / 3;
+          const level = Math.max(0, Math.min(palette.length - 1, Math.floor((wave + 1) * 2.5)));
+          mapContext.fillStyle = palette[level]; mapContext.fillRect(x * width / cols, y * height / rows, width / cols + 1, height / rows + 1);
+        }
+        mapContext.strokeStyle = 'rgba(220,250,255,.15)'; mapContext.lineWidth = 1;
+        for (let i = 1; i < 8; i++) { mapContext.beginPath(); mapContext.moveTo(i * width / 8, 0); mapContext.lineTo(i * width / 8, height); mapContext.stroke(); }
+        for (let i = 1; i < 5; i++) { mapContext.beginPath(); mapContext.moveTo(0, i * height / 5); mapContext.lineTo(width, i * height / 5); mapContext.stroke(); }
+        $('#map-probe').style.left = `${state.probe.x * 100}%`; $('#map-probe').style.top = `${state.probe.y * 100}%`;
+        drawSeries();
+      }
+      function drawSeries() {
+        const size = canvasSize(series); if (!size) return;
+        const { width, height, ratio } = size; seriesContext.setTransform(ratio, 0, 0, ratio, 0, 0); seriesContext.clearRect(0, 0, width, height);
+        seriesContext.strokeStyle = 'rgba(154,217,239,.16)';
+        for (let i = 1; i < 4; i++) { seriesContext.beginPath(); seriesContext.moveTo(0, height * i / 4); seriesContext.lineTo(width, height * i / 4); seriesContext.stroke(); }
+        seriesContext.strokeStyle = state.planet === 'mars' ? '#f19a78' : '#9ad9ef'; seriesContext.lineWidth = 1.6; seriesContext.beginPath();
+        for (let x = 0; x < width; x += 3) { const y = height * .52 + Math.sin(x * .043 + state.time * .035 + state.probe.x * 5) * height * .24 + Math.sin(x * .13 + state.probe.y) * height * .07; x ? seriesContext.lineTo(x, y) : seriesContext.moveTo(x, y); }
+        seriesContext.stroke();
+      }
+      function renderProbe() {
+        renderVariables();
+        const value = sampleValue();
+        $('#probe-value').innerHTML = `${value.toFixed(state.planet === 'mars' ? 2 : 1)} <small>${units[state.variable]}</small>`;
+        $('#probe-variable').textContent = `${state.variable}${state.variable === 'Radiation' ? ' · 演示变量' : ' · 示意场'}`;
+        $('#probe-time').textContent = `${state.planet === 'mars' ? 'Ls' : 'UTC'} · ${timeText()}`;
+        $('#time-kind').textContent = state.planet === 'mars' ? 'Ls' : 'UTC'; $('#time-readout').textContent = timeText();
+        $('#probe-location').textContent = state.planet === 'mars' ? `Ls ${(state.time * 3.6).toFixed(1)}° · 18°N` : `${(90 - state.probe.y * 180).toFixed(1)}°N · ${(state.probe.x * 360 - 180).toFixed(1)}°E`;
+        $('#data-facts').innerHTML = state.planet === 'mars' ? 'Mars 数据：OpenMARS / MCD / NOMAD<br>支持 O₃、Temperature、Dust 与臭氧分析<br>时间轴：太阳黄经 Ls' : 'Earth 数据：MERRA-2 三小时<br>原生网格 240×480 · 总览通常降采样为 60×120<br>Earth 官方模型：DLinear';
+      }
+      $('#observation-time').addEventListener('input', event => { state.time = Number(event.target.value); drawObservation(); renderProbe(); });
+      map.addEventListener('pointerdown', event => { const rect = map.getBoundingClientRect(); state.probe = { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height }; $('#probe-location').textContent = '更新探针位置'; drawObservation(); renderProbe(); });
+
+      const lossCanvas = $('#loss-chart'), lossContext = lossCanvas.getContext('2d');
+      function drawLoss(progress = 0) {
+        const size = canvasSize(lossCanvas); if (!size) return;
+        const { width, height, ratio } = size; lossContext.setTransform(ratio, 0, 0, ratio, 0, 0); lossContext.clearRect(0, 0, width, height);
+        lossContext.strokeStyle = 'rgba(154,217,239,.13)';
+        for (let i = 1; i < 5; i++) { lossContext.beginPath(); lossContext.moveTo(0, i * height / 5); lossContext.lineTo(width, i * height / 5); lossContext.stroke(); }
+        lossContext.strokeStyle = '#9ad9ef'; lossContext.lineWidth = 1.8; lossContext.beginPath();
+        for (let x = 0; x < width; x += 3) { const normalized = x / Math.max(width, 1); const decay = Math.exp(-normalized * 3.1) * .64 + .13; const y = height * (.16 + decay * (x / width <= progress ? 1 : .1)) + Math.sin(x * .13) * 2; x ? lossContext.lineTo(x, y) : lossContext.moveTo(x, y); }
+        lossContext.stroke(); lossContext.fillStyle = '#90a7b2'; lossContext.font = '10px Consolas, monospace'; lossContext.fillText('SYNTHETIC DEMO / LOSS TRACE', 11, 15);
+      }
+      const trainButton = $('#start-training');
+      function trainTick(now) {
+        if (!state.running) return;
+        const elapsed = (state.paused ? state.pausedAt : now) - state.started - state.pausedTotal;
+        const progress = Math.min(1, elapsed / 10000);
+        const stage = progress < .12 ? 'Preparing' : progress < .72 ? 'Training' : progress < .92 ? 'Evaluating' : 'Completed';
+        $('#training-stage').textContent = stage;
+        $('#compute-state').textContent = progress >= 1 ? 'CPU · COMPLETE' : progress < .12 ? 'CPU · PREPARING' : progress < .72 ? (Math.floor(elapsed / 1300) % 2 ? 'GPU · DEMO' : 'CPU · DEMO') : 'CPU · EVALUATING';
+        $('#training-progress').style.width = `${progress * 100}%`;
+        $('#checkpoint-state').textContent = progress < .28 ? 'Preparing inputs · checkpoint timeline' : progress < .72 ? `checkpoint_demo_${Math.floor(progress * 4).toString().padStart(2, '0')}.pt · synthetic` : progress < 1 ? 'Evaluating demo artifact · synthetic only' : 'checkpoint_demo.pt · presentation artifact';
+        drawLoss(progress);
+        if (progress >= 1) { state.running = false; trainButton.disabled = false; trainButton.textContent = 'Replay Demo'; return; }
+        if (!state.paused) state.frame = requestAnimationFrame(trainTick);
+      }
+      trainButton.addEventListener('click', () => {
+        if (state.running) return;
+        state.running = true; state.paused = false; state.pausedTotal = 0; state.started = performance.now();
+        trainButton.disabled = true; trainButton.textContent = 'Running…';
+        state.frame = requestAnimationFrame(trainTick);
+      });
+      [['demo-window', 'window-out'], ['demo-horizon', 'horizon-out'], ['demo-epochs', 'epochs-out']].forEach(([input, output]) => $(`#${input}`).addEventListener('input', event => { $(`#${output}`).textContent = event.target.value; }));
+
+      const fields = [$('#field-reference'), $('#field-prediction'), $('#field-residual')];
+      function drawField(canvas, kind) {
+        const ctx = canvas.getContext('2d'), width = canvas.width, height = canvas.height, lead = Number($('#lead-step').value);
+        const colors = kind === 'residual' ? ['#3b2c52', '#755285', '#ae6b83', '#ed9a78', '#ffd1b5'] : kind === 'prediction' ? ['#092536', '#14556a', '#318ea0', '#91d9d1', '#e1fbfa'] : ['#071c28', '#0d4a5a', '#228598', '#6fc9bf', '#e2fbf8'];
+        for (let y = 0; y < height; y += 5) for (let x = 0; x < width; x += 5) {
+          const variation = (Math.sin(x * .034 + lead * .25) + Math.cos(y * .061 - x * .011) + Math.sin((x + y) * .021)) / 3;
+          const residual = kind === 'residual' ? Math.sin(x * .09 + lead) * .18 : 0;
+          const index = Math.max(0, Math.min(colors.length - 1, Math.floor((variation + 1 + residual) * 2.5)));
+          ctx.fillStyle = colors[index]; ctx.fillRect(x, y, 6, 6);
+        }
+      }
+      function drawCompare() {
+        const canvas = $('#compare-chart'), size = canvasSize(canvas); if (!size) return;
+        const ctx = canvas.getContext('2d'), { width, height, ratio } = size; ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
+        ctx.strokeStyle = 'rgba(154,217,239,.14)'; for (let i = 1; i < 4; i++) { ctx.beginPath(); ctx.moveTo(0, height * i / 4); ctx.lineTo(width, height * i / 4); ctx.stroke(); }
+        const lines = [['#9ad9ef', 0], ['#f19a78', .9]];
+        lines.forEach(([color, phase], index) => {
+          if (index === 1 && !state.compare) return;
+          ctx.strokeStyle = color; ctx.lineWidth = 1.8; ctx.beginPath();
+          for (let x = 0; x < width; x += 4) { const y = height * (.2 + Math.abs(Math.sin(x * .027 + phase)) * .55 + Math.cos(x * .012 + phase) * .06); x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+          ctx.stroke();
+        });
+        ctx.fillStyle = '#90a7b2'; ctx.font = '10px Consolas, monospace'; ctx.fillText('RMSE / SYNTHETIC DEMO', 10, 14);
+      }
+      function drawDiagnostics() { fields.forEach((canvas, index) => drawField(canvas, ['reference', 'prediction', 'residual'][index])); drawCompare(); $('#lead-out').textContent = String($('#lead-step').value).padStart(2, '0'); }
+      $('#lead-step').addEventListener('input', drawDiagnostics);
+      $('#compare-models').addEventListener('click', event => { state.compare = !state.compare; event.currentTarget.classList.toggle('active', state.compare); event.currentTarget.textContent = state.compare ? '隐藏对比' : '对比模型'; drawCompare(); });
+
+      function resetCurrent() {
+        const activeId = sections[sectionIndex]?.id;
+        if (activeId === 'training-demo') {
+          state.running = false; state.paused = false; cancelAnimationFrame(state.frame); trainButton.disabled = false; trainButton.textContent = 'Start Demo';
+          $('#training-stage').textContent = 'Ready'; $('#compute-state').textContent = 'CPU · IDLE'; $('#training-progress').style.width = '0%'; $('#checkpoint-state').textContent = 'checkpoint timeline / standby'; drawLoss(0);
+        } else if (activeId === 'diagnostic-demo') { state.compare = false; $('#compare-models').classList.remove('active'); $('#compare-models').textContent = '对比模型'; $('#lead-step').value = '4'; drawDiagnostics(); }
+        else { $('#observation-time').value = '42'; state.time = 42; state.probe = { x: .42, y: .38 }; setPlanet('earth'); $('#time-readout').textContent = '2020-06-18 03:00'; }
+      }
+      document.addEventListener('keydown', event => {
         if (event.ctrlKey || event.altKey || event.metaKey || event.repeat) return;
-        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
-        if (event.key === 'ArrowRight' || event.key === 'ArrowDown' || event.key === 'PageDown') { event.preventDefault(); go(index + 1); }
-        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp' || event.key === 'PageUp') { event.preventDefault(); go(index - 1); }
-        if (event.key.toLowerCase() === 'f') fullscreen.click();
+        if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) { if (event.key === 'Escape') document.activeElement.blur(); return; }
+        if (event.key === 'ArrowRight' || event.key === 'PageDown') { event.preventDefault(); goToSection(sectionIndex + 1); }
+        else if (event.key === 'ArrowLeft' || event.key === 'PageUp') { event.preventDefault(); goToSection(sectionIndex - 1); }
+        else if (event.key.toLowerCase() === 'f') { event.preventDefault(); fullscreenButton.click(); }
+        else if (event.key === 'Escape' && document.fullscreenElement) document.exitFullscreen();
+        else if (event.code === 'Space') {
+          event.preventDefault(); state.paused = !state.paused;
+          if (state.running) {
+            if (state.paused) { state.pausedAt = performance.now(); $('#compute-state').textContent = 'PAUSED · DEMO'; }
+            else { state.pausedTotal += performance.now() - state.pausedAt; $('#compute-state').textContent = 'CPU · RESUMING'; state.frame = requestAnimationFrame(trainTick); }
+          }
+        } else if (event.key.toLowerCase() === 'r') { event.preventDefault(); resetCurrent(); }
       });
-      const observer = new IntersectionObserver((entries) => {
-        const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-        if (visible) { const found = sections.indexOf(visible.target); if (found >= 0) { index = found; renderCounter(); } }
-      }, { threshold: [.45, .7] });
-      sections.forEach((section) => observer.observe(section));
+      window.addEventListener('resize', () => { drawHero(); drawObservation(); drawLoss(state.running ? .35 : 0); drawDiagnostics(); });
+      earthTexture.onload = drawHero; marsTexture.onload = drawHero;
+      setPlanet('earth'); $('#observation-time').value = state.time; drawHero(); drawObservation(); renderProbe(); drawLoss(0); drawDiagnostics(); updateCounter();
+      function animate() { if (!state.paused && !state.drag) state.rotation += .12; drawHero(); if (!reducedMotion()) requestAnimationFrame(animate); }
+      drawHero(); if (!reducedMotion()) requestAnimationFrame(animate);
     })();
   </script>
 </body>
