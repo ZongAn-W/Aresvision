@@ -83,6 +83,49 @@ def client_for(registry: DatasetRegistry) -> TestClient:
     return TestClient(app)
 
 
+def downgrade_to_legacy(package: Path) -> dict:
+    """Rewrite a workspace copy as the pre-rule legacy publication (rule 1)."""
+    manifest = manifest_of(package)
+    mtimes = manifest.pop("source_mtimes", {})
+    manifest.pop("fingerprint_rule", None)
+    manifest["source_inventory_version"] = 2
+    files = []
+    for entry in manifest["source_files"]:
+        entry = dict(entry)
+        entry["mtime_ns"] = mtimes.get(entry["path"], 0)
+        files.append(entry)
+    manifest["source_files"] = files
+    manifest["source_sha256"] = hashlib.sha256(
+        json.dumps(files, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+    manifest["source_fingerprint_basis"] = (
+        "SHA256(canonical sorted date/product/path/name/bytes/mtime_ns/full-file-sha256 inventory)")
+    # The NetCDF records the same provenance digest, so the copy must agree.
+    with netCDF4.Dataset(package / DATA_FILE, "a") as data:
+        data.source_sha256 = manifest["source_sha256"]
+    republish_manifest(package, manifest)
+    return manifest
+
+
+def test_legacy_manifest_without_fingerprint_rule_still_registers(threehour_release, tmp_path):
+    """A pre-rule publication keeps its own identity and stays loadable."""
+    package = copy_release(threehour_release, tmp_path / "legacy_rule")
+    manifest = downgrade_to_legacy(package)
+    assert "fingerprint_rule" not in manifest and "source_mtimes" not in manifest
+    assert manifest["source_inventory_version"] == 2
+    expected_content = hashlib.sha256(json.dumps(
+        {key: value for key, value in manifest.items() if key != "dataset_fingerprint"},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    registry = registry_for(package, tmp_path)
+    descriptor = registry.get_dataset(DATASET_ID)
+    assert descriptor["availability"] == "available"
+    assert descriptor["availability_reason"] is None
+    assert descriptor["manifest_content_sha256"] == expected_content
+    assert descriptor["dataset_fingerprint"] == manifest["dataset_fingerprint"]
+    assert descriptor["dataset_fingerprint"] == build_dataset_fingerprint(
+        DATASET_ID, "v1", descriptor["manifest_content_sha256"], descriptor["data_sha256"])
+
+
 def test_builder_release_registers_as_exact_datetime_contract(threehour_release, tmp_path):
     registry = registry_for(threehour_release, tmp_path)
     with client_for(registry) as client:

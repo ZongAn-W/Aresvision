@@ -74,6 +74,11 @@ EARTH_ARTIFACT_SCHEMA = "aresvision_earth_forecast_checkpoint_v1"
 EARTH_3HOURLY_ARTIFACT_SCHEMA = "aresvision_earth_forecast_checkpoint_3hourly_v1"
 EARTH_3HOURLY_METRICS_SCHEMA = "earth_training_metrics_3hourly_v1"
 EARTH_3HOURLY_METRICS_SCHEMA_V2 = "earth_training_metrics_3hourly_v2"
+EARTH_3HOURLY_METRICS_SCHEMA_V3 = "earth_training_metrics_3hourly_v3"
+GRID_UNIFORM_AGGREGATION = "forecast_origin_lead_grid_uniform"
+CELL_AREA_WEIGHTED_AGGREGATION = "forecast_origin_lead_cell_area_weighted"
+EARTH_METRICS_SCHEMA_KEY = "_earth_metrics_schema"
+EARTH_METRICS_AGGREGATION_KEY = "_earth_metrics_aggregation"
 EARTH_TRAINING_SPEC_SCHEMA = "earth_training_spec_v1"
 EARTH_PROFILE_ID = "earth_daily_dlinear_v1"
 EARTH_DEFAULT_SPLIT_RATIOS = {
@@ -81,6 +86,53 @@ EARTH_DEFAULT_SPLIT_RATIOS = {
     "validation_ratio": 0.2,
     "test_ratio": 0.1,
 }
+
+
+def earth_3hourly_metrics_contract(schema: Any, aggregation: Any = None, *, executable: bool = False) -> dict:
+    """Resolve a known schema to its exact statistical meaning, without aliases.
+
+    V1 remains readable but cannot be emitted by the complete-metrics runner.
+    Historical tasks only froze the schema; its aggregation is unambiguous.
+    """
+    aggregations = {
+        EARTH_3HOURLY_METRICS_SCHEMA: GRID_UNIFORM_AGGREGATION,
+        EARTH_3HOURLY_METRICS_SCHEMA_V2: GRID_UNIFORM_AGGREGATION,
+        EARTH_3HOURLY_METRICS_SCHEMA_V3: CELL_AREA_WEIGHTED_AGGREGATION,
+    }
+    if not isinstance(schema, str) or schema not in aggregations:
+        raise DatasetRequestError("earth_metrics_contract_invalid", "Earth metrics schema is missing, damaged or unsupported", status_code=409)
+    expected = aggregations[schema]
+    if aggregation is not None and aggregation != expected:
+        raise DatasetRequestError("earth_metrics_contract_invalid", "Earth metrics schema and aggregation disagree", status_code=409)
+    if executable and schema == EARTH_3HOURLY_METRICS_SCHEMA:
+        raise DatasetRequestError("earth_metrics_contract_not_executable", "The legacy v1 metrics contract is read-only; queued training requires frozen v2 or v3", status_code=409)
+    return {"schema": schema, "aggregation": expected}
+
+
+def earth_task_metrics_contract(hyperparameters: Mapping[str, Any], *, executable: bool = False) -> Optional[dict]:
+    """Read server-owned markers; a task without markers is genuinely legacy."""
+    if EARTH_METRICS_SCHEMA_KEY not in hyperparameters:
+        if EARTH_METRICS_AGGREGATION_KEY in hyperparameters:
+            raise DatasetRequestError("earth_metrics_contract_invalid", "Earth task aggregation has no frozen metrics schema", status_code=409)
+        return None
+    if EARTH_METRICS_AGGREGATION_KEY in hyperparameters and hyperparameters[EARTH_METRICS_AGGREGATION_KEY] is None:
+        raise DatasetRequestError("earth_metrics_contract_invalid", "Earth task metrics aggregation is damaged", status_code=409)
+    return earth_3hourly_metrics_contract(
+        hyperparameters[EARTH_METRICS_SCHEMA_KEY], hyperparameters.get(EARTH_METRICS_AGGREGATION_KEY),
+        executable=executable,
+    )
+
+
+def earth_spec_metrics_contract(spec: Mapping[str, Any]) -> Optional[dict]:
+    """Resolve execution before data preparation; old unmarked specs stay equal-weighted."""
+    if spec.get("dataset_binding", {}).get("dataset_id") != EARTH_DATASET_3HOURLY_ID:
+        return None
+    if "metrics_contract" not in spec:
+        return earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V2, executable=True)
+    contract = spec["metrics_contract"]
+    if not isinstance(contract, Mapping) or set(contract) != {"schema", "aggregation"} or contract.get("aggregation") is None:
+        raise DatasetRequestError("earth_metrics_contract_invalid", "Earth training spec requires a complete metrics contract", status_code=409)
+    return earth_3hourly_metrics_contract(contract.get("schema"), contract["aggregation"], executable=True)
 
 #: Bounds mirrored by the frontend form. Values outside these ranges are
 #: rejected, never clamped.
@@ -515,6 +567,7 @@ def build_earth_training_spec(
     hyperparameters: Mapping[str, Any],
     uploaded_model: Optional[Mapping[str, Any]] = None,
     task_split: Optional[Mapping[str, Any]] = None,
+    metrics_contract: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Build the internal subprocess spec for one Earth training run.
 
@@ -566,6 +619,11 @@ def build_earth_training_spec(
         "hyperparameters": normalized,
         "training_profile": earth_training_profile(dataset_id, normalized),
     }
+    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        spec["metrics_contract"] = dict(metrics_contract) if metrics_contract is not None else earth_3hourly_metrics_contract(
+            EARTH_3HOURLY_METRICS_SCHEMA_V3, executable=True,
+        )
+        spec["metrics_contract"] = earth_spec_metrics_contract(spec)
     if task_split is not None:
         from services.earth_task_split import timeline_from_snapshot, validate_earth_task_split
         validate_earth_task_split(dict(task_split), timeline_from_snapshot(dataset_binding["dataset_snapshot"]),
@@ -607,6 +665,11 @@ __all__ = [
     "EARTH_3HOURLY_ARTIFACT_SCHEMA",
     "EARTH_3HOURLY_METRICS_SCHEMA",
     "EARTH_3HOURLY_METRICS_SCHEMA_V2",
+    "EARTH_3HOURLY_METRICS_SCHEMA_V3",
+    "GRID_UNIFORM_AGGREGATION",
+    "CELL_AREA_WEIGHTED_AGGREGATION",
+    "EARTH_METRICS_SCHEMA_KEY",
+    "EARTH_METRICS_AGGREGATION_KEY",
     "EARTH_3HOURLY_IMPLEMENTATION_ID",
     "EARTH_3HOURLY_WINDOW",
     "EARTH_3HOURLY_HORIZON",
@@ -629,6 +692,9 @@ __all__ = [
     "build_earth_training_spec",
     "canonical_channel_order",
     "earth_training_profile",
+    "earth_3hourly_metrics_contract",
+    "earth_task_metrics_contract",
+    "earth_spec_metrics_contract",
     "input_units_for",
     "is_earth_dataset_id",
     "normalize_earth_training_hyperparameters",

@@ -7,7 +7,9 @@ import pytest
 import torch
 
 from models.training_scripts.earth_daily import run_training
-from services.earth_training_contract import build_earth_training_spec
+from services.earth_training_contract import (
+    build_earth_training_spec, earth_3hourly_metrics_contract, EARTH_3HOURLY_METRICS_SCHEMA_V2,
+)
 from services.earth_task_split import build_earth_task_split
 from services.earth_training_artifact import load_earth_training_artifact, save_earth_artifact_atomic, FULL_METRIC_KEYS
 from services.earth_prediction_service import run_earth_prediction, compare_earth_test_metrics
@@ -37,7 +39,10 @@ def test_configurable_horizon_pipeline_and_legacy_prediction(synthetic_training_
                      "source_text": text, "param_schema": validation.param_schema, "custom_model_params": {"bias": True}}
     spec = build_earth_training_spec(task_id=1801, dataset_binding=binding, task_split=split,
         hyperparameters={**ratios, "window": 71, "horizon": 9, "epochs": 1, "batch_size": 8, "selected_channels": ["U10M"]},
-        uploaded_model=reference)
+        # This regression compares legacy equal-weight metrics. Generate actual
+        # v2 statistics rather than relabeling a new area-weighted checkpoint.
+        uploaded_model=reference,
+        metrics_contract=earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V2))
     path = tmp_path / "new.pth"
     previous = torch.get_num_threads()
     torch.set_num_threads(2)

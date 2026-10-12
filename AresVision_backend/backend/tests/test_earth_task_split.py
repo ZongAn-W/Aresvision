@@ -102,7 +102,9 @@ def custom_smoke(request, synthetic_training_release, tmp_path_factory):
                      "custom_model_params": {"bias": True}}
     spec = build_earth_training_spec(task_id=1201, dataset_binding=binding, task_split=split,
         hyperparameters={**RATIOS, "window": 55, "horizon": 24, "epochs": 1, "batch_size": 8,
-                         "selected_channels": ["U10M"]}, uploaded_model=reference)
+                         "selected_channels": ["U10M"]}, uploaded_model=reference,
+        metrics_contract={"schema": "earth_training_metrics_3hourly_v2",
+                          "aggregation": "forecast_origin_lead_grid_uniform"})
     output = root / "custom.pth"
     previous = torch.get_num_threads()
     torch.set_num_threads(2)
@@ -184,19 +186,21 @@ def test_existing_custom_artifact_without_run_marker_keeps_its_task_contract(cus
 
 def test_origin_labels_and_uploaded_cross_partition_rule_use_task_boundaries(custom_smoke):
     smoke = custom_smoke
-    # Index 90 belongs to the published validation partition, but task validation starts at 82.
-    origin = smoke.split["ranges"]["train"]["date_end"]
+    # The last origin must leave the complete target window inside train;
+    # the next origin crosses into validation and is rejected for both sources.
+    train_end = smoke.split["ranges"]["train"]["raw_end"]
+    origin = np.datetime_as_string(smoke.release.dates[train_end - 24 - 1], unit="s") + "Z"
+    crossing = np.datetime_as_string(smoke.release.dates[train_end - 24], unit="s") + "Z"
     assert threehour_origin_split(smoke.release, origin, window=55, horizon=24, task_split=smoke.split) == "train"
+    with pytest.raises(EarthArtifactError) as error:
+        threehour_origin_split(smoke.release, crossing, window=55, horizon=24, task_split=smoke.split)
+    assert error.value.code == "earth_prediction_origin_out_of_range"
     context = build_prediction_context(smoke.task, smoke.registry)
     assert context.metrics["task_split"] == smoke.split
-    assert context.training_split_end == origin
-    if context.model["model_source"] == "uploaded":
-        assert context.origins["count"] == 6
-        with pytest.raises(EarthArtifactError, match="crosses a task partition"):
-            threehour_origin_index(smoke.release, origin, strict_split=True, window=55, horizon=24, task_split=smoke.split)
-    else:
-        assert context.origins["count"] == 162
-        assert threehour_origin_index(smoke.release, origin, window=55, horizon=24, task_split=smoke.split) == 81
+    assert context.training_split_end == smoke.split["ranges"]["train"]["date_end"]
+    assert context.origins["count"] == 6
+    assert threehour_origin_index(smoke.release, origin, window=55, horizon=24,
+                                  strict_split=True, task_split=smoke.split) == train_end - 24 - 1
 
 
 def test_legacy_threehour_checkpoint_remains_a_manifest_contract():
@@ -269,6 +273,7 @@ def test_queue_restart_keeps_fixed_split_and_rejects_corruption(service_environm
     # A real legacy queue entry has neither new-task version marker.
     raw.pop(TASK_SPLIT_POLICY_KEY)
     raw.pop("_earth_metrics_schema")
+    raw.pop("_earth_metrics_aggregation")
     task.hyperparameters = json.dumps(raw)
     assert "task_split" not in service._restore_3hourly_training_spec(task)
 

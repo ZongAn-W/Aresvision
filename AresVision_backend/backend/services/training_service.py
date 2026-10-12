@@ -51,9 +51,15 @@ from services.earth_training_artifact import (
 )
 from services.earth_training_contract import (
     EARTH_3HOURLY_METRICS_SCHEMA_V2,
+    EARTH_3HOURLY_METRICS_SCHEMA_V3,
+    EARTH_METRICS_SCHEMA_KEY,
+    EARTH_METRICS_AGGREGATION_KEY,
     EARTH_TRAINING_SCRIPT,
     build_earth_training_spec,
     canonical_channel_order,
+    earth_3hourly_metrics_contract,
+    earth_task_metrics_contract,
+    earth_spec_metrics_contract,
     is_earth_dataset_id,
     require_earth_training_configuration,
 )
@@ -560,7 +566,9 @@ class TrainingService:
         payload_hypers.pop("tags", None)
         payload_hypers["_data_source"] = source
         if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
-            payload_hypers["_earth_metrics_schema"] = EARTH_3HOURLY_METRICS_SCHEMA_V2
+            metrics_contract = earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V3)
+            payload_hypers[EARTH_METRICS_SCHEMA_KEY] = metrics_contract["schema"]
+            payload_hypers[EARTH_METRICS_AGGREGATION_KEY] = metrics_contract["aggregation"]
         if earth_task_split is not None:
             from services.earth_task_split import EARTH_TASK_SPLIT_POLICY, TASK_SPLIT_POLICY_KEY
             payload_hypers["_earth_task_split"] = earth_task_split
@@ -686,6 +694,11 @@ class TrainingService:
             uploaded_model_id=raw_hypers.get("_uploaded_model_id"),
             hyperparameters=public_hypers, dataset_id=task.dataset_id,
         )
+        metrics_contract = earth_task_metrics_contract(raw_hypers, executable=True)
+        if metrics_contract is None:
+            # Truly old unmarked queue rows predate area weighting. Keep their
+            # existing statistical meaning rather than upgrading while launching.
+            metrics_contract = earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V2, executable=True)
         binding = {
             key: getattr(task, key, None) for key in (
                 "dataset_id", "dataset_version", "dataset_fingerprint",
@@ -728,6 +741,7 @@ class TrainingService:
             task_split=task_split,
             task_id=task.id, dataset_binding=binding, hyperparameters=normalized,
             uploaded_model=raw_hypers.get("_earth_uploaded_reference"),
+            metrics_contract=metrics_contract,
         )
         spec["data_path"] = str(Path(release.data_path).resolve())
         return spec
@@ -1338,9 +1352,16 @@ class TrainingService:
                             raise EarthArtifactError("Training spec partitions do not match the frozen task")
                         expected_hypers.update({
                             key: frozen_hypers[key]
-                            for key in (TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, "_earth_metrics_schema")
+                            for key in (TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, EARTH_METRICS_SCHEMA_KEY,
+                                        EARTH_METRICS_AGGREGATION_KEY)
                             if key in frozen_hypers
                         })
+                        execution_contract = earth_spec_metrics_contract(earth_training_spec)
+                        frozen_contract = earth_task_metrics_contract(frozen_hypers, executable=True)
+                        if frozen_contract is None:
+                            frozen_contract = earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V2, executable=True)
+                        if execution_contract != frozen_contract:
+                            raise EarthArtifactError("Training spec metrics do not match the frozen task contract")
                     if "task_split" in earth_training_spec:
                         expected_hypers["_earth_task_split"] = earth_training_spec["task_split"]
                     uploaded = earth_training_spec.get("uploaded_model")
@@ -1359,8 +1380,8 @@ class TrainingService:
                         earth_training_spec["task_id"],
                     )
                     if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
-                        if earth_artifact.metrics["schema"] != EARTH_3HOURLY_METRICS_SCHEMA_V2:
-                            raise EarthArtifactError("New Earth training requires the complete v2 metrics contract")
+                        if any(earth_artifact.metrics.get(key) != value for key, value in execution_contract.items()):
+                            raise EarthArtifactError("Earth checkpoint metrics do not match the frozen execution contract")
                         from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA
                         if earth_artifact.model_config.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA:
                             await asyncio.to_thread(verify_earth_model_reload_isolated, output_path,
@@ -1679,7 +1700,8 @@ class TrainingService:
         return {"id": task_id, "status": "testing"}
 
     def _parse_progress_from_log(self, line: str, total_epochs: int, start_time: float, history: dict = None) -> dict | None:
-        batch_pattern = r"Epoch\s+(\d+)/(\d+)\s+Batch\s+(\d+)/(\d+)\s+Loss=([\d\.]+)"
+        number_pattern = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+        batch_pattern = rf"Epoch\s+(\d+)/(\d+)\s+Batch\s+(\d+)/(\d+)\s+Loss=({number_pattern})"
         batch_match = re.search(batch_pattern, line)
         if batch_match:
             current_ep = int(batch_match.group(1))
@@ -1710,7 +1732,14 @@ class TrainingService:
                 "eta": eta,
             }
 
-        epoch_pattern = r"Epoch\s+(\d+)/(\d+)\s+Loss=([\d\.]+)(?:\s+Val Loss=([\d\.]+))?"
+        # Keep the metric label between train and validation loss optional: the
+        # Earth runner annotates it as ``(area-weighted normalized MSE)``.  The
+        # old expression stopped at ``Loss=...`` and therefore silently stored
+        # every Earth validation value as ``null``.
+        epoch_pattern = (
+            rf"Epoch\s+(\d+)/(\d+)\s+Loss=({number_pattern})"
+            rf"(?:\s+\([^\r\n]*?\))?(?:\s+Val Loss=({number_pattern}))?"
+        )
         epoch_match = re.search(epoch_pattern, line)
         if epoch_match:
             current_ep = int(epoch_match.group(1))
@@ -1720,9 +1749,17 @@ class TrainingService:
             effective_total_epochs = max(total_epochs, total_ep_from_log)
             progress = (current_ep / max(1, effective_total_epochs)) * 100
 
-            if history is not None and len(history["train"]) < current_ep:
-                history["train"].append(loss)
-                history["val"].append(val_loss if val_loss is not None else None)
+            if history is not None:
+                # Progress can be replayed after a restart.  Fill a missing
+                # validation value for an already recorded epoch instead of
+                # treating the existing ``null`` as final.
+                while len(history["train"]) < current_ep:
+                    history["train"].append(None)
+                while len(history["val"]) < current_ep:
+                    history["val"].append(None)
+                history["train"][current_ep - 1] = loss
+                if val_loss is not None:
+                    history["val"][current_ep - 1] = val_loss
 
             elapsed = time.time() - start_time
             if current_ep > 0:

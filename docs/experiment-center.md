@@ -31,7 +31,7 @@ Earth 默认数据集读取 `/api/datasets` 的 `default_earth_dataset_id`。日
     ├── 视图 1「实验配置」：配置画布 + 配置检查器（目录收起）
     ├── 视图 2「训练监视」：实验目录 + 画布（检查器收起；已完成任务在监视下方展示结果）
     └── 视图 3「实验矩阵」：可配置列的实验表格（任务轮询复用 TrainingContext）
-底部：配置视图的提交运行条（position: fixed，横跨浏览器）；监控区自身提供停止按钮
+底部：配置视图的提交运行条（position: fixed，横跨浏览器）；监控区自身提供停止训练 / 取消排队按钮
 ```
 
 阶段（configure / monitor / result）仍由任务状态推导，视图只决定工作区布局。首次加载若已选中任务（运行中的任务优先，否则选列表最新记录）则进入训练监视；没有任务时默认实验配置。用户主动切换视图后，轮询不会覆盖选择。点「新建实验」或「复制配置」进入实验配置，选任务或成功开始训练进入训练监视。配置画布和实验矩阵始终保持挂载（只用 `hidden` 隐藏），所以切换视图不会清空表单，也不会丢失矩阵筛选、排序或横向滚动位置。
@@ -46,7 +46,11 @@ Earth 默认数据集读取 `/api/datasets` 的 `default_earth_dataset_id`。日
 
 Earth 结果页默认显示完整测试集六项指标，并独立显示验证集；不能拿验证值补齐测试值。本次历史预测指标只属于选定窗口。新旧契约、公式、单位及比较缺失值规则见[地球评价指标](earth-evaluation-metrics.md)。
 
-「模型测试」仅对已完成且产物有效的任务开放；Earth 额外复核 checkpoint 与数据身份，不可用时禁用并显示原因，支持重新核验。Earth 弹窗与预测页共用[训练后诊断](earth-post-training-diagnostics.md)：分别展示 checkpoint 完整 test 指标和固定 test 抽样范围下的 DU 散点、prediction-reference 直方图、ΔRMSE PFI；条件切换清空旧结果并取消请求，错误显示结构化 message，可重试。日频任务仍不能运行。
+矩阵行内保留「查看详情」「复制配置」，「更多操作」菜单提供「用于预测」「模型测试」「删除实验记录」，均复用页面既有处理函数，不新增后端接口或批量删除。「用于预测」复用 `canUseTaskForPrediction`：任务须已完成、产物有效且未绑定已停用的数据集，选中模型通过既有 handoff 进入对应行星的预测模式。
+
+「模型测试」仅对已完成且产物有效的任务开放；矩阵中的 Earth 任务在打开菜单后额外复核 checkpoint 与数据身份，核验期间禁用，不可用时显示原因并可重试。Earth 弹窗与预测页共用[训练后诊断](earth-post-training-diagnostics.md)：分别展示 checkpoint 完整 test 指标和固定 test 抽样范围下的 DU 散点、prediction-reference 直方图、ΔRMSE PFI；条件切换清空旧结果并取消请求，错误显示结构化 message，可重试。日频任务仍不能运行。
+
+「删除实验记录」复用页面确认框与单任务删除接口，确认前说明会删除实验记录、关联标签关系、日志、训练权重及该任务的预测分析缓存，保留标签本身。排队、准备中和运行中的任务禁用删除，须先在训练监视中取消排队或停止训练；已完成、失败和已取消的记录可进入确认流程。
 
 Earth 服务重启恢复要求严格校验并重建 checkpoint，任务指标恢复自产物；新任务的预期指标版本由服务器保存，不能用日志标记绕过完整指标门禁。下文日志解析恢复说明仅适用于原有 Mars 路径。
 
@@ -64,9 +68,11 @@ Earth 服务重启恢复要求严格校验并重建 checkpoint，任务指标恢
 
 排队任务的正常执行与重启恢复统一从持久化记录准备，不再依赖内存启动配方。Mars 迁移任务在启动前重新解析任务/上传权重来源并复核状态、文件与当前权限；管理员权限被撤销、来源被删除或失效时，任务会在启动子进程前失败，失败原因写入任务 `metrics`，后续任务继续按 FIFO 调度。Mars 上传模型还核对固定包版本、路径和源码摘要，Earth 继续使用冻结划分与嵌入源码。具体恢复约定见[训练队列](specs/2026-10-04-training-queue-design.md)。
 
-矩阵支持名称、状态和标签筛选，适用列按数值或时间排序并把缺失值放在末尾。名称单元格可就地编辑，Enter 保存、Esc 取消，也有保存/取消按钮；沿用 255 字符、去首尾空格和账号内重名校验。排队、运行、完成、失败和取消记录都允许改显示名称，上传模型包名称仍单独显示。标签单元格复用账号私有标签选择器，支持搜索、多选、新建、批量增删和标签管理。标签编辑面板复用 MUI Popper，通过 portal 挂到 `body` 并使用视口固定定位，脱离固定单元格的层叠上下文和表格滚动裁切；靠近边缘时翻转或平移，尺寸随视口约束，搜索结果、新建标签或错误信息改变尺寸后重新定位。标签选项独立滚动，取消 / 保存操作区保持可见。Esc 取消并返回编辑按钮焦点，点击外部或切换离开矩阵视图会关闭浮层。行操作可打开训练监视或复制配置，保存后由同一任务刷新同步目录和监视视图。
+矩阵支持名称、状态和标签筛选，适用列按数值或时间排序并把缺失值放在末尾。名称单元格可就地编辑，Enter 保存、Esc 取消，也有保存/取消按钮；沿用 255 字符、去首尾空格和账号内重名校验。排队、运行、完成、失败和取消记录都允许改显示名称，上传模型包名称仍单独显示。标签单元格复用账号私有标签选择器，支持搜索、多选、新建、批量增删和标签管理。标签编辑面板复用 MUI Popper，通过 portal 挂到 `body` 并使用视口固定定位，脱离固定单元格的层叠上下文和表格滚动裁切；靠近边缘时翻转或平移，尺寸随视口约束，搜索结果、新建标签或错误信息改变尺寸后重新定位。标签选项独立滚动，取消 / 保存操作区保持可见。Esc 取消并返回编辑按钮焦点，点击外部或切换离开矩阵视图会关闭浮层。行内操作可打开训练监视或复制配置，更多菜单提供预测、模型测试与单条删除；保存和删除后由同一任务刷新同步目录、矩阵和监视视图。
 
 矩阵浏览器回归使用[隔离夹具脚本](../scripts/audit/experiment-matrix/browser-check.js)，在已构建的前端服务上运行：从仓库根目录执行 `npx --yes --package @playwright/cli playwright-cli open http://127.0.0.1:5173/#/training --headed`，再执行 `npx --yes --package @playwright/cli playwright-cli run-code --filename scripts/audit/experiment-matrix/browser-check.js`。夹具拦截浏览器 API 与 WebSocket，以 36 行、18 列和 40 个标签检查宽屏、窄屏、短横屏、边缘定位、滚动、保存 / 取消和权限失败；不写数据库，不启动训练，保存断言仅验证前端请求契约与刷新。结束后执行 `npx --yes --package @playwright/cli playwright-cli close` 清理隔离浏览器会话。截图输出到忽略目录 `output/playwright/`。
+
+三个行操作另有[隔离交互夹具](../scripts/audit/experiment-matrix/actions-browser-check.js)，同一浏览器会话执行 `npx --yes --package @playwright/cli playwright-cli run-code --filename scripts/audit/experiment-matrix/actions-browser-check.js`。覆盖预测 / 测试状态门禁、Earth 核验失败和重试、按行星跳转、删除取消 / 权限失败 / 重试 / 防重复提交、桌面与窄屏菜单定位及 Esc 焦点恢复。所有测试与删除请求均由夹具拦截，不运行真实推理或删除真实任务；本轮该夹具的 33 项检查通过，生产构建成功。前端全量测试仍有两项与既有配置切换及 batch 默认值有关的旧源码断言失败，不属于本轮行操作验证范围。
 
 **监控视图里监控常驻，结果接在下面**：任务完成后 `stage` 会变成 `result`，但监控工作区（状态、进度、Loss 曲线、实时日志）不再被结果顶替，因此点「训练监控」总能同时看到运行状态与结果指标。
 
@@ -171,7 +177,7 @@ Earth 服务重启恢复要求严格校验并重建 checkpoint，任务指标恢
 
 检查器只做摘要，不复制整张表单（组件内不渲染任何 `input` / `select`）。顶部显示已完成分区数、警告数、问题数及实际可训练状态；四个折叠分区依次是模型名称、数据集、模型来源、超参数。有问题的分区默认展开，问题来自页面控制器现有的 `readiness.blockers`，定位按钮滚动到对应表单分区或专家页签。自定义参数只显示一个汇总问题，避免在第 04 分区重复列出每个字段。没有独立 warning 校验来源时警告数为 0；“通过”表示当前无已知阻塞项，最终可训练性仍以 `readiness.canTrain` 为准。
 
-左侧目录复用原有搜索、标签筛选和批量标签操作；状态筛选按两列排布，排序与标签筛选共用一条工具行，标签筛选按需展开。列表增加最近实验、运行中、已完成、失败或需修复分组及折叠，支持最近更新、最早更新、名称排序。最近实验最多列出三条，不在其他分组重复展示。记录以名称、状态与时间为第一层，模型、数据集为第二层，编号与 `字段 0–3` 为辅助信息；标签操作、通道和指标放在记录的「标签与详情」展开区。`字段` 完整度只是历史元数据可读取程度，不是训练校验或草稿状态。当前任务接口不提供持久化草稿，因此目录没有伪造“草稿”分组。打开任务、停止训练及工作区内复制、删除等原操作不变。
+左侧目录复用原有搜索、标签筛选和批量标签操作；状态筛选按两列排布。实验搜索占满一行，排序与标签筛选按钮始终等高并排；展开面板独立占满侧栏宽度，不挤开排序控件。面板依次提供全部 / 未分组切换、标签搜索、紧凑多列标签选项和底部管理入口，短标签并排、长标签自动换行；取消重复的「按标签筛选」可见标题与内层边框，保留字段组的可访问名称。选项独立滚动，收起面板后仍保留筛选，按钮显示已启用条件数量。列表增加最近实验、运行中、已完成、失败或需修复分组及折叠，支持最近更新、最早更新、名称排序。最近实验最多列出三条，不在其他分组重复展示。每张目录卡片仅展示实验名称和全部实验标签。标题行左侧提供批量选择框，右侧为常驻的标签编辑铅笔图标；名称最多两行。全部标签直接显示在独立区域，用弱底色、小圆角与紧凑间距自动换行，不与选择或编辑控件混排。点击卡片查看实验，选择框与编辑图标保留可访问名称，编辑图标提供提示。模型、数据集、通道、进度和指标详情在监控、结果或矩阵工作区查看。当前任务接口不提供持久化草稿，因此目录没有伪造“草稿”分组。停止训练与取消排队由监控工作区提供；复制配置、预测、模型测试和删除可从结果工作区或实验矩阵进入。
 
 **删除资源估算**：过去用 `window − horizon + 1` 推导“训练样本数”，那不是数据集长度。没有真实数据长度、切分与采样信息时不给样本数、显存或耗时。
 
@@ -229,12 +235,13 @@ const readiness = useMemo(() => {
 | 自定义模型参数动态表单与校验 | 超参数「自定义参数」页签（检查器有一级入口） |
 | 模型架构、SPHERE、结构参数 | 「模型」分区的官方模型区域 + 超参数「模型结构」页签 |
 | 迁移学习、上传权重、冻结策略、微调学习率 | 超参数「迁移学习」页签 |
-| 训练标签与批量标签 | 超参数「实验标签」页签；目录中的筛选、批量标签与标签管理 |
+| 训练标签与批量标签 | 超参数「实验标签」页签；目录标题行的批量选择框与标签编辑图标、卡片独立区域中的全部标签，以及目录筛选、批量标签与标签管理 |
 | 进度、Loss 曲线、日志与自动跟随 | 监控工作区（`TrainingProgressMonitor`、`LossEvolutionChart`、原日志面板样式） |
-| 停止训练 | 监控工作区与目录中运行中实验行 |
-| 重命名、删除、单任务模型测试 | 结果工作区 |
-| 用于预测 | 结果工作区，继续使用 `TRAINING_TASK_HANDOFF_KEY` 与 `buildTrainingTaskHandoff` |
-| 复制配置 | 结果工作区；只把已完成任务的配置写入新建实验表单，不自动开始训练 |
+| 停止训练 / 取消排队 | 监控工作区 |
+| 重命名 | 结果工作区；实验矩阵名称单元格内编辑 |
+| 删除、单任务模型测试 | 结果工作区；实验矩阵「更多操作」菜单 |
+| 用于预测 | 结果工作区；实验矩阵「更多操作」菜单，继续使用 `TRAINING_TASK_HANDOFF_KEY` 与 `buildTrainingTaskHandoff` |
+| 复制配置 | 结果工作区；实验矩阵行内按钮，载入新建实验表单，不自动开始训练 |
 
 工作区组件、检查器与运行条都不调用 `startTrainingTask`、`fetchLogs`，也不创建 `setInterval` 或 WebSocket；训练提交、日志轮询与实时更新仍由 [ModelTrainingPage.jsx](../frontend/src/pages/ModelTrainingPage.jsx) 与 [TrainingContext.jsx](../frontend/src/contexts/TrainingContext.jsx) 持有。
 
@@ -242,10 +249,10 @@ const readiness = useMemo(() => {
 
 ## 10. 结果动作的口径
 
-- **用于预测**：仅当 `completed && model_available` 时出现，写入预测 handoff 并跳转 `#/predict?from=training`。
+- **用于预测**：复用 `canUseTaskForPrediction`，仅对已完成、产物有效且未绑定已停用数据集的任务开放；写入预测 handoff，火星跳转 `#/predict?from=training&mode=trained`，活动三小时地球任务使用 `mode=earth`。入口位于结果工作区与实验矩阵「更多操作」菜单。
 - **去模型比较**：同样只对 `completed && model_available` 开放，火星跳转 `#/predict?from=training&mode=trained_compare`，活动三小时地球任务使用 `mode=earth_compare`；预测页先选行星、再选单模型/多模型。没有批量预选协议，因此不写入任何选择结果。
 - **复制配置**：读取任务完整训练配置载入新建实验表单，实验名加“副本”后缀并保证唯一，字段缺失时按 `warnings` 逐条提示，任何情况下都不会自动开始训练；上传模型实验会带回上传模型 ID、版本、名称与 `custom_model_params`（深拷贝，由现有参数表单按 schema 渲染）。
-- **重命名 / 模型测试 / 删除**：复用页面既有处理函数，入口都在结果工作区。
+- **重命名 / 模型测试 / 删除**：复用页面既有处理函数，结果工作区保留入口，实验矩阵支持名称就地编辑、菜单内模型测试和单条删除。测试仅允许已完成且产物有效的任务，Earth 须通过 checkpoint / 数据身份核验。删除沿用确认框与单任务接口，说明日志、权重及该任务预测分析缓存的连带清理；活动任务禁用删除，先停止或取消，不提供批量删除。
 
 ### 复制配置覆盖的字段
 
@@ -281,7 +288,8 @@ const readiness = useMemo(() => {
 | --- | --- |
 | [ExperimentCenterShell.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentCenterShell.jsx) | 固定视图栏（实验配置 / 训练监视 / 实验矩阵三个按钮）、控制台网格与列组合、运行条 portal 与底部空间预留 |
 | [ExperimentDirectory.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentDirectory.jsx) | 左侧目录、状态筛选与轻量实验行 |
-| [ExperimentMatrix.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentMatrix.jsx) | 实验矩阵表格、筛选排序、名称与标签编辑、批量标签和属性面板 |
+| [ExperimentMatrix.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentMatrix.jsx) | 实验矩阵表格、筛选排序、名称与标签编辑、批量标签、属性面板及预测 / 测试 / 单条删除菜单 |
+| [ExperimentMatrixActions.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentMatrixActions.jsx) | 矩阵行内按钮与「更多操作」菜单、状态门禁、按需 Earth 测试核验与重试；调用页面既有预测 / 测试 / 删除流程 |
 | [experimentMatrixModel.js](../frontend/src/pages/ModelTrainingPage/experimentMatrixModel.js) | 矩阵属性定义、历史配置整理、列偏好恢复、筛选与排序 |
 | [ExperimentConfigWorkspace.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentConfigWorkspace.jsx) | 画布四个部分（模型名称 / 数据集 / 模型 / 超参数）、超参数页签（输入与预测载荷条、训练参数矩阵、专家字段） |
 | [ExperimentConfigInspector.jsx](../frontend/src/pages/ModelTrainingPage/ExperimentConfigInspector.jsx) | 右侧简短摘要与就绪检查，纯展示 |

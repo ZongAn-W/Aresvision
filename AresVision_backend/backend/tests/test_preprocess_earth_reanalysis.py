@@ -1,12 +1,18 @@
 import json
+import hashlib
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from scripts.preprocess_earth_reanalysis import (
+    _fingerprint_inventory,
+    _source_fingerprint,
+    _source_inventory,
     aggregate_to_grid,
     build_overlap_weights,
+    discover_merra2_files,
     preprocess_merra2,
 )
 
@@ -104,6 +110,93 @@ def test_preprocess_merra2_builds_daily_area_weighted_package(tmp_path):
     assert manifest["processing"]["spatial_method"] == "spherical_area_weighted_overlap"
     assert manifest["processing"]["temporal_method"] == "mean_of_complete_source_steps"
     assert manifest["source"]["product"] == "MERRA-2"
+    inventory = manifest["source_files"]
+    assert len(inventory) == 6
+    assert all({"date", "product", "name", "bytes", "mtime_ns", "sha256"} <= item.keys()
+               for item in inventory)
+    assert manifest["source_sha256"] == _fingerprint_inventory(inventory)
+    assert "full-file-sha256" in manifest["source_fingerprint_basis"]
+    report = json.loads((output_dir / "verification" / "preprocess_report.json").read_text(encoding="utf-8"))
+    assert report["source_files"] == inventory
+    assert report["source_sha256"] == manifest["source_sha256"]
+
+
+def test_daily_source_inventory_hash_and_canonical_fingerprint_are_reproducible(tmp_path):
+    source = make_raw(tmp_path / "raw")
+    index = discover_merra2_files(source)
+
+    first = _source_inventory(index)
+    second = _source_inventory(index)
+
+    assert first == second
+    assert _source_fingerprint(index) == _source_fingerprint(index)
+    assert _fingerprint_inventory(first) == _fingerprint_inventory(second)
+    assert all(len(item["sha256"]) == 64 for item in first)
+    canonical = json.dumps(first, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert _fingerprint_inventory(first) == hashlib.sha256(canonical).hexdigest()
+
+
+@pytest.mark.parametrize("change_size", [False, True], ids=["same-size-restored-mtime", "size-changed"])
+def test_daily_preprocess_rejects_source_content_change_before_manifest(tmp_path, monkeypatch, change_size):
+    import scripts.preprocess_earth_reanalysis as processor
+
+    source_root = make_raw(tmp_path / "raw")
+    target = source_root / "rad" / "MERRA2_400.tavg1_2d_rad_Nx.20210102.nc4"
+    original_read = processor._read_daily_mean
+    changed = False
+
+    def read_then_change(path, *args, **kwargs):
+        nonlocal changed
+        result = original_read(path, *args, **kwargs)
+        if path == target and not changed:
+            before = target.stat()
+            contents = bytearray(target.read_bytes())
+            if change_size:
+                contents.extend(b"x")
+            else:
+                contents[-1] ^= 1
+            target.write_bytes(contents)
+            if not change_size:
+                os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+                after = target.stat()
+                assert after.st_size == before.st_size
+                assert after.st_mtime_ns == before.st_mtime_ns
+            changed = True
+        return result
+
+    monkeypatch.setattr(processor, "_read_daily_mean", read_then_change)
+    output_dir = tmp_path / "release"
+    with pytest.raises(ValueError, match="source archive changed during preprocessing"):
+        preprocess_merra2(source_root, output_dir, train_end="2020-12-31", validation_end="2021-01-01")
+
+    assert changed
+    assert not (output_dir / "manifest.json").exists()
+
+
+def test_daily_preprocess_distinguishes_mtime_only_change_from_content_change(tmp_path, monkeypatch):
+    import scripts.preprocess_earth_reanalysis as processor
+
+    source_root = make_raw(tmp_path / "raw")
+    target = source_root / "rad" / "MERRA2_400.tavg1_2d_rad_Nx.20210102.nc4"
+    original_read = processor._read_daily_mean
+    touched = False
+
+    def read_then_touch(path, *args, **kwargs):
+        nonlocal touched
+        result = original_read(path, *args, **kwargs)
+        if path == target and not touched:
+            before = target.stat()
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000))
+            touched = True
+        return result
+
+    monkeypatch.setattr(processor, "_read_daily_mean", read_then_touch)
+    output_dir = tmp_path / "release"
+    with pytest.raises(ValueError, match="source archive metadata changed during preprocessing"):
+        preprocess_merra2(source_root, output_dir, train_end="2020-12-31", validation_end="2021-01-01")
+
+    assert touched
+    assert not (output_dir / "manifest.json").exists()
 
 
 def test_preprocess_merra2_rejects_an_incomplete_day(tmp_path):
@@ -213,28 +306,20 @@ def test_date_discovery_rejects_duplicates_gaps_and_missing_endpoints(tmp_path):
                           train_end='2020-12-31', validation_end='2021-01-01')
 
 
-def test_global_api_accepts_poles_and_dateline_and_preserves_v1(tmp_path):
+def test_preprocess_keeps_daily_package_compatible_while_registry_retires_it(tmp_path):
     from services.dataset_registry import DatasetRegistry
-    from services.earth_dataset_metadata import file_sha256
-    from services.earth_overview_service import EarthOverviewService
-    from schemas.earth_overview import EarthRegionalSeriesResponse
+    from services.dataset_identity import DatasetRequestError
     output = preprocess_merra2(make_raw(tmp_path / 'raw'), tmp_path / 'merra2_daily_v2',
                               train_end='2020-12-31', validation_end='2021-01-01')
-    registry = DatasetRegistry(output.parent, earth_dataset_id='earth_merra2_daily_v2',
-                               expected_manifest_sha256=file_sha256(output.with_name('manifest.json')),
-                               expected_data_sha256=file_sha256(output))
-    descriptor = registry.get_dataset('earth_merra2_daily_v2')
-    assert descriptor['availability'] == 'available'
-    service = EarthOverviewService(registry)
-    args = dict(dataset_id=descriptor['dataset_id'], expected_fingerprint=descriptor['dataset_fingerprint'], variable='TO3')
-    for lat,lon in ((90,180),(-90,-180),(89.9,179.9)):
-        point = service.get_point_series(**args, lat=lat, lon=lon)
-        assert point['values'][0] == pytest.approx(11.5)
-    series = service.get_regional_series(**args)
-    assert series['aggregation'] == 'spherical_cell_area_mean'
-    EarthRegionalSeriesResponse(**series)
-    assert registry.get_dataset('earth_merra2_daily_v1')['availability'] == 'missing'
-    assert registry.get_dataset('earth_merra2_daily_v1')['dataset_version'] == 'v1'
+    manifest = json.loads(output.with_name('manifest.json').read_text(encoding='utf-8'))
+    assert output.is_file()
+    assert manifest['source_files']
+    assert all('sha256' in item for item in manifest['source_files'])
+    registry = DatasetRegistry(output.parent, earth_dataset_id='earth_merra2_daily_v2')
+    with pytest.raises(DatasetRequestError) as error:
+        registry.get_dataset('earth_merra2_daily_v2')
+    assert error.value.code == 'dataset_retired'
+    assert error.value.status_code == 409
 
 
 @pytest.mark.parametrize('mutation', ['manifest_bounds', 'cell_gap', 'normalization'])

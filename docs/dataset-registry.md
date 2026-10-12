@@ -44,7 +44,14 @@
 - `manifest_sha256` 指 `manifest.json` **原始字节**的 SHA-256；日频发布继续按其固定原始字节哈希验证。
 - `data_sha256` 指 NetCDF 文件原始字节的 SHA-256。
 - 日频 `dataset_fingerprint` 组合 `dataset_id`、`dataset_version`、`manifest_sha256`、`data_sha256`，算法固定为对四字段做 `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=True)` 后再取 SHA-256 十六进制；旧哈希和组合算法不变。
-- 三小时 fingerprint 与离线构建器保持一致：使用排除 `dataset_fingerprint` 本身后的 canonical manifest 内容摘要（`manifest_content_sha256`）作为组合函数的 manifest 参数，另返回原文件字节 SHA。格式化 JSON 只改变字节 SHA，不改变三小时产品 fingerprint；ID 和版本始终参与组合，不能与日频共用身份。
+- 三小时 fingerprint 与离线构建器保持一致：使用 manifest 身份内容摘要（`manifest_content_sha256`）作为组合函数的 manifest 参数，另返回原文件字节 SHA。ID 和版本始终参与组合，不能与日频共用身份。
+- 三小时 manifest 的 `fingerprint_rule` 决定内容摘要的取法，构建器、服务端与独立验证器各有一份实现并交叉验证：
+  - 缺失或 `1`（legacy）：对除 `dataset_fingerprint` 外的整份 manifest 取 canonical 摘要；既有已注册发布包属于这一类，其 `manifest_content_sha256` 与 `dataset_fingerprint` 冻结，不因修复身份策略而漂移。摘要覆盖整份 manifest，因此给既有包补写 `fingerprint_rule: 1` 本身就会改变其内容摘要——既有发布包不得改写。
+  - `2`（内容绑定）：再排除顶层 `source_mtimes` 与 `fingerprint_rule`，并把 `source_files` 投影为 `date/product/path/bytes/sha256`。`mtime_ns`（文件系统元数据）与 `name`（`path` 的冗余后缀）显式排除：纯 mtime 漂移、`name` 改写、键顺序变化都不改变身份；`path`、`bytes`、`sha256` 或清单成员增减必然改变身份并被拒绝或作为新发布上报。
+  - 其他任何值（0、负数、字符串、浮点、布尔）报错，fail-closed，不静默回退 rule 1。
+- `source_sha256` 校验按 `source_inventory_version` 分流：缺失或 `2` 校验含 `name`/`mtime_ns` 的完整清单，`3` 只校验身份字段投影。两侧必须一致，否则既有注册包会被误判损坏；新增字段（`fingerprint_rule`、`source_mtimes`）在消费方全部可选。
+- 消费既有发布包时使用**短路**：identity 三元组取 manifest 的 `dataset_id`/`dataset_version`/`data_sha256` 与已冻结的 `manifest_content_sha256`（registry descriptor 或共享验证证明取得），不重新投影 1462 条源清单；冷路径退回 rule 1 全文摘要，两者必须得到同一 fingerprint。
+- 格式化 JSON 只改变 `manifest_sha256` 字节摘要，不改变三小时产品 fingerprint。
 - Mars 无版本记录时如实返回 `null`，不给旧来源编造 `v1`，也不用文件修改时间冒充版本。
 
 保留的 Earth v1 发布指纹：

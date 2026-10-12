@@ -500,3 +500,25 @@ def test_inference_reports_clear_error_when_weight_disappears_during_load(monkey
 
     with pytest.raises(ValueError, match="Model file not found"):
         service._load_task_state_dict(task)
+
+
+def test_parse_progress_accepts_annotated_validation_loss_and_scientific_notation():
+    service = training_module.TrainingService()
+    history = {"train": [], "val": []}
+    lines = [
+        "Epoch 1/2 Loss=1.2e-1 (area-weighted normalized MSE) Val Loss=6.75e-2",
+        "Epoch 2/2 Loss=8.0e-2 (normalized MSE) Val Loss=5.0e-2",
+    ]
+    results = [service._parse_progress_from_log(line, 2, 0.0, history) for line in lines]
+    assert [item["val_loss"] for item in results] == [0.0675, 0.05]
+    assert history == {"train": [0.12, 0.08], "val": [0.0675, 0.05]}
+
+
+def test_parse_progress_replays_missing_validation_value_without_losing_history():
+    service = training_module.TrainingService()
+    history = {"train": [0.12], "val": [None]}
+    result = service._parse_progress_from_log(
+        "Epoch 1/2 Loss=0.12 (area-weighted normalized MSE) Val Loss=0.067518",
+        2, 0.0, history,
+    )
+    assert result["loss_history"] == {"train": [0.12], "val": [0.067518]}

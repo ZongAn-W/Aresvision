@@ -41,11 +41,14 @@ from services.dataset_identity import DatasetRequestError, EARTH_DATASET_3HOURLY
 from services.earth_dataset import (  # noqa: E402
     EarthOzoneWindows, EarthThreeHourlyWindows, build_threehour_training_cache,
     fit_threehour_normalization, THREE_HOURLY_GRID_SHAPE,
+    threehour_global_cell_area_weights,
 )
 from training_backbones.earth_3hourly_uploaded_contract import (  # noqa: E402
     FULL_GRID_CONTRACT_SCHEMA, contract_profile,
 )
 from services.earth_training_artifact import (  # noqa: E402
+    CELL_AREA_WEIGHTED_AGGREGATION,
+    GRID_UNIFORM_AGGREGATION,
     EarthArtifactError,
     ErrorAccumulator,
     assert_release_matches_binding,
@@ -61,6 +64,9 @@ from services.earth_training_contract import (  # noqa: E402
     EARTH_TRAINING_SPEC_SCHEMA,
     EARTH_WINDOW,
     normalize_earth_training_hyperparameters,
+    earth_spec_metrics_contract,
+    EARTH_METRICS_SCHEMA_KEY,
+    EARTH_METRICS_AGGREGATION_KEY,
     earth_training_profile,
     split_window_counts,
 )
@@ -117,6 +123,7 @@ def _build_loaders(
 ):
     """Build the three split datasets sharing one training-fitted normalization."""
     binding = spec["dataset_binding"]
+    metrics_contract = earth_spec_metrics_contract(spec)
     full_grid = _uses_full_grid(spec)
     max_batch_size = contract_profile(FULL_GRID_CONTRACT_SCHEMA)['max_batch_size']
     if full_grid and (type(batch_size) is not int or not 1 <= batch_size <= max_batch_size):
@@ -195,10 +202,13 @@ def _build_loaders(
         split_ranges = task_split["ranges"]
     generator = torch.Generator()
     generator.manual_seed(seed)
+    area_weights = (threehour_global_cell_area_weights(release)
+                    if metrics_contract is not None and metrics_contract["aggregation"] == CELL_AREA_WEIGHTED_AGGREGATION
+                    else None)
     wrapper = _SpatialTileDataset if window_type is EarthThreeHourlyWindows and not full_grid else _ArrayDataset
     pin_memory = device is not None and device.type == 'cuda'
     train_loader = torch.utils.data.DataLoader(
-        wrapper(splits["train"]),
+        wrapper(splits["train"], area_weights=area_weights),
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
@@ -206,14 +216,14 @@ def _build_loaders(
         generator=generator,
     )
     validation_loader = torch.utils.data.DataLoader(
-        wrapper(splits["validation"]),
+        wrapper(splits["validation"], area_weights=area_weights),
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
         pin_memory=pin_memory,
     )
     test_loader = torch.utils.data.DataLoader(
-        wrapper(splits["test"]),
+        wrapper(splits["test"], area_weights=area_weights),
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
@@ -239,6 +249,7 @@ def _build_loaders(
         "validation_loader": validation_loader,
         "test_loader": test_loader,
         "full_grid": full_grid,
+        "area_weights": area_weights,
         "cache_path": cache_path,
         "preparation_timings": {'validation_seconds': validation_seconds,
                                 'normalization_seconds': normalization_seconds,
@@ -250,22 +261,34 @@ def _build_loaders(
 class _ArrayDataset(torch.utils.data.Dataset):
     """Convert only the requested window; never expand all overlapping windows."""
 
-    def __init__(self, source: EarthOzoneWindows):
+    def __init__(self, source: EarthOzoneWindows, area_weights=None):
         self.source = source
+        self.area_weights = area_weights
+        # Area weights are normalized over the complete global grid. A full-grid
+        # sample therefore represents one unit of spatial mass. Tile datasets
+        # override this with one global tile's share below.
+        self.area_weight_denominator = 1.0
 
     def __len__(self) -> int:
         return len(self.source)
 
     def __getitem__(self, index):
         inputs, targets = self.source[index]
-        return torch.from_numpy(inputs), torch.from_numpy(targets)
+        result = (torch.from_numpy(inputs), torch.from_numpy(targets))
+        if self.area_weights is not None:
+            return (*result, torch.from_numpy(np.asarray(self.area_weights, dtype='float32')))
+        return result
 
     def __getitems__(self, indices):
         if not hasattr(self.source, 'read_windows'):
             return [self[index] for index in indices]
         requests = [(index, slice(None), slice(None)) for index in indices]
-        return [(torch.from_numpy(inputs), torch.from_numpy(targets))
-                for inputs, targets in self.source.read_windows(requests)]
+        result = [(torch.from_numpy(inputs), torch.from_numpy(targets))
+                  for inputs, targets in self.source.read_windows(requests)]
+        if self.area_weights is not None:
+            weights = torch.from_numpy(np.asarray(self.area_weights, dtype='float32'))
+            result = [(*item, weights) for item in result]
+        return result
 
 
 class _SpatialTileDataset(_ArrayDataset):
@@ -275,14 +298,15 @@ class _SpatialTileDataset(_ArrayDataset):
     forecast windows; evaluation visits every cell of every window exactly once.
     """
 
-    def __init__(self, source):
-        super().__init__(source)
+    def __init__(self, source, area_weights=None):
+        super().__init__(source, area_weights=area_weights)
         self.tiles = [
             (slice(lat, lat + THREE_HOUR_TILE_SHAPE[0]),
              slice(lon, lon + THREE_HOUR_TILE_SHAPE[1]))
             for lat in range(0, 240, THREE_HOUR_TILE_SHAPE[0])
             for lon in range(0, 480, THREE_HOUR_TILE_SHAPE[1])
         ]
+        self.area_weight_denominator = 1.0 / len(self.tiles)
 
     def __len__(self):
         return len(self.source) * len(self.tiles)
@@ -293,7 +317,11 @@ class _SpatialTileDataset(_ArrayDataset):
         inputs, targets = self.source.read_window(
             window_index, lat_slice=latitude, lon_slice=longitude
         )
-        return torch.from_numpy(inputs), torch.from_numpy(targets)
+        result = (torch.from_numpy(inputs), torch.from_numpy(targets))
+        if self.area_weights is not None:
+            weights = np.asarray(self.area_weights[latitude, longitude], dtype='float32')
+            return (*result, torch.from_numpy(weights))
+        return result
 
     def __getitems__(self, indices):
         if not hasattr(self.source, 'read_windows'):
@@ -303,8 +331,17 @@ class _SpatialTileDataset(_ArrayDataset):
             window, tile = divmod(index, len(self.tiles))
             latitude, longitude = self.tiles[tile]
             requests.append((window, latitude, longitude))
-        return [(torch.from_numpy(inputs), torch.from_numpy(targets))
-                for inputs, targets in self.source.read_windows(requests)]
+        result = [(torch.from_numpy(inputs), torch.from_numpy(targets))
+                  for inputs, targets in self.source.read_windows(requests)]
+        if self.area_weights is not None:
+            weighted = []
+            for item, index in zip(result, indices):
+                _, tile = divmod(index, len(self.tiles))
+                latitude, longitude = self.tiles[tile]
+                weights = torch.from_numpy(np.asarray(self.area_weights[latitude, longitude], dtype='float32'))
+                weighted.append((*item, weights))
+            result = weighted
+        return result
 
 
 def _require_finite_gradients(model):
@@ -319,10 +356,52 @@ def _require_finite_gradients(model):
 
 
 def _forward_batch(model, inputs, *, model_source, horizon):
+    # Test doubles from the legacy runner contract expose a boolean marker and
+    # implement the tensor call directly; real uploaded models carry a schema id.
+    if model_source == MODEL_SOURCE_UPLOADED and getattr(model, "_aresvision_earth_3hourly_contract", None) is True:
+        return model(inputs)
     return earth_forward_for_model(
         model, inputs, model_source=model_source, horizon=horizon,
         height=inputs.shape[-2], width=inputs.shape[-1],
     )
+
+
+def _weighted_mse(output, targets, spatial_weights=None, sample_weight_denominator=None):
+    """Return normalized MSE and its denominator for stable streamed logging."""
+    squared = torch.square(output - targets)
+    if spatial_weights is None:
+        denominator = torch.as_tensor(squared.numel(), dtype=squared.dtype, device=squared.device)
+        return squared.mean(), denominator
+    weights = spatial_weights.to(device=output.device, dtype=output.dtype)
+    if weights.ndim == 2:
+        weights = weights.unsqueeze(0)
+    if weights.ndim != 3 or tuple(weights.shape[-2:]) != tuple(output.shape[-2:]):
+        raise EarthTrainingError('Area weights must match each batch tile/global grid')
+    expanded = weights[:, None, None, :, :].expand_as(output)
+    # ``spatial_weights`` are global normalized cell weights. For a tile
+    # sample, dividing by its local sum would make every tile contribute
+    # equally to SGD. Use the fixed global share of one sample instead.
+    if sample_weight_denominator is None:
+        denominator = expanded.sum()
+    else:
+        if not np.isfinite(sample_weight_denominator) or sample_weight_denominator <= 0:
+            raise EarthTrainingError('Area-weighted sample denominator must be finite and positive')
+        denominator = torch.as_tensor(
+            float(output.shape[0] * output.shape[1] * sample_weight_denominator),
+            dtype=output.dtype, device=output.device,
+        )
+    if not torch.isfinite(denominator) or denominator <= 0:
+        raise EarthTrainingError('Area-weighted MSE denominator must be finite and positive')
+    return (squared * expanded).sum() / denominator, denominator
+
+
+def _split_batch(batch):
+    if len(batch) == 2:
+        inputs, targets = batch
+        return inputs, targets, None
+    if len(batch) == 3:
+        return batch
+    raise EarthTrainingError('Earth loader batches must contain inputs, targets and optional area weights')
 
 
 def _evaluate_split(
@@ -331,7 +410,7 @@ def _evaluate_split(
     dataset: EarthOzoneWindows,
     device: torch.device,
     *,
-    loss_function: nn.Module,
+    loss_function=None,
     model_source: str = MODEL_SOURCE_OFFICIAL,
 ) -> tuple[dict, float]:
     """Return DU metrics plus the mean normalized MSE for a whole partition."""
@@ -340,26 +419,32 @@ def _evaluate_split(
     horizon = getattr(dataset, "horizon", EARTH_HORIZON)
     accumulator = ErrorAccumulator(dataset_id=dataset_id, horizon=horizon)
     total_loss = 0.0
-    total_loss_elements = 0
+    total_loss_denominator = 0.0
+    sample_weight_denominator = getattr(getattr(loader, 'dataset', None),
+                                        'area_weight_denominator', None)
     with torch.no_grad():
-        for inputs, targets in loader:
+        for batch in loader:
+            inputs, targets, spatial_weights = _split_batch(batch)
             inputs = inputs.to(device, non_blocking=device.type == 'cuda')
             targets = targets.to(device, non_blocking=device.type == 'cuda')
             output = _forward_batch(model, inputs, model_source=model_source, horizon=horizon)
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during evaluation")
-            loss = loss_function(output, targets)
+            loss, denominator = _weighted_mse(
+                output, targets, spatial_weights, sample_weight_denominator,
+            )
             if not torch.isfinite(loss):
                 raise EarthTrainingError("Non-finite evaluation loss")
-            elements = int(output.numel())
-            total_loss += float(loss.item()) * elements
-            total_loss_elements += elements
+            total_loss += float(loss.item()) * float(denominator.item())
+            total_loss_denominator += float(denominator.item())
             prediction_du = dataset.denormalize_ozone(output[:, :, 0]).detach().cpu().numpy()
             target_du = dataset.denormalize_ozone(targets[:, :, 0]).detach().cpu().numpy()
-            accumulator.update(prediction_du[:, :, None], target_du[:, :, None])
-    if total_loss_elements == 0:
+            weight_array = spatial_weights.detach().cpu().numpy() if spatial_weights is not None else None
+            accumulator.update(prediction_du[:, :, None], target_du[:, :, None],
+                               spatial_weights=weight_array)
+    if total_loss_denominator == 0:
         raise EarthTrainingError("Evaluation loader produced no batches")
-    return accumulator.result(), total_loss / total_loss_elements
+    return accumulator.result(), total_loss / total_loss_denominator
 
 
 def run_training(
@@ -384,6 +469,7 @@ def run_training(
     binding = spec.get("dataset_binding")
     if not isinstance(binding, dict):
         raise EarthTrainingError("Training spec has no dataset binding")
+    metrics_contract = earth_spec_metrics_contract(spec)
 
     hyperparameters = normalize_earth_training_hyperparameters(
         spec["hyperparameters"], dataset_id=binding["dataset_id"]
@@ -442,8 +528,8 @@ def run_training(
     model = model.to(resolved_device)
     for warning in model_warnings:
         print(f"Earth model warning: {warning}", flush=True)
-    loss_function = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    area_weighted = metrics_contract is not None and metrics_contract["aggregation"] == CELL_AREA_WEIGHTED_AGGREGATION
 
     model_label = (
         f"uploaded:{uploaded_reference.get('display_name')}"
@@ -480,32 +566,42 @@ def run_training(
     stopped_early = False
     epochs_without_improvement = 0
     start_time = time.time()
+    sample_weight_denominator = getattr(
+        getattr(prepared["train_loader"], 'dataset', None),
+        'area_weight_denominator', None,
+    )
 
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
         loss_elements = 0
         total_batches = len(prepared["train_loader"])
-        for batch_index, (inputs, targets) in enumerate(prepared["train_loader"], start=1):
+        for batch_index, batch in enumerate(prepared["train_loader"], start=1):
+            inputs, targets, spatial_weights = _split_batch(batch)
             inputs = inputs.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
             targets = targets.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
+            if spatial_weights is not None:
+                spatial_weights = spatial_weights.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
             optimizer.zero_grad(set_to_none=True)
             output = _forward_batch(model, inputs, model_source=model_source, horizon=profile["horizon"])
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during training")
-            loss = loss_function(output, targets)
+            loss, denominator = _weighted_mse(
+                output, targets, spatial_weights, sample_weight_denominator,
+            )
             if not torch.isfinite(loss):
                 raise EarthTrainingError("Non-finite training loss")
             loss.backward()
             _require_finite_gradients(model)
             optimizer.step()
-            elements = int(output.numel())
-            running_loss += float(loss.item()) * elements
-            loss_elements += elements
+            denominator_value = float(denominator.item())
+            running_loss += float(loss.item()) * denominator_value
+            loss_elements += denominator_value
             if batch_index % PROGRESS_EVERY_BATCHES == 0 or batch_index == total_batches:
+                loss_name = "area-weighted normalized MSE" if area_weighted else "normalized MSE"
                 print(
                     f"Epoch {epoch}/{epochs} Batch {batch_index}/{total_batches} "
-                    f"Loss={loss.item():.6f}",
+                    f"Loss={loss.item():.6f} ({loss_name})",
                     flush=True,
                 )
 
@@ -515,15 +611,12 @@ def run_training(
             prepared["validation_loader"],
             dataset_by_name["validation"],
             resolved_device,
-            loss_function=loss_function,
             model_source=model_source,
         )
         epochs_completed = epoch
-        print(
-            f"Epoch {epoch}/{epochs} Loss={training_loss:.6f} "
-            f"Val Loss={validation_loss:.6f}",
-            flush=True,
-        )
+        loss_name = "area-weighted normalized MSE" if area_weighted else "normalized MSE"
+        print(f"Epoch {epoch}/{epochs} Loss={training_loss:.6f} ({loss_name}) "
+              f"Val Loss={validation_loss:.6f} ({loss_name})", flush=True)
         if len(history["train"]) < epoch:
             history["train"].append(training_loss)
             history["val"].append(validation_loss)
@@ -559,7 +652,6 @@ def run_training(
         prepared["validation_loader"],
         dataset_by_name["validation"],
         resolved_device,
-        loss_function=loss_function,
         model_source=model_source,
     )
     test_metrics, test_loss = _evaluate_split(
@@ -567,7 +659,6 @@ def run_training(
         prepared["test_loader"],
         dataset_by_name["test"],
         resolved_device,
-        loss_function=loss_function,
         model_source=model_source,
     )
     print("Earth metrics unit: DU", flush=True)
@@ -598,13 +689,16 @@ def run_training(
         validation_window_count=prepared["counts"]["validation"],
         test_window_count=prepared["counts"]["test"],
         dataset_id=binding["dataset_id"],
+        aggregation=(CELL_AREA_WEIGHTED_AGGREGATION if area_weighted else GRID_UNIFORM_AGGREGATION),
         horizon=profile['horizon'],
     )
+    if metrics_contract is not None and any(metrics.get(key) != value for key, value in metrics_contract.items()):
+        raise EarthTrainingError("Generated metrics disagree with the frozen execution contract")
     run = {
         "task_id": task_id,
         "seed": seed,
         "optimizer": "Adam",
-        "loss": "normalized_mse_grid_uniform",
+        "loss": "normalized_mse_cell_area_weighted" if area_weighted else "normalized_mse_grid_uniform",
         "hyperparameters": hyperparameters,
         "best_epoch": best_epoch,
         "epochs_completed": epochs_completed,
@@ -668,13 +762,22 @@ def run_training(
     # Final proof on the published file: reload it strictly and reproduce the
     # first test batch, so a corrupt write can never be reported as success.
     checkpoint = load_earth_training_artifact(
-        saved_path, expected_binding=binding, expected_task_id=task_id
+        saved_path, expected_binding=binding, expected_task_id=task_id,
+        expected_hyperparameters=(None if metrics_contract is None else {
+            **hyperparameters,
+            **({"_earth_task_split": prepared["task_split"],
+                EARTH_METRICS_SCHEMA_KEY: metrics_contract["schema"],
+                EARTH_METRICS_AGGREGATION_KEY: metrics_contract["aggregation"]}
+               if prepared["task_split"] is not None else {}),
+        }),
     )
+    if metrics_contract is not None and any(checkpoint.metrics.get(key) != value for key, value in metrics_contract.items()):
+        raise EarthTrainingError("Published checkpoint metrics disagree with the frozen execution contract")
     reloaded, reload_warnings = build_earth_model_from_checkpoint(checkpoint)
     for warning in reload_warnings:
         print(f"Earth reload warning: {warning}", flush=True)
     reloaded.to(resolved_device)
-    sample_inputs, _ = next(iter(prepared["test_loader"]))
+    sample_inputs, _, _ = _split_batch(next(iter(prepared["test_loader"])))
     sample_inputs = sample_inputs.to(resolved_device)
     with torch.no_grad():
         before = _forward_batch(model, sample_inputs, model_source=model_source, horizon=profile["horizon"])

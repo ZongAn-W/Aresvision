@@ -42,3 +42,19 @@ test('marks old tasks with the explicit legacy split rule', () => {
     '测试集划分：历史兼容 80%/20%（无验证集）',
   );
 });
+
+test('distinguishes area-weighted and grid-uniform Earth metric contracts', () => {
+  assert.equal(
+    getMetricAggregationLabel({ aggregation: 'forecast_origin_lead_cell_area_weighted',
+      metric_policy: { spatial_weighting: 'spherical_cell_area' } }),
+    '球面 cell-area 加权（按发布 lat_bounds）',
+  );
+  assert.equal(
+    getMetricAggregationLabel({ aggregation: 'forecast_origin_lead_grid_uniform' }),
+    '格点等权（历史指标口径）',
+  );
+  assert.equal(
+    getMetricAggregationLabel({ aggregation: 'user_forecast_origin_lead_cell_area_weighted' }, false),
+    'Spherical cell-area weighted (published lat_bounds)',
+  );
+});

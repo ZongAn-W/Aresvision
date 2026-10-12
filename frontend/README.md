@@ -171,6 +171,8 @@ pip install torch==2.5.1       # CPU；或安装对应 CUDA 版本
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+Windows 当前工作区不要在启用 reload 时直接调用 `uvicorn`：Uvicorn 0.34.0 会先建立 Selector 事件循环，无法被项目在导入期设置的 Proactor 策略替换，可能出现 `WinError 10055` 与 `Executor shutdown has been called`。后端按工作区规定的入口 `run_backend.py` 启动，命令、原因与启动后校验见[主 README](../README.md)。
+
 `vite.config.js` 已配置代理：前端所有 `/api/*` 请求自动转发到 `http://localhost:8000`。
 
 **开发时需同时运行两个终端：**

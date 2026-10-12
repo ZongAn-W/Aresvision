@@ -65,7 +65,9 @@ export default function EarthDiagnosticPanel({ taskId, identity, autoLoad = fals
         ? label('有效 checkpoint 未提供完整测试集指标；缺失项保持未提供，不用抽样结果代替。', 'The valid checkpoint does not provide full test-set metrics. Missing values stay unprovided; sampled metrics do not replace them.')
         : label('复用 checkpoint 保存的完整 test 指标。', 'Reusing full test metrics saved in the checkpoint.')}</p>
       <p className="earth-diagnostic-note">{label('完整测试集范围：', 'Full test partition: ')}{timeLabel(full?.test_range)} · {full?.metrics?.window_count ?? full?.test_range?.window_count ?? '—'} {label('窗口', 'windows')} · {label('任务 / 发布固定划分', 'Fixed task / release partition')}</p>
-      <PredictMetrics metrics={{ overall: fullMetrics }} precision={settings.precision} presentation={fullPresentation} />
+      <PredictMetrics metrics={full?.metrics ? { ...full.metrics, overall: fullMetrics,
+        aggregation: full.aggregation, metric_policy: full.metric_policy, schema: full.schema } : null}
+        precision={settings.precision} presentation={fullPresentation} />
       <h4>{label('诊断抽样范围', 'Diagnostic sampling scope')}</h4>
       <dl className="earth-diagnostic-facts">
         <div><dt>{label('分区与窗口', 'Partition and windows')}</dt><dd>{`${scope?.split || 'test'} · ${scope?.window_count ?? '—'} / ${scope?.available_window_count ?? '—'}`}</dd></div>
@@ -81,7 +83,8 @@ export default function EarthDiagnosticPanel({ taskId, identity, autoLoad = fals
       {data.warnings?.length ? <div className="earth-diagnostic-status" role="status">{data.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div> : null}
       <h4>{label('相同诊断窗口的指标', 'Metrics for these diagnostic windows')}</h4>
       <p className="earth-diagnostic-note">{label('覆盖所选窗口全部提前步与空间格点；它们是抽样诊断指标，不是散点子样本指标，也不是完整测试集指标。', 'All leads and spatial cells in the selected windows. These are diagnostic-window metrics, distinct from the scatter subsample and full test-set metrics.')}</p>
-      <PredictMetrics metrics={{ overall: sampleMetrics }} precision={settings.precision} presentation={samplePresentation} />
+      <PredictMetrics metrics={data.sample_metrics ? { ...data.sample_metrics, overall: sampleMetrics } : null}
+        precision={settings.precision} presentation={samplePresentation} />
       <ErrorDistributionChart data={data} presentation={presentation.distribution} precision={settings.precision} />
       <h4>{label('置换重要性（PFI）', 'Permutation feature importance (PFI)')}</h4>
       <p className="earth-diagnostic-note">{label('主要重要性 = 置换后 RMSE − 基线 RMSE（DU）；保留负值。PFI 表示当前模型在此抽样范围下的输入敏感性，不能解释为因果贡献。每个通道整段历史窗口置换，含历史 TO3；未来目标和参考真值不置换。', 'Importance = permuted RMSE − baseline RMSE (DU), retaining negative values. PFI measures model sensitivity within this sample, not causal contribution. Each input channel, including historical TO3, is permuted as a whole window; future targets and references remain fixed.')}</p>

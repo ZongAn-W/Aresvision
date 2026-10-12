@@ -25,6 +25,7 @@ import xarray as xr
 from services.dataset_identity import DatasetRequestError, EARTH_DATASET_3HOURLY_ID
 from services.earth_dataset import (
     EarthThreeHourlyWindows, _threehour_path, _threehour_values, validate_normalization,
+    threehour_global_cell_area_weights,
 )
 from services.earth_model_source import EarthModelBuildError, earth_forward_for_model
 from services.earth_prediction_service import (
@@ -32,7 +33,8 @@ from services.earth_prediction_service import (
     _sync_release, _threehour_checkpoint_sha, _validate_checkpoint_split_ranges,
 )
 from services.earth_training_artifact import (
-    EarthArtifactError, ErrorAccumulator, METRIC_POLICY, METRIC_UNITS,
+    CELL_AREA_WEIGHTED_AGGREGATION, GRID_UNIFORM_AGGREGATION,
+    AREA_WEIGHTED_METRIC_POLICY, EarthArtifactError, ErrorAccumulator, METRIC_POLICY, METRIC_UNITS,
     build_earth_model_from_checkpoint,
 )
 from services.netcdf_read_lock import netcdf_read_lock
@@ -139,7 +141,9 @@ EARTH_DIAGNOSTICS_CACHE = EarthDiagnosticsCache()
 
 def build_earth_diagnostics_cache_key(*, task_id, checkpoint_sha256, dataset_binding,
                                      training_contract, normalization, model_identity,
-                                     selected_indices, parameters):
+                                     selected_indices, parameters,
+                                     aggregation=GRID_UNIFORM_AGGREGATION,
+                                     metric_policy=METRIC_POLICY):
     identity = {
         "algorithm": DIAGNOSTIC_VERSION, "planet": "earth", "task_id": int(task_id),
         "checkpoint_sha256": checkpoint_sha256,
@@ -153,7 +157,8 @@ def build_earth_diagnostics_cache_key(*, task_id, checkpoint_sha256, dataset_bin
         "tile_shape": [240, 480] if _full_grid_contract(training_contract) else list(TILE_SHAPE),
         "batch_size": 1 if _full_grid_contract(training_contract) else BATCH_SIZE,
         "uploaded_model_schema": training_contract.get("uploaded_model_schema"),
-        "metric_policy": METRIC_POLICY,
+        "aggregation": aggregation,
+        "metric_policy": metric_policy,
     }
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -163,7 +168,8 @@ def _utc(timestamp):
     return np.datetime_as_string(np.datetime64(timestamp, "s"), unit="s") + "Z"
 
 
-def _scope(dataset, selected, *, seed, name="sampled_test_windows"):
+def _scope(dataset, selected, *, seed, name="sampled_test_windows",
+           aggregation=GRID_UNIFORM_AGGREGATION):
     release = dataset._release
     starts = [dataset._offset + index for index in selected]
     origin_indices = [start + dataset.window - 1 for start in starts]
@@ -193,8 +199,25 @@ def _scope(dataset, selected, *, seed, name="sampled_test_windows"):
                      "seed": seed, "ordering": "chronological", "selected_indices": list(selected),
                      "spatial": "all_grid_cells", "leads": "all_configured_leads",
                      "maximum_windows": MAX_SAMPLE_WINDOWS, "missing_value_policy": "reject"},
-        "aggregation": "forecast_origin_lead_grid_uniform",
+        "aggregation": aggregation,
     }
+
+
+def _diagnostic_spatial_weights(release, dataset, aggregation):
+    """Resolve the exact verified global cell weights for area-weighted metrics."""
+    if aggregation != CELL_AREA_WEIGHTED_AGGREGATION:
+        return None
+    try:
+        weights = np.asarray(threehour_global_cell_area_weights(release), dtype="float64")
+    except (ValueError, KeyError, OSError, RuntimeError) as exc:
+        raise _error("invalid_earth_training_artifact",
+                     f"Area-weighted Earth diagnostics require verified latitude cell bounds: {exc}") from exc
+    expected = (len(dataset.lat), len(dataset.lon))
+    if weights.shape != expected or not np.isfinite(weights).all() or np.any(weights < 0):
+        raise _error("invalid_earth_training_artifact", "Verified Earth cell-area weights do not match the diagnostic grid")
+    if not np.isclose(float(weights.sum()), 1.0, rtol=0.0, atol=1e-12):
+        raise _error("invalid_earth_training_artifact", "Verified Earth cell-area weights are not normalized")
+    return weights
 
 
 @contextmanager
@@ -380,6 +403,16 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
         )
     except ValueError as exc:
         raise _error("invalid_earth_training_artifact", str(exc)) from exc
+    aggregation = checkpoint.metrics.get("aggregation") or GRID_UNIFORM_AGGREGATION
+    if aggregation in ("grid_uniform", "user_forecast_origin_lead_grid_uniform"):
+        aggregation = GRID_UNIFORM_AGGREGATION
+    if aggregation not in (GRID_UNIFORM_AGGREGATION, CELL_AREA_WEIGHTED_AGGREGATION):
+        raise _error("invalid_earth_training_artifact", "Earth checkpoint has an unsupported metric aggregation")
+    metric_policy = copy.deepcopy(checkpoint.metrics.get("metric_policy"))
+    if metric_policy is None:
+        metric_policy = copy.deepcopy(AREA_WEIGHTED_METRIC_POLICY if aggregation == CELL_AREA_WEIGHTED_AGGREGATION
+                                      else METRIC_POLICY)
+    spatial_weights = _diagnostic_spatial_weights(release, dataset, aggregation)
     selected = select_window_indices(len(dataset), sample_windows, seed)
     pfi_count = min(len(selected), pfi_windows if pfi_windows is not None else MAX_PFI_WINDOWS)
     pfi_positions = select_window_indices(len(selected), pfi_count, (seed + 1) % 2**32)
@@ -390,14 +423,15 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
     key = build_earth_diagnostics_cache_key(
         task_id=task.id, checkpoint_sha256=sha, dataset_binding=checkpoint.dataset_binding,
         training_contract=contract, normalization=checkpoint.normalization,
-        model_identity=checkpoint.model_identity(), selected_indices=selected, parameters=parameters)
+        model_identity=checkpoint.model_identity(), selected_indices=selected, parameters=parameters,
+        aggregation=aggregation, metric_policy=metric_policy)
     resolved_cache = EARTH_DIAGNOSTICS_CACHE if cache is None else cache
     cached = resolved_cache.get(key)
     if cached is not None:
         cached["cache"]["hit"] = True
         cached["warnings"] = _model_source_warnings(checkpoint)
         return cached
-    scope = _scope(dataset, selected, seed=seed)
+    scope = _scope(dataset, selected, seed=seed, aggregation=aggregation)
     accumulator = ErrorAccumulator(dataset_id=EARTH_DATASET_3HOURLY_ID, horizon=dataset.horizon)
     baseline = ErrorAccumulator(dataset_id=EARTH_DATASET_3HOURLY_ID, horizon=dataset.horizon)
     sampler = _ScatterSampler(scope["expected_points"], scatter_points, seed)
@@ -410,11 +444,13 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
         model.to(resolved_device).eval()
         with torch.inference_mode(), _open_verified_dataset(release) as ds:
             for offset, lat, lon, prediction, reference in _tile_batches(ds, dataset, selected, model, checkpoint, resolved_device):
-                accumulator.update(prediction, reference)
+                tile_weights = None if spatial_weights is None else spatial_weights[
+                    lat:lat + prediction.shape[-2], lon:lon + prediction.shape[-1]]
+                accumulator.update(prediction, reference, spatial_weights=tile_weights)
                 if include_pfi:
                     local = [position - offset for position in pfi_positions if offset <= position < offset + len(prediction)]
                     if local:
-                        baseline.update(prediction[local], reference[local])
+                        baseline.update(prediction[local], reference[local], spatial_weights=tile_weights)
                 sampler.update(prediction, reference)
                 residual = prediction - reference
                 if not np.isfinite(residual).all():
@@ -447,7 +483,8 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
                 raise _error("earth_diagnostics_incomplete", "Histogram counts do not cover all selected test elements")
             pfi = _compute_pfi(ds, dataset, pfi_selected, model, checkpoint, resolved_device,
                                baseline if pfi_selected == selected else None,
-                               pfi_repeats, seed) if include_pfi else None
+                               pfi_repeats, seed, spatial_weights=spatial_weights,
+                               aggregation=aggregation, metric_policy=metric_policy) if include_pfi else None
         _sync_release(registry, checkpoint.dataset_binding)
         if _threehour_checkpoint_sha(task) != sha:
             raise _error("invalid_earth_training_artifact", "The Earth checkpoint changed during diagnostics")
@@ -455,9 +492,9 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
         # publication time, as historical prediction does before cache use.
         _load_checkpoint(task)
         metrics = {**accumulator.result(), "unit": "DU", "target": "TO3",
-                   "metric_units": dict(METRIC_UNITS), "metric_policy": dict(METRIC_POLICY),
+                   "metric_units": dict(METRIC_UNITS), "metric_policy": metric_policy,
                    "scope": "selected_test_windows_all_grid_leads", "window_count": len(selected),
-                   "valid_points": count, "aggregation": "forecast_origin_lead_grid_uniform"}
+                   "valid_points": count, "aggregation": aggregation}
         mean = residual_sum / count
         result = {
             "algorithm_version": DIAGNOSTIC_VERSION, "planet": "earth", "task_id": int(task.id),
@@ -472,6 +509,11 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
             "scatter": sampler.result(seed),
             "histogram": {"edges": edges.tolist(), "counts": counts.tolist(), "unit": "DU",
                           "residual_definition": RESIDUAL_DEFINITION,
+                          "counts_are": "sample_count",
+                          "weighting": "sample_count",
+                          "distribution": "unweighted_residual_histogram",
+                          "summary_weighting": "sample_count",
+                          "metric_aggregation": aggregation,
                           "scope": "selected_test_windows_all_grid_leads", "valid_points": count,
                           "calculation": "two_pass_streaming_all_selected_grid_lead_elements",
                           "summary": {"mean": mean, "std": math.sqrt(max(0.0, residual_squared / count - mean * mean)),
@@ -493,8 +535,10 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
         raise _error("earth_diagnostics_failed", str(exc)) from exc
 
 
-def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, repeats, seed):
-    pfi_scope = _scope(dataset, selected, seed=seed)
+def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, repeats, seed,
+                 *, spatial_weights=None, aggregation=GRID_UNIFORM_AGGREGATION,
+                 metric_policy=None):
+    pfi_scope = _scope(dataset, selected, seed=seed, aggregation=aggregation)
     pfi_scope["sampling"]["method"] = "seeded_subset_of_diagnostic_test_windows"
     pfi_scope["sampling"]["maximum_windows"] = MAX_PFI_WINDOWS
     pfi_scope["sampling"].update(diagnostic_selection_seed=seed,
@@ -502,6 +546,9 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
                                  permutation_seed=seed)
     common = {"scope": pfi_scope, "sampling": pfi_scope["sampling"], "unit": "DU",
               "baseline_metric": "rmse", "importance_definition": "permuted_rmse-baseline_rmse",
+              "aggregation": aggregation,
+              "metric_policy": copy.deepcopy(metric_policy if metric_policy is not None else (
+                  AREA_WEIGHTED_METRIC_POLICY if aggregation == CELL_AREA_WEIGHTED_AGGREGATION else METRIC_POLICY)),
               "seed": seed, "repeats": repeats,
               "permutation": "whole_window_channel_derangement_shared_across_spatial_tiles",
               "interpretation": "Sensitivity of the current model on these sampled test windows; negative importance is retained."}
@@ -521,16 +568,20 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
     channel_varies = [False] * len(dataset.input_channels)
     if full_grid:
         _accumulate_full_grid_pfi(ds, dataset, selected, model, checkpoint, device,
-                                  baseline, recompute_baseline, mappings, accumulators, channel_varies)
+                                  baseline, recompute_baseline, mappings, accumulators, channel_varies,
+                                  spatial_weights=spatial_weights)
     else:
         for lat in range(0, len(dataset.lat), TILE_SHAPE[0]):
             for lon in range(0, len(dataset.lon), TILE_SHAPE[1]):
                 inputs, reference = _read_tile(ds, dataset, selected, lat, lon)
+                tile_weights = None if spatial_weights is None else spatial_weights[
+                    lat:lat + inputs.shape[-2], lon:lon + inputs.shape[-1]]
                 if recompute_baseline:
                     # A smaller PFI subset also needs its own batch composition.
                     for offset in range(0, len(selected), BATCH_SIZE):
                         stop = min(offset + BATCH_SIZE, len(selected))
-                        baseline.update(_predict_tile(model, inputs[offset:stop], checkpoint, device), reference[offset:stop])
+                        baseline.update(_predict_tile(model, inputs[offset:stop], checkpoint, device), reference[offset:stop],
+                                       spatial_weights=tile_weights)
                 for channel, rows in enumerate(accumulators):
                     channel_varies[channel] |= bool(np.any(inputs[1:, :, channel] != inputs[:1, :, channel]))
                     for repeat, mapping in enumerate(mappings):
@@ -540,7 +591,7 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
                             # All T,H,W positions come from the same source window.
                             permuted[:, :, channel] = inputs[np.asarray(mapping[offset:stop]), :, channel]
                             prediction = _predict_tile(model, permuted, checkpoint, device)
-                            rows[repeat].update(prediction, reference[offset:stop])
+                            rows[repeat].update(prediction, reference[offset:stop], spatial_weights=tile_weights)
     baseline_rmse = float(baseline.result()["overall"]["rmse"])
     items = []
     for channel, rows, meaningful in zip(dataset.input_channels, accumulators, channel_varies):
@@ -571,19 +622,22 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
 
 
 def _accumulate_full_grid_pfi(ds, dataset, selected, model, checkpoint, device,
-                              baseline, recompute_baseline, mappings, accumulators, channel_varies):
+                              baseline, recompute_baseline, mappings, accumulators, channel_varies,
+                              *, spatial_weights=None):
     """Keep only the recipient/source global windows resident for each permutation."""
     for offset, index in enumerate(selected):
         inputs, reference = _read_full_grid(ds, dataset, [index])
         if recompute_baseline:
-            baseline.update(_predict_tile(model, inputs, checkpoint, device), reference)
+            baseline.update(_predict_tile(model, inputs, checkpoint, device), reference,
+                            spatial_weights=spatial_weights)
         for repeat, mapping in enumerate(mappings):
             source, _ = _read_full_grid(ds, dataset, [selected[mapping[offset]]])
             for channel, rows in enumerate(accumulators):
                 channel_varies[channel] |= bool(np.any(source[:, :, channel] != inputs[:, :, channel]))
                 permuted = inputs.copy()
                 permuted[:, :, channel] = source[:, :, channel]
-                rows[repeat].update(_predict_tile(model, permuted, checkpoint, device), reference)
+                rows[repeat].update(_predict_tile(model, permuted, checkpoint, device), reference,
+                                    spatial_weights=spatial_weights)
 
 
 # Backwards-compatible spelling for callers using the initial design name.

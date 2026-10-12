@@ -1,3 +1,5 @@
+import { getEarthMetricPolicyLabel } from '../../utils/earthMetricMeta.js';
+
 const AGGREGATION_LABELS = {
   mean_over_forecast_steps: {
     zh: '整体（各预测步平均）',
@@ -16,8 +18,11 @@ function formatPercent(value) {
 }
 
 export function getMetricAggregationLabel(metrics, isZh = true) {
-  if (metrics?.aggregation === 'forecast_origin_lead_grid_uniform') return isZh
-    ? '完整测试集（起点 × 提前量 × 格点等权）' : 'Full test set (equal origin × lead × grid weights)';
+  if (typeof metrics?.aggregation === 'string'
+    && (metrics.aggregation.startsWith('forecast_origin_lead_')
+      || metrics.aggregation.startsWith('user_forecast_origin_lead_'))) {
+    return getEarthMetricPolicyLabel(metrics, isZh);
+  }
   const label = AGGREGATION_LABELS[metrics?.aggregation?.overall];
   if (!label) return isZh ? '整体指标' : 'Overall metrics';
   return isZh ? label.zh : label.en;

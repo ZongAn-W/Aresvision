@@ -30,9 +30,9 @@ Earth 三小时官方 DLinear 与独立 v1 上传模型共用诊断服务。训�
 
 ## 评价范围与旧任务
 
-`full_test_metrics` 只读取有效 checkpoint 已保存的完整 `metrics.splits.test`。六项指标采用现有[DU 指标契约](earth-evaluation-metrics.md)，旧三小时 v1 只有 RMSE/MAE 时其他项显示“未提供”，不以训练 loss、validation、单次历史预测或诊断抽样补值。契约缺损的 checkpoint 按现有规则拒绝；服务不会伪造完整测试集指标。
+`full_test_metrics` 只读取有效 checkpoint 已保存的完整 `metrics.splits.test`。六项指标采用[DU 指标契约](earth-evaluation-metrics.md)及 checkpoint 的真实 aggregation/metric policy；新 v3 为球面 cell-area 加权，旧三小时 v1/v2 保持 grid-uniform。旧三小时 v1 只有 RMSE/MAE 时其他项显示“未提供”，不以训练 loss、validation、单次历史预测或诊断抽样补值。契约缺损的 checkpoint 按现有规则拒绝；服务不会伪造完整测试集指标。
 
-`scope` 与 `sample_metrics` 描述本次抽样诊断。从任务的 test 分区生成完整 window+horizon 窗口，按 NumPy `default_rng(seed)` 无放回选择索引并按时间排序。新任务读取已固定的 `task_split`；无该策略的旧三小时任务读取 manifest 发布分区。归一化只复用该任务 checkpoint 的 train 统计量，不重新拟合。所选窗口的全部输出提前步与全球 240×480 格点等权，重复出现的目标时间/格点按预测起点分别计数，不宣称面积加权。
+`scope` 与 `sample_metrics` 描述本次抽样诊断。从任务的 test 分区生成完整 window+horizon 窗口，按 NumPy `default_rng(seed)` 无放回选择索引并按时间排序。新任务读取已固定的 `task_split`；无该策略的旧三小时任务读取 manifest 发布分区。归一化只复用该任务 checkpoint 的 train 统计量，不重新拟合。所选窗口的全部输出按 checkpoint policy 计算；新 v3 使用发布 `lat_bounds` 的 cell-area 权重，旧 grid-uniform checkpoint 继续逐格等权。重复出现的目标时间/格点按预测起点分别计入，响应中的 `sample_metrics.aggregation` 与 `sample_metrics.metric_policy` 是诊断展示的权威口径。
 
 响应给出实际/可用窗口数、所选索引、每窗输入与目标 UTC 范围、起点范围、网格大小、全球覆盖、经纬度范围、有效及预期评价点数、种子与策略。默认 56→24、4 窗口时，诊断累计 `4×24×240×480 = 11,059,200` 个预测/参考对；这些计数保留在服务端统计中，浏览器只接收有上限的散点与直方图。
 
@@ -40,11 +40,11 @@ Earth 三小时官方 DLinear 与独立 v1 上传模型共用诊断服务。训�
 
 所有推理输出先反归一化为 TO3 DU。残差固定为 `prediction-reference`：正值表示高估。散点 `reference`/`prediction` 严格配对，坐标单位 DU，附 `y=x` 线；流式遍历按空间块、批次、窗口、lead、纬度、经度排序，在等大小流区间内用固定种子各选一个点，最多返回请求上限。它是进一步的点位抽样；附带指标属于所选窗口全部格点，不是散点子样本，也不是完整 test。
 
-直方图对所选窗口所有 lead/grid 残差做两遍流式处理：第一遍累计物理指标、散点和残差极值/摘要，第二遍按第一遍极值确定的均匀边界累计计数。恒定残差以值±0.5 DU 分箱。返回边界、计数、均值、总体标准差、最小/最大和有效点数；两遍残差摘要哈希必须一致，计数之和必须等于声明范围。非有限输入、参考、输出或残差、无有效窗口、身份变化均明确报错，不能过滤后声称完整。
+直方图对所选窗口所有 lead/grid 残差做两遍流式处理：第一遍累计物理指标、散点和残差极值/摘要，第二遍按第一遍极值确定的均匀边界累计样本计数。直方图的 `counts` 始终是残差样本数，不是面积加权分布；面积加权 RMSE/MAE 等只通过 `sample_metrics` 表达。恒定残差以值±0.5 DU 分箱。返回边界、计数、均值、总体标准差、最小/最大和有效点数；两遍残差摘要哈希必须一致，计数之和必须等于声明范围。非有限输入、参考、输出或残差、无有效窗口、身份变化均明确报错，不能过滤后声称完整。
 
 ## Earth PFI
 
-每个实际模型输入通道逐项置换，包含历史 TO3；未来目标和参考真值不置换。每次以随机循环排列构造无固定点的窗口映射，将某通道的整段时间×空间场替换成另一窗口同通道。映射一次生成，所有空间块和通道复用，避免块间来源不一致。基线与每项置换使用相同窗口、空间格点、全部 lead 和 DU RMSE 公式。
+每个实际模型输入通道逐项置换，包含历史 TO3；未来目标和参考真值不置换。每次以随机循环排列构造无固定点的窗口映射，将某通道的整段时间×空间场替换成另一窗口同通道。映射一次生成，所有空间块和通道复用，避免块间来源不一致。基线与每项置换使用相同窗口、空间格点、全部 lead、同一面积权重矩阵和 DU RMSE 公式；响应中的 baseline/permutation RMSE 与 `sample_metrics.metric_policy` 使用同一口径。
 
 主要重要性为 `permuted_rmse - baseline_rmse`，单位 DU，保留负值。返回基线、每次置换 RMSE/增量、均值、总体标准差（ddof=0）、窗口映射、实际窗口/点数及 seed。少于两个有效窗口时 PFI 不可计算；某通道在所有抽样窗口完全相同时，该项返回不可计算原因，不能将无法置换解释成模型未使用。变化的未使用通道可得到接近零的重要性。PFI 仅代表当前模型在本抽样范围下的敏感性，不代表因果贡献。
 

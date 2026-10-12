@@ -4,17 +4,18 @@ import { useScrollLock } from '../hooks/useScrollLock';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import './ui/overlay.css';
 
-function ConfirmContent({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, confirmColor }) {
+function ConfirmContent({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, confirmColor, busy = false }) {
   const dialogRef = useRef(null);
   const titleId = useId();
   const messageId = useId();
   useScrollLock();
-  useDialogFocus(true, dialogRef, onCancel);
+  const cancel = () => { if (!busy) onCancel?.(); };
+  useDialogFocus(true, dialogRef, cancel);
 
   return (
     <div
       className="av-overlay-backdrop av-modal-backdrop"
-      onClick={onCancel}
+      onClick={cancel}
       style={{ zIndex: 9800 }}
     >
       <div
@@ -22,6 +23,7 @@ function ConfirmContent({ title, message, confirmLabel, cancelLabel, onConfirm, 
         className="av-modal av-modal--confirm"
         role="dialog"
         aria-modal="true"
+        aria-busy={busy}
         aria-labelledby={titleId}
         aria-describedby={messageId}
         tabIndex={-1}
@@ -34,7 +36,8 @@ function ConfirmContent({ title, message, confirmLabel, cancelLabel, onConfirm, 
             type="button"
             className="av-button"
             data-dialog-autofocus
-            onClick={onCancel}
+            onClick={cancel}
+            disabled={busy}
           >
             {cancelLabel}
           </button>
@@ -42,6 +45,7 @@ function ConfirmContent({ title, message, confirmLabel, cancelLabel, onConfirm, 
             type="button"
             className="av-button av-button--confirm"
             onClick={onConfirm}
+            disabled={busy}
             style={confirmColor ? { '--confirm-color': confirmColor } : undefined}
           >
             {confirmLabel}

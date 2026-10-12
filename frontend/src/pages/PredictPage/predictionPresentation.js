@@ -3,6 +3,7 @@ import { convertOzone, ozoneLabel } from '../../utils/units.js';
 import { getMetricAggregationLabel, getSplitLabel } from './predictionMetricMeta.js';
 import { currentStepScatter } from './researchExportModel.js';
 import { earthDiagnosticHistogram, earthDiagnosticScatter, earthDiagnosticPfiItems } from './earthDiagnosticsModel.js';
+import { getEarthMetricPolicyLabel } from '../../utils/earthMetricMeta.js';
 
 const selectLanguage = (options) => options.isZh ?? ((options.settings || options).language !== 'en');
 const text = (isZh, zh, en) => isZh ? zh : en;
@@ -121,8 +122,8 @@ export function createEarthPredictionPresentation(options = {}) {
         unit: earthMetricUnit(item.key, isZh), better: item.key === 'r2' ? '↑' : '↓' })),
       title: text(isZh, '模型评价指标', 'Model evaluation metrics'), missingLabel: text(isZh, '未提供', 'Not provided'),
       convertValue: (value) => value,
-      describe: () => ({ scope, subtitle: `${predictionScopeLabel(scope, isZh)} · ${text(isZh,
-        '反归一化 TO3（DU）；起点 × 提前步 × 格点等权。', 'Physical TO3 (DU); equal origin × lead × grid weights.')}`, splitLabel: '' }),
+      describe: (metrics) => ({ scope, subtitle: `${predictionScopeLabel(scope, isZh)} · ${text(isZh,
+        '反归一化 TO3（DU）；', 'Physical TO3 (DU); ')}${getEarthMetricPolicyLabel(metrics, isZh)}`, splitLabel: '' }),
     },
     distribution: {
       unitLabel: 'DU',
@@ -137,8 +138,8 @@ export function createEarthPredictionPresentation(options = {}) {
               `Only ${pairs.reference.length.toLocaleString()} sampled pairs; diagnostic metrics cover every lead and grid cell in these windows.`), exportEnabled: false },
           residual: { ...bins, scope: 'sampled_diagnostic',
             scopeText: text(isZh, '抽样诊断窗口；残差 = 预测 − 参考', 'Diagnostic windows; residual = prediction − reference'),
-            note: text(isZh, `累计 ${bins.sampleCount.toLocaleString()} 个残差，覆盖所选 test 窗口全部提前步与格点。`,
-              `${bins.sampleCount.toLocaleString()} accumulated residuals across every lead and grid cell in selected test windows.`),
+            note: text(isZh, `直方图按样本计数（${bins.sampleCount.toLocaleString()} 个残差），不做面积加权；加权误差指标见上方。`,
+              `Histogram bars are sample counts (${bins.sampleCount.toLocaleString()} residuals), not area-weighted density; area-weighted error metrics are above.`),
             summary: data.histogram.summary, rmse: data.sample_metrics?.overall?.rmse, mae: data.sample_metrics?.overall?.mae },
         };
       },
@@ -149,8 +150,7 @@ export function createEarthPredictionPresentation(options = {}) {
         items: earthDiagnosticPfiItems(data).map((item) => ({ name: item.channel, value: item.importance_mean, std: item.importance_std })),
         baseline: data?.baseline_rmse ?? data?.baseline_value, baselineLabel: text(isZh, '基线 RMSE', 'Baseline RMSE'),
         unitLabel: 'DU', axisLabel: 'ΔRMSE (DU)', scope: 'sampled_diagnostic',
-        scopeText: text(isZh, '相同抽样 test 窗口、全部提前步与全球格点；置换后 RMSE − 基线 RMSE（DU），负值保留。',
-          'Identical sampled test windows, all leads and global cells; permuted RMSE − baseline RMSE (DU), retaining negative values.'),
+        scopeText: `${text(isZh, '相同抽样 test 窗口、全部提前步与全球格点；', 'Identical sampled test windows, all leads and global cells; ')}${getEarthMetricPolicyLabel(data?.sample_metrics, isZh)} · ${text(isZh, '置换后 RMSE − 基线 RMSE（DU），负值保留。', 'permuted RMSE − baseline RMSE (DU), retaining negative values.')}`,
         helpText: text(isZh, '误差条为重复置换标准差。每个输入通道整段历史窗口置换，含历史 TO3；未来目标和参考真值保持固定。PFI 表示模型输入敏感性，不能解释为因果贡献。',
           'Error bars show the standard deviation across repeats. Each input channel, including historical TO3, is permuted as a whole window; targets and references stay fixed. PFI describes sensitivity, not causal contribution.'), exportEnabled: false,
         emptyLabel: text(isZh, '此抽样范围没有可计算的 PFI 通道，请查看诊断原因或调整窗口。',

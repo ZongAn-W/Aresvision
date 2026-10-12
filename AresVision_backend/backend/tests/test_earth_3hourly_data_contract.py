@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import shutil
@@ -13,6 +14,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import scripts.build_earth_merra2_3hourly as builder
 from scripts.build_earth_merra2_3hourly import (
     DATA_FILE, DATASET_ID, SCHEMA, _new_output, canonical_json, dataset_fingerprint,
 )
@@ -23,7 +25,8 @@ from services.earth_dataset import (
 )
 from services.earth_dataset_metadata import (
     EarthPackageError, file_sha256, read_earth_3hourly_release,
-    threehour_manifest_content_sha256,
+    threehour_fingerprint_rule, threehour_manifest_content_sha256,
+    threehour_release_identity, threehour_source_inventory_sha256,
 )
 from services.netcdf_read_lock import netcdf_read_lock
 
@@ -329,3 +332,240 @@ def test_rehashed_non_netcdf_content_is_invalid_dataset(package):
     (package / DATA_FILE).write_bytes(b"corrupted NetCDF fixture")
     republish(package)
     assert_reason(package, "invalid_dataset")
+
+# ---------------------------------------------------------------------------
+# Identity policy: content binding, with a frozen legacy publication
+# ---------------------------------------------------------------------------
+#
+# The publication that is already registered in production has no
+# fingerprint_rule field, so it keeps the legacy whole-manifest digest and its
+# published fingerprint must never drift. New publications declare rule 2 and
+# bind identity to source content only: mtime_ns and the redundant name suffix
+# can no longer move a dataset identity, while a changed path, size, digest or
+# inventory membership always does.
+
+PUBLISHED_PACKAGE_DIR = Path(r"E:\AAOzone\data\earth\merra2_3hourly_v1_full_20200101_20211231")
+PUBLISHED_MANIFEST_PATH = PUBLISHED_PACKAGE_DIR / "manifest.json"
+PUBLISHED_DATASET_FINGERPRINT = "c4f4e9127e48fc3bb18bd71c5bdc792ee9192b52e5fe44ed51193ba8524d6697"
+PUBLISHED_MANIFEST_CONTENT_SHA256 = "3ec08179a0a26c06bc74abe4d6efccd7181e083feefc9f95e81aec14b8f3282e"
+IDENTITY_FIELDS = ("date", "product", "path", "bytes", "sha256")
+
+
+@pytest.fixture(scope="module")
+def published_manifest():
+    """A parsed copy of the registered publication; the file itself is only read."""
+    if not PUBLISHED_MANIFEST_PATH.is_file():
+        pytest.skip("the registered three-hour publication is not present on this machine")
+    return json.loads(PUBLISHED_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def inline_canonical(value) -> bytes:
+    """Test-local canonical JSON, so an expectation never reuses a helper it checks."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=True, allow_nan=False).encode("utf-8")
+
+
+def identity_of(manifest):
+    """The identity digest a consumer derives from one manifest."""
+    content = threehour_manifest_content_sha256(manifest)
+    return build_dataset_fingerprint(
+        manifest["dataset_id"], manifest["dataset_version"], content, manifest["data_sha256"])
+
+
+def inline_canonical_source_digest(files) -> str:
+    projection = [{field: entry[field] for field in IDENTITY_FIELDS} for entry in files]
+    return hashlib.sha256(inline_canonical(projection)).hexdigest()
+
+
+def as_content_rule(manifest):
+    """Rewrite a manifest copy the way a rule 2 build of the same data would.
+
+    mtime_ns moves into the provenance block, the identity projection becomes the
+    source digest, and the identity fields are recomputed. Nothing on disk moves.
+    """
+    upgraded = json.loads(json.dumps(manifest))
+    mtimes = upgraded.get("source_mtimes") or {}
+    files = []
+    for entry in upgraded["source_files"]:
+        entry = dict(entry)
+        if "mtime_ns" in entry:
+            mtimes.setdefault(entry["path"], entry.pop("mtime_ns"))
+        files.append(entry)
+    upgraded["source_files"] = files
+    upgraded["source_mtimes"] = mtimes
+    upgraded["source_inventory_version"] = 3
+    upgraded["fingerprint_rule"] = 2
+    upgraded["source_sha256"] = inline_canonical_source_digest(files)
+    upgraded["dataset_fingerprint"] = dataset_fingerprint(upgraded)
+    return upgraded
+
+
+def set_source_digest(package, digest):
+    """Keep the NetCDF provenance attribute in step with a rewritten manifest."""
+    with netcdf_read_lock(), netCDF4.Dataset(package / DATA_FILE, "a") as stored:
+        stored.source_sha256 = digest
+
+
+def publish_content_rule(package):
+    """Republish a workspace fixture under the content rule (copy only)."""
+    manifest = as_content_rule(json.loads((package / "manifest.json").read_text(encoding="utf-8")))
+    set_source_digest(package, manifest["source_sha256"])
+    manifest["data_bytes"] = (package / DATA_FILE).stat().st_size
+    manifest["data_sha256"] = file_sha256(package / DATA_FILE)
+    write_manifest(package, manifest)
+    return manifest
+
+
+def recursively_reordered(value):
+    """The same JSON document with every object's keys in reverse order."""
+    if isinstance(value, dict):
+        return {key: recursively_reordered(value[key]) for key in reversed(list(value))}
+    if isinstance(value, list):
+        return [recursively_reordered(item) for item in value]
+    return value
+
+
+def test_published_release_keeps_its_frozen_legacy_identity(published_manifest):
+    """The already registered publication must never re-identify itself."""
+    manifest = published_manifest
+    # Published before the rule existed: missing means rule 1, not rule 2.
+    assert "fingerprint_rule" not in manifest
+    assert "source_mtimes" not in manifest
+    assert threehour_fingerprint_rule(manifest) == 1
+    content = threehour_manifest_content_sha256(manifest)
+    assert content == PUBLISHED_MANIFEST_CONTENT_SHA256
+    assert manifest["dataset_fingerprint"] == PUBLISHED_DATASET_FINGERPRINT
+    assert identity_of(manifest) == PUBLISHED_DATASET_FINGERPRINT
+    # Both sides of the boundary reproduce it: the builder and the service.
+    assert builder.manifest_content_sha256(manifest) == PUBLISHED_MANIFEST_CONTENT_SHA256
+    assert builder.dataset_fingerprint(manifest) == PUBLISHED_DATASET_FINGERPRINT
+    # The short-circuit reuses the frozen digest instead of re-projecting 1462
+    # inventory entries, and must land on exactly the same fingerprint.
+    short_circuit = threehour_release_identity(manifest, verified_content_sha256=content)
+    assert short_circuit["manifest_content_sha256"] == PUBLISHED_MANIFEST_CONTENT_SHA256
+    assert short_circuit["dataset_fingerprint"] == PUBLISHED_DATASET_FINGERPRINT
+    assert short_circuit["fingerprint_rule"] == 1
+    # A forged frozen digest fails closed instead of silently re-deriving.
+    with pytest.raises(EarthPackageError) as error:
+        threehour_release_identity(manifest, verified_content_sha256="0" * 64)
+    assert error.value.reason == "manifest_fingerprint_mismatch"
+    # name is a documented redundant suffix of path, which is why it is excluded.
+    assert all(entry["name"] == entry["path"].rsplit("/", 1)[-1] for entry in manifest["source_files"])
+    assert len({entry["mtime_ns"] for entry in manifest["source_files"]}) == len(manifest["source_files"])
+
+
+def test_content_rule_hashes_only_content_identity(published_manifest):
+    """Rule 2 hashes the identity projection, not the whole manifest."""
+    manifest = as_content_rule(published_manifest)
+    assert threehour_fingerprint_rule(manifest) == 2
+    expected = hashlib.sha256(inline_canonical(
+        {key: value for key, value in manifest.items()
+         if key not in ("dataset_fingerprint", "source_mtimes", "fingerprint_rule")}
+        | {"source_files": [{field: entry[field] for field in IDENTITY_FIELDS}
+                            for entry in manifest["source_files"]]}
+    )).hexdigest()
+    assert threehour_manifest_content_sha256(manifest) == expected
+    assert builder.manifest_content_sha256(manifest) == expected
+    # A different rule is a different identity basis for the same data.
+    assert expected != PUBLISHED_MANIFEST_CONTENT_SHA256
+    assert manifest["source_sha256"] == inline_canonical_source_digest(manifest["source_files"])
+    assert threehour_source_inventory_sha256(manifest["source_files"], 3) == manifest["source_sha256"]
+    # The inventory still carries everything change detection needs.
+    assert set(manifest["source_mtimes"]) == {entry["path"] for entry in manifest["source_files"]}
+    assert all("mtime_ns" not in entry for entry in manifest["source_files"])
+
+
+def test_seven_identity_invariants_on_a_copy_of_the_published_manifest(published_manifest):
+    """Identity follows content: seven invariants on a copy of the real manifest."""
+    base_manifest = as_content_rule(published_manifest)
+    baseline = identity_of(base_manifest)
+
+    # A pure mtime drift is file-system metadata: identity must not move.
+    drifted = copy.deepcopy(base_manifest)
+    drifted["source_mtimes"] = {path: value + 1 for path, value in drifted["source_mtimes"].items()}
+    assert identity_of(drifted) == baseline
+
+    # name is a redundant suffix of path and is not part of the identity.
+    renamed = copy.deepcopy(base_manifest)
+    for entry in renamed["source_files"]:
+        entry["name"] = "rewritten-" + entry["name"]
+    assert identity_of(renamed) == baseline
+
+    # Canonical JSON sorts keys, so document order is not identity either.
+    assert identity_of(recursively_reordered(base_manifest)) == baseline
+    assert identity_of(recursively_reordered(published_manifest)) == PUBLISHED_DATASET_FINGERPRINT
+
+    def with_change(index, field, value):
+        changed = copy.deepcopy(base_manifest)
+        changed["source_files"][index][field] = value
+        return changed
+
+    # Content changes must always move the identity.
+    assert identity_of(with_change(0, "sha256", "0" * 64)) != baseline
+    assert identity_of(with_change(0, "bytes", base_manifest["source_files"][0]["bytes"] + 1)) != baseline
+    assert identity_of(with_change(0, "path", "slv/renamed.nc4")) != baseline
+    shortened = copy.deepcopy(base_manifest)
+    shortened["source_files"].pop()
+    assert identity_of(shortened) != baseline
+
+
+@pytest.mark.parametrize("rule", [0, -1, "2", 2.0, 3, True, None])
+def test_unsupported_fingerprint_rule_fails_closed(published_manifest, rule):
+    """No unknown rule may silently fall back to the legacy digest."""
+    manifest = as_content_rule(published_manifest)
+    manifest["fingerprint_rule"] = rule
+    for digest in (threehour_manifest_content_sha256, builder.manifest_content_sha256):
+        with pytest.raises(ValueError, match="fingerprint_rule"):
+            digest(manifest)
+    with pytest.raises(ValueError, match="fingerprint_rule"):
+        threehour_release_identity(manifest)
+
+
+def test_explicit_legacy_rule_resolves_to_rule_1(published_manifest):
+    """Rule 1 hashes the whole manifest, so writing the marker down is content."""
+    explicit = dict(published_manifest, fingerprint_rule=1)
+    assert threehour_fingerprint_rule(explicit) == 1
+    assert threehour_manifest_content_sha256(explicit) == hashlib.sha256(inline_canonical(
+        {key: value for key, value in explicit.items() if key != "dataset_fingerprint"})).hexdigest()
+    # The registered publication simply never carries the field, which is why its
+    # frozen digest is the digest of the manifest exactly as published.
+    assert "fingerprint_rule" not in published_manifest
+    assert threehour_manifest_content_sha256(published_manifest) == PUBLISHED_MANIFEST_CONTENT_SHA256
+    with pytest.raises(ValueError, match="source_inventory_version"):
+        threehour_release_identity(dict(published_manifest, source_inventory_version=4))
+
+
+def test_mtime_drift_never_reidentifies_or_breaks_a_content_rule_package(package):
+    """A published rule 2 release survives pure provenance drift."""
+    published = publish_content_rule(package)
+    first = read_earth_3hourly_release(package)
+    assert first.metadata["dataset_fingerprint"] == published["dataset_fingerprint"]
+    manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+    manifest["source_mtimes"] = {path: value + 10 ** 9
+                                 for path, value in manifest["source_mtimes"].items()}
+    (package / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    second = read_earth_3hourly_release(package)
+    assert second.metadata["dataset_fingerprint"] == first.metadata["dataset_fingerprint"]
+    assert second.metadata["manifest_content_sha256"] == first.metadata["manifest_content_sha256"]
+    # Only the raw-byte digest of the manifest file changed.
+    assert second.metadata["manifest_sha256"] != first.metadata["manifest_sha256"]
+
+
+def test_changed_source_content_is_never_the_same_release(package):
+    """A changed source digest is either rejected or a different dataset identity."""
+    published = publish_content_rule(package)
+    manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+    manifest["source_files"][0]["sha256"] = "0" * 64
+    write_manifest(package, manifest)
+    # The manifest still claims the published inventory digest, so it is refused.
+    assert_reason(package, "manifest_metadata_mismatch")
+    # Republished consistently, the changed inventory is a different release.
+    manifest["source_sha256"] = inline_canonical_source_digest(manifest["source_files"])
+    set_source_digest(package, manifest["source_sha256"])
+    manifest["data_bytes"] = (package / DATA_FILE).stat().st_size
+    manifest["data_sha256"] = file_sha256(package / DATA_FILE)
+    write_manifest(package, manifest)
+    changed = read_earth_3hourly_release(package)
+    assert changed.metadata["dataset_fingerprint"] != published["dataset_fingerprint"]
+    assert changed.metadata["dataset_fingerprint"] == manifest["dataset_fingerprint"]
+

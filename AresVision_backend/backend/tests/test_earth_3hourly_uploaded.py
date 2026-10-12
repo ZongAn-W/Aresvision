@@ -337,7 +337,8 @@ def test_uploaded_synthetic_training_evaluates_and_strictly_reloads(uploaded_smo
     for split in ("validation", "test"):
         assert len(checkpoint.metrics["splits"][split]["by_lead"]) == 24
         assert set(checkpoint.metrics["splits"][split]["overall"]) == {"mse", "rmse", "mae", "r2", "mape", "smape"}
-    assert checkpoint.metrics["schema"] == "earth_training_metrics_3hourly_v2"
+    assert checkpoint.metrics["schema"] == "earth_training_metrics_3hourly_v3"
+    assert checkpoint.metrics["aggregation"] == "forecast_origin_lead_cell_area_weighted"
     model, _ = build_earth_model_from_checkpoint(checkpoint)
     assert forward(model, torch.randn(2, 56, 2, 24, 48)).shape == (2, 24, 1, 24, 48)
 

@@ -33,7 +33,7 @@
 .experiment-matrix-table .experiment-matrix-col-tags { width: 190px; min-width: 190px; position: sticky; left: calc(42px + var(--matrix-name-width)); z-index: 6; background: var(--bg); }
 .experiment-matrix-table th.experiment-matrix-col-tags { z-index: 12; background: var(--bg); }
 .experiment-matrix-table tbody tr:hover .experiment-matrix-select-col, .experiment-matrix-table tbody tr:hover .experiment-matrix-col-model-name, .experiment-matrix-table tbody tr:hover .experiment-matrix-col-tags { background: color-mix(in srgb, var(--brand-primary) 6%, var(--bg)); }
-.experiment-matrix-actions-col { width: 88px; min-width: 88px !important; position: sticky; right: 0; z-index: 6; background: var(--bg); }
+.experiment-matrix-actions-col { width: 140px; min-width: 140px !important; position: sticky; right: 0; z-index: 6; background: var(--bg); }
 .experiment-matrix-table th.experiment-matrix-actions-col { z-index: 12; background: var(--bg); }
 .experiment-matrix-row-actions, .experiment-matrix-editor-actions, .experiment-matrix-tags-line { display: flex; align-items: center; gap: 4px; }
 .experiment-matrix-icon-button { width: 30px; height: 30px; flex: 0 0 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-60); cursor: pointer; }
@@ -194,6 +194,40 @@
 .experiment-matrix-text-button:active:not(:disabled) {
   background: var(--surface-3);
 }
+
+.experiment-matrix-action-menu.MuiPaper-root {
+  width: min(300px, calc(100vw - 24px));
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-panel);
+  background: var(--surface-1);
+  background-image: none;
+  color: var(--text);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .22);
+}
+
+.experiment-matrix-action-menu .MuiMenuItem-root {
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 14px;
+  white-space: normal;
+  font-family: var(--font-body);
+  font-size: calc(var(--type-control) * var(--font-scale, 1));
+  line-height: 1.4;
+}
+
+.experiment-matrix-action-menu .MuiMenuItem-root > svg { flex-shrink: 0; }
+.experiment-matrix-action-menu .MuiMenuItem-root small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: calc(var(--type-helper) * var(--font-scale, 1));
+  overflow-wrap: anywhere;
+}
+.experiment-matrix-action-menu .MuiMenuItem-root.Mui-disabled { opacity: 1; color: var(--text-muted); }
+.experiment-matrix-action-menu .MuiMenuItem-root:hover,
+.experiment-matrix-action-menu .MuiMenuItem-root.Mui-focusVisible { background: var(--surface-3); }
+.experiment-matrix-action-menu .MuiMenuItem-root.Mui-focusVisible { outline: 2px solid var(--brand-ice); outline-offset: -2px; }
+.experiment-matrix-action-menu .experiment-matrix-delete-action { margin-top: 6px; border-top: 1px solid var(--line-subtle); color: var(--status-danger); }
 
 @media (max-width: 560px) {
   .experiment-matrix :is(input, select, summary, button) {

@@ -152,6 +152,13 @@ def register_earth(result, task, user_id):
     metadata = {key: result[key] for key in keys if key in result}
     metadata.update(planet="earth", scope="current_prediction_window", source_unit="DU",
                     model=str(task.custom_model_name or f"Task {task.id}"))
+    # Keep the prediction snapshot self-describing.  New checkpoints expose
+    # cell-area weighting while historical checkpoints retain their original
+    # grid-uniform policy; exports must not infer a policy from the task age.
+    metrics = result.get("metrics") or {}
+    for key in ("schema", "aggregation", "metric_units", "metric_policy"):
+        if key in metrics:
+            metadata[key if key != "schema" else "metrics_schema"] = metrics[key]
     ref = EXPORT_SOURCES.register(user_id=user_id, task_id=task.id, planet="earth", analysis="prediction",
                                   horizon=result["horizon"], origin=result["forecast_origin"], variables=[],
                                   guard=task_guard(task), data=data, metadata=metadata)

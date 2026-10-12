@@ -5,6 +5,14 @@ three hourly mean fields is averaged, then conservatively regridded by spherical
 cell overlap. Missing support is propagated, never renormalized or filled with
 zero. Existing output is verified and reused; incompatible or partial output is
 retained and rejected. Use a fresh external directory after an interrupted build.
+
+Dataset identity is bound to *content*, not to how the content was obtained.
+Every published manifest declares its fingerprint rule: rule 1 is the legacy
+whole-manifest digest kept for already registered publications, rule 2 hashes the
+same manifest without the source_mtimes provenance block and with source_files
+projected onto (date, product, path, bytes, sha256). File-system timestamps
+(mtime_ns) and the redundant name suffix never move the identity, while a changed
+path, size, digest or inventory membership always does.
 """
 
 from __future__ import annotations
@@ -18,7 +26,7 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import netCDF4
 import numpy as np
@@ -33,7 +41,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from services.dataset_identity import build_dataset_fingerprint
 from services.netcdf_read_lock import netcdf_read_lock
-from scripts.preprocess_earth_reanalysis import build_overlap_weights
+from scripts.preprocess_earth_reanalysis import build_overlap_weights, sha256_file
 
 DATASET_ID = "earth_merra2_3hourly_v1"
 DATASET_VERSION = "v1"
@@ -51,10 +59,23 @@ RAW_VARIABLES = {
 }
 TIME_UNITS = "hours since 2020-01-01 00:00:00 UTC"
 CALENDAR = "proleptic_gregorian"
+FINGERPRINT_RULE_LEGACY = 1
+FINGERPRINT_RULE_CONTENT = 2
+FINGERPRINT_RULE = FINGERPRINT_RULE_CONTENT
+SOURCE_INVENTORY_VERSION = 3
+# Content identity of one source inventory entry. name is a redundant suffix of
+# path and mtime_ns is file-system metadata, so neither may enter an identity
+# digest; both stay in the manifest for human and change-detection use.
+SOURCE_IDENTITY_FIELDS = ("date", "product", "path", "bytes", "sha256")
 FINGERPRINT_BASIS = (
     "build_dataset_fingerprint(dataset_id, dataset_version, "
-    "SHA256(canonical manifest excluding dataset_fingerprint), data_sha256); "
-    "canonical JSON: sort_keys=True, separators=(',', ':'), ensure_ascii=True"
+    "SHA256(canonical manifest excluding dataset_fingerprint, source_mtimes and "
+    "fingerprint_rule, with source_files projected to date/product/path/bytes/sha256), "
+    "data_sha256); canonical JSON: sort_keys=True, separators=(',', ':'), ensure_ascii=True"
+)
+SOURCE_FINGERPRINT_BASIS = (
+    "SHA256(canonical sorted date/product/path/bytes/full-file-content-SHA256 identity "
+    "inventory); name and mtime_ns are provenance only and never enter an identity digest"
 )
 _DATE_RE = re.compile(r"(?:^|[._-])(?P<date>20\d{6})(?:[._-]|$)")
 _PRODUCT_RE = re.compile(r"(?:^|[._-])(?P<product>slv|rad)(?:[._-]|$)", re.I)
@@ -66,24 +87,80 @@ def canonical_json(value: Any) -> bytes:
                       allow_nan=False).encode("utf-8")
 
 
+def fingerprint_rule(manifest: Mapping) -> int:
+    """Resolve the identity rule of a manifest; unknown values fail closed.
+
+    A missing field means the legacy rule. Anything that is not exactly 1 or 2
+    (0, negative, string, float, bool) is refused rather than silently digesting
+    as the legacy rule, because a silent fallback would publish a package whose
+    identity no consumer can reproduce.
+    """
+    value = manifest.get("fingerprint_rule", FINGERPRINT_RULE_LEGACY)
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value not in (FINGERPRINT_RULE_LEGACY, FINGERPRINT_RULE_CONTENT)):
+        raise ValueError(f"unsupported fingerprint_rule: {value!r}")
+    return value
+
+
+def source_inventory_version(manifest: Mapping) -> int:
+    """Resolve the source inventory basis; unknown values fail closed."""
+    value = manifest.get("source_inventory_version", 2)
+    if isinstance(value, bool) or not isinstance(value, int) or value not in (2, SOURCE_INVENTORY_VERSION):
+        raise ValueError(f"unsupported source_inventory_version: {value!r}")
+    return value
+
+
+def source_identity_projection(files) -> list:
+    """Project inventory entries onto the fields that define source content."""
+    projection = []
+    for entry in files:
+        if not isinstance(entry, dict):
+            raise ValueError("source inventory entry must be a JSON object")
+        missing = [field for field in SOURCE_IDENTITY_FIELDS if field not in entry]
+        if missing:
+            raise ValueError(f"source inventory entry lacks {', '.join(missing)}")
+        projection.append({field: entry[field] for field in SOURCE_IDENTITY_FIELDS})
+    return projection
+
+
+def source_inventory_sha256(files, version: int) -> str:
+    """Digest an inventory with the basis its version declares.
+
+    Version 3 hashes the content identity projection; earlier versions hash every
+    recorded field, including name and mtime_ns.
+    """
+    if version not in (2, SOURCE_INVENTORY_VERSION):
+        raise ValueError(f"unsupported source_inventory_version: {version!r}")
+    payload = source_identity_projection(files) if version == SOURCE_INVENTORY_VERSION else files
+    return hashlib.sha256(canonical_json(payload)).hexdigest()
+
+
 def manifest_content_sha256(manifest: dict) -> str:
-    """Digest manifest content before its self-referential fingerprint field."""
-    return hashlib.sha256(canonical_json({
-        key: value for key, value in manifest.items() if key != "dataset_fingerprint"
-    })).hexdigest()
+    """Digest the manifest content that defines the dataset identity.
+
+    Rule 1 keeps the historical behaviour byte for byte: every manifest field
+    except the self-referential dataset_fingerprint. Rule 2 additionally excludes
+    the source_mtimes provenance block and the rule marker itself, and projects
+    source_files onto its identity fields, so file-system metadata cannot move a
+    published identity.
+    """
+    rule = fingerprint_rule(manifest)
+    if rule == FINGERPRINT_RULE_LEGACY:
+        return hashlib.sha256(canonical_json({
+            key: value for key, value in manifest.items() if key != "dataset_fingerprint"
+        })).hexdigest()
+    payload = {key: value for key, value in manifest.items()
+               if key not in ("dataset_fingerprint", "source_mtimes", "fingerprint_rule")}
+    files = payload.get("source_files")
+    if not isinstance(files, list):
+        raise ValueError("source_files must be a JSON array")
+    payload["source_files"] = source_identity_projection(files)
+    return hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
 def dataset_fingerprint(manifest: dict) -> str:
     return build_dataset_fingerprint(manifest["dataset_id"], manifest["dataset_version"],
                                      manifest_content_sha256(manifest), manifest["data_sha256"])
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def target_grid() -> tuple[np.ndarray, np.ndarray]:
@@ -184,7 +261,16 @@ def regrid_three_hour_mean(values, valid_mask, source_lat, source_lon):
 
 
 def _signature(path: Path) -> tuple[int, int]:
-    info = path.stat()
+    try:
+        info = path.stat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"source file is missing: {path}") from exc
+    except PermissionError as exc:
+        raise ValueError(f"source file is not readable: {path}") from exc
+    except OSError as exc:
+        raise ValueError(f"source file metadata could not be read: {path}: {exc}") from exc
+    if not path.is_file():
+        raise ValueError(f"source path is not a regular file: {path}")
     return info.st_size, info.st_mtime_ns
 
 
@@ -288,8 +374,9 @@ def _read_hourly(path: Path, variable: str, day: date,
 
 
 def _source_inventory(index: dict, source_root: Path):
-    inventory, signatures = [], {}
-    for day, pair in index.items():
+    inventory, signatures, digests = [], {}, {}
+    for day in sorted(index):
+        pair = index[day]
         for product in ("slv", "rad"):
             path = pair[product]
             signature = _signature(path)
@@ -297,10 +384,24 @@ def _source_inventory(index: dict, source_root: Path):
             if signature != _signature(path):
                 raise ValueError(f"source file changed while hashing: {path.name}")
             signatures[path] = signature
+            digests[(day.isoformat(), product)] = digest
             inventory.append({"date": day.isoformat(), "product": product,
                               "path": path.relative_to(source_root).as_posix(), "name": path.name,
-                              "bytes": signature[0], "mtime_ns": signature[1], "sha256": digest})
-    return inventory, signatures
+                              "bytes": signature[0], "sha256": digest})
+    return inventory, signatures, digests
+
+
+def source_mtimes(signatures: Mapping[Path, tuple], source_root: Path) -> dict:
+    """Provenance block: cheap change detection, never part of any identity digest."""
+    return {path.relative_to(source_root).as_posix(): signature[1]
+            for path, signature in signatures.items()}
+
+
+def _assert_source_digests(index: dict, source_root: Path,
+                           expected: dict[tuple[str, str], str]) -> None:
+    _, _, current = _source_inventory(index, source_root)
+    if current != expected:
+        raise ValueError("source archive content changed during build")
 
 
 def _safe_output_dir(output_dir: Path, source_root: Path) -> Path:
@@ -397,6 +498,8 @@ def verify_existing_release(output_dir: Path, *, days: Sequence[date] | None = N
         raise ValueError("existing output identity does not match this builder")
     if path.stat().st_size != manifest.get("data_bytes") or sha256_file(path) != manifest.get("data_sha256"):
         raise ValueError("existing NetCDF SHA-256 or size mismatch")
+    if manifest.get("source_inventory_version") != SOURCE_INVENTORY_VERSION:
+        raise ValueError("existing output uses another source inventory version; use a fresh directory")
     if manifest.get("dataset_fingerprint") != dataset_fingerprint(manifest):
         raise ValueError("existing manifest fingerprint mismatch")
     if source_sha256 is not None and manifest.get("source_sha256") != source_sha256:
@@ -431,13 +534,14 @@ def build_dataset(source_root: Path | str, output_dir: Path | str, *,
     output_dir = _safe_output_dir(Path(output_dir), source_root)
     days = _period(start_date, end_date, smoke_days)
     index = discover_source_files(source_root, days)
-    inventory, signatures = _source_inventory(index, source_root)
-    source_sha = hashlib.sha256(canonical_json(inventory)).hexdigest()
+    inventory, signatures, source_digests = _source_inventory(index, source_root)
+    source_sha = source_inventory_sha256(inventory, SOURCE_INVENTORY_VERSION)
     output, manifest_path = output_dir / DATA_FILE, output_dir / "manifest.json"
     if output.exists() or manifest_path.exists():
         if not verify_existing:
             raise ValueError("output already exists; refusing to overwrite")
         verify_existing_release(output_dir, days=days, source_sha256=source_sha)
+        _assert_source_digests(index, source_root, source_digests)
         print(f"Verified existing release: {output}", flush=True)
         return output
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -498,8 +602,7 @@ def build_dataset(source_root: Path | str, output_dir: Path | str, *,
                             stats["complete_support_frames"] += 1
                 stored.sync()
                 print(f"Processed {day.isoformat()} ({day_index + 1}/{len(days)} UTC days)", flush=True)
-            if any(_signature(path) != before for path, before in signatures.items()):
-                raise ValueError("source archive changed during build")
+            _assert_source_digests(index, source_root, source_digests)
         finally:
             stored.close()
     times, bounds = _times(days)
@@ -525,7 +628,10 @@ def build_dataset(source_root: Path | str, output_dir: Path | str, *,
                    "date_end": days[-1].isoformat(), "daily_file_count": len(days),
                    "products": ["slv", "rad"], "excluded_products": ["chm"]},
         "source_files": inventory, "source_sha256": source_sha,
-        "source_fingerprint_basis": "SHA256(canonical sorted date/product/path/name/bytes/mtime_ns/full-file-sha256 inventory)",
+        "source_mtimes": source_mtimes(signatures, source_root),
+        "source_inventory_version": SOURCE_INVENTORY_VERSION,
+        "source_fingerprint_basis": SOURCE_FINGERPRINT_BASIS,
+        "fingerprint_rule": FINGERPRINT_RULE,
         "dimensions": {"time": len(times), "lat": 240, "lon": 480, "bounds": 2},
         "time_start": _iso_time(times[0]), "time_end": _iso_time(times[-1]),
         "frequency_hours": 3, "step_unit": "hour", "step": 3, "time_zone": "UTC",
@@ -557,9 +663,8 @@ def build_dataset(source_root: Path | str, output_dir: Path | str, *,
         "fingerprint_basis": FINGERPRINT_BASIS,
         "data_bytes": output.stat().st_size, "data_sha256": sha256_file(output),
     }
-    if any(_signature(path) != before for path, before in signatures.items()):
-        raise ValueError("source archive changed before publishing the manifest")
     manifest["dataset_fingerprint"] = dataset_fingerprint(manifest)
+    _assert_source_digests(index, source_root, source_digests)
     with manifest_path.open("x", encoding="utf-8", newline="\n") as stream:
         json.dump(manifest, stream, ensure_ascii=False, indent=2, allow_nan=False)
         stream.write("\n")

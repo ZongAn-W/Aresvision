@@ -46,6 +46,9 @@ from services.earth_training_contract import (
     EARTH_3HOURLY_ARTIFACT_SCHEMA,
     EARTH_3HOURLY_METRICS_SCHEMA,
     EARTH_3HOURLY_METRICS_SCHEMA_V2,
+    EARTH_3HOURLY_METRICS_SCHEMA_V3,
+    GRID_UNIFORM_AGGREGATION,
+    CELL_AREA_WEIGHTED_AGGREGATION,
     EARTH_3HOURLY_IMPLEMENTATION_ID,
     EARTH_3HOURLY_WINDOW,
     EARTH_3HOURLY_HORIZON,
@@ -58,6 +61,7 @@ from services.earth_training_contract import (
     EARTH_UPLOADED_ARCHITECTURE,
     EARTH_WINDOW,
     earth_training_profile,
+    earth_task_metrics_contract,
 )
 from services.dataset_identity import EARTH_DATASET_3HOURLY_ID, DatasetRequestError
 from services.training_split import normalize_split_ratios, TrainingSplitError
@@ -88,6 +92,12 @@ METRIC_POLICY = {
     "smape_numerator_multiplier": 2,
     "r2_constant_target": "1 if squared_error_sum == 0 else 0",
 }
+AREA_WEIGHTED_METRIC_POLICY = {
+    **METRIC_POLICY,
+    "spatial_weighting": "spherical_cell_area",
+    "cell_area_formula": "sin(latitude_north) - sin(latitude_south)",
+    "weight_normalization": "global_cell_weights_sum_to_one",
+}
 LEAD_DAYS = (1, 2, 3)
 THREE_HOURLY_HORIZONS = (24, 48, 72)
 THREE_HOURLY_TIMESTAMP_RULE = "interval_center"
@@ -111,15 +121,16 @@ class EarthArtifactError(ValueError):
 
 # ── metrics ────────────────────────────────────────────────────────────────
 
-def compute_earth_metrics(predictions_du, targets_du, dataset_id: str | None = None) -> dict:
+def compute_earth_metrics(predictions_du, targets_du, dataset_id: str | None = None,
+                          spatial_weights=None) -> dict:
     """Return physical metrics for ``[N, horizon, 1, H, W]`` arrays.
 
-    Every ``(forecast origin, lead day, grid cell)`` contributes equally, so the
-    numbers are grid-uniform spatial errors, never an area-weighted global mean.
+    Three-hour weights may be supplied as normalized cell-area weights. Omitting
+    them preserves the historical grid-uniform policy for legacy callers.
     """
     if dataset_id == EARTH_DATASET_3HOURLY_ID:
         accumulator = ErrorAccumulator(dataset_id=dataset_id, horizon=np.asarray(predictions_du).shape[1])
-        accumulator.update(predictions_du, targets_du)
+        accumulator.update(predictions_du, targets_du, spatial_weights=spatial_weights)
         return accumulator.result()
     prediction = np.asarray(predictions_du, dtype="float64")
     target = np.asarray(targets_du, dtype="float64")
@@ -151,7 +162,7 @@ def compute_earth_metrics(predictions_du, targets_du, dataset_id: str | None = N
 
 
 class ErrorAccumulator:
-    """Float64 error sums and Chan target moments; memory scales with horizon."""
+    """Float64 error sums and weighted Chan target moments; memory scales with horizon."""
 
     def __init__(self, dataset_id: str | None = None, horizon: int | None = None) -> None:
         self._three_hourly = dataset_id == EARTH_DATASET_3HOURLY_ID
@@ -165,8 +176,10 @@ class ErrorAccumulator:
         self._symmetric = np.zeros(leads, dtype="float64")
         self._means = np.zeros(leads, dtype="float64")
         self._m2 = np.zeros(leads, dtype="float64")
+        self._weight_sums = np.zeros(leads, dtype="float64")
+        self._weighted_mode: Optional[bool] = None
 
-    def update(self, predictions_du, targets_du) -> None:
+    def update(self, predictions_du, targets_du, *, spatial_weights=None) -> None:
         prediction = np.asarray(predictions_du, dtype="float64")
         target = np.asarray(targets_du, dtype="float64")
         if prediction.shape != target.shape or prediction.ndim != 5:
@@ -175,32 +188,51 @@ class ErrorAccumulator:
             raise EarthArtifactError("Three-hourly metric leads must match the configured TO3 horizon")
         if not np.isfinite(prediction).all() or not np.isfinite(target).all():
             raise EarthArtifactError("Metrics require finite predictions and references")
+        weighted = spatial_weights is not None
+        if self._weighted_mode is None:
+            self._weighted_mode = weighted
+        elif self._weighted_mode != weighted:
+            raise EarthArtifactError("Metric updates cannot mix weighted and unweighted spatial samples")
+        if spatial_weights is None:
+            weights = np.ones((prediction.shape[0], prediction.shape[-2], prediction.shape[-1]), dtype="float64")
+        else:
+            weights = np.asarray(spatial_weights, dtype="float64")
+            expected_patch = prediction.shape[-2:]
+            if weights.shape == expected_patch:
+                weights = np.broadcast_to(weights, (prediction.shape[0], *expected_patch))
+            if (weights.shape != (prediction.shape[0], *expected_patch)
+                    or not np.isfinite(weights).all() or np.any(weights < 0)
+                    or not np.any(weights > 0)):
+                raise EarthArtifactError("Spatial weights must be finite non-negative [lat, lon] or [N, lat, lon]")
         error = prediction - target
         for index in range(min(len(self._counts), prediction.shape[1])):
             lead_error = error[:, index]
             if not lead_error.size:
                 continue
             truth = target[:, index]
-            mean = float(truth.mean())
-            m2 = float(np.square(truth - mean).sum())
+            cell_weights = weights[:, None, :, :]
+            weight_total = float(np.broadcast_to(cell_weights, truth.shape).sum(dtype="float64"))
+            mean = float((truth * cell_weights).sum(dtype="float64") / weight_total)
+            m2 = float((np.square(truth - mean) * cell_weights).sum(dtype="float64"))
             count = float(lead_error.size)
-            old_count = self._counts[index]
+            old_weight = self._weight_sums[index]
             delta = mean - self._means[index]
-            total = old_count + count
-            self._m2[index] += m2 + delta * delta * old_count * count / total
-            self._means[index] += delta * count / total
-            self._squared[index] += float((lead_error ** 2).sum())
-            self._absolute[index] += float(np.abs(lead_error).sum())
+            total = old_weight + weight_total
+            self._m2[index] += m2 + delta * delta * old_weight * weight_total / total
+            self._means[index] += delta * weight_total / total
+            self._squared[index] += float((np.square(lead_error) * cell_weights).sum(dtype="float64"))
+            self._absolute[index] += float((np.abs(lead_error) * cell_weights).sum(dtype="float64"))
             epsilon = METRIC_POLICY["denominator_epsilon"]
-            self._percentage[index] += float((np.abs(lead_error) / (np.abs(truth) + epsilon)).sum())
+            self._percentage[index] += float((np.abs(lead_error) / (np.abs(truth) + epsilon) * cell_weights).sum(dtype="float64"))
             self._symmetric[index] += float((2 * np.abs(lead_error) / (
-                np.abs(truth) + np.abs(prediction[:, index]) + epsilon)).sum())
-            self._counts[index] = total
+                np.abs(truth) + np.abs(prediction[:, index]) + epsilon) * cell_weights).sum(dtype="float64"))
+            self._counts[index] += count
+            self._weight_sums[index] = total
 
     def _summary(self, steps: int) -> dict:
         count, mean, m2 = 0.0, 0.0, 0.0
         for index in range(steps):
-            n = self._counts[index]
+            n = self._weight_sums[index]
             delta = self._means[index] - mean
             total = count + n
             m2 += self._m2[index] + delta * delta * count * n / total
@@ -243,15 +275,17 @@ class ErrorAccumulator:
         return result
 
     def _lead_summary(self, index: int) -> dict:
-        count = self._counts[index]
+        count = self._weight_sums[index]
         mse = float(self._squared[index] / count)
         result = {"rmse": math.sqrt(mse), "mae": float(self._absolute[index] / count)}
         if self._three_hourly:
             result.update(mse=mse, r2=_r2(self._squared[index], self._m2[index]),
                           mape=float(100 * self._percentage[index] / count),
                           smape=float(100 * self._symmetric[index] / count),
-                          target_statistics={"count": int(count), "mean": float(self._means[index]),
+                          target_statistics={"count": int(self._counts[index]), "mean": float(self._means[index]),
                                              "m2": float(self._m2[index])})
+            if self._weighted_mode:
+                result["target_statistics"]["weight_sum"] = float(count)
         return result
 
 
@@ -267,6 +301,7 @@ def build_metrics_block(
     test_window_count: int,
     dataset_id: str | None = None,
     horizon: int | None = None,
+    aggregation: str = GRID_UNIFORM_AGGREGATION,
 ) -> dict:
     """Assemble the persisted metrics block for one training run.
 
@@ -274,20 +309,28 @@ def build_metrics_block(
     self-describing: a reader never has to guess how many forecast origins the
     numbers were aggregated over.
     """
+    area_weighted = aggregation == CELL_AREA_WEIGHTED_AGGREGATION
+    if aggregation not in (GRID_UNIFORM_AGGREGATION, CELL_AREA_WEIGHTED_AGGREGATION):
+        raise EarthArtifactError("Unsupported Earth metric aggregation")
     block = {
-        "schema": EARTH_3HOURLY_METRICS_SCHEMA_V2 if dataset_id == EARTH_DATASET_3HOURLY_ID else EARTH_METRICS_SCHEMA,
+        "schema": (EARTH_3HOURLY_METRICS_SCHEMA_V3 if area_weighted
+                   else EARTH_3HOURLY_METRICS_SCHEMA_V2 if dataset_id == EARTH_DATASET_3HOURLY_ID
+                   else EARTH_METRICS_SCHEMA),
         "target": EARTH_TARGET_CHANNEL,
         "unit": EARTH_TARGET_UNIT,
-        "aggregation": "forecast_origin_lead_grid_uniform",
+        "aggregation": aggregation,
         "splits": {
             "validation": _checked_split_metrics(validation, validation_window_count, dataset_id, horizon,
-                                                  full=dataset_id == EARTH_DATASET_3HOURLY_ID),
+                                                  full=dataset_id == EARTH_DATASET_3HOURLY_ID,
+                                                  area_weighted=area_weighted),
             "test": _checked_split_metrics(test, test_window_count, dataset_id, horizon,
-                                            full=dataset_id == EARTH_DATASET_3HOURLY_ID),
+                                            full=dataset_id == EARTH_DATASET_3HOURLY_ID,
+                                            area_weighted=area_weighted),
         },
     }
     if dataset_id == EARTH_DATASET_3HOURLY_ID:
-        block.update(metric_units=dict(METRIC_UNITS), metric_policy=dict(METRIC_POLICY))
+        block.update(metric_units=dict(METRIC_UNITS),
+                     metric_policy=dict(AREA_WEIGHTED_METRIC_POLICY if area_weighted else METRIC_POLICY))
     return block
 
 
@@ -297,7 +340,8 @@ def threehour_summary_hours(horizon: int) -> list[int]:
 
 
 def _checked_split_metrics(metrics: Mapping[str, Any], window_count: int, dataset_id: str | None = None,
-                           horizon: int | None = None, *, full: bool = False) -> dict:
+                           horizon: int | None = None, *, full: bool = False,
+                           area_weighted: bool = False) -> dict:
     if not isinstance(metrics, Mapping):
         raise EarthArtifactError("Split metrics must be a mapping")
     counts = int(window_count)
@@ -332,6 +376,11 @@ def _checked_split_metrics(metrics: Mapping[str, Any], window_count: int, datase
                 }
                 if stats["m2"] < 0:
                     raise EarthArtifactError("Target m2 cannot be negative")
+                if area_weighted:
+                    weight_sum = _finite_float(stats.get("weight_sum"), "target weight_sum")
+                    if weight_sum <= 0:
+                        raise EarthArtifactError("Weighted target statistics require positive weight_sum")
+                    block["by_lead"][-1]["target_statistics"]["weight_sum"] = weight_sum
         horizons = metrics.get("by_horizon")
         summary_hours = threehour_summary_hours(expected_horizon)
         if not isinstance(horizons, (list, tuple)) or len(horizons) != len(summary_hours):
@@ -352,7 +401,7 @@ def _checked_split_metrics(metrics: Mapping[str, Any], window_count: int, datase
                          or not math.isclose(group["mse"], group["rmse"] ** 2, rel_tol=1e-6, abs_tol=1e-9)):
                 raise EarthArtifactError("Metric range or MSE/RMSE consistency is invalid")
         if full:
-            _validate_full_aggregation(block, expected_horizon)
+            _validate_full_aggregation(block, expected_horizon, area_weighted=area_weighted)
         # Every lead contains the same forecast-origin/grid elements.
         for summary in [*block["by_horizon"], {**block["overall"], "lead_steps": expected_horizon}]:
             leads = block["by_lead"][:summary["lead_steps"]]
@@ -378,7 +427,7 @@ def _checked_split_metrics(metrics: Mapping[str, Any], window_count: int, datase
     return block
 
 
-def _validate_full_aggregation(block: dict, horizon: int) -> None:
+def _validate_full_aggregation(block: dict, horizon: int, *, area_weighted: bool = False) -> None:
     accumulator = ErrorAccumulator(dataset_id=EARTH_DATASET_3HOURLY_ID, horizon=horizon)
     leads = block["by_lead"]
     for index, row in enumerate(leads):
@@ -387,13 +436,15 @@ def _validate_full_aggregation(block: dict, horizon: int) -> None:
             raise EarthArtifactError("Every lead must contain the same forecast-origin/grid elements")
         count = stats["count"]
         accumulator._counts[index] = count
+        weight_sum = stats.get("weight_sum", count) if area_weighted else count
+        accumulator._weight_sums[index] = weight_sum
         accumulator._means[index] = stats["mean"]
         accumulator._m2[index] = stats["m2"]
-        accumulator._squared[index] = row["mse"] * count
-        accumulator._absolute[index] = row["mae"] * count
-        accumulator._percentage[index] = row["mape"] * count / 100
-        accumulator._symmetric[index] = row["smape"] * count / 100
-        if not math.isclose(row["r2"], _r2(row["mse"] * count, stats["m2"]), rel_tol=1e-6, abs_tol=1e-9):
+        accumulator._squared[index] = row["mse"] * weight_sum
+        accumulator._absolute[index] = row["mae"] * weight_sum
+        accumulator._percentage[index] = row["mape"] * weight_sum / 100
+        accumulator._symmetric[index] = row["smape"] * weight_sum / 100
+        if not math.isclose(row["r2"], _r2(row["mse"] * weight_sum, stats["m2"]), rel_tol=1e-6, abs_tol=1e-9):
             raise EarthArtifactError("Lead R2 disagrees with target statistics")
     for row in [*block["by_horizon"], {**block["overall"], "lead_steps": horizon}]:
         expected = accumulator._summary(row["lead_steps"])
@@ -944,16 +995,41 @@ def validate_checkpoint_payload(
                        for key, value in contract["split_ratios"].items())):
             raise EarthArtifactError("Checkpoint run ratios or windows disagree with its fixed partition")
     metrics = payload.get("metrics")
-    allowed_metrics_schemas = (EARTH_3HOURLY_METRICS_SCHEMA, EARTH_3HOURLY_METRICS_SCHEMA_V2) if three_hourly else (EARTH_METRICS_SCHEMA,)
+    allowed_metrics_schemas = (EARTH_3HOURLY_METRICS_SCHEMA, EARTH_3HOURLY_METRICS_SCHEMA_V2,
+                               EARTH_3HOURLY_METRICS_SCHEMA_V3) if three_hourly else (EARTH_METRICS_SCHEMA,)
     if not isinstance(metrics, Mapping) or metrics.get("schema") not in allowed_metrics_schemas:
         raise EarthArtifactError("Checkpoint has no Earth metrics block")
-    full_metrics = metrics["schema"] == EARTH_3HOURLY_METRICS_SCHEMA_V2
-    if full_metrics and (metrics.get("metric_units") != METRIC_UNITS or metrics.get("metric_policy") != METRIC_POLICY):
+    area_weighted_metrics = metrics["schema"] == EARTH_3HOURLY_METRICS_SCHEMA_V3
+    full_metrics = metrics["schema"] in (EARTH_3HOURLY_METRICS_SCHEMA_V2,
+                                          EARTH_3HOURLY_METRICS_SCHEMA_V3)
+    expected_metric_policy = AREA_WEIGHTED_METRIC_POLICY if area_weighted_metrics else METRIC_POLICY
+    expected_aggregation = CELL_AREA_WEIGHTED_AGGREGATION if area_weighted_metrics else GRID_UNIFORM_AGGREGATION
+    if full_metrics and (metrics.get("metric_units") != METRIC_UNITS
+                         or metrics.get("metric_policy") != expected_metric_policy):
         raise EarthArtifactError("Checkpoint metric units or formula policy is invalid")
     if metrics.get("unit") != EARTH_TARGET_UNIT or metrics.get("target") != EARTH_TARGET_CHANNEL:
         raise EarthArtifactError("Checkpoint metrics must be TO3 in DU")
-    if three_hourly and metrics.get("aggregation") != "forecast_origin_lead_grid_uniform":
-        raise EarthArtifactError("Three-hourly metrics aggregation is inconsistent with full partition evaluation")
+    if three_hourly and metrics.get("aggregation") != expected_aggregation:
+        raise EarthArtifactError("Three-hourly metrics aggregation disagrees with its schema")
+    if three_hourly:
+        # Older v1/v2 artifacts may call their uniform MSE simply ``mse``.
+        # Known weighted/uniform loss declarations must always agree with the
+        # metrics, and every v3 artifact must explicitly record weighted loss.
+        expected_loss = ("normalized_mse_cell_area_weighted" if area_weighted_metrics
+                         else "normalized_mse_grid_uniform")
+        if ((area_weighted_metrics or run["loss"] in (
+                "normalized_mse_cell_area_weighted", "normalized_mse_grid_uniform"))
+                and run["loss"] != expected_loss):
+            raise EarthArtifactError("Checkpoint run loss disagrees with its metrics contract")
+        run_hypers = run.get("hyperparameters")
+        if isinstance(run_hypers, Mapping):
+            try:
+                run_metrics_contract = earth_task_metrics_contract(run_hypers, executable=True)
+            except ValueError as exc:
+                raise EarthArtifactError(str(exc)) from exc
+            if run_metrics_contract is not None and any(
+                    metrics.get(key) != value for key, value in run_metrics_contract.items()):
+                raise EarthArtifactError("Checkpoint metrics do not match its frozen run metrics contract")
     splits = metrics.get("splits")
     if not isinstance(splits, Mapping) or "test" not in splits or "validation" not in splits:
         raise EarthArtifactError("Checkpoint metrics require validation and test splits")
@@ -975,7 +1051,8 @@ def validate_checkpoint_payload(
         "unit": metrics["unit"],
         "aggregation": metrics.get("aggregation"),
         "splits": {
-            name: _validated_split_metrics(splits.get(name), name, metric_dataset_id, profile['horizon'], full=full_metrics)
+            name: _validated_split_metrics(splits.get(name), name, metric_dataset_id, profile['horizon'],
+                                           full=full_metrics, area_weighted=area_weighted_metrics)
             for name in ("validation", "test")
         },
     }
@@ -985,19 +1062,26 @@ def validate_checkpoint_payload(
             if any(row["target_statistics"]["count"] != expected_elements
                    for row in validated["metrics"]["splits"][name]["by_lead"]):
                 raise EarthArtifactError(f"{name} metrics do not cover every forecast-origin/grid element")
-        validated["metrics"].update(metric_units=dict(METRIC_UNITS), metric_policy=dict(METRIC_POLICY))
+            if area_weighted_metrics and any(
+                    not math.isclose(row["target_statistics"]["weight_sum"], counts[name],
+                                     rel_tol=1e-6, abs_tol=1e-9)
+                    for row in validated["metrics"]["splits"][name]["by_lead"]):
+                raise EarthArtifactError(f"{name} weighted metrics do not cover one global unit area per origin")
+        validated["metrics"].update(metric_units=dict(METRIC_UNITS),
+                                    metric_policy=dict(expected_metric_policy))
     return validated
 
 
 def _validated_split_metrics(metrics: Any, name: str, dataset_id: str | None = None, horizon: int | None = None,
-                             *, full: bool = False) -> dict:
+                             *, full: bool = False, area_weighted: bool = False) -> dict:
     """Strictly validate one split's metrics block read back from a checkpoint."""
     if not isinstance(metrics, Mapping):
         raise EarthArtifactError(f"Checkpoint metrics for {name} must be a mapping")
     counts = metrics.get("window_count")
     if isinstance(counts, bool) or not isinstance(counts, int) or counts < 1:
         raise EarthArtifactError(f"Checkpoint {name} window_count is invalid")
-    return _checked_split_metrics(metrics, counts, dataset_id, horizon, full=full)
+    return _checked_split_metrics(metrics, counts, dataset_id, horizon, full=full,
+                                  area_weighted=area_weighted)
 
 
 def _threehour_time(value: Any, label: str) -> np.datetime64:
@@ -1164,9 +1248,13 @@ def load_earth_training_artifact(
         expected_channel_order=expected_order,
     )
     if expected_hyperparameters is not None:
-        expected_schema = expected_hyperparameters.get("_earth_metrics_schema")
-        if expected_schema is not None and (expected_schema != EARTH_3HOURLY_METRICS_SCHEMA_V2
-                                             or validated["metrics"]["schema"] != expected_schema):
+        try:
+            expected_metrics_contract = earth_task_metrics_contract(expected_hyperparameters, executable=True)
+        except ValueError as exc:
+            raise EarthArtifactError(str(exc)) from exc
+        if expected_metrics_contract is not None and any(
+                validated["metrics"].get(key) != value
+                for key, value in expected_metrics_contract.items()):
             raise EarthArtifactError("Checkpoint metrics do not match the task's required metrics contract")
         requested_id = expected_hyperparameters.get("training_dataset")
         actual_id = validated["dataset_binding"].get("dataset_id")
@@ -1543,6 +1631,16 @@ def origin_split(release, origin: str) -> str:
     return labels[int(codes[int(matches[0])])]
 
 
+def has_earth_task_split(contract: Mapping[str, Any] | None) -> bool:
+    """Return whether a three-hour contract carries the new frozen UTC split."""
+    from services.earth_task_split import EARTH_TASK_SPLIT_POLICY
+    return bool(
+        isinstance(contract, Mapping)
+        and contract.get("split_policy") == EARTH_TASK_SPLIT_POLICY
+        and isinstance(contract.get("task_split"), dict)
+    )
+
+
 def _require_daily_prediction_release(release) -> None:
     if (getattr(release, "metadata", None) or {}).get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
         raise EarthArtifactError(
@@ -1608,8 +1706,9 @@ def _parse_threehour_origin(origin: str) -> np.datetime64:
 def threehour_available_origin_range(release, *, strict_split=False, window=56, horizon=24, task_split=None) -> dict:
     """Offer every centre with 56 inputs ending at it and 24 following truths.
 
-    Official backtesting uses the complete release. Uploaded models retain only
-    complete windows within task partitions (published splits for legacy tasks).
+    Legacy official backtesting uses the complete release. Strict task-split
+    checkpoints retain only complete windows within one task partition; legacy
+    uploaded artifacts use the published manifest split when requested.
     """
     times = _threehour_prediction_times(release)
     profile = earth_training_profile(EARTH_DATASET_3HOURLY_ID, {'window': window, 'horizon': horizon})
@@ -1622,7 +1721,10 @@ def threehour_available_origin_range(release, *, strict_split=False, window=56, 
             code="earth_prediction_origin_out_of_range",
         )
     indices = range(first, stop)
-    if strict_split:
+    # Passing a frozen task split is itself an opt-in to the complete-window
+    # rule.  ``strict_split`` remains available for legacy uploaded artifacts,
+    # where it means the published manifest split.
+    if strict_split or task_split is not None:
         from services.earth_task_split import task_split_codes
         codes = task_split_codes(release.dates, release.metadata, task_split)
         indices = [i for i in indices if np.all(codes[i - window + 1:i + horizon + 1] == codes[i])]
@@ -1661,26 +1763,30 @@ def threehour_origin_index(release, origin: str, *, strict_split=False, window=5
             f"The forecast origin has no complete {window}-step input and {horizon}-step reference window",
             code="earth_prediction_origin_out_of_range",
         )
-    if strict_split:
+    if strict_split or task_split is not None:
         from services.earth_task_split import task_split_codes
         codes = task_split_codes(release.dates, release.metadata, task_split)
         if not np.all(codes[index - window + 1:index + horizon + 1] == codes[index]):
-            raise EarthArtifactError("The uploaded model window crosses a task partition",
+            raise EarthArtifactError("The prediction window crosses a task partition",
                                      code="earth_prediction_origin_out_of_range")
     return index
 
 
-def threehour_forecast_timestamps(release, origin: str, *, window=56, horizon=24) -> list[str]:
+def threehour_forecast_timestamps(release, origin: str, *, window=56, horizon=24,
+                                  strict_split=False, task_split=None) -> list[str]:
     """Return the 24 exact target centres at +3 through +72 hours."""
-    index = threehour_origin_index(release, origin, window=window, horizon=horizon)
+    index = threehour_origin_index(release, origin, window=window, horizon=horizon,
+                                   strict_split=strict_split, task_split=task_split)
     times = _threehour_prediction_times(release)
     return [_threehour_iso_utc(value)
             for value in times[index + 1:index + 1 + horizon]]
 
 
-def threehour_origin_split(release, origin: str, *, window=56, horizon=24, task_split=None) -> str:
+def threehour_origin_split(release, origin: str, *, window=56, horizon=24,
+                           strict_split=False, task_split=None) -> str:
     """Label the selected UTC origin using the verified release's split blocks."""
-    index = threehour_origin_index(release, origin, window=window, horizon=horizon)
+    index = threehour_origin_index(release, origin, window=window, horizon=horizon,
+                                   strict_split=strict_split, task_split=task_split)
     try:
         from services.earth_task_split import task_split_codes
         codes = task_split_codes(release.dates, release.metadata, task_split)
@@ -1711,4 +1817,5 @@ __all__ = [
     "threehour_forecast_timestamps",
     "threehour_origin_index",
     "threehour_origin_split",
+    "has_earth_task_split",
 ]

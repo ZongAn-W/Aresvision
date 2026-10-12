@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readExperimentMetrics, buildExperimentSummary } from './experimentCenterModel.js';
 import { getMatrixValue, formatMatrixValue, getMatrixPropertyDefinitions } from './experimentMatrixModel.js';
-import { EARTH_METRIC_META, earthMetricUnit } from '../../utils/earthMetricMeta.js';
+import { EARTH_METRIC_META, earthMetricUnit, getEarthMetricPolicyLabel } from '../../utils/earthMetricMeta.js';
 import { readEarthMetric, readEarthLeadMetric, readEarthHorizonMetric } from '../PredictPage/earthPredictModel.js';
 import { sortCompareItems, metricValue, buildStepCurveTraces } from '../PredictPage/CompareTrainingModels/compareTrainingModelsData.js';
 
@@ -43,6 +43,14 @@ test('Earth units and labels cover all six metrics in both languages', () => {
     const formatted = formatMatrixValue(overall[metric.key], { key: `metric:${metric.key}` }, task, 'en');
     assert.ok(formatted.endsWith(units[metric.key]));
   }
+});
+
+test('Earth training results identify legacy uniform and new cell-area metric policies', () => {
+  assert.equal(getEarthMetricPolicyLabel({ aggregation: 'forecast_origin_lead_grid_uniform' }),
+    '格点等权（历史指标口径）');
+  assert.equal(getEarthMetricPolicyLabel({ aggregation: 'forecast_origin_lead_cell_area_weighted',
+    metric_policy: { spatial_weighting: 'spherical_cell_area' } }, false),
+  'Spherical cell-area weighted (published lat_bounds)');
 });
 
 test('current forecast, per-lead and cumulative metrics retain finite negative R2 and zero errors', () => {

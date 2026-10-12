@@ -11,17 +11,20 @@ from collections import OrderedDict
 import numpy as np
 
 ARRAY_KEYS = ("_prediction_du", "_reference_du", "_residual_du")
+TASK_SPLIT_BOUNDARY_VERSION = "earth_task_split_complete_window_v1"
 
 
 def build_earth_prediction_cache_key(*, planet, dataset_id, dataset_version,
                                      dataset_fingerprint, task_id, forecast_origin,
-                                     target_timestamps, checkpoint_sha256=""):
+                                     target_timestamps, checkpoint_sha256="",
+                                     split_boundary_policy="legacy_compatibility"):
     identity = {
         "schema": "earth_backtest_cache_v1", "planet": planet,
         "dataset_id": dataset_id, "dataset_version": dataset_version,
         "dataset_fingerprint": dataset_fingerprint, "task_id": int(task_id),
         "forecast_origin": forecast_origin, "target_timestamps": list(target_timestamps),
         "checkpoint_sha256": checkpoint_sha256,
+        "split_boundary_policy": split_boundary_policy,
     }
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     return hashlib.sha256(encoded).hexdigest()

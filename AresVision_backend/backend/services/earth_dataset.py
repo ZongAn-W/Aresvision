@@ -568,6 +568,49 @@ def _threehour_path(release):
     return path
 
 
+def cell_area_weights_from_lat_bounds(lat_bounds, longitude_count: int) -> np.ndarray:
+    """Return globally normalized spherical cell weights from latitude bounds."""
+    bounds = np.asarray(lat_bounds, dtype='float64')
+    if (bounds.ndim != 2 or bounds.shape[1] != 2 or not len(bounds)
+            or not np.isfinite(bounds).all() or np.any(bounds[:, 1] <= bounds[:, 0])
+            or np.any(bounds < -90.) or np.any(bounds > 90.)
+            or type(longitude_count) is not int or longitude_count < 1):
+        raise ValueError('Latitude bounds and longitude count are invalid for cell-area weights')
+    row_area = (np.sin(np.deg2rad(bounds[:, 1]))
+                - np.sin(np.deg2rad(bounds[:, 0])))
+    if not np.isfinite(row_area).all() or np.any(row_area <= 0):
+        raise ValueError('Latitude bounds produce invalid spherical cell areas')
+    weights = np.broadcast_to(
+        (row_area / (row_area.sum() * longitude_count))[:, None],
+        (len(row_area), longitude_count),
+    ).copy()
+    weights /= weights.sum(dtype='float64')
+    return weights
+
+
+def threehour_global_cell_area_weights(release) -> np.ndarray:
+    """Read exact cell bounds from a verified three-hour global release."""
+    metadata = getattr(release, 'metadata', {}) or {}
+    if (metadata.get('schema') != THREE_HOURLY_SCHEMA
+            or metadata.get('dataset_id') not in (None, THREE_HOURLY_DATASET_ID)
+            or metadata.get('dataset_version') not in (None, THREE_HOURLY_DATASET_VERSION)
+            or metadata.get('grid_shape') != [240, 480]
+            or not np.array_equal(np.asarray(release.latitude), -89.625 + np.arange(240) * .75)
+            or not np.array_equal(np.asarray(release.longitude), -179.625 + np.arange(480) * .75)):
+        raise ValueError('Area weights require a verified fixed three-hour global grid')
+    path = _threehour_path(release)
+    from services.netcdf_read_lock import netcdf_read_lock
+    with netcdf_read_lock(), xr.open_dataset(path, engine='netcdf4', mask_and_scale=False) as ds:
+        bounds = np.asarray(ds['lat_bounds'].values, dtype='float64')
+        expected = np.column_stack((-90. + np.arange(240) * .75,
+                                    -90. + (np.arange(240) + 1) * .75))
+        if (ds['lat_bounds'].dims != ('lat', 'bounds')
+                or bounds.shape != expected.shape or not np.array_equal(bounds, expected)):
+            raise ValueError('Verified release latitude cell bounds changed')
+    _threehour_path(release)
+    return cell_area_weights_from_lat_bounds(bounds, 480)
+
+
 def _threehour_values(ds, channel, start, stop, *, lat_slice=slice(None), lon_slice=slice(None)):
     """Read one selected field and mask; never silently fill missing observations."""
     selection = {'time': slice(start, stop), 'lat': lat_slice, 'lon': lon_slice}
@@ -1343,6 +1386,7 @@ __all__ = [
     'TARGET_CHANNEL_INDEX',
     'UNITS',
     'build_threehour_training_cache',
+    'cell_area_weights_from_lat_bounds',
     'canonical_input_channels',
     'fit_normalization',
     'fit_threehour_normalization',
@@ -1353,6 +1397,7 @@ __all__ = [
     'release_date_index',
     'release_split_codes',
     'threehour_release_split_codes',
+    'threehour_global_cell_area_weights',
     'split_days',
     'stack_release_cube',
     'validate_dataset',

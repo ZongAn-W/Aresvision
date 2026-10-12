@@ -30,6 +30,15 @@ UNITS = dict(TO3="DU", U10M="m s-1", V10M="m s-1", T2M="K", SWGDN="W m-2")
 DATASET_ID = "earth_merra2_3hourly_v1"
 DATA_FILENAME = "earth_merra2_3hourly.nc"
 
+# This verifier reimplements the identity rules on purpose. It must not import
+# the builder's or the service's digest helpers, otherwise a shared bug would be
+# verified by itself.
+FINGERPRINT_RULE_LEGACY = 1
+FINGERPRINT_RULE_CONTENT = 2
+SOURCE_INVENTORY_FULL = 2
+SOURCE_INVENTORY_IDENTITY = 3
+SOURCE_IDENTITY_FIELDS = ("date", "product", "path", "bytes", "sha256")
+
 
 def _sha256(path: Path) -> str:
     with path.open("rb") as stream:
@@ -44,6 +53,50 @@ def _canonical(value) -> bytes:
 def _require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def _fingerprint_rule(manifest) -> int:
+    """Missing means the legacy rule; anything unsupported fails closed."""
+    value = manifest.get("fingerprint_rule", FINGERPRINT_RULE_LEGACY)
+    _require(not isinstance(value, bool) and isinstance(value, int)
+             and value in (FINGERPRINT_RULE_LEGACY, FINGERPRINT_RULE_CONTENT),
+             f"unsupported fingerprint_rule: {value!r}")
+    return value
+
+
+def _source_inventory_version(manifest) -> int:
+    """Missing means the full-inventory basis; anything unsupported fails closed."""
+    value = manifest.get("source_inventory_version", SOURCE_INVENTORY_FULL)
+    _require(not isinstance(value, bool) and isinstance(value, int)
+             and value in (SOURCE_INVENTORY_FULL, SOURCE_INVENTORY_IDENTITY),
+             f"unsupported source_inventory_version: {value!r}")
+    return value
+
+
+def _source_identity(entry: dict) -> dict:
+    _require(all(field in entry for field in SOURCE_IDENTITY_FIELDS),
+             "source inventory entry lacks content identity fields")
+    return {field: entry[field] for field in SOURCE_IDENTITY_FIELDS}
+
+
+def _source_inventory_sha256(files, version: int) -> str:
+    payload = ([_source_identity(entry) for entry in files]
+               if version == SOURCE_INVENTORY_IDENTITY else files)
+    return hashlib.sha256(_canonical(payload)).hexdigest()
+
+
+def _manifest_content_sha256(manifest) -> str:
+    """Rule 1 hashes the whole manifest, rule 2 only its content identity."""
+    if _fingerprint_rule(manifest) == FINGERPRINT_RULE_LEGACY:
+        content = {key: value for key, value in manifest.items()
+                   if key != "dataset_fingerprint"}
+    else:
+        content = {key: value for key, value in manifest.items()
+                   if key not in ("dataset_fingerprint", "source_mtimes", "fingerprint_rule")}
+        _require(isinstance(content.get("source_files"), list),
+                 "manifest requires a source_files array")
+        content["source_files"] = [_source_identity(entry) for entry in content["source_files"]]
+    return hashlib.sha256(_canonical(content)).hexdigest()
 
 
 def _utc_labels(time_var) -> list[str]:
@@ -172,14 +225,20 @@ def verify_package(package_dir, *, raw_root=None) -> dict:
     data_sha = _sha256(data_path)
     _require(data_sha == manifest.get("data_sha256"), "NetCDF SHA-256 mismatch")
     _require(data_path.stat().st_size == manifest.get("data_bytes"), "NetCDF size mismatch")
-    content = {key: value for key, value in manifest.items()
-               if key != "dataset_fingerprint"}
-    content_sha = hashlib.sha256(_canonical(content)).hexdigest()
+    rule = _fingerprint_rule(manifest)
+    inventory_version = _source_inventory_version(manifest)
+    content_sha = _manifest_content_sha256(manifest)
     fingerprint = build_dataset_fingerprint(DATASET_ID, "v1", content_sha, data_sha)
     _require(fingerprint == manifest.get("dataset_fingerprint"), "dataset fingerprint mismatch")
     files = manifest.get("source_files", [])
-    _require(bool(files) and hashlib.sha256(_canonical(files)).hexdigest() == manifest.get("source_sha256"),
+    _require(bool(files) and _source_inventory_sha256(files, inventory_version) == manifest.get("source_sha256"),
              "source inventory digest mismatch")
+    source_mtimes = manifest.get("source_mtimes")
+    if source_mtimes is not None:
+        _require(isinstance(source_mtimes, dict)
+                 and set(source_mtimes) == {entry.get("path") for entry in files}
+                 and all(type(value) is int and value >= 0 for value in source_mtimes.values()),
+                 "source mtimes provenance block mismatch")
     days = sorted({entry["date"] for entry in files})
     _require(len(files) == len(days) * 2 and
              len({(entry["date"], entry["product"]) for entry in files}) == len(files) and
@@ -271,6 +330,7 @@ def verify_package(package_dir, *, raw_root=None) -> dict:
             "variables": statistics, "data_sha256": data_sha,
             "manifest_file_sha256": _sha256(manifest_path),
             "manifest_content_sha256": content_sha, "dataset_fingerprint": fingerprint,
+            "fingerprint_rule": rule, "source_inventory_version": inventory_version,
             "raw_comparison": raw_comparison}
 
 

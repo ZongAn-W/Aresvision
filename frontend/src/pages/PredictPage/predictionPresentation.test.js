@@ -40,6 +40,14 @@ test('evaluation configuration keeps forecast, complete test, and sampled diagno
   assert.equal(new Set(['current_window', 'full_test', 'sampled_diagnostic'].map(predictionScopeLabel)).size, 3);
 });
 
+test('Earth metric subtitles use the response aggregation and metric policy', () => {
+  const presentation = createEarthPredictionPresentation({ language: 'en' }).metrics;
+  assert.match(presentation.describe({ aggregation: 'forecast_origin_lead_cell_area_weighted',
+    metric_policy: { spatial_weighting: 'spherical_cell_area' } }).subtitle, /Spherical cell-area weighted/);
+  assert.match(presentation.describe({ aggregation: 'forecast_origin_lead_grid_uniform' }).subtitle,
+    /Grid-uniform \(historical metric policy\)/);
+});
+
 test('Earth diagnostics retain paired DU values and true server histogram counts, with no scatter or PFI export', () => {
   const config = createEarthPredictionPresentation({ language: 'en' });
   const plots = config.distribution.readData(earthData);

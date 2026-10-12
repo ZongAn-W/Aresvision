@@ -15,7 +15,7 @@ import {
   parseTaskHyperparameters,
   readExperimentMetrics,
 } from './experimentCenterModel';
-import { EARTH_METRIC_META, earthMetricUnit } from '../../utils/earthMetricMeta.js';
+import { EARTH_METRIC_META, earthMetricUnit, getEarthMetricPolicyLabel } from '../../utils/earthMetricMeta.js';
 import { useSettings } from '../../contexts/SettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { getTrainingStatusMeta } from './trainingStatusMeta';
@@ -160,6 +160,7 @@ export default function ExperimentResultPanel({
     .map((key) => ({ key, label: earth ? EARTH_METRIC_META.find(metric => metric.key === key)[isZh ? 'zh' : 'en'] : t(METRIC_LABEL_KEYS[key]),
       value: summary.metrics[key] === undefined ? t('experimentCenter.metricNotProvided') : formatExperimentMetricValue(summary.metrics[key]) }));
   const validationMetrics = earth ? readExperimentMetrics(activeTask.metrics, 'validation') : {};
+  const metricPolicyLabel = earth ? getEarthMetricPolicyLabel(activeTask.metrics, isZh) : '';
 
   const datasetFingerprint = activeTask.dataset_fingerprint || '';
   const datasetVersion = activeTask.dataset_version || '';
@@ -218,6 +219,9 @@ export default function ExperimentResultPanel({
 
       <section className="experiment-result-section" data-earth-training-metrics={earth ? 'true' : undefined} aria-labelledby="experiment-result-metrics-title">
         <h4 className="experiment-result-section-title" id="experiment-result-metrics-title">{earth ? t('experimentCenter.fullTestMetrics') : copy.metricsTitle}</h4>
+        {earth ? <p className="experiment-center-hint" data-earth-metric-policy={activeTask.metrics?.aggregation || 'unknown'}>
+          {metricPolicyLabel}
+        </p> : null}
         {metrics.length > 0 ? (
           <div className="experiment-result-metrics">
             {metrics.map((metric) => (

@@ -34,8 +34,12 @@ from services.earth_dataset import (
     stack_release_cube,
     validate_normalization,
     _threehour_path, _threehour_values, threehour_release_split_codes,
+    threehour_global_cell_area_weights,
 )
 from services.earth_training_artifact import (
+    AREA_WEIGHTED_METRIC_POLICY,
+    CELL_AREA_WEIGHTED_AGGREGATION,
+    GRID_UNIFORM_AGGREGATION,
     EarthArtifactError,
     ErrorAccumulator,
     available_origin_range,
@@ -45,7 +49,7 @@ from services.earth_training_artifact import (
     origin_split,
     validate_checkpoint_payload,
     threehour_available_origin_range, threehour_origin_index,
-    threehour_forecast_timestamps, threehour_origin_split,
+    threehour_forecast_timestamps, threehour_origin_split, has_earth_task_split,
 )
 from services.earth_training_contract import (
     EARTH_HORIZON,
@@ -63,7 +67,9 @@ from services.uploaded_model_source import (
     verify_reference_source,
 )
 from services.earth_dataset_metadata import file_sha256
-from services.earth_prediction_cache import EARTH_PREDICTION_CACHE, build_earth_prediction_cache_key
+from services.earth_prediction_cache import (
+    EARTH_PREDICTION_CACHE, TASK_SPLIT_BOUNDARY_VERSION, build_earth_prediction_cache_key,
+)
 from services.netcdf_read_lock import netcdf_read_lock
 import xarray as xr
 
@@ -295,8 +301,13 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
     release = _sync_release(registry, checkpoint.dataset_binding)
     _validate_checkpoint_split_ranges(checkpoint, release)
     contract = checkpoint.training_contract
+    task_split = contract.get("task_split")
+    strict_task_split = has_earth_task_split(contract)
+    # Preserve the published-manifest restriction for old uploaded artifacts,
+    # while applying the frozen task split to both model sources.
+    strict_origins = strict_task_split or checkpoint.model_source == MODEL_SOURCE_UPLOADED
     origins = threehour_available_origin_range(release, window=contract['window'], horizon=contract['horizon'],
-        strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED, task_split=contract.get("task_split")) if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else available_origin_range(
+        strict_split=strict_origins, task_split=task_split) if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else available_origin_range(
         release,
         window=int(contract.get("window", EARTH_WINDOW)),
         horizon=int(contract.get("horizon", EARTH_HORIZON)),
@@ -612,10 +623,15 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
     contract = checkpoint.training_contract
     window, horizon = contract['window'], contract['horizon']
     try:
+        task_split = contract.get("task_split")
+        strict_task_split = has_earth_task_split(contract)
+        strict_origins = strict_task_split or checkpoint.model_source == MODEL_SOURCE_UPLOADED
         index = threehour_origin_index(release, origin, window=window, horizon=horizon,
-            strict_split=checkpoint.model_source == MODEL_SOURCE_UPLOADED, task_split=contract.get("task_split"))
-        timestamps = threehour_forecast_timestamps(release, origin, window=window, horizon=horizon)
-        split_name = threehour_origin_split(release, origin, window=window, horizon=horizon, task_split=contract.get("task_split"))
+            strict_split=strict_origins, task_split=task_split)
+        timestamps = threehour_forecast_timestamps(release, origin, window=window, horizon=horizon,
+            strict_split=strict_origins, task_split=task_split)
+        split_name = threehour_origin_split(release, origin, window=window, horizon=horizon,
+            strict_split=strict_origins, task_split=task_split)
     except EarthArtifactError as exc:
         raise DatasetRequestError(exc.code, str(exc), status_code=422 if exc.code in (
             ORIGIN_INVALID, ORIGIN_OUT_OF_RANGE) else 409) from exc
@@ -627,6 +643,8 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
         dataset_fingerprint=checkpoint.dataset_binding["dataset_fingerprint"],
         task_id=task.id, forecast_origin=normalized_origin, target_timestamps=timestamps,
         checkpoint_sha256=checkpoint_sha,
+        split_boundary_policy=(TASK_SPLIT_BOUNDARY_VERSION if strict_task_split
+                               else "legacy_compatibility"),
     )
     cache = EARTH_PREDICTION_CACHE if cache is None else cache
     cached = cache.get(key)
@@ -672,14 +690,22 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
             residual = prediction - reference
         if not np.isfinite(residual).all():
             raise EarthArtifactError("The Earth model produced non-finite residuals")
+        checkpoint_metrics = getattr(checkpoint, "metrics", None) or {}
+        aggregation = checkpoint_metrics.get("aggregation", GRID_UNIFORM_AGGREGATION)
+        area_weighted = aggregation == CELL_AREA_WEIGHTED_AGGREGATION
+        spatial_weights = threehour_global_cell_area_weights(release) if area_weighted else None
         accumulator = ErrorAccumulator(dataset_id=EARTH_DATASET_3HOURLY_ID, horizon=horizon)
-        accumulator.update(prediction[None, :, None], reference[None, :, None])
+        accumulator.update(prediction[None, :, None], reference[None, :, None],
+                           spatial_weights=spatial_weights)
         from services.earth_training_artifact import METRIC_UNITS, METRIC_POLICY
-        from services.earth_training_contract import EARTH_3HOURLY_METRICS_SCHEMA_V2
+        from services.earth_training_contract import EARTH_3HOURLY_METRICS_SCHEMA_V2, EARTH_3HOURLY_METRICS_SCHEMA_V3
         metrics = {**accumulator.result(), "unit": "DU", "target": "TO3",
-                   "schema": EARTH_3HOURLY_METRICS_SCHEMA_V2,
-                   "metric_units": dict(METRIC_UNITS), "metric_policy": dict(METRIC_POLICY),
-                   "aggregation": "user_forecast_origin_lead_grid_uniform", "reference_available": True}
+                   "schema": checkpoint_metrics.get("schema", EARTH_3HOURLY_METRICS_SCHEMA_V3 if area_weighted else EARTH_3HOURLY_METRICS_SCHEMA_V2),
+                   "metric_units": dict(METRIC_UNITS),
+                   "metric_policy": dict(AREA_WEIGHTED_METRIC_POLICY if area_weighted else METRIC_POLICY),
+                   "aggregation": ("user_forecast_origin_lead_cell_area_weighted" if area_weighted
+                                   else "user_forecast_origin_lead_grid_uniform"),
+                   "reference_available": True}
     except EarthArtifactError as exc:
         raise DatasetRequestError("invalid_earth_training_artifact", str(exc), status_code=409) from exc
     published_grid = checkpoint.dataset_binding["dataset_snapshot"]["grid"]

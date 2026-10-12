@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import C from '../../constants/colors';
 import { replaceTrainingTaskTags, updateTrainingTaskTags } from '../../services/api';
 import { filterTaggedTasks } from './trainingTagFilters';
@@ -10,6 +12,7 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask, ren
   const [filter, setFilter] = useState({ tagIds: [], untagged: false });
   const [search, setSearch] = useState('');
   const [tagFilterOpen, setTagFilterOpen] = useState(false);
+  const tagFilterId = useId();
   const [selected, setSelected] = useState([]);
   const [batchTagIds, setBatchTagIds] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -47,13 +50,17 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask, ren
     </div>
     <div className="experiment-directory-tools">
       {headerExtra ? headerExtra(selected, filtered) : null}
-      <details className="experiment-directory-tag-filter" open={tagFilterOpen} onToggle={event => setTagFilterOpen(event.currentTarget.open)}>
-        <summary>{isZh ? '标签筛选' : 'Tag filter'}{filter.untagged || filter.tagIds.length > 0 ? <span>{isZh ? '已启用' : 'Active'}</span> : null}</summary>
-        <div className="experiment-directory-tag-filter-body">
-          <TagFilter tags={tagState.tags} {...filter} isZh={isZh} disabled={tagState.loading || tagState.busy} onChange={next => { setSelected([]); setFilter(next); }} />
-          <button className="training-tag-button" disabled={tagState.scope === null || tagState.busy} onClick={() => setManaging(true)}>{isZh ? '管理标签' : 'Manage tags'}</button>
-        </div>
-      </details>
+      <button type="button" className="experiment-directory-tag-toggle" aria-expanded={tagFilterOpen} aria-controls={tagFilterId} onClick={() => setTagFilterOpen(open => !open)}>
+        <span>{isZh ? '标签筛选' : 'Tag filter'}</span>
+        {filter.untagged || filter.tagIds.length > 0 ? <span className="experiment-directory-tag-count">{filter.untagged ? 1 : filter.tagIds.length}</span> : null}
+        <KeyboardArrowDownIcon aria-hidden="true" />
+      </button>
+    </div>
+    <div id={tagFilterId} className="experiment-directory-tag-panel" hidden={!tagFilterOpen}>
+      <TagFilter tags={tagState.tags} {...filter} isZh={isZh} disabled={tagState.loading || tagState.busy} onChange={next => { setSelected([]); setFilter(next); }} />
+      <div className="experiment-directory-tag-panel-footer">
+        <button type="button" className="experiment-directory-manage-tags" disabled={tagState.scope === null || tagState.busy} onClick={() => setManaging(true)}>{isZh ? '管理标签' : 'Manage tags'}</button>
+      </div>
     </div>
     {tagState.loading && <div role="status" className="training-tag-hint">{isZh ? '正在加载标签…' : 'Loading tags…'}</div>}
     {tagState.error && <div role="alert" className="training-tag-toolbar" style={{ color: C.mars }}>
@@ -74,15 +81,25 @@ export default function TrainingHistory({ tasks, tagState, isZh, renderTask, ren
           {group.label ? <button type="button" className="experiment-directory-group-toggle" aria-expanded={!collapsedGroups.includes(group.id)} onClick={() => setCollapsedGroups(previous => previous.includes(group.id) ? previous.filter(id => id !== group.id) : [...previous, group.id])}>
             <span>{group.label}</span><span>{group.tasks.length}</span><span aria-hidden="true">{collapsedGroups.includes(group.id) ? '+' : '−'}</span>
           </button> : null}
-          {!collapsedGroups.includes(group.id) ? <div className="experiment-directory-group-items">{group.tasks.map(task => renderTask(task, <div className="training-tag-toolbar experiment-directory-row-tools" onClick={event => event.stopPropagation()}>
-        <label className="training-tag-option">
-          <input type="checkbox" checked={visibleSelection.includes(task.id)} disabled={tagState.busy} aria-label={isZh ? `选择实验 ${task.custom_model_name || task.id}` : `Select experiment ${task.custom_model_name || task.id}`} onChange={event => setSelected(prev => event.target.checked ? [...new Set([...prev, task.id])] : prev.filter(id => id !== task.id))} />
-          {isZh ? '选择' : 'Select'}
-        </label>
-        <TagChips tags={task.tags} />
-        {!task.tags?.length && <span className="training-tag-hint">{isZh ? '未分组' : 'Untagged'}</span>}
-        <button className="training-tag-button" style={{ marginLeft: 'auto' }} disabled={tagState.busy || tagState.loading || Boolean(tagState.error)} onClick={() => setEditing(task)}>{isZh ? '编辑标签' : 'Edit tags'}</button>
-      </div>))}</div> : null}
+          {!collapsedGroups.includes(group.id) ? <div className="experiment-directory-group-items">{group.tasks.map(task => renderTask(
+            task,
+            <div className="experiment-directory-tag-list">
+              <TagChips tags={task.tags} />
+              {!task.tags?.length && <span className="training-tag-hint">{isZh ? '未分组' : 'Untagged'}</span>}
+            </div>,
+            {
+              selection: (
+                <label className="experiment-directory-select" title={isZh ? '选择实验' : 'Select experiment'} onClick={event => event.stopPropagation()}>
+                  <input type="checkbox" checked={visibleSelection.includes(task.id)} disabled={tagState.busy} aria-label={isZh ? `选择实验 ${task.custom_model_name || task.id}` : `Select experiment ${task.custom_model_name || task.id}`} onChange={event => setSelected(prev => event.target.checked ? [...new Set([...prev, task.id])] : prev.filter(id => id !== task.id))} />
+                </label>
+              ),
+              edit: (
+                <button type="button" className="experiment-directory-edit-tags" title={isZh ? '编辑标签' : 'Edit tags'} aria-label={isZh ? `编辑标签 · ${task.custom_model_name || task.id}` : `Edit tags · ${task.custom_model_name || task.id}`} disabled={tagState.busy || tagState.loading || Boolean(tagState.error)} onClick={event => { event.stopPropagation(); setEditing(task); }}>
+                  <EditOutlinedIcon aria-hidden="true" />
+                </button>
+              ),
+            },
+          ))}</div> : null}
         </section>
       ))}
     </div>

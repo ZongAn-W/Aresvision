@@ -73,9 +73,16 @@ merra2_3hourly_v1/
 
 ## Manifest 与验证
 
-manifest 包含数据集 ID/版本、源日期/产品/相对路径/大小/mtime/逐文件 SHA-256、来源清单摘要、变量及单位、时间规则、目标坐标与边界、重网格方法、缺失规则与统计、规划窗口、数据文件大小/SHA-256 和数据集 fingerprint。绝对源路径不进入发布 manifest。
+manifest 包含数据集 ID/版本、`fingerprint_rule`、`source_inventory_version`、源日期/产品/相对路径/大小/逐文件完整 SHA-256、顶层 `source_mtimes` 溯源块、来源清单摘要、变量及单位、时间规则、目标坐标与边界、重网格方法、缺失规则与统计、规划窗口、数据文件大小/SHA-256 和数据集 fingerprint。绝对源路径不进入发布 manifest。新构建写 `fingerprint_rule=2`、`source_inventory_version=3`：清单条目只保留 `date`/`product`/`path`/`name`/`bytes`/`sha256`，`mtime_ns` 移到不参与任何身份摘要的顶层 `source_mtimes` 块（`path -> mtime_ns`）。`bytes` 与逐文件 SHA-256 属于内容身份，`mtime_ns` 只作为溯源和快速变化检测信号，不证明文件内容完整。构建开始保存 digest inventory，构建结束及 manifest 发布前都会重新计算全部源文件摘要；内容变化（即使大小和 mtime 恢复原值）会拒绝发布，而纯 mtime 漂移（AV 扫描、复制、touch）既不改变身份，也不让构建器或 registry 判定已有发布损坏。
 
-fingerprint 复用 `build_dataset_fingerprint()` 的组合方式：数据集 ID、版本、manifest 内容摘要、NetCDF SHA-256。为避免自引用，manifest 内容摘要计算时排除 `dataset_fingerprint` 本身，使用排序键、紧凑分隔符、ASCII 转义且拒绝 NaN 的 canonical JSON。验证报告另记录实际 manifest 文件字节的 SHA-256；内容摘要与文件字节摘要具有不同含义。日频注册所用的固定发布哈希不变。
+fingerprint 复用 `build_dataset_fingerprint()` 的组合方式：数据集 ID、版本、manifest 内容摘要、NetCDF SHA-256，组合函数本身不变。manifest 内容摘要的规则由 manifest 自带的整数 `fingerprint_rule` 决定，构建器（`scripts/build_earth_merra2_3hourly.py`）、服务端（`services/earth_dataset_metadata.py`）和独立验证器（`scripts/verify_earth_merra2_3hourly.py`）各自保留一份实现，并由交叉验证测试锁死一致：
+
+- **rule 1（legacy，字段缺失即此值）**：对除 `dataset_fingerprint` 外的**整份 manifest** 取 canonical 摘要（该摘要因此覆盖 manifest 的每一个字段：给既有包补写 `fingerprint_rule: 1` 本身就会改变内容摘要，既有发布包必须保持发布时的原样）。既有已注册发布包（`source_inventory_version` 缺失）声明的就是 rule 1，其 `manifest_content_sha256` 与 `dataset_fingerprint` 逐字节冻结——该摘要会写进 descriptor 与共享验证证明，因此不得漂移。
+- **rule 2（新）**：在排除 `dataset_fingerprint` 的基础上再排除顶层 `source_mtimes` 与 `fingerprint_rule`，并把 `source_files` 投影为身份字段元组 `(date, product, path, bytes, sha256)`。`mtime_ns`（文件系统元数据，不是内容）与 `name`（`path` 的冗余后缀）显式排除；因此键顺序变化、`name` 改写、`mtime` 漂移都不改变身份，而 `path`、`bytes`、`sha256` 或清单成员增减必然改变身份。
+
+规则选择 fail-closed：缺失等价 rule 1，`1`/`2` 按上表解释，其他任何值（0、负数、字符串、浮点）都直接报错，不静默回退 rule 1。`source_sha256` 校验同样按 `source_inventory_version` 分流：缺失或 `2` 校验包含 `name` 与 `mtime_ns` 的完整清单，`3` 只校验身份字段投影，两侧语义必须一致。canonical JSON 使用排序键、紧凑分隔符、ASCII 转义且拒绝 NaN；验证报告另记录实际 manifest 文件字节的 SHA-256，并透传 `fingerprint_rule`、`source_inventory_version`、`manifest_content_sha256` 与 `dataset_fingerprint`。日频注册所用的固定发布哈希不变。
+
+既有发布包在消费方走**短路**而不是重算：identity 三元组直接取自 manifest 既有字段（`dataset_id`、`dataset_version`、`data_sha256`）与已冻结的 `manifest_content_sha256`（来自 registry descriptor 或共享验证证明），组合出的 fingerprint 必须与发布值相同；不再对 1462 条源清单重新投影。冷路径（没有可用证明时）退回 rule 1 全文摘要，两条路径必须得到同一个 fingerprint，否则拒绝。
 
 独立验证器扫描所有输出字段及掩码，核对时间中心、三小时边界、坐标/单元边界、单位、缺失率、SHA 和 fingerprint。传入 `--raw-dir` 时，独立读取首/中/尾日期的原始数据，在三组小时区间、九个目标单元（含两极和经度接缝）直接积分源单元重叠面积，与输出比较；该数值检查不调用构建器的平均或重网格函数。
 
@@ -98,7 +105,7 @@ $earthTestTemp = Join-Path 'D:\_Aresvision' ('.earth-3hourly-test-' + [guid]::Ne
 $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 ```
 
-`GET /api/datasets` 保留原四个身份并追加新 ID，`GET /api/datasets/earth_merra2_3hourly_v1` 返回独立描述符。完整两年包摘要：5848 步，`2020-01-01T01:30:00Z` 至 `2021-12-31T22:30:00Z`，指纹 `c4f4e9127e48fc3bb18bd71c5bdc792ee9192b52e5fe44ed51193ba8524d6697`。经校验的 7 天 smoke 详情仍可作为构建器回归夹具参考：
+`GET /api/datasets` 保留原四个身份并追加新 ID，`GET /api/datasets/earth_merra2_3hourly_v1` 返回独立描述符。完整两年包摘要：5848 步，`2020-01-01T01:30:00Z` 至 `2021-12-31T22:30:00Z`，指纹 `c4f4e9127e48fc3bb18bd71c5bdc792ee9192b52e5fe44ed51193ba8524d6697`。该包发布于 `fingerprint_rule` 出现之前，因此按 rule 1 解释，内容摘要与 fingerprint 保持冻结（`manifest_content_sha256=3ec08179…3282e`）；新增的规则只影响之后构建的新包，不重算、不改写已注册发布。经校验的 7 天 smoke 详情仍可作为构建器回归夹具参考：
 
 开发与生产默认 Earth 数据集均为 `earth_merra2_3hourly_v1`，作为 `default_earth_dataset_id` 返回。`ARESVISION_DEFAULT_EARTH_DATASET_ID` 只接受该值，旧日频配置须修改或移除；不能通过设为日频恢复入口。缺失三小时包时 catalog 仍返回 `missing/package_missing`，界面不回退到旧包。完整发布的数据验证与模型精度验收仍是不同范围。
 
@@ -128,7 +135,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 }
 ```
 
-实际响应还包含完整坐标、五变量/单位/缺失率、时间边界、发布 split 和三个 SHA/fingerprint 字段。`manifest_sha256` 是原文件字节摘要，`manifest_content_sha256` 是排除 fingerprint 后的 canonical 内容摘要；fingerprint 使用后者，与构建器原记录一致。新包由服务器目录及其 manifest 定义，没有复用或替换日频固定哈希；格式化 manifest 可改变字节摘要而不改变产品 fingerprint。
+实际响应还包含完整坐标、五变量/单位/缺失率、时间边界、发布 split 和三个 SHA/fingerprint 字段。`manifest_sha256` 是原文件字节摘要，`manifest_content_sha256` 是 manifest 身份内容摘要（规则由 `fingerprint_rule` 决定：rule 1 为整份 manifest，rule 2 为内容投影）；fingerprint 使用后者，与构建器原记录一致。新包由服务器目录及其 manifest 定义，没有复用或替换日频固定哈希；格式化 manifest 可改变字节摘要而不改变产品 fingerprint。
 
 首次查询或后台预热校验 manifest、NetCDF 完整 SHA、无重复/无缺步的三小时 UTC 轴、精确全球中心与边界、变量及单位、NaN/掩码对应关系、逐项统计与来源清单；扫描每变量最多 8 步，缓存元信息及只读坐标，完整体积留在磁盘。文件签名变化重新校验，未变化的缺失/损坏结果也缓存。全量包独立验证还直接读取首/中/末日期源文件，405 个目标单元样本全部通过，最大绝对误差为 `2.65e-5`。包不存在返回 `missing/package_missing`，哈希或契约不符返回 `invalid` 及稳定原因；读取权限问题返回 `unverified/package_unreadable`。活动注册详情与列表仍返回 200，日频详情返回 409 `dataset_retired`。
 
@@ -144,7 +151,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 
 复用服务器 registry、任务级原始 UTC split、仅当前任务训练期 normalization、缺失拒绝、任务调度和训练/评估循环。上传代码不控制路径、版本、fingerprint、snapshot 或 normalization。队列保存冻结源码引用，重启恢复同一版本。上传 checkpoint 仍用独立三小时 artifact schema，另保存上传 implementation `aresvision_earth_3hourly_uploaded_runner_v1`、契约 schema、块尺寸、实际 build config 和源码摘要；重载核对它们并严格加载权重。任务完成前使用 30 秒超时的独立 CPU 进程重载并检查前向一致性，失败不能 completed。日频和 Mars checkpoint 不能冒充三小时产物。
 
-上传模型历史回测要求完整 window+horizon 步在同一任务分区内；context 只返回满足条件的起点，跨分区返回 `earth_prediction_origin_out_of_range`。旧 manifest 任务在默认 56→24 下共有 2849+1369+1393=5611 个此类起点；新任务依保存的比例、实际边界与窗口计算。三小时官方 DLinear 保留完整发布历史范围；日频任务不能回测。
+新 `earth_raw_utc_timeline_v1` checkpoint 的官方 DLinear 与上传模型历史回测都要求完整 window+horizon 步在同一任务分区内；context 只返回满足条件的起点，跨分区返回 `earth_prediction_origin_out_of_range`。旧 manifest 任务在默认 56→24 下共有 2849+1369+1393=5611 个此类起点；新任务依保存的比例、实际边界与窗口计算。没有 task split 的旧 checkpoint 保留各自的 manifest 兼容行为；日频任务不能回测。
 
 ## 官方 DLinear 后端训练
 
@@ -255,9 +262,9 @@ foreach ($earthTrainingTest in $earthTrainingTests) {
 
 此起点的 56 个 `input_timestamps` 从 `2021-07-01T04:30:00Z` 到起点；24 个 `target_timestamps` 从 `2021-07-08T04:30:00Z` 到 `2021-07-11T01:30:00Z`，相邻差严格 3 小时。响应同时给出 `input_dates` / `target_dates` 兼容别名，其内容也是完整 UTC datetime；日频日期字段仅保留历史协议，当前日频预测请求返回 409。
 
-`prediction`、`reference`、`residual` 各有 24 个 `{field, minVal, maxVal, valid_cells}`，每个 `field` 为 `[240][480]`，整体形状各为 `[24,240,480]`，单位均为 DU；`residual = prediction − reference`。真实纬度从南到北，真实经度从西到东，三种场与 `grid.latitude` / `grid.longitude` 一致。选中通道或参考 TO3 的缺测显式报错，不补零。`origin_split` 标记起点所属任务分区（无新策略的旧任务使用发布分区）。官方历史回测保留完整发布时间轴，可跨分区读取完整历史和参考；上传回测要求完整 window+horizon 步落在同一任务分区内。所有训练窗口均不得跨分区。
+`prediction`、`reference`、`residual` 各有 24 个 `{field, minVal, maxVal, valid_cells}`，每个 `field` 为 `[240][480]`，整体形状各为 `[24,240,480]`，单位均为 DU；`residual = prediction − reference`。真实纬度从南到北，真实经度从西到东，三种场与 `grid.latitude` / `grid.longitude` 一致。选中通道或参考 TO3 的缺测显式报错，不补零。新 `earth_raw_utc_timeline_v1` checkpoint 要求完整输入 `window` 与目标 `horizon` 都属于同一任务分区，forecast origin 也必须属于该分区；官方 DLinear 和上传模型使用完全相同的可用起点集合。`origin_split` 表示完整输入加目标窗口所属的分区，合法窗口的 `input_split`、`target_split` 与其相同。跨分区窗口不会被标记后继续使用，而是返回 422 `earth_prediction_origin_out_of_range`。无 task split 的旧 checkpoint 继续使用已发布 manifest 的兼容行为。
 
-`metrics.aggregation=user_forecast_origin_lead_grid_uniform`，总体、每个 lead 和累计时段均含六项指标与逐项单位/公式策略，使用与训练相同的物理公式。默认 24 步的 24/48/72 小时分别累计前 8/16/24 步全部格点；非默认 horizon 自动生成对应汇总，不平均逐步 RMSE/R²。这仅是本次历史预测窗口评价，与训练结果的完整测试集明确分开。
+历史预测的 `metrics.aggregation` 跟随 checkpoint 的指标契约：新 task-split/v3 产物使用 `user_forecast_origin_lead_cell_area_weighted`，旧 grid-uniform 产物继续使用 `user_forecast_origin_lead_grid_uniform`。总体、每个 lead 和累计时段均含六项指标与逐项单位/公式策略，使用与训练相同的物理公式。默认 24 步的 24/48/72 小时分别累计前 8/16/24 步全部格点；非默认 horizon 自动生成对应汇总，不平均逐步 RMSE/R²。这仅是本次历史预测窗口评价，与训练结果的完整测试集明确分开。
 
 推理只读取一个 80 步跨度，每通道最多 8 个全网格步分块读取；只保留本次 56 步输入和 24 步参考，模型按 24×48 空间块执行，不物化两年数据或全部滑窗。响应仍包含完整全球数组。
 

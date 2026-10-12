@@ -88,7 +88,8 @@ def test_start_queues_56_to_24_with_only_the_server_data_path(service_environmen
     assert (hypers["window"], hypers["horizon"]) == (56, 24)
     assert hypers["selected_channels"] == ["U10M", "SWGDN"]
     assert hypers["training_dataset"] == EARTH_DATASET_3HOURLY_ID
-    assert hypers["_earth_metrics_schema"] == "earth_training_metrics_3hourly_v2"
+    assert hypers["_earth_metrics_schema"] == "earth_training_metrics_3hourly_v3"
+    assert hypers["_earth_metrics_aggregation"] == "forecast_origin_lead_cell_area_weighted"
     assert "data_path" not in hypers
     plan = asyncio.run(service._prepare_training_execution(task, dataset_registry=registry))
     spec = plan["earth_training_spec"]
@@ -96,6 +97,10 @@ def test_start_queues_56_to_24_with_only_the_server_data_path(service_environmen
     assert spec["training_profile"]["frequency_hours"] == 3
     assert spec["training_profile"]["grid_shape"] == [240, 480]
     assert spec["dataset_binding"]["dataset_snapshot"] == task.dataset_snapshot
+    assert spec["metrics_contract"] == {
+        "schema": "earth_training_metrics_3hourly_v3",
+        "aggregation": "forecast_origin_lead_cell_area_weighted",
+    }
     assert registry.lookups == [(EARTH_DATASET_3HOURLY_ID, "a" * 64)] * 2
 
 

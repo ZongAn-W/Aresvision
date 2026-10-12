@@ -24,7 +24,7 @@
 
 发布身份保留在任务的 `dataset_id/version/fingerprint/snapshot`。其中 snapshot 的 `splits` 始终是发布 manifest 分区，不替换成任务分区。
 
-服务器在任务 `hyperparameters._earth_task_split` 保存策略版本、请求比例、完整时间步数、window/horizon 和三个 `ranges`，并独立保存 `_earth_task_split_policy=earth_raw_utc_timeline_v1`。每个 range 包含 `raw_start/raw_end`、`date_start/date_end`、`step_count/window_count`。这些是服务端内部字段，不接受客户端设置；排队 spec 的独立 `task_split` 传递同一固定副本。重启恢复会对照发布的原始时间轴和已保存请求严格校验，不能重新选择边界。策略标记或已有 `_earth_metrics_schema=earth_training_metrics_3hourly_v2` 均要求完整冻结划分；缺失/损坏的划分、未知标记或版本不一致返回 409，不会降级为发布 manifest。此前已创建、只有 v2 标记和完整划分的任务继续读取，无需迁移。
+服务器在任务 `hyperparameters._earth_task_split` 保存策略版本、请求比例、完整时间步数、window/horizon 和三个 `ranges`，并独立保存 `_earth_task_split_policy=earth_raw_utc_timeline_v1`。每个 range 包含 `raw_start/raw_end`、`date_start/date_end`、`step_count/window_count`。这些是服务端内部字段，不接受客户端设置；排队 spec 的独立 `task_split` 传递同一固定副本。重启恢复会对照发布的原始时间轴和已保存请求严格校验，不能重新选择边界。策略标记或 `_earth_metrics_schema`（v2/v3）及 `_earth_metrics_aggregation` 均要求完整冻结划分；缺失/损坏的划分、未知标记或版本不一致返回 409，不会降级为发布 manifest。新任务冻结 v3 面积加权；此前已创建、只有 v2 标记和完整划分的任务继续读取，排队执行仍使用 v2 等权，无需迁移。版本与 aggregation 严格对应，未知或混搭在执行前拒绝，见[指标契约](earth-evaluation-metrics.md)。
 
 仅以当前任务完整 train 区间拟合逐通道人口均值/标准差（ddof=0、epsilon=1e-6），保留逐通道最多八步的有界读取、连续性、有效掩码及有限值检查。验证、测试与预测复用保存值，不重新拟合。normalization 同时保存 UTC 拟合边界、步数及完整任务划分策略。共享统计量按数据身份、train 实际 UTC 边界/步数、通道顺序及方法版本匹配，并将当前任务的完整冻结划分绑定回返回值。训练缓存覆盖完整已归一化时间轴，按数据、通道、归一化内容、布局和缓存版本寻址；仅修改窗口或 validation/test 边界而 train 边界不变时可以共享缓存字节，窗口索引与 checkpoint 划分仍分别严格校验。train 实际边界变化必须重新拟合并建立另一缓存身份，详见[训练准备缓存](earth-preparation-cache.md)。预测 LRU 的 task ID 和 checkpoint SHA 隔离不同策略、边界及统计量，命中前仍严格校验产物和当前发布。
 
@@ -32,13 +32,15 @@
 
 新 checkpoint 继续使用三小时 artifact schema；`training_contract.split_policy` 声明 `earth_raw_utc_timeline_v1`，`task_split` 保存完整策略；`split_ratios`、`split_ranges` 与 `split_window_counts` 必须与其一致。新产物的 `run.task_split_policy` 独立记录同一策略，存在时必须与 contract 一致。严格加载对照发布时间轴、请求比例、实际索引/UTC 边界、窗口数、run 参数、normalization 拟合范围、validation/test 指标窗口数及全分区指标口径，并严格重建模型权重。新策略声明存在但元数据缺失、类型损坏或不一致时明确拒绝，不能退回 manifest。带新任务标记的任务不能读取 manifest checkpoint，训练结束和服务重启后的完成恢复也执行相同校验。
 
-官方模型保留完整发布时间轴的历史回测规则，只要有完整历史输入及未来参考就可选择起点；其回测窗口可跨训练分区。上传模型保留更严格的规则：完整 `window + horizon` 个时间步必须在同一**任务分区**内。两者 `origin_split` 都标记起点所处任务分区，预测 context 返回相同划分，normalization 永远复用 checkpoint train 统计量。
+新 `earth_raw_utc_timeline_v1` checkpoint（官方 DLinear 与上传模型）使用同一套严格历史回测边界：完整 `window + horizon` 个时间步必须在同一**任务分区**内，forecast origin、输入窗口和目标窗口的分区必须相同。跨分区起点不进入 context 的 origins，也不会返回预测结果，而是返回稳定的 `422 earth_prediction_origin_out_of_range`。`origin_split` 表示完整输入加目标窗口所属的分区；合法窗口满足 `input_split == target_split == origin_split`。normalization 永远复用 checkpoint train 统计量。
+
+没有 task split 的旧三小时 checkpoint 继续使用已发布 manifest 的兼容边界和原有历史行为，不自动迁移；旧 checkpoint 不要求新增 split 字段。训练、测试指标、诊断抽样和历史预测对新 checkpoint 复用同一组完整窗口边界，不能各自重新计算起点范围。预测缓存 key 继续包含任务、数据集指纹、checkpoint SHA、origin 和 target timestamps，并额外包含完整窗口边界策略版本；策略版本变化不会复用旧结果。
 
 多模型比较只读取保存的完整 test 指标，要求发布身份、测试 UTC 起止、输入/输出窗口、实际窗口数量和指标口径一致。不一致返回 `409 earth_comparison_incompatible`，说明测试时间范围或窗口不同，不能混合排名。不同 train/validation 划分但相同 test 范围及窗口口径仍可比较。
 
 ## 旧任务兼容与验证
 
-真正旧三小时任务没有冻结划分、划分策略标记或 v2 新任务标记时，继续按原发布 manifest 的 train/validation/test 解释，包括原有日块边界、normalization 和上传回测限制；比例兼容字段不改变其历史分区。旧 checkpoint 没有独立 run 策略标记仍可读取，单独的 v2 指标 block 不改变 artifact 的历史划分语义；但将其绑定到新任务时必须满足新任务的冻结划分。不自动改写、迁移或重新训练。已有日频 artifact 可保留为历史记录，活动运行入口仍返回 `dataset_retired`。
+真正旧三小时任务没有冻结划分、划分策略标记或指标版本/aggregation 标记时，继续按原发布 manifest 的 train/validation/test 解释，包括原有日块边界、normalization 和上传回测限制；比例兼容字段不改变其历史分区。旧 checkpoint 没有独立 run 策略标记仍可读取，单独的 v2 指标 block 不改变 artifact 的历史划分语义；但将其绑定到新任务时必须满足新任务的冻结划分。不自动改写、迁移或重新训练。已有日频 artifact 可保留为历史记录，活动运行入口仍返回 `dataset_retired`。
 
 从 `AresVision_backend/backend` 使用项目 conda `AresVision` 的解释器执行 `python -m pytest tests/test_earth_task_split.py` 及相关三小时训练、上传、预测、队列和停用回归；Windows 的 NetCDF 测试应通过 `--basetemp` 指定一个新的 ASCII 临时路径。从 `frontend` 执行 `node --test` 对应训练页测试和 `npm run build`。
 

@@ -125,15 +125,11 @@ test('experiment directory keeps status grouping, search, tags and bulk tag acti
   assert.match(historySource, /TagManager/);
 });
 
-test('directory rows show name, task id, architecture, dataset, time, status and a core metric', () => {
+test('directory rows show only the experiment name and visible tags', () => {
   assert.match(directorySource, /className="experiment-directory-name"/);
-  assert.match(directorySource, /experiment-directory-id/);
-  assert.match(directorySource, /experiment-directory-metric/);
-  assert.match(directorySource, /EXPERIMENT_METRIC_KEYS/);
-  // 目录行日期按 locale 格式化；结束时间优先，未结束时回退开始时间。
-  // （原断言写的是 task.start_time，与实现不符，一直是失败项。）
-  assert.match(directorySource, /formatDirectoryDate\(task\.end_time \|\| task\.start_time, locale\)/);
-  assert.match(directorySource, /experiment-directory-badge/);
+  assert.doesNotMatch(directorySource, /experiment-directory-(?:badge|status-line|status-dot)|getTrainingStatusMeta/);
+  assert.match(directorySource, /className="experiment-directory-row-tags"[\s\S]*?\{tagControls\}/);
+  assert.doesNotMatch(directorySource, /<details|<time|experiment-directory-(?:id|metric|facts|footer|completeness)/);
 });
 
 test('directory mode does not reference props it never declares', () => {
@@ -152,11 +148,10 @@ test('directory mode does not reference props it never declares', () => {
   assert.deepEqual(rowUndeclared, [], `ExperimentDirectoryRow 引用了未声明的回调: ${rowUndeclared.join(', ')}`);
 });
 
-test('directory keeps only the progress row and the stop action for running tasks', () => {
-  assert.match(directorySource, /experiment-directory-progress/);
-  assert.match(directorySource, /role="progressbar"/);
-  assert.match(directorySource, /onStop\(task\.id\)/);
-  // 目录只负责找到实验：重命名、测试、删除都移到右侧结果工作区。
+test('directory leaves progress and training actions to the selected experiment workspace', () => {
+  assert.doesNotMatch(directorySource, /experiment-directory-progress|role="progressbar"/);
+  assert.doesNotMatch(directorySource, /onStop\(task\.id\)|onCancel\(task\.id\)/);
+  // 目录只负责找到实验与整理标签，训练和维护动作位于中间工作区。
   assert.doesNotMatch(directorySource, /onRename\(task\)/);
   assert.doesNotMatch(directorySource, /onDelete\(task\.id\)/);
   assert.doesNotMatch(directorySource, /onTest\(task\.id\)/);

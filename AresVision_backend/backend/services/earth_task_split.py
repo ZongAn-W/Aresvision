@@ -25,12 +25,13 @@ def required_task_split(hyperparameters):
     if (TASK_SPLIT_POLICY_KEY in raw
             and raw[TASK_SPLIT_POLICY_KEY] != EARTH_TASK_SPLIT_POLICY):
         raise TrainingSplitError("Earth task split policy marker is damaged or unsupported")
-    if "_earth_metrics_schema" in raw:
-        from services.earth_training_contract import EARTH_3HOURLY_METRICS_SCHEMA_V2
-        if raw["_earth_metrics_schema"] != EARTH_3HOURLY_METRICS_SCHEMA_V2:
-            raise TrainingSplitError("Earth task metrics version marker is damaged or unsupported")
+    from services.earth_training_contract import earth_task_metrics_contract
+    try:
+        earth_task_metrics_contract(raw, executable=True)
+    except ValueError as exc:
+        raise TrainingSplitError(str(exc)) from exc
     requires_split = any(key in raw for key in (
-        TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, "_earth_metrics_schema",
+        TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, "_earth_metrics_schema", "_earth_metrics_aggregation",
     ))
     split = raw.get(TASK_SPLIT_KEY)
     if requires_split and not isinstance(split, dict):

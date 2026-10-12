@@ -14,6 +14,7 @@ from services.earth_training_artifact import (
     compute_earth_metrics, validate_checkpoint_payload, load_earth_training_artifact,
     save_earth_artifact_atomic, build_earth_model_from_checkpoint,
 )
+from services.earth_dataset import cell_area_weights_from_lat_bounds
 from services.earth_training_contract import EARTH_3HOURLY_METRICS_SCHEMA
 from test_earth_3hourly_artifact import _payload
 from test_earth_3hourly_training_service import service_environment
@@ -32,6 +33,31 @@ def direct(prediction, truth):
 
 def shaped(values):
     return np.asarray(values, dtype=np.float64).reshape(1, 1, 1, 1, -1)
+
+
+def test_area_weighted_tile_loss_keeps_global_tile_share_in_denominator():
+    from models.training_scripts.earth_daily import _weighted_mse
+
+    # These two synthetic tiles represent a high-area and low-area tile from a
+    # 100-tile global partition. Local normalization would make both tiles
+    # contribute equally; the fixed 1/100 denominator preserves global area.
+    output = torch.tensor([[[[[1.0]]]], [[[[3.0]]]]])
+    target = torch.zeros_like(output)
+    weights = torch.tensor([[[0.90]], [[0.01]]])
+    loss, denominator = _weighted_mse(
+        output, target, weights, sample_weight_denominator=0.01,
+    )
+    assert denominator.item() == pytest.approx(0.02)
+    assert loss.item() == pytest.approx((0.90 + 9 * 0.01) / 0.02)
+
+
+def test_cell_area_weights_use_lat_bounds_and_sum_to_one():
+    bounds = np.array([[-90.0, 0.0], [0.0, 90.0]])
+    weights = cell_area_weights_from_lat_bounds(bounds, 2)
+    expected_row = np.array([0.25, 0.25])
+    assert weights.sum() == pytest.approx(1.0)
+    assert weights[0] == pytest.approx(expected_row)
+    assert weights[1] == pytest.approx(expected_row)
 
 
 def test_hand_calculated_negative_r2():

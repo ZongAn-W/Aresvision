@@ -6,7 +6,7 @@
 
 ## 数据与调用
 
-官方与上传模型共用反归一化 TO3 的六项评价指标及 v2 保存/完成门禁：MSE（DU²）、RMSE/MAE（DU）、R²（无量纲）、MAPE/SMAPE（%）。总体、每步和累计时段保持预测起点 × 提前步 × 格点等权；旧三小时 v1 checkpoint 保持只读兼容、缺项不补写。公式、单位和验证入口见[地球评价指标](earth-evaluation-metrics.md)。
+官方与上传模型共用反归一化 TO3 的六项评价指标及 v3 保存/完成门禁：MSE（DU²）、RMSE/MAE（DU）、R²（无量纲）、MAPE/SMAPE（%）。新训练总体、每步和累计时段按发布 `lat_bounds` 做球面 cell-area 加权；旧三小时 v1/v2 checkpoint 保持只读兼容、缺项不补写。公式、单位和验证入口见[地球评价指标](earth-evaluation-metrics.md)。
 
 服务端 registry 提供 UTC 三小时数据，任务配置输入/输出窗口（默认 56→24）和 240×480 全球网格。目标始终为 TO3（DU），辅助变量可选 U10M/V10M（`m s-1`）、T2M（K）、SWGDN（`W m-2`）。`input_channels/input_units/auxiliary_inputs` 声明的是支持的通道全集，训练请求可选任意辅助变量子集。
 

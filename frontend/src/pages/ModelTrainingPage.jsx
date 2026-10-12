@@ -688,6 +688,7 @@ export default function ModelTrainingPage() {
   // their values until the user explicitly creates a new experiment.
   const editedTrainingDefaultFieldsRef = useRef(new Set());
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deleteTaskError, setDeleteTaskError] = useState('');
   const [testTaskId, setTestTaskId] = useState(null);
   const [renameTask, setRenameTask] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1991,17 +1992,26 @@ export default function ModelTrainingPage() {
     try {
       setIsProcessing(true);
       await deleteTrainingTask(targetId);
+      setTasks((current) => current.filter((task) => Number(task.id) !== Number(targetId)));
       if (activeTaskId === targetId) {
         setActiveTaskId(null);
         setLogs([]);
       }
       setConfirmDeleteId(null);
-      await loadTasks();
+      setDeleteTaskError('');
+      await loadTasks().catch(() => {
+        showToast(isZh ? '实验已删除，列表刷新失败，请重试刷新。' : 'Experiment deleted, but the list could not refresh. Try refreshing again.', 'info');
+      });
     } catch (error) {
-      alert(t('modelTraining.deleteError') + error.message);
+      setDeleteTaskError(t('modelTraining.deleteError') + error.message);
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleRequestDeleteTask = (taskId) => {
+    setDeleteTaskError('');
+    setConfirmDeleteId(taskId);
   };
 
   const handleRenameTask = async (normalizedName) => {
@@ -2400,7 +2410,7 @@ export default function ModelTrainingPage() {
       onCompare={handleCompareTask}
       onCopyConfig={handleCopyConfig}
       onRename={setRenameTask}
-      onDelete={setConfirmDeleteId}
+      onDelete={handleRequestDeleteTask}
       onTest={setTestTaskId}
       onFormatValue={(key, value) => formatHyperValue(key, value, t)}
     />
@@ -2411,9 +2421,7 @@ export default function ModelTrainingPage() {
       tasks={tasks}
       tagState={tagState}
       activeTaskId={activeTaskId}
-      isProcessing={isProcessing}
       onSelectTask={handleSelectTask}
-      onStop={handleStopTask}
       tasksLoading={tasksLoading}
       tasksError={tasksError}
       onCreateTask={handleCreateExperiment}
@@ -2421,12 +2429,8 @@ export default function ModelTrainingPage() {
         setTasksError(false);
         loadTasks().catch(() => {});
       }}
-      copy={copy}
       locale={locale}
       isZh={isZh}
-      channelOrder={activeChannelOrder}
-      channelMap={activeChannelMap}
-      baselineLabel={baselineLabel}
     />
   );
 
@@ -2443,6 +2447,10 @@ export default function ModelTrainingPage() {
       onSelectTask={handleSelectTask}
       onCopyConfig={handleCopyConfig}
       onRenameTask={handleMatrixRenameTask}
+      isProcessing={isProcessing}
+      onPredict={handleAnalyzeTask}
+      onTest={setTestTaskId}
+      onDelete={handleRequestDeleteTask}
       onRetryTasks={() => {
         setTasksError(false);
         loadTasks().catch(() => {});
@@ -2493,7 +2501,11 @@ export default function ModelTrainingPage() {
       {confirmDeleteId ? (
         <ConfirmDialog
           title={t('modelTraining.confirmDelete')}
-          message={t('modelTraining.confirmDeleteMsg', { id: confirmDeleteId })}
+          message={<>
+            {t('modelTraining.confirmDeleteMsg', { id: confirmDeleteId })}
+            {deleteTaskError ? <p role="alert" className="experiment-matrix-cell-error">{deleteTaskError}</p> : null}
+          </>}
+          busy={isProcessing}
           confirmLabel={isProcessing ? t('modelTraining.deleting') : t('modelTraining.confirmDelete')}
           cancelLabel={t('modelTraining.cancel')}
           onConfirm={() => handleDeleteTask(confirmDeleteId)}

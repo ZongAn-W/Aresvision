@@ -70,6 +70,20 @@ REASON_PACKAGE_CHANGED = "package_changed_during_verification"
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
+# Three-hour identity rules. Rule 1 is the legacy whole-manifest digest that the
+# already registered publication is frozen to; rule 2 binds identity to source
+# content only. A manifest declares its rule with an optional integer field.
+THREE_HOURLY_FINGERPRINT_RULE_LEGACY = 1
+THREE_HOURLY_FINGERPRINT_RULE_CONTENT = 2
+# Source inventory bases. Version 2 (and any manifest without the field) hashes
+# every recorded field, including name and mtime_ns; version 3 hashes the content
+# identity projection only.
+THREE_HOURLY_SOURCE_INVENTORY_FULL = 2
+THREE_HOURLY_SOURCE_INVENTORY_IDENTITY = 3
+# Content identity of one inventory entry. name is a redundant suffix of path and
+# mtime_ns is file-system metadata, so neither may enter an identity digest.
+THREE_HOURLY_SOURCE_IDENTITY_FIELDS = ("date", "product", "path", "bytes", "sha256")
+
 
 class EarthPackageError(RuntimeError):
     """A package verification failure carrying a stable public reason code."""
@@ -462,11 +476,116 @@ def _canonical_json(value) -> bytes:
                       ensure_ascii=True, allow_nan=False).encode("utf-8")
 
 
+def threehour_fingerprint_rule(manifest: Mapping[str, Any]) -> int:
+    """Resolve the manifest's identity rule; unknown values fail closed.
+
+    A missing ``fingerprint_rule`` is the legacy rule, which is what the already
+    registered publication relies on. Every other unsupported value (0, negative,
+    string, float, bool) is refused instead of silently digesting as the legacy
+    rule: a silent fallback would report a fingerprint no builder can reproduce.
+    """
+    value = manifest.get("fingerprint_rule", THREE_HOURLY_FINGERPRINT_RULE_LEGACY)
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value not in (THREE_HOURLY_FINGERPRINT_RULE_LEGACY,
+                             THREE_HOURLY_FINGERPRINT_RULE_CONTENT)):
+        raise ValueError(f"unsupported three-hour fingerprint_rule: {value!r}")
+    return value
+
+
+def threehour_source_inventory_version(manifest: Mapping[str, Any]) -> int:
+    """Resolve the source inventory basis; unknown values fail closed."""
+    value = manifest.get("source_inventory_version", THREE_HOURLY_SOURCE_INVENTORY_FULL)
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value not in (THREE_HOURLY_SOURCE_INVENTORY_FULL,
+                             THREE_HOURLY_SOURCE_INVENTORY_IDENTITY)):
+        raise ValueError(f"unsupported three-hour source_inventory_version: {value!r}")
+    return value
+
+
+def threehour_source_identity_projection(files) -> list:
+    """Project source inventory entries onto their content identity fields."""
+    projection = []
+    for entry in files:
+        if not isinstance(entry, dict):
+            raise ValueError("invalid three-hour source inventory entry")
+        missing = [field for field in THREE_HOURLY_SOURCE_IDENTITY_FIELDS if field not in entry]
+        if missing:
+            raise ValueError(f"three-hour source inventory entry lacks {', '.join(missing)}")
+        projection.append({field: entry[field] for field in THREE_HOURLY_SOURCE_IDENTITY_FIELDS})
+    return projection
+
+
+def threehour_source_inventory_sha256(files, version: int) -> str:
+    """Digest an inventory with the basis its declared version requires.
+
+    Version 3 projects onto content identity, so a pure mtime drift cannot make a
+    published release look damaged; earlier versions keep the full entry digest.
+    """
+    if version not in (THREE_HOURLY_SOURCE_INVENTORY_FULL,
+                       THREE_HOURLY_SOURCE_INVENTORY_IDENTITY):
+        raise ValueError(f"unsupported three-hour source_inventory_version: {version!r}")
+    payload = (threehour_source_identity_projection(files)
+               if version == THREE_HOURLY_SOURCE_INVENTORY_IDENTITY else files)
+    return hashlib.sha256(_canonical_json(payload)).hexdigest()
+
+
 def threehour_manifest_content_sha256(manifest: Mapping[str, Any]) -> str:
-    """Match the offline builder's non-self-referential fingerprint basis."""
-    return hashlib.sha256(_canonical_json({
-        key: value for key, value in manifest.items() if key != "dataset_fingerprint"
-    })).hexdigest()
+    """Digest the manifest content that defines the three-hour dataset identity.
+
+    Rule 1 keeps the historical basis byte for byte: every field except the
+    self-referential ``dataset_fingerprint``. Rule 2 additionally excludes the
+    ``source_mtimes`` provenance block and the rule marker itself, and projects
+    ``source_files`` onto (date, product, path, bytes, sha256), so neither a
+    timestamp nor the redundant ``name`` suffix can move a published identity.
+    """
+    rule = threehour_fingerprint_rule(manifest)
+    if rule == THREE_HOURLY_FINGERPRINT_RULE_LEGACY:
+        return hashlib.sha256(_canonical_json({
+            key: value for key, value in manifest.items() if key != "dataset_fingerprint"
+        })).hexdigest()
+    payload = {key: value for key, value in manifest.items()
+               if key not in ("dataset_fingerprint", "source_mtimes", "fingerprint_rule")}
+    files = payload.get("source_files")
+    if not isinstance(files, list):
+        raise ValueError("three-hour manifest requires a source_files array")
+    payload["source_files"] = threehour_source_identity_projection(files)
+    return hashlib.sha256(_canonical_json(payload)).hexdigest()
+
+
+def threehour_release_identity(manifest: Mapping[str, Any], *,
+                               verified_content_sha256: Optional[str] = None) -> dict:
+    """Resolve the identity triple behind ``dataset_fingerprint``.
+
+    ``verified_content_sha256`` is the frozen digest of an already verified
+    publication (registry descriptor or shared verification proof). Supplying it
+    short-circuits a legacy publication: the 1462 entry source inventory is never
+    re-projected and never re-hashed, the persisted value is combined with the
+    manifest's own id, version and data digest, and the result must reproduce the
+    published ``dataset_fingerprint`` exactly. Without it the cold path falls back
+    to the rule the manifest declares, which for every legacy publication is rule 1
+    over the full manifest.
+    """
+    rule = threehour_fingerprint_rule(manifest)
+    inventory_version = threehour_source_inventory_version(manifest)
+    dataset_id = manifest["dataset_id"]
+    dataset_version = manifest["dataset_version"]
+    data_sha256 = manifest["data_sha256"]
+    if verified_content_sha256 is None:
+        content_sha256 = threehour_manifest_content_sha256(manifest)
+    else:
+        if (not isinstance(verified_content_sha256, str)
+                or not _SHA256_PATTERN.fullmatch(verified_content_sha256)):
+            raise ValueError("persisted manifest_content_sha256 is not a sha256 digest")
+        content_sha256 = verified_content_sha256
+    fingerprint = build_dataset_fingerprint(dataset_id, dataset_version,
+                                            content_sha256, data_sha256)
+    if manifest.get("dataset_fingerprint") != fingerprint:
+        raise EarthPackageError(REASON_MANIFEST_FINGERPRINT_MISMATCH,
+                                "three-hour dataset fingerprint does not match its manifest")
+    return {"dataset_id": dataset_id, "dataset_version": dataset_version,
+            "manifest_content_sha256": content_sha256, "data_sha256": data_sha256,
+            "dataset_fingerprint": fingerprint,
+            "fingerprint_rule": rule, "source_inventory_version": inventory_version}
 
 
 def _unique_json_object(pairs):
@@ -553,6 +672,12 @@ def _assert_threehour_manifest_matches(ds, manifest, statistics):
                       and len(times) == 5848)
     if manifest["build_mode"] == "smoke":
         checks.append(7 <= len(expected_days) <= 30)
+    # The source digest basis is versioned and must stay symmetric with the
+    # builder: version 3 (and therefore the projection branch) verifies by content
+    # identity only, while a manifest without the field stays on the full entry
+    # digest that the already registered publication was published with.
+    inventory_version = threehour_source_inventory_version(manifest)
+    projected = inventory_version == THREE_HOURLY_SOURCE_INVENTORY_IDENTITY
     keys = []
     for item in files:
         if not isinstance(item, dict):
@@ -568,15 +693,31 @@ def _assert_threehour_manifest_matches(ds, manifest, statistics):
             path.parts[0] == product if path.parts else False,
             path.name == item.get("name"),
             type(item.get("bytes")) is int and item["bytes"] > 0,
-            type(item.get("mtime_ns")) is int and item["mtime_ns"] >= 0,
             bool(_SHA256_PATTERN.fullmatch(str(item.get("sha256", "")))),
         ])
+        if projected:
+            # Version 3 keeps file-system metadata in the optional top-level
+            # source_mtimes block; an entry that still carries one must be well
+            # formed, but it never takes part in the identity or the source digest.
+            checks.append("mtime_ns" not in item
+                          or (type(item["mtime_ns"]) is int and item["mtime_ns"] >= 0))
+        else:
+            checks.append(type(item.get("mtime_ns")) is int and item["mtime_ns"] >= 0)
         keys.append((day, product))
     checks.extend([
         len(keys) == 2 * len(expected_days), len(set(keys)) == len(keys),
         set(keys) == {(day, product) for day in expected_days for product in ("slv", "rad")},
-        hashlib.sha256(_canonical_json(files)).hexdigest() == manifest["source_sha256"],
+        threehour_source_inventory_sha256(files, inventory_version) == manifest["source_sha256"],
     ])
+    source_mtimes = manifest.get("source_mtimes")
+    if source_mtimes is not None:
+        # Optional provenance block: never an identity input, but a recorded block
+        # must stay internally consistent so change detection can trust it.
+        checks.append(isinstance(source_mtimes, dict)
+                      and set(source_mtimes) == {item.get("path") for item in files
+                                                 if isinstance(item, dict)}
+                      and all(type(value) is int and value >= 0
+                              for value in source_mtimes.values()))
     variables = manifest.get("variables")
     if not isinstance(variables, dict) or set(variables) != set(CHANNELS):
         checks.append(False)
@@ -631,6 +772,18 @@ def _proof_matches_manifest(release: VerifiedEarthRelease, manifest: dict, raw: 
         calendar = metadata["time"]["calendar"]
         if calendar not in GREGORIAN_CALENDARS:
             return False
+        # Reuse the frozen content digest of the verified publication instead of
+        # re-projecting the whole source inventory. The frozen value and the
+        # manifest's own id, version and data digest must reproduce the published
+        # fingerprint exactly; any disagreement is a proof miss, never a silent
+        # fallback to the cached metadata.
+        frozen_content_sha256 = metadata.get("manifest_content_sha256")
+        if not isinstance(frozen_content_sha256, str):
+            return False
+        resolved = threehour_release_identity(
+            manifest, verified_content_sha256=frozen_content_sha256)
+        if resolved["dataset_fingerprint"] != metadata.get("dataset_fingerprint"):
+            return False
         expected = _threehour_metadata(manifest, raw, calendar, dates, lat, lon,
                                        manifest["variables"])
         # Registration adds these stable ids to in-memory snapshots, so allow
@@ -641,7 +794,7 @@ def _proof_matches_manifest(release: VerifiedEarthRelease, manifest: dict, raw: 
             if name in candidate and candidate.pop(name) != value:
                 return False
         return candidate == expected
-    except (KeyError, TypeError, ValueError, OverflowError, IndexError):
+    except (EarthPackageError, KeyError, TypeError, ValueError, OverflowError, IndexError):
         return False
 
 
@@ -816,15 +969,13 @@ def _read_earth_3hourly_release(root: Path, *, verification_cache_dir=None,
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise EarthPackageError(REASON_INVALID_MANIFEST, str(exc)) from exc
     _assert_threehour_manifest_identity(manifest)
+    # The cold path recomputes the rule the manifest declares. A legacy
+    # publication therefore falls back to the rule 1 whole-manifest digest, which
+    # is byte-for-byte the value frozen into its descriptors and proof.
     try:
-        content_sha = threehour_manifest_content_sha256(manifest)
+        threehour_release_identity(manifest)
     except (ValueError, RecursionError) as exc:
         raise EarthPackageError(REASON_INVALID_MANIFEST, str(exc)) from exc
-    expected_fingerprint = build_dataset_fingerprint(
-        THREE_HOURLY_DATASET_ID, THREE_HOURLY_DATASET_VERSION, content_sha, manifest["data_sha256"])
-    if manifest["dataset_fingerprint"] != expected_fingerprint:
-        raise EarthPackageError(REASON_MANIFEST_FINGERPRINT_MISMATCH,
-                                "three-hour dataset fingerprint does not match its manifest")
     if verification_cache_dir is not None and not force_full:
         from services.earth_preparation_cache import _read_json
         try:

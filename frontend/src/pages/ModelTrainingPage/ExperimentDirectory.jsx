@@ -1,54 +1,12 @@
 import { useMemo, useState } from 'react';
 import { useT } from '../../i18n';
 import TrainingHistory from '../../components/TrainingTags/TrainingHistory';
-import { getTrainingStatusMeta } from './trainingStatusMeta';
 import { createTrainingStatusMatcher } from '../../components/TrainingTags/trainingTagFilters';
 import {
-  EXPERIMENT_METRIC_KEYS,
   EXPERIMENT_STATUS_FILTERS,
   countExperimentStatuses,
-  formatExperimentMetricValue,
-  getExperimentArchitectureLabel,
-  normalizeTaskChannels,
-  parseTaskHyperparameters,
-  readExperimentMetrics,
 } from './experimentCenterModel';
 import './experimentCenter.css';
-
-function formatDirectoryDate(value, locale) {
-  if (!value) return '--';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-function getCoreMetric(task) {
-  const metrics = readExperimentMetrics(task?.metrics);
-  const key = EXPERIMENT_METRIC_KEYS.find((candidate) => metrics[candidate] !== undefined);
-  if (!key) return null;
-  return { key, value: formatExperimentMetricValue(metrics[key]) };
-}
-
-/** 目录里有意义的模型身份：上传模型显示文件名，官方模型显示架构。 */
-function getModelIdentity(task) {
-  const hyperparameters = parseTaskHyperparameters(task?.hyperparameters);
-  if (String(task?.model_source || hyperparameters.model_source).toLowerCase() === 'uploaded') {
-    return task?.uploaded_model_name
-      || hyperparameters._uploaded_model_name
-      || hyperparameters._uploaded_model_id
-      || '';
-  }
-  return getExperimentArchitectureLabel(hyperparameters.model_architecture);
-}
-
-function getDirectoryCompleteness(task) {
-  const hyperparameters = parseTaskHyperparameters(task?.hyperparameters);
-  return [
-    Boolean(task?.custom_model_name?.trim()),
-    Boolean(getModelIdentity(task)),
-    Boolean(task?.dataset_id || hyperparameters.training_dataset),
-  ].filter(Boolean).length;
-}
 
 function groupDirectoryTasks(items, isZh, showRecent) {
   const groups = [
@@ -75,37 +33,17 @@ function groupDirectoryTasks(items, isZh, showRecent) {
 }
 
 /**
- * 目录行优先展示识别实验所需的信息；通道、指标与标签操作放在次级详情。
+ * 目录行只展示实验名称与实验标签，标签操作直接可用。
  */
 function ExperimentDirectoryRow({
   task,
   tagControls,
+  selectionControl,
+  editControl,
   t,
-  locale,
-  channelOrder,
-  channelMap,
-  baselineLabel,
   isActive,
-  isProcessing,
   onSelect,
-  onStop,
-  onCancel,
-  copy,
-  isZh,
 }) {
-  const statusMeta = getTrainingStatusMeta(task.status, t);
-  const hyperparameters = useMemo(() => parseTaskHyperparameters(task.hyperparameters), [task.hyperparameters]);
-  const metric = getCoreMetric(task);
-  const isActiveRun = task.status === 'running' || task.status === 'pending';
-  const isQueued = task.status === 'queued';
-  const channels = normalizeTaskChannels(task, channelOrder);
-  const channelLabel = channels.length > 0
-    ? channels.map((channel) => channelMap[channel]?.short || channel).join(' + ')
-    : baselineLabel;
-  const datasetLabel = task.dataset_id || hyperparameters.training_dataset || '--';
-  const progress = Math.min(100, Math.max(0, Number(task.progress) || 0));
-  const completeness = getDirectoryCompleteness(task);
-
   return (
     <div
       role="button"
@@ -124,66 +62,15 @@ function ExperimentDirectoryRow({
       }}
     >
       <div className="experiment-directory-row-top">
+        {selectionControl}
         <span className="experiment-directory-name" title={task.custom_model_name || t('modelTraining.unnamedModel')}>
           {task.custom_model_name || t('modelTraining.unnamedModel')}
         </span>
+        {editControl}
       </div>
-      <div className="experiment-directory-status-line">
-        <span className="experiment-directory-badge" data-tone={task.status || 'unknown'}>
-          <span className="experiment-directory-status-dot" />
-          {statusMeta.label}
-        </span>
-        <time>{formatDirectoryDate(task.end_time || task.start_time, locale)}</time>
+      <div className="experiment-directory-row-tags" onClick={(event) => event.stopPropagation()}>
+        {tagControls}
       </div>
-
-      <div className="experiment-directory-facts">
-        <div><span>{isZh ? '模型' : 'Model'}</span><strong title={getModelIdentity(task)}>{getModelIdentity(task) || '--'}</strong></div>
-        <div><span>{isZh ? '数据' : 'Data'}</span><strong title={datasetLabel}>{datasetLabel}</strong></div>
-      </div>
-
-      <div className="experiment-directory-footer">
-        <span className="experiment-directory-id">{`#${task.id}`}</span>
-        <span className="experiment-directory-completeness" title={isZh ? '记录字段完整度，不代表训练校验' : 'Recorded fields, not training readiness'}>{`${isZh ? '字段' : 'Fields'} ${completeness}/3`}</span>
-      </div>
-
-      {isActiveRun ? (
-        <>
-          <div className="experiment-directory-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-label={copy.progressLabel}>
-            <div className="experiment-directory-progress-fill" style={{ width: `${progress}%` }} />
-          </div>
-          <div className="experiment-center-actions" onClick={(event) => event.stopPropagation()}>
-            <button
-              type="button"
-              className="experiment-center-button"
-              style={{ minHeight: 32, padding: '6px 12px', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', color: 'var(--status-danger)', borderColor: 'color-mix(in srgb, var(--status-danger) 28%, transparent)' }}
-              disabled={isProcessing}
-              onClick={() => onStop(task.id)}
-            >
-              {copy.stopTraining}
-            </button>
-          </div>
-        </>
-      ) : null}
-      {isQueued ? (
-        <div className="experiment-center-actions" onClick={(event) => event.stopPropagation()}>
-          <span className="training-tag-hint">{copy.queuePosition(task.queue_position)}</span>
-          <button type="button" className="experiment-center-button" style={{ minHeight: 32, padding: '6px 12px', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))' }} disabled={isProcessing} onClick={() => onCancel(task.id)}>
-            {copy.cancelQueued}
-          </button>
-        </div>
-      ) : null}
-
-      <details className="experiment-directory-row-details" onClick={(event) => event.stopPropagation()}>
-        <summary>{isZh ? '标签与详情' : 'Tags and details'}<span aria-hidden="true">⌄</span></summary>
-        <div className="experiment-directory-row-extra">
-          {tagControls}
-          <div className="experiment-directory-extra-facts">
-            <span title={channelLabel}>{`${isZh ? '通道' : 'Channels'} · ${channelLabel}`}</span>
-            {metric ? <span className="experiment-directory-metric" title={`${metric.key.toUpperCase()} ${metric.value}`}>{`${metric.key.toUpperCase()} ${metric.value}`}</span> : null}
-            {isActiveRun ? <span>{`${copy.progressLabel} ${progress.toFixed(0)}%`}</span> : null}
-          </div>
-        </div>
-      </details>
     </div>
   );
 }
@@ -197,20 +84,13 @@ export default function ExperimentDirectory({
   tasks,
   tagState,
   activeTaskId,
-  isProcessing,
   onSelectTask,
-  onStop,
-  onCancel,
   tasksLoading = false,
   tasksError = false,
   onCreateTask,
   onRetryTasks,
-  copy,
   locale,
   isZh,
-  channelOrder,
-  channelMap,
-  baselineLabel,
 }) {
   const t = useT();
   const [statusFilter, setStatusFilter] = useState('all');
@@ -303,23 +183,16 @@ export default function ExperimentDirectory({
           onAction: onCreateTask,
           onRetry: onRetryTasks,
         }}
-        renderTask={(task, tagControls) => (
+        renderTask={(task, tagControls, rowControls) => (
           <ExperimentDirectoryRow
             key={task.id}
             task={task}
             tagControls={tagControls}
+            selectionControl={rowControls.selection}
+            editControl={rowControls.edit}
             t={t}
-            locale={locale}
-            channelOrder={channelOrder}
-            channelMap={channelMap}
-            baselineLabel={baselineLabel}
             isActive={task.id === activeTaskId}
-            isProcessing={isProcessing}
             onSelect={onSelectTask}
-            onStop={onStop}
-            onCancel={onCancel}
-            copy={copy}
-            isZh={isZh}
           />
         )}
       />
