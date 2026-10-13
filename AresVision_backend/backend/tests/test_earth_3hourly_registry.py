@@ -83,6 +83,49 @@ def client_for(registry: DatasetRegistry) -> TestClient:
     return TestClient(app)
 
 
+def downgrade_to_legacy(package: Path) -> dict:
+    """Rewrite a workspace copy as the pre-rule legacy publication (rule 1)."""
+    manifest = manifest_of(package)
+    mtimes = manifest.pop("source_mtimes", {})
+    manifest.pop("fingerprint_rule", None)
+    manifest["source_inventory_version"] = 2
+    files = []
+    for entry in manifest["source_files"]:
+        entry = dict(entry)
+        entry["mtime_ns"] = mtimes.get(entry["path"], 0)
+        files.append(entry)
+    manifest["source_files"] = files
+    manifest["source_sha256"] = hashlib.sha256(
+        json.dumps(files, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+    manifest["source_fingerprint_basis"] = (
+        "SHA256(canonical sorted date/product/path/name/bytes/mtime_ns/full-file-sha256 inventory)")
+    # The NetCDF records the same provenance digest, so the copy must agree.
+    with netCDF4.Dataset(package / DATA_FILE, "a") as data:
+        data.source_sha256 = manifest["source_sha256"]
+    republish_manifest(package, manifest)
+    return manifest
+
+
+def test_legacy_manifest_without_fingerprint_rule_still_registers(threehour_release, tmp_path):
+    """A pre-rule publication keeps its own identity and stays loadable."""
+    package = copy_release(threehour_release, tmp_path / "legacy_rule")
+    manifest = downgrade_to_legacy(package)
+    assert "fingerprint_rule" not in manifest and "source_mtimes" not in manifest
+    assert manifest["source_inventory_version"] == 2
+    expected_content = hashlib.sha256(json.dumps(
+        {key: value for key, value in manifest.items() if key != "dataset_fingerprint"},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    registry = registry_for(package, tmp_path)
+    descriptor = registry.get_dataset(DATASET_ID)
+    assert descriptor["availability"] == "available"
+    assert descriptor["availability_reason"] is None
+    assert descriptor["manifest_content_sha256"] == expected_content
+    assert descriptor["dataset_fingerprint"] == manifest["dataset_fingerprint"]
+    assert descriptor["dataset_fingerprint"] == build_dataset_fingerprint(
+        DATASET_ID, "v1", descriptor["manifest_content_sha256"], descriptor["data_sha256"])
+
+
 def test_builder_release_registers_as_exact_datetime_contract(threehour_release, tmp_path):
     registry = registry_for(threehour_release, tmp_path)
     with client_for(registry) as client:
@@ -98,7 +141,7 @@ def test_builder_release_registers_as_exact_datetime_contract(threehour_release,
     assert descriptor["planet"] == "earth"
     assert descriptor["capabilities"] == NEW_CAPABILITIES
     assert [item["dataset_id"] for item in catalog] == [
-        "openmars_mcd", "mcd_overview", "earth_merra2_daily_v1", "earth_merra2_daily_v2", DATASET_ID,
+        "openmars_mcd", "mcd_overview", DATASET_ID,
     ]
     assert catalog[-1] == descriptor
     assert descriptor["time"]["kind"] == "datetime"
@@ -135,28 +178,24 @@ def test_builder_release_registers_as_exact_datetime_contract(threehour_release,
     )
 
 
-def test_new_identity_isolated_from_daily_id_and_preserves_daily_binding(
+def test_new_identity_isolated_from_retired_daily_id(
     threehour_release, earth_global_release, tmp_path,
 ):
     registry = registry_for(threehour_release, tmp_path, **earth_global_release)
-    daily = registry.get_dataset("earth_merra2_daily_v2")
-    before = registry.build_training_binding("earth_merra2_daily_v2")
     descriptor = registry.get_dataset(DATASET_ID)
-    assert daily["availability"] == descriptor["availability"] == "available"
-    assert daily["dataset_fingerprint"] != descriptor["dataset_fingerprint"]
-    assert before == registry.build_training_binding("earth_merra2_daily_v2")
-    assert daily["time"]["kind"] == "date"
-    assert daily["time"]["start"] == "2020-01-01"
-    assert daily["grid"]["shape"] == [36, 72]
-    assert daily["training_profile"]["window"] == 7
-    assert daily["training_profile"]["horizon"] == 3
+    assert descriptor["availability"] == "available"
+    for read in (registry.get_dataset, registry.build_training_binding):
+        with pytest.raises(DatasetRequestError) as error:
+            read("earth_merra2_daily_v2")
+        assert error.value.code == "dataset_retired"
+    assert Path(earth_global_release["earth_package_dir"]).is_dir()
     assert descriptor["dataset_fingerprint"] != build_dataset_fingerprint(
         "earth_merra2_daily_v2", "v1", descriptor["manifest_content_sha256"], descriptor["data_sha256"],
     )
 
 
 @pytest.mark.parametrize("missing", ["directory", "manifest", "netcdf"])
-def test_missing_new_release_returns_stable_catalog_without_affecting_daily(
+def test_missing_new_release_returns_stable_catalog_without_daily_fallback(
     threehour_release, earth_global_release, tmp_path, missing,
 ):
     package = tmp_path / "missing_new"
@@ -180,7 +219,8 @@ def test_missing_new_release_returns_stable_catalog_without_affecting_daily(
     assert descriptor["grid_shape"] == [240, 480]
     assert descriptor["capabilities"] == NEW_CAPABILITIES
     assert catalog.status_code == 200
-    assert catalog.json()["items"][3]["availability"] == "available"
+    assert catalog.json()["items"][-1]["availability"] == "missing"
+    assert len(catalog.json()["items"]) == 3
 
 
 @pytest.mark.parametrize("bad,reason", [
@@ -194,7 +234,7 @@ def test_missing_new_release_returns_stable_catalog_without_affecting_daily(
     ("frequency", "manifest_metadata_mismatch"), ("training_window", "manifest_metadata_mismatch"),
     ("source_inventory", "manifest_metadata_mismatch"), ("variable_statistics", "manifest_metadata_mismatch"),
 ])
-def test_invalid_manifest_has_stable_reason_and_does_not_break_daily(
+def test_invalid_manifest_has_stable_reason_without_daily_fallback(
     threehour_release, earth_global_release, tmp_path, bad, reason,
 ):
     package = copy_release(threehour_release, tmp_path / "bad_manifest")
@@ -242,15 +282,16 @@ def test_invalid_manifest_has_stable_reason_and_does_not_break_daily(
     with client_for(registry) as client:
         descriptor = client.get(f"/api/datasets/{DATASET_ID}").json()
         repeated = client.get(f"/api/datasets/{DATASET_ID}").json()
-        daily = client.get("/api/datasets/earth_merra2_daily_v2").json()
+        daily = client.get("/api/datasets/earth_merra2_daily_v2")
         catalog = client.get("/api/datasets")
     assert descriptor == repeated
     assert descriptor["availability"] == "invalid"
     assert descriptor["availability_reason"] == reason
     assert descriptor["dataset_fingerprint"] is None
-    assert daily["availability"] == "available"
+    assert daily.status_code == 409
+    assert daily.json()["detail"]["code"] == "dataset_retired"
     assert catalog.status_code == 200
-    assert catalog.json()["items"][3]["availability"] == "available"
+    assert len(catalog.json()["items"]) == 3
     assert catalog.json()["items"][-1] == descriptor
 
 

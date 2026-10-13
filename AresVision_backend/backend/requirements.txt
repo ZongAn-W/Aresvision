@@ -20,6 +20,7 @@ scikit-image==0.24.0
 
 # Cache
 cachetools==5.5.0
+filelock==3.20.0
 
 # AI client
 httpx==0.28.1

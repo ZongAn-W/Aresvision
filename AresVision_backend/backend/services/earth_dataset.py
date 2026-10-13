@@ -21,7 +21,9 @@ are read-only and shared with the overview API.
 from pathlib import Path
 import operator
 import json
-import uuid
+import time
+import os
+import copy
 
 import numpy as np
 import xarray as xr
@@ -34,6 +36,10 @@ THREE_HOURLY_SCHEMA = 'aresvision_earth_3hourly_v1'
 THREE_HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1'
 THREE_HOURLY_DATASET_VERSION = 'v1'
 THREE_HOURLY_GRID_SHAPE = (240, 480)
+THREE_HOURLY_TILE_SHAPE = (24, 48)
+THREE_HOURLY_TILE_CACHE_LAYOUT = 'earth_spatial_tiles_v1'
+THREE_HOURLY_FULL_GRID_CACHE_LAYOUT = 'earth_full_grid_v1'
+THREE_HOURLY_CACHE_SCHEMA = 'aresvision_earth_training_cache_v1'
 THREE_HOURLY_TRAINING_PROFILE = {
     'target': 'TO3', 'target_unit': 'DU', 'window': 56, 'horizon': 24,
     'step_unit': 'hour', 'step': 3, 'grid_shape': [240, 480],
@@ -46,6 +52,7 @@ OPTIONAL_CHANNELS = ('U10M', 'V10M', 'T2M', 'SWGDN')
 # Published normalization contract. The stored values are valid float32 numbers
 # computed with population statistics over the training dates.
 NORMALIZATION_METHOD = 'per_channel_standard'
+NORMALIZATION_CACHE_VERSION = 'earth_3hourly_normalization_v2'
 NORMALIZATION_DDOF = 0
 NORMALIZATION_EPSILON = 1e-6
 MINIMUM_SCALE = 1e-6
@@ -113,14 +120,14 @@ def validate_dataset(ds):
         raise ValueError('split does not match chronological boundaries')
 
 
-def validate_earth_3hourly_dataset(ds, *, chunk_steps=8):
+def validate_earth_3hourly_dataset(ds, *, chunk_steps=8, progress=None):
     """Verify the three-hour data and masks under the shared NetCDF lock."""
     from services.netcdf_read_lock import netcdf_read_lock
     with netcdf_read_lock():
-        return _validate_earth_3hourly_dataset(ds, chunk_steps=chunk_steps)
+        return _validate_earth_3hourly_dataset(ds, chunk_steps=chunk_steps, progress=progress)
 
 
-def _validate_earth_3hourly_dataset(ds, *, chunk_steps=8):
+def _validate_earth_3hourly_dataset(ds, *, chunk_steps=8, progress=None):
     """Validate the three-hour product in bounded chunks, returning field statistics.
 
     Only coordinates and at most eight spatial frames per variable are read at
@@ -209,10 +216,17 @@ def _validate_earth_3hourly_dataset(ds, *, chunk_steps=8):
                 or ds[name].attrs.get('ancillary_variables') != mask_name):
             raise ValueError(f'{name} must include an explicit uint8 validity mask')
         missing, minimum, maximum = 0, None, None
+        last_progress = time.monotonic()
+        if progress is not None:
+            progress(f'Earth preparation: scientific validation {name} 0/{len(times)} frames')
         for start in range(0, len(times), chunk_steps):
             with netcdf_read_lock():
                 values = np.asarray(ds[name].isel(time=slice(start, start + chunk_steps)).values)
                 valid = np.asarray(ds[mask_name].isel(time=slice(start, start + chunk_steps)).values)
+            stop = min(start + chunk_steps, len(times))
+            if progress is not None and (stop == len(times) or time.monotonic() - last_progress >= 5):
+                progress(f'Earth preparation: scientific validation {name} {stop}/{len(times)} frames')
+                last_progress = time.monotonic()
             if (not np.isin(valid, [0, 1]).all()
                     or not np.array_equal(valid.astype(bool), np.isfinite(values))
                     or not np.isnan(values[valid == 0]).all()):
@@ -554,6 +568,49 @@ def _threehour_path(release):
     return path
 
 
+def cell_area_weights_from_lat_bounds(lat_bounds, longitude_count: int) -> np.ndarray:
+    """Return globally normalized spherical cell weights from latitude bounds."""
+    bounds = np.asarray(lat_bounds, dtype='float64')
+    if (bounds.ndim != 2 or bounds.shape[1] != 2 or not len(bounds)
+            or not np.isfinite(bounds).all() or np.any(bounds[:, 1] <= bounds[:, 0])
+            or np.any(bounds < -90.) or np.any(bounds > 90.)
+            or type(longitude_count) is not int or longitude_count < 1):
+        raise ValueError('Latitude bounds and longitude count are invalid for cell-area weights')
+    row_area = (np.sin(np.deg2rad(bounds[:, 1]))
+                - np.sin(np.deg2rad(bounds[:, 0])))
+    if not np.isfinite(row_area).all() or np.any(row_area <= 0):
+        raise ValueError('Latitude bounds produce invalid spherical cell areas')
+    weights = np.broadcast_to(
+        (row_area / (row_area.sum() * longitude_count))[:, None],
+        (len(row_area), longitude_count),
+    ).copy()
+    weights /= weights.sum(dtype='float64')
+    return weights
+
+
+def threehour_global_cell_area_weights(release) -> np.ndarray:
+    """Read exact cell bounds from a verified three-hour global release."""
+    metadata = getattr(release, 'metadata', {}) or {}
+    if (metadata.get('schema') != THREE_HOURLY_SCHEMA
+            or metadata.get('dataset_id') not in (None, THREE_HOURLY_DATASET_ID)
+            or metadata.get('dataset_version') not in (None, THREE_HOURLY_DATASET_VERSION)
+            or metadata.get('grid_shape') != [240, 480]
+            or not np.array_equal(np.asarray(release.latitude), -89.625 + np.arange(240) * .75)
+            or not np.array_equal(np.asarray(release.longitude), -179.625 + np.arange(480) * .75)):
+        raise ValueError('Area weights require a verified fixed three-hour global grid')
+    path = _threehour_path(release)
+    from services.netcdf_read_lock import netcdf_read_lock
+    with netcdf_read_lock(), xr.open_dataset(path, engine='netcdf4', mask_and_scale=False) as ds:
+        bounds = np.asarray(ds['lat_bounds'].values, dtype='float64')
+        expected = np.column_stack((-90. + np.arange(240) * .75,
+                                    -90. + (np.arange(240) + 1) * .75))
+        if (ds['lat_bounds'].dims != ('lat', 'bounds')
+                or bounds.shape != expected.shape or not np.array_equal(bounds, expected)):
+            raise ValueError('Verified release latitude cell bounds changed')
+    _threehour_path(release)
+    return cell_area_weights_from_lat_bounds(bounds, 480)
+
+
 def _threehour_values(ds, channel, start, stop, *, lat_slice=slice(None), lon_slice=slice(None)):
     """Read one selected field and mask; never silently fill missing observations."""
     selection = {'time': slice(start, stop), 'lat': lat_slice, 'lon': lon_slice}
@@ -569,7 +626,59 @@ def _utc_timestamp(value):
     return np.datetime_as_string(np.datetime64(value, 's'), unit='s') + 'Z'
 
 
-def fit_threehour_normalization(release, channels=None):
+def _normalization_identity(release, channels, *, dates, start, stop):
+    from services.earth_preparation_cache import signature_json
+    return {
+        'schema': NORMALIZATION_CACHE_VERSION,
+        'dataset_id': release.metadata.get('dataset_id', THREE_HOURLY_DATASET_ID),
+        'dataset_version': release.metadata.get('dataset_version', THREE_HOURLY_DATASET_VERSION),
+        'dataset_fingerprint': release.metadata.get('dataset_fingerprint'),
+        'package_signature': signature_json(release.signature),
+        'channel_order': list(channels), 'method': NORMALIZATION_METHOD,
+        'ddof': NORMALIZATION_DDOF, 'epsilon': NORMALIZATION_EPSILON,
+        'fit_split': 'train', 'fit_time_start': _utc_timestamp(dates[start]),
+        'fit_time_end': _utc_timestamp(dates[stop - 1]), 'fit_step_count': int(stop - start),
+    }
+
+
+def _normalization_cache_paths(cache_root, identity):
+    from services.earth_preparation_cache import digest_json
+    root = Path(cache_root).expanduser().resolve() / 'normalization'
+    key = digest_json(identity)
+    return root / f'{key}.json', root / f'{key}.lock'
+
+
+def _load_normalization_cache(path, identity):
+    from services.earth_preparation_cache import _read_json
+    payload = _read_json(path)
+    if payload is None or payload.get('schema') != NORMALIZATION_CACHE_VERSION:
+        return None
+    if payload.get('identity') != identity or not isinstance(payload.get('normalization'), dict):
+        return None
+    normalization = payload['normalization']
+    try:
+        validate_normalization(normalization, identity['channel_order'])
+        from services.earth_preparation_cache import digest_json
+        if payload.get('normalization_sha256') != digest_json(normalization):
+            return None
+        if any(normalization.get(key) != identity[key] for key in (
+                'fit_split', 'fit_time_start', 'fit_time_end', 'fit_step_count',
+                'method', 'ddof', 'epsilon')):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return normalization
+
+
+def _normalization_for_task(normalization, task_split):
+    result = copy.deepcopy(normalization)
+    result.pop('task_split', None)
+    if task_split is not None:
+        result['task_split'] = copy.deepcopy(task_split)
+    return result
+
+
+def _fit_threehour_normalization_uncached(release, channels=None, *, task_split=None, progress=None):
     """Fit stable population statistics on training frames in chunks of at most 8.
 
     This scans one channel at a time and merges float64 chunk moments. It never
@@ -580,7 +689,8 @@ def fit_threehour_normalization(release, channels=None):
     from services.netcdf_read_lock import netcdf_read_lock
     selected_channels = canonical_input_channels(channels)
     dates = np.asarray(release.dates, dtype='datetime64[ns]')
-    codes = threehour_release_split_codes(dates, release.metadata)
+    from services.earth_task_split import task_split_codes
+    codes = task_split_codes(dates, release.metadata, task_split)
     indices = np.flatnonzero(codes == SPLITS['train'])
     if not len(indices):
         raise ValueError('No training timestamps are available to fit normalization')
@@ -591,9 +701,13 @@ def fit_threehour_normalization(release, channels=None):
         if not np.array_equal(ds.time.values, dates):
             raise ValueError('Earth three-hour timestamps changed since verification')
         for channel in selected_channels:
+            last_progress = time.monotonic()
+            if progress is not None:
+                progress(f'Earth preparation: normalization {channel} 0/{stop - start} train frames')
             count, mean, moment = 0, 0.0, 0.0
             for offset in range(start, stop, 8):
-                values = _threehour_values(ds, channel, offset, min(offset + 8, stop)).astype('float64')
+                chunk_stop = min(offset + 8, stop)
+                values = _threehour_values(ds, channel, offset, chunk_stop).astype('float64')
                 chunk_count = values.size
                 chunk_mean = float(values.mean())
                 chunk_moment = float(values.var(ddof=0)) * chunk_count
@@ -602,6 +716,9 @@ def fit_threehour_normalization(release, channels=None):
                 moment += chunk_moment + delta * delta * count * chunk_count / total_count
                 mean += delta * chunk_count / total_count
                 count = total_count
+                if progress is not None and (chunk_stop == stop or time.monotonic() - last_progress >= 5):
+                    progress(f'Earth preparation: normalization {channel} {chunk_stop - start}/{stop - start} train frames')
+                    last_progress = time.monotonic()
             std = float(np.sqrt(max(moment / count, 0.0)))
             constant = std < MINIMUM_SCALE
             means.append(float(np.float32(mean)))
@@ -609,6 +726,7 @@ def fit_threehour_normalization(release, channels=None):
             constants.append(bool(constant))
     _threehour_path(release)
     return {
+        **({'task_split': task_split} if task_split is not None else {}),
         'method': NORMALIZATION_METHOD, 'fit_split': 'train',
         'fit_date_start': _utc_timestamp(dates[start]), 'fit_date_end': _utc_timestamp(dates[stop - 1]),
         'fit_time_start': _utc_timestamp(dates[start]), 'fit_time_end': _utc_timestamp(dates[stop - 1]),
@@ -621,11 +739,66 @@ def fit_threehour_normalization(release, channels=None):
     }
 
 
-def build_threehour_training_cache(release, channels, normalization, cache_root):
+def fit_threehour_normalization(release, channels=None, *, task_split=None, progress=None,
+                                cache_root=None):
+    """Return train-only statistics, reusing a verified content-addressed result."""
+    started = time.perf_counter()
+    _threehour_path(release)
+    selected_channels = canonical_input_channels(channels)
+    dates = np.asarray(release.dates, dtype='datetime64[ns]')
+    from services.earth_task_split import task_split_codes
+    codes = task_split_codes(dates, release.metadata, task_split)
+    indices = np.flatnonzero(codes == SPLITS['train'])
+    if not len(indices):
+        raise ValueError('No training timestamps are available to fit normalization')
+    start, stop = int(indices[0]), int(indices[-1]) + 1
+    identity = _normalization_identity(
+        release, selected_channels, dates=dates, start=start, stop=stop,
+    )
+    if cache_root is None:
+        return _fit_threehour_normalization_uncached(
+            release, selected_channels, task_split=task_split, progress=progress,
+        )
+    cache_path, lock_path = _normalization_cache_paths(cache_root, identity)
+    cached = _load_normalization_cache(cache_path, identity)
+    if cached is not None:
+        _threehour_path(release)
+        if progress is not None:
+            progress(f'Earth preparation: normalization cache hit in {time.perf_counter() - started:.3f}s')
+        return _normalization_for_task(cached, task_split)
+    from services.earth_preparation_cache import atomic_write_json, preparation_lock
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with preparation_lock(lock_path, progress=progress):
+        _threehour_path(release)
+        cached = _load_normalization_cache(cache_path, identity)
+        if cached is not None:
+            _threehour_path(release)
+            if progress is not None:
+                progress('Earth preparation: normalization cache hit (waited for builder)')
+            return _normalization_for_task(cached, task_split)
+        if progress is not None:
+            progress('Earth preparation: normalization cache miss; fitting train-only statistics')
+        result = _fit_threehour_normalization_uncached(
+            release, selected_channels, task_split=task_split, progress=progress,
+        )
+        stored = _normalization_for_task(result, None)
+        from services.earth_preparation_cache import digest_json
+        atomic_write_json(cache_path, {'schema': NORMALIZATION_CACHE_VERSION,
+                                       'identity': identity, 'normalization': stored,
+                                       'normalization_sha256': digest_json(stored)})
+        _threehour_path(release)
+        if progress is not None:
+            progress(f'Earth preparation: normalization generated in {time.perf_counter() - started:.3f}s')
+        return result
+
+
+def _build_threehour_training_cache_uncached(release, channels, normalization, cache_root, *, full_grid=False,
+                                             progress=None, folder_override, cache_identity):
     """Stream normalized fields to a unique disk map, without expanding windows.
 
-    Compressed global chunks are decoded once here, avoiding repeated full-field
-    decompression for every spatial tile. Only <=8 frames of one channel are read.
+    Compressed global chunks are decoded once here. Full-grid models use time-major
+    fields; tile models retain spatially contiguous tile storage. Only <=8 frames
+    of one channel are read.
     Interrupted caches are retained; source packages are always read-only.
     """
     from services.netcdf_read_lock import netcdf_read_lock
@@ -634,11 +807,16 @@ def build_threehour_training_cache(release, channels, normalization, cache_root)
     source_path = _threehour_path(release)
     root = Path(cache_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
-    folder = root / (str(release.metadata.get('dataset_fingerprint', 'earth'))[:16] + '-' + uuid.uuid4().hex)
-    folder.mkdir()
+    folder = Path(folder_override)
+    folder.mkdir(parents=True, exist_ok=False)
     path = folder / 'normalized.npy'
     shape = (len(release.dates), len(order), 240, 480)
-    mapped = np.lib.format.open_memmap(path, mode='w+', dtype='float32', shape=shape)
+    layout = THREE_HOURLY_FULL_GRID_CACHE_LAYOUT if full_grid else THREE_HOURLY_TILE_CACHE_LAYOUT
+    storage_shape = shape if full_grid else (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
+    mapped = np.lib.format.open_memmap(path, mode='w+', dtype='float32', shape=storage_shape)
+    last_progress = time.monotonic()
+    if progress is not None:
+        progress(f'Earth preparation: {layout} cache 0/{shape[0]} frames')
     try:
         with netcdf_read_lock(), xr.open_dataset(source_path, engine='netcdf4', mask_and_scale=False) as ds:
             if not np.array_equal(ds.time.values, release.dates):
@@ -648,18 +826,226 @@ def build_threehour_training_cache(release, channels, normalization, cache_root)
                 for index, channel in enumerate(order):
                     values = _threehour_values(ds, channel, start, stop)
                     values = ((values.astype('float64') - mean[index]) / scale[index]).astype('float32')
-                    mapped[start:stop, index] = values
+                    if full_grid:
+                        mapped[start:stop, index] = values
+                    else:
+                        tiles = values.reshape(stop - start, 10, 24, 10, 48)
+                        tiles = tiles.transpose(1, 3, 0, 2, 4).reshape(100, stop - start, 24, 48)
+                        mapped[:, start:stop, index] = tiles
+                if progress is not None and (stop == shape[0] or time.monotonic() - last_progress >= 5):
+                    progress(f'Earth preparation: {layout} cache {stop}/{shape[0]} frames')
+                    last_progress = time.monotonic()
         mapped.flush()
     finally:
         mapped._mmap.close()
     _threehour_path(release)
-    (folder / 'metadata.json').write_text(json.dumps({
+    metadata = {
+        'schema': THREE_HOURLY_CACHE_SCHEMA, 'cache_version': 1,
+        'cache_identity_version': 2,
+        'cache_status': 'ready',
         'dataset_id': THREE_HOURLY_DATASET_ID,
+        'dataset_version': THREE_HOURLY_DATASET_VERSION,
         'dataset_fingerprint': release.metadata.get('dataset_fingerprint'),
+        'package_signature': cache_identity['package_signature'],
         'shape': list(shape), 'input_channel_order': order,
+        'layout': layout, 'storage_shape': list(storage_shape),
+        **({'spatial_tile_shape': list(THREE_HOURLY_TILE_SHAPE)} if not full_grid else {}),
         'normalization': normalization,
-    }, sort_keys=True, allow_nan=False), encoding='utf-8')
+    }
+    from services.earth_preparation_cache import (atomic_write_json, cache_file_identity,
+        sha256_file, seal_payload, digest_json)
+    with path.open('r+b') as stream:
+        os.fsync(stream.fileno())
+    metadata['array_sha256'] = sha256_file(path, progress=progress)
+    metadata['array_identity'] = cache_file_identity(path)
+    metadata['identity'] = cache_identity
+    metadata['cache_key'] = digest_json(cache_identity)
+    atomic_write_json(folder / 'metadata.json', seal_payload(metadata))
     return path
+
+
+def _training_cache_identity(release, order, normalization, *, full_grid):
+    from services.earth_preparation_cache import signature_json
+    shape = (len(release.dates), len(order), 240, 480)
+    layout = THREE_HOURLY_FULL_GRID_CACHE_LAYOUT if full_grid else THREE_HOURLY_TILE_CACHE_LAYOUT
+    storage_shape = shape if full_grid else (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
+    return {
+        'schema': THREE_HOURLY_CACHE_SCHEMA, 'cache_version': 1,
+        'cache_identity_version': 2, 'dataset_id': THREE_HOURLY_DATASET_ID,
+        'dataset_version': THREE_HOURLY_DATASET_VERSION,
+        'dataset_fingerprint': release.metadata.get('dataset_fingerprint'),
+        'package_signature': signature_json(release.signature),
+        'input_channel_order': list(order), 'layout': layout,
+        'shape': list(shape), 'storage_shape': list(storage_shape),
+        'normalization_method_version': NORMALIZATION_CACHE_VERSION,
+        'normalization': _normalization_content(normalization),
+    }
+
+
+def _normalization_content(normalization):
+    """Only fields which define normalized bytes; partition windows are separate."""
+    return {key: copy.deepcopy(value) for key, value in normalization.items()
+            if key not in {'task_split', 'normalization_cache_version', 'dataset_id',
+                           'dataset_version', 'dataset_fingerprint', 'package_signature'}}
+
+
+def _training_cache_candidate(path, identity, *, release=None, progress=None, verify_payload=True):
+    from services.earth_preparation_cache import (_read_json, verify_array_file, valid_seal)
+    path = Path(path)
+    if path.parent.name.startswith('.'):
+        return None  # An unpublished/interrupted staging directory.
+    metadata = _read_json(path.parent / 'metadata.json')
+    if metadata is None:
+        return None
+    for key in ('schema', 'cache_version', 'dataset_id', 'dataset_version', 'dataset_fingerprint',
+                'input_channel_order', 'layout', 'shape', 'storage_shape'):
+        if metadata.get(key) != identity.get(key):
+            if key == 'dataset_version' and metadata.get('dataset_version') is None:
+                continue
+            return None
+    if (not isinstance(metadata.get('normalization'), dict)
+            or _normalization_content(metadata['normalization']) != identity['normalization']):
+        return None
+    if metadata.get('cache_identity_version') not in (None, 2):
+        return None
+    if metadata.get('cache_identity_version') == 2:
+        from services.earth_preparation_cache import digest_json
+        if (metadata.get('cache_status') != 'ready' or metadata.get('identity') != identity
+                or metadata.get('cache_key') != digest_json(identity) or not valid_seal(metadata)):
+            return None
+    try:
+        mapped = np.load(path, mmap_mode='r', allow_pickle=False)
+        if (mapped.shape != tuple(identity['storage_shape']) or mapped.dtype != np.dtype('float32')
+                or path.stat().st_size != mapped.offset + mapped.nbytes):
+            mapped._mmap.close()
+            return None
+        mapped._mmap.close()
+        if metadata.get('cache_identity_version') is None:
+            if release is None:
+                return None
+            return _certify_existing_training_cache(path, metadata, identity, release, progress=progress)
+        if verify_payload and not verify_array_file(path, metadata.get('array_identity'), metadata.get('array_sha256'), progress=progress):
+            return None
+        return path
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _certify_existing_training_cache(path, metadata, identity, release, *, progress):
+    """Certify an existing current-layout v1 volume against source bytes once.
+
+    Original caches have no payload digest or completion identity. They cannot
+    be trusted by shape alone, so compare every normalized float32 chunk before
+    adding an atomic integrity certificate; the large array stays in place.
+    """
+    from services.earth_preparation_cache import (preparation_lock, _read_json,
+        cache_file_identity, sha256_file, atomic_write_json, seal_payload, digest_json)
+    with preparation_lock(path.parent / 'certification.lock', progress=progress):
+        current = _read_json(path.parent / 'metadata.json')
+        if current is not None and current.get('cache_identity_version') == 2:
+            return _training_cache_candidate(path, identity, progress=progress)
+        before = cache_file_identity(path)
+        _threehour_path(release)
+        started = time.perf_counter()
+        if progress is not None:
+            progress('Earth preparation: existing cache needs full source certification')
+        from services.netcdf_read_lock import netcdf_read_lock
+        mean, scale = validate_normalization(metadata['normalization'], identity['input_channel_order'])
+        mapped = np.load(path, mmap_mode='r', allow_pickle=False)
+        last = time.monotonic()
+        try:
+            with netcdf_read_lock(), xr.open_dataset(_threehour_path(release), engine='netcdf4', mask_and_scale=False) as ds:
+                if not np.array_equal(ds.time.values, release.dates):
+                    raise ValueError('Earth three-hour timestamps changed since verification')
+                for start in range(0, len(release.dates), 8):
+                    stop = min(start + 8, len(release.dates))
+                    for index, channel in enumerate(identity['input_channel_order']):
+                        values = _threehour_values(ds, channel, start, stop)
+                        values = ((values.astype('float64') - mean[index]) / scale[index]).astype('float32')
+                        if identity['layout'] == THREE_HOURLY_TILE_CACHE_LAYOUT:
+                            values = values.reshape(stop - start, 10, 24, 10, 48).transpose(1, 3, 0, 2, 4).reshape(100, stop - start, 24, 48)
+                            actual = mapped[:, start:stop, index]
+                        else:
+                            actual = mapped[start:stop, index]
+                        if not np.array_equal(actual, values):
+                            return None
+                    if progress is not None and (stop == len(release.dates) or time.monotonic() - last >= 5):
+                        progress(f'Earth preparation: existing cache certification {stop}/{len(release.dates)} frames')
+                        last = time.monotonic()
+        finally:
+            mapped._mmap.close()
+        _threehour_path(release)
+        if cache_file_identity(path) != before:
+            return None
+        checksum = sha256_file(path, progress=progress)
+        if cache_file_identity(path) != before:
+            return None
+        updated = dict(metadata, cache_identity_version=2, cache_status='ready',
+                       dataset_version=THREE_HOURLY_DATASET_VERSION,
+                       package_signature=identity['package_signature'], identity=identity,
+                       cache_key=digest_json(identity), array_identity=before, array_sha256=checksum)
+        atomic_write_json(path.parent / 'metadata.json', seal_payload(updated))
+        if progress is not None:
+            progress(f'Earth preparation: existing cache certified in {time.perf_counter() - started:.3f}s')
+        return path
+
+
+def build_threehour_training_cache(release, channels, normalization, cache_root, *, full_grid=False, progress=None):
+    """Find or atomically publish the normalized volume for this data identity."""
+    started = time.perf_counter()
+    _threehour_path(release)
+    order = canonical_input_channels(channels)
+    validate_normalization(normalization, order)
+    identity = _training_cache_identity(release, order, normalization, full_grid=full_grid)
+    from services.earth_preparation_cache import digest_json, preparation_lock
+    root = Path(cache_root).expanduser().resolve()
+    final = root / 'earth_cache_v2' / digest_json(identity)
+    path = final / 'normalized.npy'
+    found = _training_cache_candidate(path, identity, release=release, progress=progress)
+    if found is None and root.exists():
+        for metadata_path in root.glob('**/metadata.json'):
+            candidate = _training_cache_candidate(metadata_path.parent / 'normalized.npy', identity, release=release, progress=progress)
+            if candidate is not None:
+                found = candidate
+                break
+    if found is not None:
+        _threehour_path(release)
+        if progress is not None:
+            progress(f"Earth preparation: {identity['layout']} cache hit in {time.perf_counter() - started:.3f}s")
+        return found
+    final.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = root / 'locks' / f"{digest_json(identity)}.lock"
+    with preparation_lock(lock_path, progress=progress):
+        _threehour_path(release)
+        found = _training_cache_candidate(path, identity, release=release, progress=progress)
+        if found is None:
+            for metadata_path in root.glob('**/metadata.json'):
+                candidate = _training_cache_candidate(metadata_path.parent / 'normalized.npy', identity,
+                                                      release=release, progress=progress)
+                if candidate is not None:
+                    found = candidate
+                    break
+        if found is not None:
+            _threehour_path(release)
+            if progress is not None:
+                progress(f"Earth preparation: {identity['layout']} cache hit (waited for builder)")
+            return found
+        temporary = final.parent / f'.{final.name}.building-{os.getpid()}-{time.time_ns()}'
+        if progress is not None:
+            progress(f"Earth preparation: {identity['layout']} cache miss; generating normalized volume")
+        built = _build_threehour_training_cache_uncached(
+            release, order, normalization, root, full_grid=full_grid, progress=progress,
+            folder_override=temporary, cache_identity=identity,
+        )
+        if final.exists():
+            # Retain rejected published files. Never overwrite a volume which
+            # another process could still have mapped.
+            final = final.with_name(f'{final.name}-generation-{os.getpid()}-{time.time_ns()}')
+        os.replace(temporary, final)
+        _threehour_path(release)
+        if progress is not None:
+            progress(f"Earth preparation: {identity['layout']} cache generated in {time.perf_counter() - started:.3f}s")
+        return final / built.name
 
 
 class EarthThreeHourlyWindows:
@@ -675,14 +1061,19 @@ class EarthThreeHourlyWindows:
 
     @classmethod
     def from_release(cls, release, *, split='train', window=56, horizon=24,
-                     selected_channels=None, normalization=None):
+                     selected_channels=None, normalization=None, task_split=None):
         if split not in SPLITS:
             raise ValueError(f'Unknown split: {split}')
-        if operator.index(window) != 56 or operator.index(horizon) != 24:
-            raise ValueError('Earth three-hour training requires window=56 and horizon=24')
+        from services.earth_training_contract import earth_training_profile
+        profile = earth_training_profile(THREE_HOURLY_DATASET_ID, {'window': window, 'horizon': horizon})
+        window, horizon = profile['window'], profile['horizon']
         channels = canonical_input_channels(selected_channels)
         dates = np.asarray(release.dates, dtype='datetime64[ns]')
-        codes = threehour_release_split_codes(dates, release.metadata)
+        from services.earth_task_split import task_split_codes, validate_earth_task_split
+        if task_split is not None:
+            validate_earth_task_split(task_split, dates, window, horizon,
+                                      task_split.get('ratios') if isinstance(task_split, dict) else None)
+        codes = task_split_codes(dates, release.metadata, task_split)
         lat = np.asarray(release.latitude, dtype='float64')
         lon = np.asarray(release.longitude, dtype='float64')
         if (lat.shape != (240,) or lon.shape != (480,)
@@ -690,16 +1081,17 @@ class EarthThreeHourlyWindows:
                 or not np.array_equal(lon, -179.625 + np.arange(480) * .75)):
             raise ValueError('Earth three-hour training requires the global 240x480 grid')
         indices = np.flatnonzero(codes == SPLITS[split])
-        length = len(indices) - 56 - 24 + 1
+        length = len(indices) - window - horizon + 1
         if length < 1:
             raise ValueError('Not enough three-hour steps in the selected split for window + horizon')
         if normalization is None:
             if split != 'train':
                 raise ValueError('Only the training split may fit normalization statistics')
-            normalization = fit_threehour_normalization(release, channels)
+            normalization = fit_threehour_normalization(release, channels, task_split=task_split)
         mean, scale = validate_normalization(normalization, channels)
         train_dates = dates[codes == SPLITS['train']]
-        if (not len(train_dates) or normalization.get('frequency_hours') != 3
+        if (normalization.get('task_split') != task_split
+                or not len(train_dates) or normalization.get('frequency_hours') != 3
                 or normalization.get('step_unit') != 'hour' or normalization.get('step') != 3
                 or normalization.get('time_zone') != 'UTC'
                 or normalization.get('timestamp_rule') != 'interval_center'
@@ -710,7 +1102,7 @@ class EarthThreeHourlyWindows:
         dataset = cls.__new__(cls)
         dataset._release = release
         dataset.data_path = _threehour_path(release)
-        dataset.window, dataset.horizon = 56, 24
+        dataset.window, dataset.horizon = window, horizon
         dataset.length, dataset.split = length, split
         dataset._offset = int(indices[0])
         dataset.dates = dates[indices]
@@ -719,6 +1111,7 @@ class EarthThreeHourlyWindows:
         dataset.target_channel_index = TARGET_CHANNEL_INDEX
         dataset.normalization = normalization
         dataset._normalized_map = None
+        dataset._normalized_cache_layout = None
         dataset.mean = mean.astype('float32')
         dataset.std = scale.astype('float32')
         return dataset
@@ -729,25 +1122,123 @@ class EarthThreeHourlyWindows:
     def __getitem__(self, index):
         return self.read_window(index)
 
-    def use_training_cache(self, path):
+    def use_training_cache(self, path, *, progress=None):
         """Attach a server-created map after checking identity and statistics."""
+        _threehour_path(self._release)
         path = Path(path)
         metadata = json.loads((path.parent / 'metadata.json').read_text(encoding='utf-8'))
         shape = (len(self._release.dates), len(self.input_channels), 240, 480)
+        from services.earth_preparation_cache import signature_json
+        normalization_match = metadata.get('normalization') == self.normalization
+        if metadata.get('cache_identity_version') == 2 and isinstance(metadata.get('normalization'), dict):
+            normalization_match = _normalization_content(metadata['normalization']) == _normalization_content(self.normalization)
         if (metadata.get('dataset_id') != THREE_HOURLY_DATASET_ID
                 or metadata.get('dataset_fingerprint') != self._release.metadata.get('dataset_fingerprint')
                 or metadata.get('input_channel_order') != self.input_channels
-                or metadata.get('normalization') != self.normalization
+                or not normalization_match
                 or metadata.get('shape') != list(shape)):
             raise ValueError('Three-hour training cache identity or normalization mismatch')
-        mapped = np.load(path, mmap_mode='r', allow_pickle=False)
-        if mapped.shape != shape or mapped.dtype != np.dtype('float32'):
-            mapped._mmap.close()
-            raise ValueError('Three-hour training cache shape or dtype mismatch')
+        if metadata.get('cache_identity_version') not in (None, 2):
+            raise ValueError('Unsupported three-hour training cache identity version')
+        if metadata.get('cache_identity_version') == 2:
+            if metadata.get('cache_status') != 'ready' or metadata.get('package_signature') != signature_json(self._release.signature):
+                raise ValueError('Three-hour training cache is incomplete or source identity changed')
+        layout = metadata.get('layout')
+        storage_shape = shape
+        if metadata.get('schema') is not None and (metadata.get('schema') != THREE_HOURLY_CACHE_SCHEMA
+                                                   or metadata.get('cache_version') != 1):
+            raise ValueError('Unsupported three-hour training cache version')
+        if layout == THREE_HOURLY_TILE_CACHE_LAYOUT:
+            storage_shape = (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
+            if (metadata.get('storage_shape') != list(storage_shape)
+                    or metadata.get('spatial_tile_shape') != list(THREE_HOURLY_TILE_SHAPE)):
+                raise ValueError('Three-hour training cache storage layout mismatch')
+        elif layout == THREE_HOURLY_FULL_GRID_CACHE_LAYOUT:
+            if (metadata.get('schema') != THREE_HOURLY_CACHE_SCHEMA
+                    or metadata.get('cache_version') != 1
+                    or metadata.get('storage_shape') != list(storage_shape)):
+                raise ValueError('Three-hour training cache storage layout mismatch')
+        elif layout is not None:
+            raise ValueError('Unsupported three-hour training cache layout')
+        identity = _training_cache_identity(self._release, self.input_channels, self.normalization,
+                                            full_grid=layout != THREE_HOURLY_TILE_CACHE_LAYOUT)
+        if metadata.get('cache_identity_version') is None:
+            legacy = dict(metadata, schema=THREE_HOURLY_CACHE_SCHEMA, cache_version=1,
+                          dataset_version=THREE_HOURLY_DATASET_VERSION,
+                          layout=identity['layout'], storage_shape=list(storage_shape))
+            if _certify_existing_training_cache(path, legacy, identity, self._release,
+                                                progress=progress) is None:
+                raise ValueError('Three-hour training cache integrity check failed')
+            return self.use_training_cache(path, progress=progress)
+        from services.earth_preparation_cache import (ReadOnlyFileGuard,
+                                                      file_identity_matches, verify_array_file)
+        guard = ReadOnlyFileGuard(path)
+        mapped = None
+        try:
+            if _training_cache_candidate(path, identity, verify_payload=False) is None:
+                raise ValueError('Three-hour training cache integrity check failed')
+            # Keep the certified identity; never adopt a newer stat baseline.
+            certified_identity = metadata.get('array_identity')
+            if not file_identity_matches(path, certified_identity):
+                raise ValueError('Three-hour training cache file changed after publication')
+            mapped = np.load(path, mmap_mode='r', allow_pickle=False)
+            if (mapped.shape != storage_shape or mapped.dtype != np.dtype('float32')
+                    or path.stat().st_size != mapped.offset + mapped.nbytes):
+                raise ValueError('Three-hour training cache shape or dtype mismatch')
+            if not verify_array_file(path, certified_identity, metadata.get('array_sha256'),
+                                     progress=progress):
+                raise ValueError('Three-hour training cache changed after publication')
+            _threehour_path(self._release)
+            if not file_identity_matches(path, certified_identity):
+                raise ValueError('Three-hour training cache file changed after publication')
+        except BaseException:
+            if mapped is not None:
+                mapped._mmap.close()
+            guard.close()
+            raise
+        self.close_training_cache()
         self._normalized_map = mapped
+        self._normalized_cache_layout = layout
+        self._normalized_cache_path = path
+        self._normalized_cache_file_identity = certified_identity
+        self._normalized_cache_guard = guard
+
+    def close_training_cache(self):
+        mapped = getattr(self, '_normalized_map', None)
+        if mapped is not None:
+            mapped._mmap.close()
+            self._normalized_map = None
+        guard = getattr(self, '_normalized_cache_guard', None)
+        if guard is not None:
+            guard.close()
+            self._normalized_cache_guard = None
+
+    def __del__(self):
+        self.close_training_cache()
+
+    def _check_cache_file(self):
+        from services.earth_preparation_cache import file_identity_matches
+        if not file_identity_matches(self._normalized_cache_path, self._normalized_cache_file_identity):
+            raise ValueError('Three-hour training cache file changed after publication')
+
+    def read_windows(self, requests):
+        """Verify the source before and after a batch of read-only cache slices."""
+        if self._normalized_map is None:
+            return [self.read_window(index, lat_slice=lat, lon_slice=lon)
+                    for index, lat, lon in requests]
+        _threehour_path(self._release)
+        self._check_cache_file()
+        windows = [self._read_window(index, lat_slice=lat, lon_slice=lon, verify_source=False)
+                   for index, lat, lon in requests]
+        _threehour_path(self._release)
+        self._check_cache_file()
+        return windows
 
     def read_window(self, index, *, lat_slice=slice(None), lon_slice=slice(None)):
         """Read exactly one temporal window, optionally limited to a spatial tile."""
+        return self._read_window(index, lat_slice=lat_slice, lon_slice=lon_slice, verify_source=True)
+
+    def _read_window(self, index, *, lat_slice, lon_slice, verify_source):
         from services.netcdf_read_lock import netcdf_read_lock
         index = operator.index(index)
         if index < 0 or index >= self.length:
@@ -761,11 +1252,19 @@ class EarthThreeHourlyWindows:
         start = self._offset + index
         forecast, stop = start + self.window, start + self.window + self.horizon
         if self._normalized_map is not None:
-            _threehour_path(self._release)
-            inputs = np.array(self._normalized_map[start:forecast, :, lat_slice, lon_slice], copy=True)
-            targets = np.array(self._normalized_map[forecast:stop, :1, lat_slice, lon_slice], copy=True)
+            if verify_source:
+                _threehour_path(self._release)
+                self._check_cache_file()
+            if self._normalized_cache_layout == THREE_HOURLY_TILE_CACHE_LAYOUT:
+                inputs, targets = self._read_tile_cache(start, forecast, stop, latitude, longitude)
+            else:
+                inputs = np.array(self._normalized_map[start:forecast, :, lat_slice, lon_slice], copy=True)
+                targets = np.array(self._normalized_map[forecast:stop, :1, lat_slice, lon_slice], copy=True)
             if not np.isfinite(inputs).all() or not np.isfinite(targets).all():
                 raise ValueError('Three-hour training cache contains non-finite values')
+            if verify_source:
+                _threehour_path(self._release)
+                self._check_cache_file()
             return inputs, targets
         inputs = np.empty((self.window, len(self.input_channels), len(latitude), len(longitude)), dtype='float32')
         targets = np.empty((self.horizon, 1, len(latitude), len(longitude)), dtype='float32')
@@ -785,6 +1284,33 @@ class EarthThreeHourlyWindows:
                     np.subtract(values, self.mean[channel_index], out=targets[:, 0])
                     np.divide(targets[:, 0], self.std[channel_index], out=targets[:, 0])
         _threehour_path(self._release)
+        return inputs, targets
+
+    def _read_tile_cache(self, start, forecast, stop, latitude, longitude):
+        tile_height, tile_width = THREE_HOURLY_TILE_SHAPE
+        if (len(latitude) == tile_height and len(longitude) == tile_width
+                and latitude[0] % tile_height == 0 and longitude[0] % tile_width == 0
+                and np.array_equal(latitude, latitude[0] + np.arange(tile_height))
+                and np.array_equal(longitude, longitude[0] + np.arange(tile_width))):
+            tile = int(latitude[0] // tile_height * 10 + longitude[0] // tile_width)
+            return (
+                np.array(self._normalized_map[tile, start:forecast], copy=True),
+                np.array(self._normalized_map[tile, forecast:stop, :1], copy=True),
+            )
+        inputs = np.empty((forecast - start, len(self.input_channels), len(latitude), len(longitude)), dtype='float32')
+        targets = np.empty((stop - forecast, 1, len(latitude), len(longitude)), dtype='float32')
+        # Arbitrary slices can cross tiles or reverse/skip coordinates.
+        for tile_row in np.unique(latitude // tile_height):
+            output_rows = np.flatnonzero(latitude // tile_height == tile_row)
+            local_rows = latitude[output_rows] % tile_height
+            for tile_column in np.unique(longitude // tile_width):
+                output_columns = np.flatnonzero(longitude // tile_width == tile_column)
+                local_columns = longitude[output_columns] % tile_width
+                tile = int(tile_row * 10 + tile_column)
+                history = self._normalized_map[tile, start:forecast]
+                future = self._normalized_map[tile, forecast:stop, :1]
+                inputs[:, :, output_rows[:, None], output_columns] = history[:, :, local_rows[:, None], local_columns]
+                targets[:, :, output_rows[:, None], output_columns] = future[:, :, local_rows[:, None], local_columns]
         return inputs, targets
 
     def denormalize_ozone(self, values):
@@ -860,6 +1386,7 @@ __all__ = [
     'TARGET_CHANNEL_INDEX',
     'UNITS',
     'build_threehour_training_cache',
+    'cell_area_weights_from_lat_bounds',
     'canonical_input_channels',
     'fit_normalization',
     'fit_threehour_normalization',
@@ -870,6 +1397,7 @@ __all__ = [
     'release_date_index',
     'release_split_codes',
     'threehour_release_split_codes',
+    'threehour_global_cell_area_weights',
     'split_days',
     'stack_release_cube',
     'validate_dataset',

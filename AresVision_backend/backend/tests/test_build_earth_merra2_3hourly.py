@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -11,9 +12,13 @@ import netCDF4
 import numpy as np
 import pytest
 
+import scripts.build_earth_merra2_3hourly as builder
+import scripts.verify_earth_merra2_3hourly as verifier
+import services.earth_dataset_metadata as earth_metadata
 from scripts.build_earth_merra2_3hourly import (
     DATASET_ID,
     DATA_FILE,
+    SCHEMA,
     build_dataset,
     conservative_regrid,
     dataset_fingerprint,
@@ -177,10 +182,26 @@ def test_streaming_smoke_publication_masks_identity_and_reuse(tmp_path):
     assert manifest["data_sha256"] == sha256(output)
     assert len(manifest["source_files"]) == 14
     assert {item["product"] for item in manifest["source_files"]} == {"slv", "rad"}
+    assert manifest["fingerprint_rule"] == 2
+    assert manifest["source_inventory_version"] == 3
+    # mtime_ns is provenance, not identity: it left the inventory entries for the
+    # top-level block that no identity digest covers.
+    assert all({"date", "product", "path", "name", "bytes", "sha256"} <= item.keys()
+               for item in manifest["source_files"])
+    assert not any("mtime_ns" in item for item in manifest["source_files"])
+    assert set(manifest["source_mtimes"]) == {item["path"] for item in manifest["source_files"]}
+    assert manifest["source_sha256"] == hashlib.sha256(
+        builder.canonical_json(builder.source_identity_projection(manifest["source_files"]))
+    ).hexdigest()
+    assert "full-file-content-SHA256" in manifest["source_fingerprint_basis"]
     for item in manifest["source_files"]:
         assert item["sha256"] == sha256(raw / item["path"])
-    canonical_manifest = json.dumps({key: value for key, value in manifest.items() if key != "dataset_fingerprint"},
-                                    sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        assert manifest["source_mtimes"][item["path"]] == (raw / item["path"]).stat().st_mtime_ns
+    canonical_manifest = json.dumps(
+        {key: value for key, value in manifest.items()
+         if key not in ("dataset_fingerprint", "source_mtimes", "fingerprint_rule")}
+        | {"source_files": builder.source_identity_projection(manifest["source_files"])},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
     identity = {"dataset_id": DATASET_ID, "dataset_version": "v1",
                 "manifest_sha256": hashlib.sha256(canonical_manifest).hexdigest(),
                 "data_sha256": sha256(output)}
@@ -223,6 +244,232 @@ def test_streaming_smoke_publication_masks_identity_and_reuse(tmp_path):
     with pytest.raises(ValueError, match="fingerprint"):
         build_dataset(raw, output.parent, smoke_days=7)
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["time_zone"] == "changed"
+
+
+def test_three_hour_source_inventory_and_canonical_json_are_reproducible(tmp_path):
+    raw = make_source_archive(tmp_path / "raw")
+    days = [date(2020, 1, 1) + timedelta(days=index) for index in range(7)]
+    index = discover_source_files(raw, days)
+
+    first, _, _ = builder._source_inventory(index, raw.resolve())
+    second, _, _ = builder._source_inventory(index, raw.resolve())
+
+    assert first == second
+    assert builder.canonical_json(first) == builder.canonical_json(second)
+    assert hashlib.sha256(builder.canonical_json(first)).digest() == hashlib.sha256(
+        builder.canonical_json(second)
+    ).digest()
+    assert all(len(item["sha256"]) == 64 for item in first)
+
+
+def test_changed_source_content_cannot_reuse_existing_output(tmp_path):
+    raw = make_source_archive(tmp_path / "raw")
+    output = build_dataset(raw, tmp_path / "release", smoke_days=7)
+    manifest_path = output.with_name("manifest.json")
+    previous_output = sha256(output)
+    previous_manifest = sha256(manifest_path)
+    target = raw / "slv" / "MERRA2_400.tavg1_2d_slv_Nx.20200101.nc4"
+    before = target.stat()
+    contents = bytearray(target.read_bytes())
+    contents[len(contents) // 2] ^= 1
+    target.write_bytes(contents)
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert target.stat().st_size == before.st_size
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+
+    with pytest.raises(ValueError, match="source inventory does not match"):
+        build_dataset(raw, output.parent, smoke_days=7)
+
+    assert sha256(output) == previous_output
+    assert sha256(manifest_path) == previous_manifest
+
+
+@pytest.mark.parametrize("change_size", [False, True], ids=["same-size-restored-mtime", "size-changed"])
+def test_build_rejects_source_content_change_before_manifest(tmp_path, monkeypatch, change_size):
+    raw = make_source_archive(tmp_path / "raw")
+    target = raw.resolve() / "rad" / "MERRA2_400.tavg1_2d_rad_Nx.20200107.nc4"
+    original_read = builder._read_hourly
+    changed = False
+
+    def read_then_change(path, *args, **kwargs):
+        nonlocal changed
+        result = original_read(path, *args, **kwargs)
+        if path == target and not changed:
+            before = target.stat()
+            contents = bytearray(target.read_bytes())
+            if change_size:
+                contents.extend(b"x")
+            else:
+                contents[-1] ^= 1
+            target.write_bytes(contents)
+            if not change_size:
+                os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+                after = target.stat()
+                assert after.st_size == before.st_size
+                assert after.st_mtime_ns == before.st_mtime_ns
+            changed = True
+        return result
+
+    monkeypatch.setattr(builder, "_read_hourly", read_then_change)
+    output_dir = tmp_path / "release"
+    with pytest.raises(ValueError, match="source archive .* changed"):
+        build_dataset(raw, output_dir, smoke_days=7)
+
+    assert changed
+    assert (output_dir / DATA_FILE).exists()
+    assert not (output_dir / "manifest.json").exists()
+
+
+def test_build_allows_mtime_only_change_when_source_content_digest_matches(tmp_path, monkeypatch):
+    raw = make_source_archive(tmp_path / "raw")
+    target = raw.resolve() / "rad" / "MERRA2_400.tavg1_2d_rad_Nx.20200107.nc4"
+    original_read = builder._read_hourly
+    changed = False
+
+    def read_then_touch(path, *args, **kwargs):
+        nonlocal changed
+        result = original_read(path, *args, **kwargs)
+        if path == target and not changed:
+            before = target.stat()
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+            assert target.stat().st_mtime_ns != before.st_mtime_ns
+            changed = True
+        return result
+
+    monkeypatch.setattr(builder, "_read_hourly", read_then_touch)
+    output_dir = tmp_path / "release"
+    output = build_dataset(raw, output_dir, smoke_days=7)
+
+    manifest = json.loads(output.with_name("manifest.json").read_text(encoding="utf-8"))
+    assert changed
+    assert output.exists()
+    assert manifest["source_sha256"] == hashlib.sha256(
+        builder.canonical_json(builder.source_identity_projection(manifest["source_files"]))
+    ).hexdigest()
+    entry = next(item for item in manifest["source_files"] if item["name"] == target.name)
+    assert entry["sha256"] == sha256(target)
+    # The manifest keeps the provenance recorded before the build; identity and
+    # source digest are unaffected by the later timestamp drift.
+    assert manifest["source_mtimes"][entry["path"]] != target.stat().st_mtime_ns
+
+
+def test_verify_existing_release_accepts_pure_mtime_drift_without_moving_identity(tmp_path):
+    """Touching every source file must neither rebuild nor re-identify the release."""
+    raw = make_source_archive(tmp_path / "raw")
+    output = build_dataset(raw, tmp_path / "release", smoke_days=7)
+    manifest_path = output.with_name("manifest.json")
+    published = manifest_path.read_bytes()
+    manifest = json.loads(published.decode("utf-8"))
+    for path in raw.rglob("*.nc4"):
+        before = path.stat()
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 3_000_000_000))
+    assert all((raw / item["path"]).stat().st_mtime_ns != manifest["source_mtimes"][item["path"]]
+               for item in manifest["source_files"])
+
+    assert build_dataset(raw, output.parent, smoke_days=7) == output
+    # The publication is reused unchanged: same bytes, same identity, same digest.
+    assert manifest_path.read_bytes() == published
+    reused = verify_existing_release(output.parent)
+    assert reused["dataset_fingerprint"] == manifest["dataset_fingerprint"]
+    assert reused["source_sha256"] == manifest["source_sha256"]
+
+
+# Minimal manifest fixture for the cross-implementation golden vector. The three
+# implementations (builder, service, independent verifier) are deliberately
+# separate, so this locks them to one frozen expectation.
+GOLDEN_SOURCE_FILES = (
+    {"date": "2020-01-01", "product": "slv", "path": "slv/MERRA2.slv.20200101.nc4",
+     "name": "MERRA2.slv.20200101.nc4", "bytes": 1024, "sha256": "a" * 64},
+    {"date": "2020-01-01", "product": "rad", "path": "rad/MERRA2.rad.20200101.nc4",
+     "name": "MERRA2.rad.20200101.nc4", "bytes": 2048, "sha256": "b" * 64},
+    {"date": "2020-01-02", "product": "slv", "path": "slv/MERRA2.slv.20200102.nc4",
+     "name": "MERRA2.slv.20200102.nc4", "bytes": 4096, "sha256": "c" * 64},
+    {"date": "2020-01-02", "product": "rad", "path": "rad/MERRA2.rad.20200102.nc4",
+     "name": "MERRA2.rad.20200102.nc4", "bytes": 8192, "sha256": "d" * 64},
+)
+GOLDEN_IDENTITY_FIELDS = ("date", "product", "path", "bytes", "sha256")
+GOLDEN_LEGACY_SOURCE_SHA = "38e107533f22e45033fb6d0cbf057ecba6fb3d2a2af242edaefd2206d7784beb"
+GOLDEN_CONTENT_SOURCE_SHA = "16aa682afb93b5a7f9f5965c7a5e95a47b1dbf12c630b706f9523770ee958935"
+GOLDEN_RULE1_CONTENT_SHA = "11af7ab3c960d88f6e205b83e80ab21d903ca1014b999fbb9278b486a37438cf"
+GOLDEN_RULE2_CONTENT_SHA = "160f0857e0f750d321faa7c214f03fe80d8bb676f05451f6ee35f4470fb846f6"
+
+
+def _golden_canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=True).encode("utf-8")
+
+
+def golden_manifests():
+    """One legacy rule 1 fixture and one content rule 2 fixture of the same data."""
+    identity = [{key: item[key] for key in GOLDEN_IDENTITY_FIELDS} for item in GOLDEN_SOURCE_FILES]
+    legacy_files = [dict(item, mtime_ns=1_600_000_000_000_000_000 + index)
+                    for index, item in enumerate(GOLDEN_SOURCE_FILES)]
+    base = {"schema": SCHEMA, "planet": "Earth", "dataset_id": DATASET_ID,
+            "dataset_version": "v1", "data_file": DATA_FILE,
+            "data_bytes": 4096, "data_sha256": "e" * 64}
+    legacy = dict(base, source_files=legacy_files,
+                  source_sha256=hashlib.sha256(_golden_canonical(legacy_files)).hexdigest())
+    content = dict(base, source_files=[dict(item) for item in GOLDEN_SOURCE_FILES],
+                   source_sha256=hashlib.sha256(_golden_canonical(identity)).hexdigest(),
+                   source_mtimes={item["path"]: item["bytes"] for item in GOLDEN_SOURCE_FILES},
+                   source_inventory_version=3, fingerprint_rule=2)
+    legacy["dataset_fingerprint"] = dataset_fingerprint(legacy)
+    content["dataset_fingerprint"] = dataset_fingerprint(content)
+    return legacy, content
+
+
+def test_identity_rule_implementations_agree_on_a_golden_vector():
+    """Builder, service and independent verifier must digest both rules identically."""
+    legacy, content = golden_manifests()
+    assert legacy["source_sha256"] == GOLDEN_LEGACY_SOURCE_SHA
+    assert content["source_sha256"] == GOLDEN_CONTENT_SOURCE_SHA
+    assert manifest_content_sha256_paths(legacy) == [GOLDEN_RULE1_CONTENT_SHA] * 3
+    assert manifest_content_sha256_paths(content) == [GOLDEN_RULE2_CONTENT_SHA] * 3
+    assert earth_metadata.threehour_source_inventory_sha256(content["source_files"], 3) == GOLDEN_CONTENT_SOURCE_SHA
+    assert verifier._source_inventory_sha256(content["source_files"], 3) == GOLDEN_CONTENT_SOURCE_SHA
+    assert earth_metadata.threehour_source_inventory_sha256(legacy["source_files"], 2) == GOLDEN_LEGACY_SOURCE_SHA
+    assert verifier._source_inventory_sha256(legacy["source_files"], 2) == GOLDEN_LEGACY_SOURCE_SHA
+    # The identity wrapper reuses the same digest and must reproduce the frozen field.
+    for manifest in (legacy, content):
+        assert earth_metadata.threehour_release_identity(manifest)["dataset_fingerprint"] == \
+            manifest["dataset_fingerprint"]
+
+
+def manifest_content_sha256_paths(manifest):
+    """The three independent digests for one manifest, in a fixed order."""
+    return [builder.manifest_content_sha256(manifest),
+            earth_metadata.threehour_manifest_content_sha256(manifest),
+            verifier._manifest_content_sha256(manifest)]
+
+
+def test_final_prepublication_digest_failure_does_not_create_manifest(tmp_path, monkeypatch):
+    raw = make_source_archive(tmp_path / "raw")
+    target = raw.resolve() / "slv" / "MERRA2_400.tavg1_2d_slv_Nx.20200101.nc4"
+    original_assert = builder._assert_source_digests
+    checks = 0
+
+    def mutate_after_build_check(index, source_root, expected):
+        nonlocal checks
+        checks += 1
+        original_assert(index, source_root, expected)
+        if checks == 1:
+            before = target.stat()
+            contents = bytearray(target.read_bytes())
+            contents[len(contents) // 2] ^= 1
+            target.write_bytes(contents)
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+            after = target.stat()
+            assert after.st_size == before.st_size
+            assert after.st_mtime_ns == before.st_mtime_ns
+
+    monkeypatch.setattr(builder, "_assert_source_digests", mutate_after_build_check)
+    output_dir = tmp_path / "release"
+    with pytest.raises(ValueError, match="source archive content changed during build"):
+        build_dataset(raw, output_dir, smoke_days=7)
+
+    assert checks == 2
+    assert (output_dir / DATA_FILE).exists()
+    assert not (output_dir / "manifest.json").exists()
 
 
 @pytest.mark.parametrize("bad,match", [("duplicate_hour", "time"), ("offset_hour", "time"),
@@ -289,6 +536,14 @@ def test_independent_verifier_agrees_on_cf_packing_valid_range_and_du(tmp_path):
     report = verify_package(output.parent, raw_root=raw)
     assert report["validation"] == "passed"
     assert report["raw_comparison"]["samples_checked"] == 405
+    # The independent verifier reports the rule it applied and keeps the two
+    # frozen identity digests in its proof output.
+    manifest = json.loads((output.parent / "manifest.json").read_text(encoding="utf-8"))
+    assert report["fingerprint_rule"] == 2
+    assert report["source_inventory_version"] == 3
+    assert report["manifest_content_sha256"] == verifier._manifest_content_sha256(manifest)
+    assert report["dataset_fingerprint"] == manifest["dataset_fingerprint"]
+    assert report["manifest_file_sha256"] == sha256(output.with_name("manifest.json"))
 
 
 @pytest.mark.parametrize("change,match", [("time", "time has duplicates"),

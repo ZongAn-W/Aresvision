@@ -25,11 +25,8 @@ import {
   compareTrainingModels,
 } from '../services/api';
 
-import { VARIABLE_DEFS, VIEW_MODE_IDS, TRIPTYCH_PANEL_DEFS } from './PredictPage/PredictComponents';
+import { VARIABLE_DEFS } from './PredictPage/PredictComponents';
 import PredictSidebar from './PredictPage/PredictSidebar';
-import PredictDisplay from './PredictPage/PredictDisplay';
-import PredictMetrics from './PredictPage/PredictMetrics';
-import PredictFullscreenHUD from './PredictPage/PredictFullscreenHUD';
 import ErrorDistributionChart from './PredictPage/ErrorDistributionChart';
 import PermutationImportanceChart from './PredictPage/PermutationImportanceChart';
 import { getPredictAnalysisVisibility } from './PredictPage/predictAnalysisVisibility';
@@ -56,11 +53,14 @@ import {
 import {
   PREDICT_MODEL_MODE_COMPARE,
   PREDICT_MODEL_MODE_EARTH,
+  PREDICT_MODEL_MODE_EARTH_COMPARE,
   PREDICT_MODEL_MODE_TRAINED,
   normalizePredictModelMode,
   readPredictModeFromHash,
 } from './PredictPage/predictModelModes';
 import EarthPredictPanel from './PredictPage/EarthPredictPanel';
+import EarthCompareWorkspace from './PredictPage/EarthCompareWorkspace';
+import PredictModeSelector from './PredictPage/PredictModeSelector';
 import {
   buildEarthPredictKey,
   getEarthTrainingModelOptions,
@@ -77,9 +77,16 @@ import {
   resolvePredictionHorizonLimit,
 } from './PredictPage/predictionHorizon';
 import { validatePredictCacheTrainingTasks } from './PredictPage/predictCacheTaskValidation';
+import SingleModelWorkbench from './PredictPage/SingleModelWorkbench';
+import { earthPredictionAdapter, marsPredictionAdapter } from './PredictPage/PredictionPlanetAdapter';
+import { earthResponseMatchesRequest } from './PredictPage/singleModelAdapters';
+import './PredictPage/singleModelWorkbench.css';
+import { selectPredictionMetrics } from './PredictPage/predictionMetricSelection';
 
 export default function PredictPage() {
   const t = useT();
+  const translateRef = useRef(t);
+  translateRef.current = t;
   const { settings } = useSettings();
   const { user, isLoading } = useAuth();
   const precision = settings.precision;
@@ -87,8 +94,6 @@ export default function PredictPage() {
   const isLight = settings.theme === 'light';
 
   const VARIABLES = VARIABLE_DEFS.map((v) => ({ ...v, label: t(`predict.variables.${v.id}`) }));
-  const VIEW_MODES = VIEW_MODE_IDS.map((id) => ({ id, label: t(`predict.viewModes.${id}`) }));
-  const TRIPTYCH_PANELS = TRIPTYCH_PANEL_DEFS.map((p) => ({ ...p, title: t(`predict.panels.${p.key}`) }));
 
   const plotTextColor = isLight ? 'rgba(23,33,47,0.96)' : 'rgba(236,244,255,0.96)';
   const plotText60 = isLight ? 'rgba(23,33,47,0.76)' : 'rgba(214,228,244,0.78)';
@@ -125,6 +130,9 @@ export default function PredictPage() {
   const [trainingTasksScope, setTrainingTasksScope] = useState(null);
   const [trainingTasksLoading, setTrainingTasksLoading] = useState(false);
   const [trainingTasksLoaded, setTrainingTasksLoaded] = useState(false);
+  const [trainingTasksError, setTrainingTasksError] = useState(null);
+  const trainingTasksRequestRef = useRef({ id: 0, controller: null });
+  const previousModelModeRef = useRef(modelMode);
   const [selectedTrainingTaskId, setSelectedTrainingTaskId] = useState(null);
   const [selectedCompareTrainingTaskIds, setSelectedCompareTrainingTaskIds] = useState([]);
   const [activeHorizon, setActiveHorizon] = useState(0);
@@ -173,6 +181,8 @@ export default function PredictPage() {
   const [earthResultError, setEarthResultError] = useState(null);
   const [earthLoading, setEarthLoading] = useState(false);
   const earthRequestRef = useRef(null);
+  const earthContextRequestRef = useRef(null);
+  const earthRunRequestRef = useRef(null);
 
   const analysisVisibility = useMemo(
     () => getPredictAnalysisVisibility(modelMode),
@@ -294,7 +304,8 @@ export default function PredictPage() {
     || pfiLoading
     || compareTrainingLoading
     || compareTrainingErrorLoading
-    || compareTrainingPfiLoading;
+    || compareTrainingPfiLoading
+    || earthLoading || earthContextLoading;
 
   const toggleVar = (id) => {
     setSelectedVars((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -332,6 +343,7 @@ export default function PredictPage() {
     setTrainingTasksScope(null);
     setTrainingTasksLoading(false);
     setTrainingTasksLoaded(false);
+    setTrainingTasksError(null);
     setCompareConfigs([]);
     setSelectedCompareIds([]);
 
@@ -362,49 +374,79 @@ export default function PredictPage() {
     setCompareTrainingPfiData(null);
     setCompareTrainingPfiKey(null);
     setFullscreen3D(null);
+    earthContextRequestRef.current?.abort();
+    earthRunRequestRef.current?.abort();
+    trainingTasksRequestRef.current.controller?.abort();
+    setEarthTaskId(''); setEarthOrigin(''); setEarthContext(null);
+    setEarthResult(null); setEarthResultError(null); setEarthContextError(null);
+    setEarthLoading(false); setEarthContextLoading(false);
 
     if (!predictScope) return;
   }, [predictScope, requestCoordinator]);
+
+  const loadTrainingTasks = useCallback(() => {
+    const scope = predictScope;
+    const userId = user?.id;
+    if (!scope || !userId) return Promise.resolve([]);
+
+    trainingTasksRequestRef.current.controller?.abort();
+    const requestId = trainingTasksRequestRef.current.id + 1;
+    const controller = new AbortController();
+    trainingTasksRequestRef.current = { id: requestId, controller };
+    const isCurrent = () => (
+      trainingTasksRequestRef.current.id === requestId
+      && trainingTasksRequestRef.current.controller === controller
+      && predictScopeRef.current === scope
+      && user?.id === userId
+    );
+
+    setTrainingTasksLoading(true);
+    setTrainingTasksError(null);
+
+    return fetchTasks({ signal: controller.signal })
+      .then((items) => {
+        if (!isCurrent()) return items;
+        setTrainingTasks(Array.isArray(items) ? items : []);
+        setTrainingTasksScope(scope);
+        setTrainingTasksLoaded(true);
+        return items;
+      })
+      .catch((requestError) => {
+        if (!isCurrent() || requestError?.name === 'AbortError') return undefined;
+        setTrainingTasksError(requestError instanceof Error ? requestError : new Error(String(requestError || '')));
+        return undefined;
+      })
+      .finally(() => {
+        if (!isCurrent()) return;
+        setTrainingTasksLoading(false);
+        trainingTasksRequestRef.current = { id: requestId, controller: null };
+      });
+  }, [predictScope, user?.id]);
 
   useEffect(() => {
     if (isLoading) return undefined;
 
     if (!user) {
+      trainingTasksRequestRef.current.controller?.abort();
+      trainingTasksRequestRef.current = {
+        id: trainingTasksRequestRef.current.id + 1,
+        controller: null,
+      };
       setTrainingTasks([]);
       setTrainingTasksScope(null);
       setTrainingTasksLoading(false);
       setTrainingTasksLoaded(false);
+      setTrainingTasksError(null);
       setSelectedTrainingTaskId(null);
       setSelectedCompareTrainingTaskIds([]);
       return undefined;
     }
 
-    let active = true;
-    setTrainingTasksLoading(true);
-    setTrainingTasksLoaded(false);
-    setTrainingTasksScope(null);
-
-    fetchTasks()
-      .then((items) => {
-        if (!active) return;
-        setTrainingTasks(Array.isArray(items) ? items : []);
-        setTrainingTasksScope(predictScope);
-      })
-      .catch(() => {
-        if (!active) return;
-        setTrainingTasks([]);
-        setTrainingTasksScope(predictScope);
-      })
-      .finally(() => {
-        if (!active) return;
-        setTrainingTasksLoading(false);
-        setTrainingTasksLoaded(true);
-      });
-
+    loadTrainingTasks();
     return () => {
-      active = false;
+      trainingTasksRequestRef.current.controller?.abort();
     };
-  }, [isLoading, predictScope, user?.id]);
+  }, [isLoading, loadTrainingTasks, user?.id]);
 
   useEffect(() => {
     if (!predictScope || predictScopeRef.current !== predictScope) return;
@@ -432,6 +474,10 @@ export default function PredictPage() {
     let restoredTrainingTaskId = cachedParams.trainingTaskId ?? null;
 
     const handoff = pendingTrainingTaskHandoffRef.current;
+    const handoffTask = trainingTasks.find(task => Number(task.id) === Number(handoff?.taskId));
+    if (handoffTask && isEarthTask(handoffTask) && getEarthTrainingModelOptions([handoffTask]).length) {
+      setEarthTaskId(String(handoffTask.id));
+    }
     if (authenticatedScope && handoff && accessibleTaskIds.includes(Number(handoff.taskId))) {
       restoredTrainingTaskId = Number(handoff.taskId);
       pendingTrainingTaskHandoffRef.current = null;
@@ -443,7 +489,7 @@ export default function PredictPage() {
     // 否则上次浏览留下的 trained 模式会把比较模式顶掉，URL 与实际界面不一致。
     const urlRequestedMode = readPredictModeFromHash(window.location.hash);
     const effectiveRestoredModelMode = handoff
-      ? PREDICT_MODEL_MODE_TRAINED
+      ? (isEarthTask(handoffTask) ? PREDICT_MODEL_MODE_EARTH : PREDICT_MODEL_MODE_TRAINED)
       : (urlRequestedMode || restoredModelMode);
     const restoredContext = {
       modelMode: effectiveRestoredModelMode,
@@ -685,7 +731,9 @@ export default function PredictPage() {
         return;
       }
       setError(null);
-      if (nextCompareKey === compareTrainingMetricsKey && compareTrainingMetricsData) {
+      if (nextCompareKey === compareTrainingMetricsKey
+        && compareTrainingMetricsData?.items?.length >= 2
+        && compareTrainingMetricsData.items.every((item) => item.metrics?.export_ref)) {
         return;
       }
       const requestContextKey = nextCompareKey;
@@ -736,12 +784,9 @@ export default function PredictPage() {
       return;
     }
 
-    const body = {
-      selected_variables: selectedVars,
-      horizon: predStep,
-      ls_start: lsStart,
-      ...(trainingTaskId ? { training_task_id: trainingTaskId } : {}),
-    };
+    const body = marsPredictionAdapter({ ozoneUnit, isZh: settings.language !== 'en', horizonLimit: predictionHorizonLimit }).request({
+      taskId: trainingTaskId, variables: selectedVars, horizon: predStep, origin: lsStart,
+    });
     const analysisContext = {
       modelMode,
       trainingTaskId,
@@ -771,7 +816,7 @@ export default function PredictPage() {
       && Boolean(nextMetricsKey)
       && (nextMetricsKey !== metricsKey || !metrics);
     const shouldFetchErrorDist = Boolean(nextErrorDistKey) && (nextErrorDistKey !== errorDistKey || !errorDistData);
-    const shouldFetchPfi = Boolean(nextPfiKey) && (nextPfiKey !== pfiKey || !pfiData);
+    const shouldFetchPfi = Boolean(nextPfiKey) && (nextPfiKey !== pfiKey || !pfiData?.export_ref);
     const metricsPromise = shouldFetchMetrics
       ? fetchPredictMetrics(body, {
           dataSource: dataSourceMode,
@@ -798,9 +843,10 @@ export default function PredictPage() {
         metricsPromise,
       ]);
       if (!isRequestCurrent(requestToken, requestContextKey)) return;
-      const resolvedMetrics = modelMode === PREDICT_MODEL_MODE_TRAINED
-        ? metricsResult ?? predResult.metrics ?? null
-        : predResult.metrics ?? null;
+      const resolvedMetrics = selectPredictionMetrics({
+        trained: modelMode === PREDICT_MODEL_MODE_TRAINED, fetched: metricsResult, cached: metrics,
+        prediction: predResult.metrics, cacheMatches: nextMetricsKey === metricsKey,
+      });
 
       const errorDistPromise = analysisVisibility.errorDistribution
         ? !nextErrorDistKey
@@ -1024,8 +1070,17 @@ export default function PredictPage() {
     setPfiData(null);
   }, [modelMode]);
 
+  // A mode switch is a useful recovery action after a transient task-directory failure.
+  // Only retry when the mode actually changed, so a persistent outage does not loop.
+  useEffect(() => {
+    const changed = previousModelModeRef.current !== modelMode;
+    previousModelModeRef.current = modelMode;
+    if (!changed || !trainingTasksError || trainingTasksLoading) return;
+    loadTrainingTasks();
+  }, [loadTrainingTasks, modelMode, trainingTasksError, trainingTasksLoading]);
+
   // ── 地球历史预测 ───────────────────────────────────────────────────
-  const earthTasks = trainingTasksScope === predictScope ? trainingTasks : [];
+  const earthTasks = useMemo(() => trainingTasksScope === predictScope ? trainingTasks : [], [trainingTasksScope, predictScope, trainingTasks]);
   const earthTaskOptions = useMemo(() => getEarthTrainingModelOptions(earthTasks), [earthTasks]);
 
   const selectedEarthTask = useMemo(
@@ -1043,12 +1098,25 @@ export default function PredictPage() {
     if (!Number.isFinite(normalized) || normalized <= 0) {
       setEarthContext(null);
       setEarthContextError(null);
-      return;
+      return null;
     }
+    const controller = new AbortController();
+    const scope = predictScopeRef.current;
+    earthContextRequestRef.current?.abort();
+    earthContextRequestRef.current = controller;
     setEarthContextLoading(true);
+    earthRunRequestRef.current?.abort();
+    setEarthLoading(false);
+    setEarthContext(null);
+    setEarthResult(null);
+    setEarthResultKey(null);
+    setEarthResultError(null);
+    setEarthDay(0);
     setEarthContextError(null);
     try {
-      const payload = await fetchEarthPredictContext(normalized);
+      const payload = await fetchEarthPredictContext(normalized, { signal: controller.signal });
+      if (controller.signal.aborted || earthContextRequestRef.current !== controller || scope !== predictScopeRef.current) return;
+      if (Number(payload.task_id) !== normalized || payload.planet !== 'earth') throw new Error('Prediction context identity does not match');
       setEarthContext(payload);
       setEarthOrigin((current) => {
         const availableOrigins = Array.isArray(payload?.origins?.timestamps) && payload.origins.timestamps.length
@@ -1059,27 +1127,42 @@ export default function PredictPage() {
           : pickDefaultOrigin(payload?.origins)
         );
       });
+      return payload;
     } catch (requestError) {
+      if (controller.signal.aborted) return null;
       setEarthContext(null);
       const resolved = resolveEarthPredictErrorMessage(requestError);
-      setEarthContextError(resolved.key ? t(`predict.${resolved.key}`) : resolved.fallback);
+      setEarthContextError(resolved.key ? translateRef.current(`predict.${resolved.key}`) : resolved.fallback);
+      return null;
     } finally {
-      setEarthContextLoading(false);
+      if (!controller.signal.aborted) setEarthContextLoading(false);
     }
-  }, [t]);
+  }, []);
+
+  const reloadEarthContextAndTasks = useCallback(() => {
+    const tasksRequest = loadTrainingTasks();
+    loadEarthContext(earthTaskId);
+    return tasksRequest;
+  }, [earthTaskId, loadEarthContext, loadTrainingTasks]);
 
   useEffect(() => {
     if (modelMode !== PREDICT_MODEL_MODE_EARTH) return;
-    if (!earthTaskId && earthTaskOptions.length > 0) {
+    if (!selectedEarthTask && earthTaskOptions.length > 0) {
       setEarthTaskId(String(earthTaskOptions[0].id));
       return;
     }
-    if (earthTaskId) loadEarthContext(earthTaskId);
-  }, [modelMode, earthTaskId, earthTaskOptions, loadEarthContext]);
+    if (!selectedEarthTask) { setEarthTaskId(''); setEarthContext(null); }
+    return () => earthContextRequestRef.current?.abort();
+  }, [modelMode, earthTaskId, selectedEarthTask, earthTaskOptions]);
 
   /** 切换模式或任务时丢弃地球结果，避免显示上一个任务/起点的场。 */
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (modelMode === PREDICT_MODEL_MODE_EARTH) return;
+    earthContextRequestRef.current?.abort();
+    earthRunRequestRef.current?.abort();
+    setEarthContext(null);
+    setEarthLoading(false);
+    setEarthContextLoading(false);
     setEarthResult(null);
     setEarthResultKey(null);
     setEarthResultError(null);
@@ -1087,6 +1170,9 @@ export default function PredictPage() {
   }, [modelMode]);
 
   const handleEarthTaskChange = useCallback((value) => {
+    earthContextRequestRef.current?.abort();
+    earthRunRequestRef.current?.abort();
+    setEarthLoading(false);
     setEarthTaskId(value);
     setEarthResult(null);
     setEarthResultKey(null);
@@ -1097,6 +1183,8 @@ export default function PredictPage() {
   }, []);
 
   const handleEarthOriginChange = useCallback((value) => {
+    earthRunRequestRef.current?.abort();
+    setEarthLoading(false);
     setEarthOrigin(value);
     setEarthResult(null);
     setEarthResultKey(null);
@@ -1112,11 +1200,29 @@ export default function PredictPage() {
    */
   const handleRunEarthPredict = useCallback(async () => {
     const taskId = Number(earthTaskId);
-    if (!Number.isFinite(taskId) || taskId <= 0 || !earthOrigin || earthLoading) return;
+    if (!Number.isFinite(taskId) || taskId <= 0 || earthLoading || earthContextLoading) return;
+    const context = earthContext && Number(earthContext.task_id) === taskId
+      ? earthContext
+      : await loadEarthContext(taskId);
+    if (!context) return;
+    const adapter = earthPredictionAdapter({ context, isZh: settings.language !== 'en', colormap: settings.colormap });
+    const origin = adapter.origin.selectable(earthOrigin) ? earthOrigin : pickDefaultOrigin(context.origins);
+    if (!origin) return;
+    if (origin !== earthOrigin) setEarthOrigin(origin);
+    const requestIdentity = { taskId, origin, context, scope: predictScopeRef.current };
+    const controller = new AbortController();
+    earthRunRequestRef.current?.abort();
+    earthRunRequestRef.current = controller;
     setEarthLoading(true);
     setEarthResultError(null);
+    setEarthResult(null);
+    setEarthResultKey(null);
     try {
-      const payload = await runEarthPrediction({ trainingTaskId: taskId, forecastOrigin: earthOrigin });
+      const payload = await runEarthPrediction(adapter.request({ taskId, origin }), { signal: controller.signal });
+      if (controller.signal.aborted || earthRunRequestRef.current !== controller) return;
+      if (!earthResponseMatchesRequest(payload, requestIdentity, predictScopeRef.current)) {
+        throw new Error(settings.language !== 'en' ? '预测响应身份已变化，请刷新起点范围后重试。' : 'Prediction identity changed. Reload the origin range and retry.');
+      }
       const nextKey = buildEarthPredictKey({
         taskId,
         datasetId: payload?.dataset_id,
@@ -1135,12 +1241,13 @@ export default function PredictPage() {
       setEarthResult(payload);
       setEarthDay(0);
     } catch (requestError) {
+      if (controller.signal.aborted) return;
       const resolved = resolveEarthPredictErrorMessage(requestError);
       setEarthResultError(resolved.key ? t(`predict.${resolved.key}`) : resolved.fallback);
     } finally {
-      setEarthLoading(false);
+      if (!controller.signal.aborted) setEarthLoading(false);
     }
-  }, [earthLoading, earthOrigin, earthTaskId, t]);
+  }, [earthContext, earthContextLoading, earthLoading, earthOrigin, earthTaskId, loadEarthContext, settings.language, settings.colormap, t]);
 
   const earthCopy = useMemo(() => ({
     title: t('predict.earthTitle'),
@@ -1160,8 +1267,8 @@ export default function PredictPage() {
     emptyNoTask: t('predict.earthEmptyNoTask'),
     fieldEmpty: t('predict.earthFieldEmpty'),
     dayTabsLabel: t('predict.earthDayTabsLabel'),
-    originLine: (origin, first, last, threeHourly = false) => t('predict.earthOriginLine', {
-      origin, first, last, threeHourly,
+    originLine: (origin, first, last, threeHourly = false, window = 56, horizon = 24) => t('predict.earthOriginLine', {
+      origin, first, last, threeHourly, window, horizon,
     }),
     originSplit: (split) => t('predict.earthOriginSplit', { split }),
     rangeLabel: t('predict.earthRangeLabel'),
@@ -1195,18 +1302,22 @@ export default function PredictPage() {
   }), [t]);
 
   const isEarthMode = modelMode === PREDICT_MODEL_MODE_EARTH;
+  const isEarthCompareMode = modelMode === PREDICT_MODEL_MODE_EARTH_COMPARE;
+  const earthAdapter = useMemo(() => earthPredictionAdapter({ context: earthContext, isZh: settings.language !== 'en', colormap: settings.colormap }),
+    [earthContext, settings.language, settings.colormap]);
+  const marsAdapter = useMemo(() => marsPredictionAdapter({ ozoneUnit, isZh: settings.language !== 'en', horizonLimit: predictionHorizonLimit }),
+    [ozoneUnit, settings.language, predictionHorizonLimit]);
+  useEffect(() => () => {
+    earthContextRequestRef.current?.abort();
+    earthRunRequestRef.current?.abort();
+  }, [modelMode, predictScope]);
 
   const step = activeResults ? Math.min(activeHorizon, (activeResults.horizon || 1) - 1) : 0;
-  const truthField = activeResults?.ground_truth?.[step] ?? null;
-  const predField = activeResults?.prediction?.[step] ?? null;
-  const residField = activeResults?.residual?.[step] ?? null;
-  const stepLs = activeResults?.ls_values?.[step];
-
-  const stepLabel = (ls) => (ls != null ? ` · Ls=${ls.toFixed(3)}°` : '');
 
   return (
-    <div className="page-enter" style={{ padding: '100px 40px 60px', maxWidth: 1400, margin: '0 auto' }}>
+    <div className="page-enter prediction-page">
       <SectionTitle title={t('predict.title')} subtitle={t('predict.subtitle')} />
+      <PredictModeSelector mode={modelMode} onChange={setModelMode} disabled={requestContextLocked} />
 
       {hashRequestedMode === PREDICT_MODEL_MODE_COMPARE && modelMode === PREDICT_MODEL_MODE_COMPARE ? (
         <div className="predict-mode-hint" role="status">
@@ -1214,103 +1325,105 @@ export default function PredictPage() {
         </div>
       ) : null}
 
-      <div style={{ display: 'grid', gridTemplateColumns: isEarthMode ? '1fr' : '300px 1fr', gap: 24 }}>
-        {!isEarthMode ? (
+      {isEarthCompareMode ? <EarthCompareWorkspace key={predictScope} tasks={earthTasks} scope={predictScope}
+        tasksLoading={trainingTasksLoading} tasksError={trainingTasksError} onRetryTasks={loadTrainingTasks}
+        isLight={isLight} precision={precision} isZh={settings?.language !== 'en'}
+        plotTextColor={plotTextColor} plotGridColor={plotGridColor} /> : null}
+      <div className={isEarthCompareMode ? undefined : 'predict-workspace'}>
+        {!isEarthCompareMode ? (
         <PredictSidebar
+          adapter={isEarthMode ? earthAdapter : marsAdapter}
+          originValue={isEarthMode ? earthOrigin : lsStart}
+          onOriginChange={isEarthMode ? handleEarthOriginChange : setLsStart}
+          originDisabled={isEarthMode && !earthContext}
+          originHint={isEarthMode ? (earthOrigin && earthContext && !earthAdapter.origin.selectable(earthOrigin)
+            ? earthCopy.originOutOfRange : earthContext?.origins ? earthCopy.originRange(earthContext.origins.start, earthContext.origins.end, earthContext.origins.count) : earthCopy.originRangeUnknown) : null}
+          onReloadContext={isEarthMode && (earthContext || earthContextError) ? reloadEarthContextAndTasks : undefined}
+          contextLoading={isEarthMode && earthContextLoading}
+          contextError={isEarthMode ? earthContextError : null}
+          deferContext={isEarthMode}
+          runDisabled={isEarthMode && (!earthTaskId || (earthContext && earthOrigin && !earthAdapter.origin.selectable(earthOrigin)))}
           isLight={isLight}
-          loading={modelMode === PREDICT_MODEL_MODE_COMPARE ? compareTrainingLoading : loading}
+          loading={isEarthMode ? (earthLoading || earthContextLoading) : modelMode === PREDICT_MODEL_MODE_COMPARE ? compareTrainingLoading : loading}
           requestContextLocked={requestContextLocked}
-          error={activeError}
-          modelMode={modelMode}
-          setModelMode={setModelMode}
-          trainingModelOptions={trainingModelOptions}
-          selectedTrainingTaskId={selectedTrainingTaskId}
-          setSelectedTrainingTaskId={setSelectedTrainingTaskId}
+          error={isEarthMode ? earthResultError : activeError}
+          modelMode={isEarthMode ? PREDICT_MODEL_MODE_TRAINED : modelMode}
+          trainingModelOptions={isEarthMode ? earthTaskOptions : trainingModelOptions}
+          selectedTrainingTaskId={isEarthMode ? earthTaskId : selectedTrainingTaskId}
+          setSelectedTrainingTaskId={isEarthMode ? handleEarthTaskChange : setSelectedTrainingTaskId}
           selectedCompareTrainingTaskIds={selectedCompareTrainingTaskIds}
           setSelectedCompareTrainingTaskIds={setSelectedCompareTrainingTaskIds}
           trainingTasksLoading={trainingTasksLoading}
-          selectedTrainingOption={selectedTrainingOption}
+           trainingTasksError={trainingTasksError}
+           onRetryTrainingTasks={loadTrainingTasks}
+          selectedTrainingOption={isEarthMode ? selectedEarthTask : selectedTrainingOption}
           analysisVisibility={analysisVisibility}
           lsStart={lsStart}
           setLsStart={setLsStart}
-          predStep={predStep}
+          predStep={isEarthMode ? earthContext?.horizon ?? '' : predStep}
           setPredStep={setPredStep}
-          predictionHorizonLimit={predictionHorizonLimit}
+          predictionHorizonLimit={isEarthMode ? earthContext?.horizon ?? null : predictionHorizonLimit}
           selectedVars={selectedVars}
           toggleVar={toggleVar}
           VARIABLES={VARIABLES}
-          handlePredict={handlePredict}
+          handlePredict={isEarthMode ? handleRunEarthPredict : handlePredict}
           precision={precision}
         />
         ) : null}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* 地球模式：日期起点 + DU 三场 + 指标，不进入火星场图与 Ls 控件 */}
+          {/* Earth only assembles context and adaptation; single-model display is shared. */}
           {isEarthMode ? (
             <>
               {earthTaskOptions.length === 0 ? (
                 <div className="predict-mode-hint" role="status" data-earth-no-task-hint="true">
-                  {t('predict.earthNoCompletedTask')}
+                  {trainingTasksError
+                    ? (settings?.language === 'en' ? 'Training models could not be loaded. Retry to try again.' : '训练任务加载失败，请重试。')
+                    : t('predict.earthNoCompletedTask')}
                 </div>
               ) : null}
               <EarthPredictPanel
+                key={`${predictScope}:earth:${earthTaskId}`}
+                adapter={earthAdapter}
+                identityKey={`${predictScope}:${earthTaskId}:${earthOrigin}:${earthResultKey}`}
+                scope={predictScope}
                 copy={earthCopy}
                 context={earthContext}
-                contextLoading={earthContextLoading}
-                contextError={earthContextError}
                 result={earthResult}
-                resultError={earthResultError}
-                loading={earthLoading}
+                loading={earthLoading || earthContextLoading}
                 origin={earthOrigin}
-                onOriginChange={handleEarthOriginChange}
-                onRun={handleRunEarthPredict}
-                onReloadContext={() => loadEarthContext(earthTaskId)}
                 selectedDay={earthDay}
                 onSelectDay={setEarthDay}
                 taskOptions={earthTaskOptions}
-                selectedTaskId={earthTaskId}
-                onSelectTask={handleEarthTaskChange}
+                selectedTaskId={earthContext ? earthTaskId : null}
+                modelsLoading={trainingTasksLoading}
+                modelsError={trainingTasksError}
+                onRetryModels={loadTrainingTasks}
               />
             </>
           ) : null}
 
           {analysisVisibility.predictionFields ? (
-          <PredictDisplay
-            viewMode={viewMode}
-            setViewMode={setViewMode}
-            VIEW_MODES={VIEW_MODES}
-            results={activeResults}
-            activeHorizon={activeHorizon}
-            setActiveHorizon={setActiveHorizon}
-            loading={loading}
-            truthField={truthField}
-            predField={predField}
-            residField={residField}
-            stepLs={stepLs}
-            stepLabel={stepLabel}
-            setFullscreen3D={setFullscreen3D}
-            TRIPTYCH_PANELS={TRIPTYCH_PANELS}
-          />
-          ) : null}
-
-          {analysisVisibility.metrics ? (
-          <PredictMetrics
-            loading={metricsLoading}
-            metrics={activeMetrics}
-            precision={precision}
-            ozoneUnit={ozoneUnit}
-            modelMode={modelMode}
-          />
-          ) : null}
+          <SingleModelWorkbench key={`${predictScope}:mars:${selectedTrainingTaskId}`}
+            adapter={marsAdapter} result={activeResults} metrics={activeMetrics} metricsLoading={metricsLoading}
+            hasAvailableModels={trainingModelOptions.length > 0} modelsLoading={trainingTasksLoading}
+            modelsError={trainingTasksError} onRetryModels={loadTrainingTasks}
+            viewMode={viewMode} setViewMode={setViewMode}
+            fullscreen={fullscreen3D} onFullscreenChange={setFullscreen3D}
+            loading={loading} activeStep={activeHorizon} onStepChange={setActiveHorizon}
+            identityKey={currentPageRequestContextKey}>
 
           {analysisVisibility.errorDistribution ? (
             <ErrorDistributionChart
+              predictionResult={activeResults}
+              step={step}
               data={activeErrorDistData}
               loading={errorDistLoading}
               isLight={isLight}
               plotTextColor={plotTextColor}
               plotText60={plotText60}
               plotGridColor={plotGridColor}
+              presentation={marsAdapter.presentation.distribution}
             />
           ) : null}
 
@@ -1321,7 +1434,10 @@ export default function PredictPage() {
               plotTextColor={plotTextColor}
               plotText60={plotText60}
               plotGridColor={plotGridColor}
+              presentation={marsAdapter.presentation.pfi}
             />
+          ) : null}
+          </SingleModelWorkbench>
           ) : null}
 
           {analysisVisibility.compareSummary ? (
@@ -1343,16 +1459,6 @@ export default function PredictPage() {
           ) : null}
         </div>
       </div>
-
-      <PredictFullscreenHUD
-        fullscreen3D={fullscreen3D}
-        setFullscreen3D={setFullscreen3D}
-        truthField={truthField}
-        stepLs={stepLs}
-        step={activeHorizon}
-        precision={precision}
-        ozoneUnit={ozoneUnit}
-      />
 
     </div>
   );

@@ -18,13 +18,22 @@ from schemas.earth_predict import (
     EarthPredictContextResponse,
     EarthPredictRequest,
     EarthPredictResponse,
+    EarthCompareRequest,
 )
-from services.dataset_identity import DatasetRequestError
+from schemas.earth_diagnostics import EarthDiagnosticsRequest
+from services.inference_compute import run_inference_compute
+from services.dataset_identity import (
+    DatasetRequestError, require_active_dataset, training_task_dataset_id,
+)
 from services.earth_dataset_metadata import EarthPackageError
 from services.earth_prediction_service import (
     build_prediction_context,
     run_earth_prediction,
+    compare_earth_test_metrics,
+    _load_checkpoint,
+    _require_completed_earth_task,
 )
+from services.research_export_sources import ArtifactGuardError, task_guard, register_earth
 
 logger = logging.getLogger("aresvision.earth.predict")
 
@@ -44,6 +53,14 @@ def _error_response(exc: Exception) -> HTTPException:
                 "code": "dataset_unavailable",
                 "message": "The registered Earth dataset is not available",
                 "availability_reason": exc.reason,
+            },
+        )
+    if isinstance(exc, ArtifactGuardError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "invalid_earth_training_artifact",
+                "message": "The Earth model artifact is unavailable",
             },
         )
     raise exc
@@ -69,6 +86,63 @@ def _registry(request: Request):
     if registry is None:
         raise HTTPException(status_code=500, detail="dataset registry unavailable")
     return registry
+
+
+@router.get("/diagnostics/context")
+async def get_earth_diagnostics_context(
+    request: Request, training_task_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    task = await _load_task(request, training_task_id, current_user)
+    try:
+        context = await asyncio.to_thread(build_prediction_context, task, _registry(request))
+        test_range = (context.metrics.get("split_ranges") or {}).get("test")
+        return {"available": True, "planet": "earth", "task_id": task.id,
+                "target_unit": "DU", "window": context.window, "horizon": context.horizon,
+                "test_range": test_range, "input_channel_order": context.input_channel_order,
+                "defaults": EarthDiagnosticsRequest(training_task_id=task.id).model_dump(exclude={"training_task_id"})}
+    except (DatasetRequestError, EarthPackageError) as exc:
+        raise _error_response(exc) from exc
+
+
+async def diagnostics_for_task(request: Request, task, payload: EarthDiagnosticsRequest, current_user: User):
+    """Shared by the Earth page and the legacy task action=test entry."""
+    from services.earth_diagnostics import compute_earth_diagnostics
+    try:
+        require_active_dataset(training_task_dataset_id(task))
+        from services.earth_prediction_service import _require_completed_earth_task
+        _require_completed_earth_task(task)
+        guard = task_guard(task)
+        parameters = payload.model_dump(exclude={"training_task_id"})
+        async def compute():
+            current_task = await _load_task(request, task.id, current_user)
+            if guard != task_guard(current_task):
+                raise DatasetRequestError("invalid_earth_training_artifact", "Task changed while diagnostics were queued", status_code=409)
+            return await asyncio.to_thread(compute_earth_diagnostics, current_task, _registry(request), **parameters)
+
+        result = await run_inference_compute(compute)
+        current_task = await _load_task(request, task.id, current_user)
+        if guard != task_guard(current_task):
+            raise DatasetRequestError("invalid_earth_training_artifact", "Model changed during diagnostics", status_code=409)
+        return result
+    except (DatasetRequestError, EarthPackageError) as exc:
+        raise _error_response(exc) from exc
+    except OSError as exc:
+        raise HTTPException(409, detail={"code": "invalid_earth_training_artifact", "message": "Model artifact is unavailable"}) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Earth diagnostics failed: task_id=%s", task.id)
+        raise HTTPException(500, detail={"code": "earth_diagnostics_failed", "message": f"Earth diagnostics failed: {exc}"}) from exc
+
+
+@router.post("/diagnostics")
+async def run_earth_diagnostics(
+    request: Request, payload: EarthDiagnosticsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    task = await _load_task(request, payload.training_task_id, current_user)
+    return await diagnostics_for_task(request, task, payload, current_user)
 
 
 @router.get("/context", response_model=EarthPredictContextResponse)
@@ -115,20 +189,60 @@ async def get_earth_predict_context(
     }
 
 
+@router.post("/training-models/compare")
+async def compare_earth_models(request: Request, payload: EarthCompareRequest,
+                               current_user: User = Depends(get_current_user)):
+    if any(task_id <= 0 for task_id in payload.task_ids) or len(set(payload.task_ids)) != len(payload.task_ids):
+        raise HTTPException(422, detail={"code": "invalid_earth_comparison", "message": "Select distinct positive task IDs"})
+    tasks = [await _load_task(request, task_id, current_user) for task_id in payload.task_ids]
+    try:
+        from services.research_export_sources import register_earth_metrics
+        for task in tasks:
+            require_active_dataset(training_task_dataset_id(task))
+        guards = [task_guard(task) if task.output_model_path else None for task in tasks]
+        result = await asyncio.to_thread(compare_earth_test_metrics, tasks, _registry(request))
+        for task, guard, item in zip(tasks, guards, result["items"]):
+            if task_guard(task) != guard:
+                raise DatasetRequestError("invalid_earth_training_artifact", "Model changed during comparison", status_code=409)
+            item["metrics"] = register_earth_metrics(item, task, current_user.id)
+        return result
+    except (DatasetRequestError, EarthPackageError) as exc:
+        raise _error_response(exc) from exc
+    except ArtifactGuardError as exc:
+        raise HTTPException(409, detail={"code": "invalid_earth_training_artifact", "message": "Model artifact is unavailable"}) from exc
+
+
 @router.post("/run", response_model=EarthPredictResponse)
 async def run_earth_predict(
     request: Request,
     payload: EarthPredictRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Forecast the daily or three-hour leads after a historical origin."""
+    """Forecast three-hour leads after a historical UTC origin."""
     task = await _load_task(request, payload.training_task_id, current_user)
     registry = _registry(request)
     try:
-        result = await asyncio.to_thread(
+        require_active_dataset(training_task_dataset_id(task))
+        _require_completed_earth_task(task)
+        # Validate the artifact before task_guard() so missing, unreadable, or
+        # malformed checkpoints never fall through to the generic 500 branch.
+        _load_checkpoint(task)
+        export_guard = task_guard(task)
+        result = await run_inference_compute(lambda: asyncio.to_thread(
             run_earth_prediction, task, payload.forecast_origin, registry
-        )
+        ))
+        current_task = await _load_task(request, payload.training_task_id, current_user)
+        _require_completed_earth_task(current_task)
+        if task_guard(current_task) != export_guard:
+            raise DatasetRequestError(
+                "invalid_earth_training_artifact",
+                "The model artifact changed during prediction",
+                status_code=409,
+            )
+        result = await asyncio.to_thread(register_earth, result, current_task, current_user.id)
     except (DatasetRequestError, EarthPackageError) as exc:
+        raise _error_response(exc) from exc
+    except ArtifactGuardError as exc:
         raise _error_response(exc) from exc
     except Exception as exc:  # pragma: no cover - surfaced for troubleshooting
         logger.exception(

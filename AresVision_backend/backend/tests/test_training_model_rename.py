@@ -62,7 +62,7 @@ def test_rename_completed_model_trims_name_and_preserves_artifact_path(tmp_path,
     asyncio.run(run())
 
 
-def test_rename_model_rejects_duplicates_and_incomplete_tasks(tmp_path, monkeypatch):
+def test_rename_model_rejects_duplicates_and_unknown_status(tmp_path, monkeypatch):
     async def run():
         engine, sessions = await _create_session_maker(tmp_path)
         monkeypatch.setattr(training_module, "async_session_maker", sessions)
@@ -71,15 +71,34 @@ def test_rename_model_rejects_duplicates_and_incomplete_tasks(tmp_path, monkeypa
             async with sessions() as session:
                 existing = _task("Existing")
                 completed = _task("Target")
-                running = _task("Still running", status="running")
-                session.add_all([existing, completed, running])
+                unknown = _task("Unknown", status="archived")
+                session.add_all([existing, completed, unknown])
                 await session.commit()
 
             service = training_module.TrainingService()
             with pytest.raises(ValueError, match="已被使用"):
                 await service.rename_model(completed.id, " Existing ")
-            with pytest.raises(ValueError, match="已完成"):
-                await service.rename_model(running.id, "New name")
+            with pytest.raises(ValueError, match="不允许"):
+                await service.rename_model(unknown.id, "New name")
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.parametrize("status", ["queued", "pending", "running", "completed", "failed", "cancelled"])
+def test_rename_model_all_user_visible_statuses(tmp_path, monkeypatch, status):
+    async def run():
+        status_dir = tmp_path / status
+        status_dir.mkdir()
+        engine, sessions = await _create_session_maker(status_dir)
+        monkeypatch.setattr(training_module, "async_session_maker", sessions)
+        try:
+            async with sessions() as session:
+                task = _task(f"Before {status}", status=status)
+                session.add(task)
+                await session.commit()
+                task_id = task.id
+            renamed = await training_module.TrainingService().rename_model(task_id, f"After {status}")
+            assert renamed.custom_model_name == f"After {status}"
         finally:
             await engine.dispose()
 

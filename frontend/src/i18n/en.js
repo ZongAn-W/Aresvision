@@ -115,7 +115,7 @@ const en = {
     },
     training: {
       label: 'Training defaults',
-      desc: 'Initial values for new training experiments. Copied experiments keep their original configuration.',
+      desc: 'Defaults update new experiments and untouched draft fields. Manual edits and copied configurations keep their values. Earth supports task windows and split ratios; all partitions must have positive ratios.',
       strategyLabel: 'Training strategy defaults',
       epochs: 'Epochs',
       batchSize: 'Batch size',
@@ -983,7 +983,7 @@ const en = {
     testSetNote: '* The test set contains MY28 data unseen during training, providing an unbiased evaluation of model generalization.',
     fallbackWarning: 'Note: This prediction uses a fallback model selected automatically due to missing weights.',
     fallbackReason: 'Reason: ',
-    initPrompt: 'Configure parameters and click "Run Prediction" to run PredRNNv2 inference',
+    initPrompt: 'Select a trained model and run a prediction',
     initDesc: "The model follows the selected training task's input and output horizon configuration to\npredict global Mars ozone column concentration from the selected Ls.",
     summary: ({ lsStart, year, horizon, varCount, varNames, rmse, ssim, r2 }) =>
       `<strong>Prediction complete</strong>: Start Ls=${lsStart}°, MY${year}, ${horizon} steps predicted.\n` +
@@ -1048,6 +1048,68 @@ const en = {
       reliability: 'RELIABILITY: 1σ CONFIDENCE COVERAGE',
       emptyDesc: 'Generate a polar spectrum view for the current metric from the selected model combinations.',
     },
+    planetSelection: 'Planet',
+    analysisSelection: 'Analysis',
+    planet: { earth: 'Earth', mars: 'Mars' },
+    analysis: { single: 'Single model', compare: 'Compare models' },
+    earthCompareNote: 'Full test set: MSE (DU²), RMSE/MAE (DU), R² (dimensionless), MAPE/SMAPE (%). Models must share the same release, input/output windows and test windows; missing legacy values are excluded from ranking.',
+    earthComparisonIncompatible: 'Selected models use different dataset releases, test windows or metric policies and cannot be compared.',
+    earthTitle: 'Earth historical forecast (MERRA-2 · TO3 · DU)',
+    earthNote: 'Restores weights from a completed Earth training task, reads the 7 days before the chosen historical forecast origin and returns the next 3 days as prediction, reference and residual fields. The reference comes from the same published release, so only origins with published reference days are offered.',
+    earthThreeHourlyNote: 'Restores a three-hour Earth task and uses its saved input and output windows to produce prediction, reference and residual fields at each UTC step. Configure the windows during training; each step is 3 hours.',
+    earthTaskLabel: 'Earth training task',
+    earthTaskPlaceholder: 'Select a completed Earth task',
+    earthNoCompletedTask: 'No completed three-hourly Earth training task yet. Train a model on the Earth MERRA-2 three-hourly dataset first.',
+    earthDatasetRetired: 'Daily Earth datasets are retired. Previous records and artifacts are retained; train a new model on the three-hourly dataset.',
+    earthOriginLabel: 'Historical forecast origin',
+    earthOriginRangeUnknown: 'The selectable origin range appears after the task loads',
+    earthOriginOutOfRange: 'That origin is outside the current selectable range: the required input steps and published reference steps must all be present.',
+    earthRun: 'Generate forecast',
+    earthRunning: 'Forecasting…',
+    earthReload: 'Reload selectable range',
+    earthLoadingContext: 'Reading the task dataset identity and selectable dates…',
+    earthEmptyReady: 'Ready: pick a forecast origin, then generate the forecast.',
+    earthEmptyNoTask: 'Select a completed Earth training task.',
+    earthFieldEmpty: 'No field to display for this day',
+    earthDayTabsLabel: 'Forecast steps',
+    earthOriginLine: ({ origin, first, last, threeHourly = false, window = 56, horizon = 24 } = {}) => threeHourly
+      ? `Origin ${origin} UTC · input ${first} to ${last} (${window} steps) · output ${horizon} steps (+3h to +${horizon * 3}h)`
+      : `Origin ${origin} · input ${first} to ${last} (7 days) · output the next 3 days`,
+    earthOriginSplit: ({ split } = {}) => `Historical origin split: ${split}`,
+    earthRangeLabel: 'Color range',
+    earthValidCells: 'Valid cells',
+    earthLeadHeader: 'Lead',
+    earthDateHeader: 'Date',
+    earthReferenceNote: 'References use matching UTC timestamps from the same release; residuals are prediction minus reference (DU). This forecast window weights every origin × lead × grid cell equally: MSE in DU², RMSE/MAE in DU, dimensionless R², MAPE/SMAPE in %.',
+    earthResidualUnit: 'DU (prediction − reference)',
+    earthResidualMode: 'Zero centred',
+    earthPhysicalMode: 'Physical field',
+    earthDayUnit: 'days',
+    earthStepUnit: 'steps',
+    earthDailyFrequency: '24h daily',
+    earthFactFrequency: 'Frequency',
+    earthTimestampHeader: 'UTC timestamp',
+    earthDaySuffix: 'd',
+    earthFactDataset: 'Dataset',
+    earthFactModel: 'Model',
+    earthModelOfficial: 'DLinear (official)',
+    earthModelUploadedFallback: 'Uploaded model',
+    earthFactGrid: 'Grid',
+    earthFactWindow: 'Window',
+    earthFactChannels: 'Input channels',
+    earthFactBestEpoch: 'Best epoch',
+    earthFactTestRmse: 'Test RMSE',
+    earthFieldPrediction: 'Prediction',
+    earthFieldReference: 'Reference',
+    earthFieldResidual: 'Residual',
+    earthOriginInvalid: 'The forecast origin is not a valid UTC date or datetime.',
+    earthDatasetChanged: 'The dataset release changed since this task was trained; retrain before predicting.',
+    earthArtifactInvalid: 'The model artifact does not match this task or is damaged, so it cannot be used for prediction.',
+    earthTaskNotCompleted: 'This task has not completed successfully and cannot be predicted yet.',
+    earthNotAnEarthTask: 'The selected task is not an Earth task; pick an Earth training task.',
+    earthDatasetUnavailable: 'The Earth dataset package is unavailable on this server; check data status and retry.',
+    earthPredictionDataUnavailable: 'The selected Earth data slice is unavailable or incomplete; check the release and retry.',
+    earthTrainingProfileUnsupported: 'This Earth training profile is not supported by the prediction page.',
   },
 
   ai: {
@@ -1103,12 +1165,13 @@ const en = {
     subtitle: 'CONFIGURE, RUN, REVIEW',
     eyebrow: 'Atmospheric mission control / 01',
     newExperimentTitle: 'New experiment',
-    intro: 'Organize experiments on the left and work through Configure, Monitor, and Results on the right.',
-    stageConfigure: 'Configure',
-    stageMonitor: 'Monitor',
+    intro: 'Work through experiment setup, training monitoring, and the experiment matrix.',
+    stageConfigure: 'Experiment setup',
+    stageMonitor: 'Training monitor',
     stageResult: 'Results',
     viewLabel: 'Experiment center view',
-    monitorResultsView: 'Monitor / Results',
+    monitorResultsView: 'Training monitor',
+    matrixView: 'Experiment matrix',
     stageNavLabel: 'Experiment center stages',
     directoryTitle: 'Experiment directory',
     directoryCount: ({ count }) => `${count} experiments`,
@@ -1137,6 +1200,9 @@ const en = {
     metricR2: 'R²',
     metricMape: 'MAPE',
     metricSmape: 'SMAPE',
+    fullTestMetrics: 'Full test-set metrics',
+    validationMetrics: 'Validation-set metrics',
+    metricNotProvided: 'Not provided',
     groupIdentity: 'Experiment identity',
     groupModel: 'Model and prediction settings',
     groupTraining: 'Training settings',
@@ -1159,61 +1225,6 @@ const en = {
     copyConfigWarningCustomParams: 'The task custom model parameters are missing; check the uploaded model parameters.',
     copyConfigSuccess: 'Loaded the full training configuration from this experiment. Review it and start manually.',
     compareModeHint: 'Model comparison mode is active. Select at least two completed models.',
-    earthTitle: 'Earth historical forecast (MERRA-2 · TO3 · DU)',
-    earthNote: 'Restores weights from a completed Earth training task, reads the 7 days before the chosen historical forecast origin and returns the next 3 days as prediction, reference and residual fields. The reference comes from the same published release, so only origins with published reference days are offered.',
-    earthThreeHourlyNote: 'Restores a 3-hour Earth task with 56 input steps (7 days) and returns 24 UTC forecast steps (3 days) as prediction, reference and residual fields.',
-    earthTaskLabel: 'Earth training task',
-    earthTaskPlaceholder: 'Select a completed Earth task',
-    earthNoCompletedTask: 'No completed Earth training task yet. Train the official DLinear on earth_merra2_daily_v2 from the training page first.',
-    earthOriginLabel: 'Historical forecast origin',
-    earthOriginRangeUnknown: 'The selectable origin range appears after the task loads',
-    earthOriginOutOfRange: 'That origin is outside the current selectable range: the required input steps and published reference steps must all be present.',
-    earthRun: 'Generate 3-day forecast',
-    earthRunning: 'Forecasting…',
-    earthReload: 'Reload selectable range',
-    earthLoadingContext: 'Reading the task dataset identity and selectable dates…',
-    earthEmptyReady: 'Ready: pick a forecast origin, then generate the 3-day forecast.',
-    earthEmptyNoTask: 'Select a completed Earth training task.',
-    earthFieldEmpty: 'No field to display for this day',
-    earthDayTabsLabel: 'Next three days',
-    earthOriginLine: ({ origin, first, last, threeHourly = false } = {}) => threeHourly
-      ? `Origin ${origin} UTC · input ${first} to ${last} (56 steps) · output 24 steps (+3h to +72h)`
-      : `Origin ${origin} · input ${first} to ${last} (7 days) · output the next 3 days`,
-    earthOriginSplit: ({ split } = {}) => `Historical origin split: ${split}`,
-    earthRangeLabel: 'Color range',
-    earthValidCells: 'Valid cells',
-    earthLeadHeader: 'Lead',
-    earthDateHeader: 'Date',
-    earthReferenceNote: 'The reference field comes from the same published release for the matching dates or UTC timestamps; the residual is prediction minus reference. Metrics aggregate every origin × lead × grid cell equally inside this forecast window, in DU.',
-    earthResidualUnit: 'DU (prediction − reference)',
-    earthResidualMode: 'Zero centred',
-    earthPhysicalMode: 'Physical field',
-    earthDayUnit: 'days',
-    earthStepUnit: 'steps',
-    earthDailyFrequency: '24h daily',
-    earthFactFrequency: 'Frequency',
-    earthTimestampHeader: 'UTC timestamp',
-    earthDaySuffix: 'd',
-    earthFactDataset: 'Dataset',
-    earthFactModel: 'Model',
-    earthModelOfficial: 'DLinear (official)',
-    earthModelUploadedFallback: 'Uploaded model',
-    earthFactGrid: 'Grid',
-    earthFactWindow: 'Window',
-    earthFactChannels: 'Input channels',
-    earthFactBestEpoch: 'Best epoch',
-    earthFactTestRmse: 'Test RMSE',
-    earthFieldPrediction: 'Prediction',
-    earthFieldReference: 'Reference',
-    earthFieldResidual: 'Residual',
-    earthOriginInvalid: 'The forecast origin is not a valid UTC date or datetime.',
-    earthDatasetChanged: 'The dataset release changed since this task was trained; retrain before predicting.',
-    earthArtifactInvalid: 'The model artifact does not match this task or is damaged, so it cannot be used for prediction.',
-    earthTaskNotCompleted: 'This task has not completed successfully and cannot be predicted yet.',
-    earthNotAnEarthTask: 'The selected task is not an Earth task; pick an Earth training task.',
-    earthDatasetUnavailable: 'The Earth dataset package is unavailable on this server; check data status and retry.',
-    earthPredictionDataUnavailable: 'The selected Earth data slice is unavailable or incomplete; check the release and retry.',
-    earthTrainingProfileUnsupported: 'This Earth training profile is not supported by the prediction page.',
   },
 
   modelTraining: {
@@ -1273,7 +1284,7 @@ const en = {
     earlyStopNote: '0 = disabled; recommended: 5–20',
     layer: 'Layer',
     confirmDelete: 'Confirm Delete',
-    confirmDeleteMsg: ({ id }) => `Are you sure you want to delete training task #${id} and all related logs and model files? This action cannot be undone.`,
+    confirmDeleteMsg: ({ id }) => `Delete experiment record #${id} and its related logs, model weights and prediction analysis caches? This action cannot be undone.`,
     deleting: 'Deleting...',
     cancel: 'Cancel',
     nameRequired: 'Model name cannot be empty',
@@ -1375,29 +1386,135 @@ const en = {
     title: 'About',
     subtitle: 'ABOUT ASTRAATMOS',
     description:
-      'AstraAtmos is a planetary atmosphere platform for data analysis, model training, and spatiotemporal prediction experiments. ' +
-      'It currently supports Mars ozone training and prediction, alongside Earth MERRA-2 data analysis. Earth training and prediction are not yet available; more planets and prediction targets are planned.',
-    techCats: {
-      frontend: 'Frontend',
-      backend:  'Backend',
-      model:    'Model',
-      data:     'Data',
+      'AstraAtmos brings planetary-atmosphere data management, model training, spatiotemporal prediction, ' +
+      'model comparison and 3D visualization into one web platform. It started from Mars ozone research ' +
+      'and now runs both Mars and Earth experiment tracks.',
+    missionTitle: 'What this platform is',
+    missionBody:
+      'AstraAtmos does not replace any reanalysis or climate-model data source. It turns "read the data, train a model, ' +
+      'check the forecast, compare models" into one auditable path. Every prediction comes from a task you trained and ' +
+      'whose weights were saved; the platform never reports results from a pre-trained baseline. Data identity, training ' +
+      'configuration and evaluation conventions are frozen with each task so any result can be traced back.',
+    planets: {
+      label: 'Current coverage',
+      marsTitle: 'Mars atmosphere',
+      marsBody:
+        'OpenMARS reanalysis ozone and MCD 6.1 climate simulation form the Mars data base, explored on a 3D globe along ' +
+        'the Ls solar-longitude axis, with ozone as the target and wind, temperature, dust and radiation as optional inputs.',
+      marsMeta: '36 × 72 grid · Ls time axis',
+      earthTitle: 'Earth atmosphere',
+      earthBody:
+        'MERRA-2 3-hourly global data supports the Earth overview, training of the official DLinear and of independent-contract ' +
+        'uploaded models, and historical backtesting of the following 72 hours from a UTC origin.',
+      earthMeta: '240 × 480 (0.75°) · UTC 3-hourly',
+      futureTitle: 'Planned extensions',
+      futureBody:
+        'More planets, more forecast variables and longer lead times remain on the roadmap. The retired daily Earth datasets ' +
+        'keep only historical records and are no longer used for any run.',
+      futureMeta: 'Planned',
     },
+    caps: {
+      label: 'Capabilities',
+      dataTitle: 'Data management',
+      dataBody:
+        'Reads OpenMARS, MCD, MERRA-2 and MOLA topography in one place; supports .nc/.nc4/.netcdf upload with field and unit ' +
+        'validation, contribution review, and a clear split between server-managed datasets and personal uploads.',
+      trainTitle: 'Model training',
+      trainBody:
+        '29 built-in spatiotemporal and time-series architectures plus custom PyTorch models behind an independent contract. ' +
+        'Configure input/output windows, meteorological channels, hyperparameters and task-level splits, with live progress, ' +
+        'loss curves and logs.',
+      predictTitle: 'Prediction and backtesting',
+      predictBody:
+        'Mars predicts from an Ls origin, Earth backtests from a UTC origin. Reference, prediction and residual fields are shown ' +
+        'side by side with per-step metrics, on a sphere for Mars and a map for Earth.',
+      compareTitle: 'Comparison and diagnostics',
+      compareBody:
+        'Ranks multiple models under one test convention with per-lead curves; error distribution, scatter, residual histogram and ' +
+        'permutation importance (PFI) explain behaviour, each planet keeping its own metrics and units.',
+      vizTitle: '3D visualization',
+      vizBody:
+        'Mars and Earth share the observatory shell: 3D globe and 2D map switching, Ls/UTC timeline playback, point probing, ' +
+        'contour / anomaly / wind-vector / terminator layers, and a thematic analysis board.',
+      exportTitle: 'Research figure export',
+      exportBody:
+        'Current-step triples, scatter, multi-model per-lead curves and PFI export to PDF, SVG and 300/600 DPI PNG, with a .mat ' +
+        'data file and a MATLAB rebuild script. Export only redraws existing results and never re-runs inference.',
+    },
+    workflowTitle: 'Experiment workflow',
+    workflowSteps: [
+      { title: 'Prepare data', body: 'Attach a server dataset or upload your own NetCDF and confirm variables and units.' },
+      { title: 'Configure', body: 'Pick model source (uploaded or official), dataset, channels, windows and split ratios.' },
+      { title: 'Train', body: 'The training subprocess is queued while progress, loss and logs stream to the page.' },
+      { title: 'Evaluate', body: 'Read full-test metrics, compare several models and inspect diagnostic charts.' },
+      { title: 'Visualize', body: 'Revisit the predicted fields in the 3D workbench and export reproducible figures.' },
+    ],
+    step: ({ n, title }) => `0${n} · ${title}`,
+    sourcesTitle: 'Data resources',
     openmarsTitle: 'OpenMARS Reanalysis Data',
     openmarsContent:
       'Variable: o3col (ozone column, μm-atm)\n' +
       'Dimensions: Ls × lat(36) × lon(72) × lev(35)\n' +
-      'Coverage: MY27 full year (Ls 2°–360°)\n' +
-      'Resolution: 5° lat/lon grid',
+      'Grid: 5° latitude/longitude, aligned on the Ls axis\n' +
+      'Reading: source files carry a level axis; the platform averages over levels and uses the 3D field\n' +
+      'Used for: 3D ozone overview, Mars ozone prediction target',
     mcdTitle: 'MCD 6.1 Climate Simulation Data',
     mcdContent:
-      'Variables: U/V Wind, Pressure, Temperature, DOD, Solar Flux\n' +
-      'Dimensions: sol(669) × hour(8) × lat(36) × lon(72)\n' +
-      'Coverage: MY27 full (5352 time steps)\n' +
-      'Alignment: Ls-interpolated to OpenMARS grid',
-    teamRoles: ['Full-Stack Dev', 'Data Science', 'UI/UX', 'Model Training'],
-    member: ({ n }) => `Member ${n}`,
-    competition: 'National College Computer Application Ability Competition — Big Data Track',
+      'Variables: U/V wind, temperature, dust optical depth, downward solar flux (source also carries pressure)\n' +
+      'Grid: lat(36) × lon(72), organized by Ls and local time\n' +
+      'Reading: the overview dataset uses a daily-aggregated series; runtime exposes wind, temperature and flux\n' +
+      'Used for: Mars observation overview and training inputs (the D channel is training-only)',
+    earthTitle: 'MERRA-2 3-hourly Data',
+    earthContent:
+      'Variables: TO3 (ozone column, DU), U10M, V10M, T2M, SWGDN\n' +
+      'Grid: 240 × 480 global, conserved-area regridded at 0.75°\n' +
+      'Coverage: all 5,848 UTC 3-hourly steps of 2020–2021\n' +
+      'Used for: Earth overview, training and backtesting (only active Earth dataset)',
+    othersTitle: 'Other resources',
+    othersContent:
+      'NOMAD gridded observations (ozone overlay and observation counts)\n' +
+      'MOLA topography (Mars globe terrain reference)\n' +
+      'Uploaded NetCDF files (overview sources, not training data)',
+    modelsTitle: 'Model ecosystem',
+    modelsLead:
+      'Official and uploaded models share one training, evaluation and prediction pipeline; the platform owns data loading, ' +
+      'the training loop, evaluation and weight saving.',
+    modelsOfficialTitle: 'Official models',
+    modelsUploadedTitle: 'Uploaded models',
+    modelsOfficial:
+      '29 built-in architectures: PredRNNv2, PredRNN++, ConvLSTM, SimVP, DLinear, Informer, Autoformer, PatchTST, TimeMixer, ' +
+      'TimeXer, TSMixer, Crossformer, Earthformer, ETSformer, FEDformer, iTransformer, MAU, N-BEATS, N-HiTS, Pyraformer, ' +
+      'RNN-CNN-RNN, CNN-RNN-CNN-RNN-CNN, plus experimental variants such as SimVP-3DConv, SimVP-Hybrid3D, ConvLSTM-MST, ' +
+      'DLinear-MST, ConvLSTM-PhaseGated-MST, ConvLSTM-MST-Feature and ConvLSTM-Climatology-Anomaly.',
+    modelsUploaded:
+      'Uploaded models: declare MODEL_SPEC and build_model and the platform runs your code after an isolated dry-run on upload ' +
+      'and on manual re-validation. Earth tiled v1 (24×48) and full-grid v2 (240×480) use separate contracts; unknown or failed ' +
+      'models cannot create a task.',
+    techLabel: 'TECHNOLOGY STACK',
+    techCats: {
+      frontend: 'Frontend',
+      backend:  'Backend',
+      model:    'Model & training',
+      data:     'Data & storage',
+    },
+    techDesc: {
+      frontend: 'Single-page app, 3D globe and gesture control; charts render through Plotly.',
+      backend: 'Async API, account authentication and the external AI client.',
+      model: 'PyTorch for training and inference; scikit-learn for metrics, matplotlib for figure export.',
+      data: 'NetCDF scientific data access plus local persistence.',
+    },
+    boundariesTitle: 'Boundaries and naming',
+    boundaryItems: [
+      'A successful upload only means the file can drive the overview, not that it joined a training set; training and prediction always use server-managed datasets.',
+      'Prediction only runs trained models. There is no "skip training" pre-trained baseline, and a result without a training task is rejected.',
+      'Earth uses the 3-hourly dataset only; retired daily data returns dataset_retired. Future extrapolation without reference truth and mixed Earth/Mars comparison are not open.',
+      'Earth diagnostic charts have no research export yet, and the MATLAB rebuild script is an editable entry point that has not been pixel-verified across versions.',
+      'The platform promises no prediction accuracy, RAG knowledge base, live satellite feed or VR capability; real results depend on data quality, training configuration and model weights.',
+      '"MCD 6.1" follows the project\'s existing version label; neither the code nor the data manifests record that version, and Mars source data is marked only by Mars year (MY).',
+      'AresVision (智绘赤星) is the original product name; directories, repository URL, start scripts, environment variables and storage keys keep it for compatibility, and renaming needs no data migration.',
+    ],
+    footerNote:
+      'This page describes what is implemented today; planned or closed areas are marked as such in the list above.',
   },
 
   auth: {

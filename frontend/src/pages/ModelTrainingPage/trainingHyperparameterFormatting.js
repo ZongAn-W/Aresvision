@@ -14,6 +14,10 @@ export function getTrainingParameterLabel(key, t) {
 
 export function buildTrainingHistoryParameters(hyperparameters = {}) {
   const visible = getVisibleTrainingHyperparameters(hyperparameters);
+  if (hyperparameters._earth_task_split) {
+    const split = hyperparameters._earth_task_split;
+    visible.push(['task_split', { policy: split.policy, ...split.ranges }]);
+  }
   const summaryKeys = ['window', 'horizon', 'epochs', 'batch_size', 'learning_rate'];
   const summary = summaryKeys.flatMap(key => {
     const entry = visible.find(([name, value]) => name === key && value != null && typeof value !== 'object');

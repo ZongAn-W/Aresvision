@@ -6,6 +6,8 @@
  * 预测页区分「日期越界」「数据集指纹变化」「权重损坏」「无权限」。
  */
 
+import { handleUnauthorizedResponse } from '../stores/authPredictionSession.js';
+
 const BASE = '/api';
 const EARTH_PREDICT_PATH = `${BASE}/earth/predict`;
 
@@ -67,7 +69,10 @@ async function request(path, { method = 'GET', body, signal } = {}) {
     if (error?.name === 'AbortError') throw error;
     throw new EarthPredictApiError('Network request failed', { code: 'network_error' });
   }
-  if (!response.ok) throw await readError(response);
+  if (!response.ok) {
+    handleUnauthorizedResponse(response);
+    throw await readError(response);
+  }
   try {
     return await response.json();
   } catch {
@@ -88,5 +93,23 @@ export function runEarthPrediction({ trainingTaskId, forecastOrigin }, { signal 
     method: 'POST',
     body: { training_task_id: trainingTaskId, forecast_origin: forecastOrigin },
     signal,
+  });
+}
+
+export function compareEarthModels(taskIds, { signal } = {}) {
+  return request(`${EARTH_PREDICT_PATH}/training-models/compare`, {
+    method: 'POST', body: { task_ids: taskIds }, signal,
+  });
+}
+
+/** Every request reaches the server so cached diagnostics still recheck artifact/data identity. */
+export function fetchEarthDiagnosticContext(trainingTaskId, { signal } = {}) {
+  const params = new URLSearchParams({ training_task_id: String(trainingTaskId) });
+  return request(`${EARTH_PREDICT_PATH}/diagnostics/context?${params.toString()}`, { signal });
+}
+
+export function runEarthDiagnostics(parameters, { signal } = {}) {
+  return request(`${EARTH_PREDICT_PATH}/diagnostics`, {
+    method: 'POST', body: parameters, signal,
   });
 }

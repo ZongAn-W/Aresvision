@@ -10,22 +10,13 @@
  */
 
 import React from 'react';
-import C from '../../../constants/colors';
+import { SegmentedControl } from '../../../components/ui/Controls';
 import { useOverviewLayout } from './OverviewShell.jsx';
 
 export function ToolbarSection({ label, children }) {
   return (
     <div className="observatory-toolbar__section" data-toolbar-section={label}>
-      <span
-        style={{
-          color: C.ice50,
-          fontSize: 'calc(10px * var(--font-scale, 1))',
-          fontWeight: 700,
-          letterSpacing: '0.06em',
-          textTransform: 'uppercase',
-          whiteSpace: 'nowrap',
-        }}
-      >
+      <span className="observatory-toolbar__label">
         {label}
       </span>
       {children}
@@ -35,22 +26,15 @@ export function ToolbarSection({ label, children }) {
 
 /** 工具栏内的原生下拉；与左栏旧控件保持同样的可访问语义。 */
 export function ToolbarSelect({ label, value, onChange, options, disabled = false, isLight = false, title = null }) {
-  const optionBg = isLight ? '#ffffff' : '#111827';
-  const optionColor = isLight ? '#17212f' : '#f5f7fb';
+  const selectedOption = options.find((option) => String(option.value) === String(value));
+  const selectedTitle = selectedOption?.detail || selectedOption?.label || title || label;
   return (
     <label
-      title={title || label || undefined}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 0 }}
+      className={`observatory-toolbar__select${disabled ? ' is-disabled' : ''}`}
+      title={selectedTitle || undefined}
     >
       {label ? (
-        <span
-          style={{
-            color: C.ice50,
-            fontSize: 'calc(10px * var(--font-scale, 1))',
-            fontWeight: 700,
-            whiteSpace: 'nowrap',
-          }}
-        >
+        <span className="observatory-toolbar__label">
           {label}
         </span>
       ) : null}
@@ -59,27 +43,13 @@ export function ToolbarSelect({ label, value, onChange, options, disabled = fals
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
         aria-label={title || label}
-        style={{
-          minWidth: 0,
-          maxWidth: 190,
-          padding: '7px 10px',
-          borderRadius: 'var(--overview-control-radius)',
-          border: `1px solid ${C.borderStrong}`,
-          background: isLight ? 'rgba(255,255,255,0.94)' : C.bgCardStrong,
-          color: C.ice,
-          fontSize: 'calc(12px * var(--font-scale, 1))',
-          fontWeight: 600,
-          outline: 'none',
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.7 : 1,
-        }}
+        title={selectedTitle || undefined}
       >
         {options.map((option) => (
           <option
             key={option.value}
             value={option.value}
             title={option.detail || option.label}
-            style={{ color: optionColor, background: optionBg }}
           >
             {option.label}
           </option>
@@ -90,29 +60,15 @@ export function ToolbarSelect({ label, value, onChange, options, disabled = fals
 }
 
 /** 画布工具入口：点击打开对应设置面板；面板打开时给按钮 aria-expanded。 */
-export function ToolbarToolButton({ label, hint = null, active = false, onClick, buttonRef = null }) {
+export function ToolbarToolButton({ label, hint = null, active = false, primary = false, onClick, buttonRef = null }) {
   return (
     <button
       type="button"
+      className={`observatory-toolbar__tool${primary ? ' observatory-toolbar__tool--primary' : ''}${active ? ' is-active' : ''}`}
       ref={buttonRef}
       onClick={onClick}
       aria-expanded={active}
       title={hint || label}
-      style={{
-        minHeight: 36,
-        minWidth: 44,
-        padding: '7px 12px',
-        borderRadius: 'var(--overview-control-radius)',
-        border: `1px solid ${active ? 'var(--overview-accent)' : 'var(--border)'}`,
-        background: active ? 'var(--overview-accent-soft)' : 'transparent',
-        color: active ? 'var(--overview-accent)' : C.ice80,
-        fontFamily: 'var(--font-body)',
-        fontSize: 'calc(12px * var(--font-scale, 1))',
-        fontWeight: active ? 700 : 600,
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
-        transition: 'background 150ms ease, border-color 150ms ease, color 150ms ease',
-      }}
     >
       {label}
     </button>
@@ -127,50 +83,12 @@ export function ToolbarToolButton({ label, hint = null, active = false, onClick,
  */
 export function ObservatoryViewSwitch({ view, onChange, isZh }) {
   const options = [
-    { id: 'observe', label: isZh ? '观测' : 'Observe' },
-    { id: 'analyze', label: isZh ? '分析' : 'Analyze' },
+    { value: 'observe', label: isZh ? '观测' : 'Observe' },
+    { value: 'analyze', label: isZh ? '分析' : 'Analyze' },
   ];
   return (
-    <div
-      role="group"
-      aria-label={isZh ? '观测台档位' : 'Observatory view'}
-      style={{
-        display: 'inline-flex',
-        gap: 4,
-        padding: 3,
-        borderRadius: 'var(--overview-control-radius)',
-        border: '1px solid var(--border)',
-        background: 'var(--overview-elevated)',
-      }}
-    >
-      {options.map((option) => {
-        const active = view === option.id;
-        return (
-          <button
-            key={option.id}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onChange?.(option.id)}
-            style={{
-              minHeight: 32,
-              minWidth: 52,
-              padding: '6px 12px',
-              borderRadius: 6,
-              border: 'none',
-              background: active ? 'var(--overview-accent-soft)' : 'transparent',
-              color: active ? 'var(--overview-accent)' : C.ice60,
-              fontFamily: 'var(--font-body)',
-              fontSize: 'calc(12px * var(--font-scale, 1))',
-              fontWeight: active ? 800 : 600,
-              cursor: 'pointer',
-              transition: 'background 150ms ease, color 150ms ease',
-            }}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
+    <SegmentedControl label={isZh ? '观测台档位' : 'Observatory view'} value={view}
+      options={options} onChange={next => onChange?.(next)} />
   );
 }
 
@@ -179,37 +97,15 @@ export function ToolbarStatus({ items = [] }) {
   const rows = items.filter((item) => item && item.value);
   if (!rows.length) return null;
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        minWidth: 0,
-        overflow: 'hidden',
-        flexShrink: 0,
-      }}
-    >
+    <div className="observatory-toolbar__status">
       {rows.slice(0, 3).map((item) => (
         <span
           key={item.label}
+          className="observatory-toolbar__status-item"
           title={`${item.label}: ${item.value}`}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'baseline',
-            gap: 5,
-            padding: '4px 9px',
-            borderRadius: 999,
-            border: `1px solid ${C.border}`,
-            color: item.color || C.ice70,
-            fontSize: 'calc(11px * var(--font-scale, 1))',
-            fontWeight: 700,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            maxWidth: 180,
-          }}
+          style={item.color ? { color: item.color } : undefined}
         >
-          <span style={{ color: C.ice40, fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 600 }}>
+          <span className="observatory-toolbar__label">
             {item.label}
           </span>
           {item.value}
@@ -229,26 +125,10 @@ export function AnalysisEntryButton({ label, onClick }) {
   return (
     <button
       type="button"
+      className="observatory-analysis-entry"
       aria-label={label}
       title={label}
       onClick={onClick}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        minHeight: 36,
-        padding: '7px 14px',
-        borderRadius: 'var(--overview-control-radius)',
-        border: '1px solid var(--overview-accent)',
-        background: 'var(--overview-accent-soft)',
-        color: 'var(--overview-accent)',
-        fontFamily: 'var(--font-body)',
-        fontSize: 'calc(12px * var(--font-scale, 1))',
-        fontWeight: 700,
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
-        flexShrink: 0,
-      }}
     >
       {label}
     </button>
@@ -285,6 +165,7 @@ export default function ObservatoryToolbar({
       {planetSlot}
 
       <div
+        className="observatory-toolbar__conditions"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -292,7 +173,6 @@ export default function ObservatoryToolbar({
           flexWrap: flow ? 'wrap' : 'nowrap',
           flex: '1 1 auto',
           minWidth: 0,
-          overflow: 'hidden',
         }}
       >
         {sourceSlot}
@@ -302,7 +182,7 @@ export default function ObservatoryToolbar({
 
       {statusSlot}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+      <div className="observatory-toolbar__tools">
         {toolsSlot}
       </div>
 

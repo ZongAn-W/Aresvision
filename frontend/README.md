@@ -1,6 +1,6 @@
 
 
-# AresVision 智绘赤星 — 前端本地运行指南
+# AstraAtmos 行星大气实验室 — 前端本地运行指南
 
 ---
 
@@ -85,7 +85,7 @@ AresVision/
 │       └── core/                ← ML 核心模块
 │
 └── frontend/                    ← React 前端
-    ├── index.html               ← HTML 入口（Google Fonts: Orbitron + Exo 2）
+    ├── index.html               ← HTML 入口（系统字体 fallback，无远程字体请求）
     ├── package.json             ← 依赖声明
     ├── vite.config.js           ← Vite 配置（/api/* → localhost:8000 代理）
     └── src/
@@ -117,7 +117,7 @@ AresVision/
         │   ├── Navbar.jsx            ← 导航栏（用户头像下拉/通知铃铛/管理员入口）
         │   ├── SettingsFab.jsx       ← 左下角浮动按钮（语言/主题/Colormap 快捷切换）
         │   ├── SettingsPanel.jsx     ← 右侧完整设置抽屉
-        │   ├── AuthModal.jsx         ← 登录/注册/找回密码（createPortal）
+        │   ├── AuthModal.jsx         ← 登录/注册/找回密码（根节点挂载，共享弹窗焦点）
         │   ├── NotificationPanel.jsx ← 站内通知抽屉
         │   ├── AdminReviewPanel.jsx  ← 管理员 NC 文件审核抽屉
         │   ├── FeedbackManagePanel.jsx ← 管理员反馈管理抽屉
@@ -126,6 +126,7 @@ AresVision/
         │   ├── ContributeHistoryPanel.jsx ← 贡献记录抽屉
         │   ├── ChangePasswordModal.jsx ← 修改密码（createPortal）
         │   ├── ConfirmDialog.jsx     ← 通用确认对话框（createPortal）
+        │   ├── ui/                   ← Button / Panel / Input / Badge / SegmentedControl、弹窗焦点与共享样式
         │   ├── Toast.jsx             ← Toast 通知条（createPortal）
         │   ├── StarField.jsx         ← 星空粒子背景
         │   ├── GlowCard.jsx          ← 发光卡片
@@ -147,6 +148,20 @@ AresVision/
 
 ---
 
+## 界面样式与可访问性
+
+`src/index.css` 统一维护 `--surface-*`、`--text-*`、品牌/状态色、三级边框、圆角、控件高度和字号令牌。深浅主题共用这些语义，旧 `--bg-*` / `--border-*` 为兼容别名。字号通过 `--font-scale` 保留设置缩放；正文优先使用 Noto Sans SC / Inter，展示字体使用 Sora，当前未打包字体文件，实际由系统无衬线 fallback 渲染，不请求 Google Fonts。
+
+首页保留地球、星空与轨道；深色模式的训练和预测页复用首页 `--bg-gradient` 与既有 `StarField`，训练页不再叠加局部深色光晕或实色 body 覆盖，面板、输入及图表继续使用实色表面。浅色主题不显示星点，系统开启“减少动态效果”时星点停止闪烁，数据总览保持实色工作台；鼠标视差与地球交互仅作用于首页。冰蓝表示选择/定位，橙色表示主操作，绿色/红色表示成功/错误，紫色用于诊断。科学色带和 `C.blue` / `C.mars` 兼容常量不受界面状态色调整影响。共享基础控件在 `src/components/ui/Controls.jsx`，新增图标复用既有 MUI Icons，没有新增依赖。
+
+桌面精修沿用既有令牌：导航常态 13px / 500，当前项 600、冰蓝文字和 2px 底部线；中文正文保持 14px，辅助信息至少 12px / 18px 行高。总览关键名称提供完整名称 `title`，主要面板与内部区域分别使用 default / subtle 边框或分隔线，辅助工具保留入口并降低强调。
+
+单模型预测通过 `prediction-display--empty` 显示约 140px 的引导面板，暂不显示三张空结果卡片；有模型时定位已有选择器，无模型时进入现有训练页。禁用的预测动作通过相邻说明和 `aria-describedby` 解释原因。训练页底部条默认约 56px，检查器登录提示为辅助文字，实验登录动作集中在底栏；正文仍根据实测条高预留空间，以适应字号缩放。真实预测的数据、图表、全屏和导出路径继续沿用既有实现。
+
+登录、确认弹窗和设置/通知抽屉使用 `useDialogFocus`：打开后焦点进入，Tab 循环、Esc 关闭，关闭后返回可用触发项；堆叠弹窗只处理最上层。设置快捷菜单支持键盘选择，通知请求失败单独显示错误和重试，不作为空列表显示。
+
+从 `frontend` 目录运行 `npm run build` 构建，前端测试通过 `node --test` 执行 `src` 下的 `*.test.js`。应用运行、后端解释器和生产代理启动方式以[主 README](../README.md)为准。
+
 ## 运行后端
 
 ```bash
@@ -155,6 +170,8 @@ pip install -r requirements.txt
 pip install torch==2.5.1       # CPU；或安装对应 CUDA 版本
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+Windows 当前工作区不要在启用 reload 时直接调用 `uvicorn`：Uvicorn 0.34.0 会先建立 Selector 事件循环，无法被项目在导入期设置的 Proactor 策略替换，可能出现 `WinError 10055` 与 `Executor shutdown has been called`。后端按工作区规定的入口 `run_backend.py` 启动，命令、原因与启动后校验见[主 README](../README.md)。
 
 `vite.config.js` 已配置代理：前端所有 `/api/*` 请求自动转发到 `http://localhost:8000`。
 

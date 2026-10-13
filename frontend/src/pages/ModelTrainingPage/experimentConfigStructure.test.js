@@ -235,7 +235,7 @@ test('training parameters render as a readable matrix', () => {
   ['windowValue', 'horizon', 'epochs', 'batchSize', 'learningRate'].forEach((key) => {
     assert.match(configSource, new RegExp(`key: '${key}'`), `${key} should be a matrix field`);
   });
-  assert.match(trainingBlock, /parameterFields\.map/);
+  assert.match(trainingBlock, /parameterFields\.filter[\s\S]*\.map/);
   assert.match(configSource, /experiment-param-grid/);
   assert.match(trainingBlock, /experiment-param-cell/);
   assert.match(trainingBlock, /onFoldChange\(field\.key/);

@@ -514,6 +514,8 @@ class InferenceService:
         ls_start,
         horizon,
     ):
+        from services.research_export_sources import mars_result_guard
+        export_guard = mars_result_guard(task, data_dirs)
         async def compute():
             return await asyncio.to_thread(self._predict_task_with_context,
                 task=task,
@@ -541,11 +543,16 @@ class InferenceService:
                 hypers,
                 overall_aggregation="mean_over_forecast_steps",
             )
-        return result
+        from services.research_export_sources import register_mars
+        return register_mars(result, task=task, hypers=hypers, data_dirs=data_dirs,
+                             user_id=user_id, analysis="prediction", horizon=horizon,
+                             origin=str(float(ls_start)), variables=result.get("selected_variables", []), expected_guard=export_guard)
 
     async def _cached_test_set_metrics(
         self, task, hypers, data_dirs, user_id, horizon
     ):
+        from services.research_export_sources import mars_result_guard
+        export_guard = mars_result_guard(task, data_dirs)
         async def compute():
             if getattr(task, "model_source", "official") == "uploaded":
                 return await asyncio.to_thread(self._uploaded_task_test_set_metrics,
@@ -569,7 +576,9 @@ class InferenceService:
             data_dirs=data_dirs,
             compute=compute,
         )
-        return self._with_test_set_contract(result, hypers)
+        from services.research_export_sources import register_mars
+        return register_mars(self._with_test_set_contract(result, hypers), task=task, hypers=hypers,
+                             data_dirs=data_dirs, user_id=user_id, analysis="metrics", horizon=horizon, expected_guard=export_guard)
 
     async def _cached_error_distribution(
         self, task, hypers, data_dirs, user_id, horizon
@@ -613,6 +622,8 @@ class InferenceService:
         horizon,
         selected_variables,
     ):
+        from services.research_export_sources import mars_result_guard
+        export_guard = mars_result_guard(task, data_dirs)
         async def compute():
             return await asyncio.to_thread(self._task_permutation_importance_with_context,
                 task=task,
@@ -622,7 +633,7 @@ class InferenceService:
                 data_dirs=data_dirs,
             )
 
-        return await self.analysis_cache.get_or_compute(
+        result = await self.analysis_cache.get_or_compute(
             user_id=user_id,
             task=task,
             analysis_type="pfi",
@@ -633,6 +644,9 @@ class InferenceService:
             data_dirs=data_dirs,
             compute=compute,
         )
+        from services.research_export_sources import register_mars
+        return register_mars(result, task=task, hypers=hypers, data_dirs=data_dirs, user_id=user_id,
+                             analysis="pfi", horizon=horizon, variables=sorted(set(selected_variables)), expected_guard=export_guard)
 
     async def _prepare_task_data_env(
         self,
@@ -1612,7 +1626,10 @@ class InferenceService:
             })
 
         items.sort(key=lambda item: item["importance"], reverse=True)
-        return {"items": items, "baseline_metric": "r2", "baseline_value": round(float(baseline), 4)}
+        return {"items": items, "baseline_metric": "r2", "baseline_value": round(float(baseline), 4),
+                "sampling": {"method": "evenly_spaced_test_windows", "sample_size": sample_size,
+                             "test_windows": len(x_test), "test_window_indices": sample_indices.tolist(),
+                             "permutation": "one_random_permutation_per_feature", "seed": None}}
 
     def _uploaded_task_permutation_importance(self, task, hypers: dict, selected_variables: list[str], horizon: int, data_dirs=None):
         from sklearn.metrics import r2_score
@@ -1713,7 +1730,10 @@ class InferenceService:
                 "importance": round(float(baseline - score(shuffled)), 6),
             })
         items.sort(key=lambda item: item["importance"], reverse=True)
-        return {"items": items, "baseline_metric": "r2", "baseline_value": round(float(baseline), 4)}
+        return {"items": items, "baseline_metric": "r2", "baseline_value": round(float(baseline), 4),
+                "sampling": {"method": "evenly_spaced_test_windows", "sample_size": sample_size,
+                             "test_windows": len(x_test), "test_window_indices": sample_indices.tolist(),
+                             "permutation": "one_random_permutation_per_feature", "seed": None}}
 
     @staticmethod
     def _nearest_sequence_index(ls_torch: torch.Tensor, ls_start: float) -> int:

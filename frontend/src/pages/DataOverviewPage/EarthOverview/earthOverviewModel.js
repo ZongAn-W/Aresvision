@@ -7,9 +7,9 @@
 const DAY_MS = 86_400_000;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-export const EARTH_DATASET_ID = 'earth_merra2_daily_v2';
 export const EARTH_3HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1';
-export const EARTH_OVERVIEW_DATASETS = [EARTH_DATASET_ID, EARTH_3HOURLY_DATASET_ID];
+export const EARTH_DATASET_ID = EARTH_3HOURLY_DATASET_ID;
+export const EARTH_OVERVIEW_DATASETS = [EARTH_3HOURLY_DATASET_ID];
 
 export function resolveEarthDatasetId(catalog, preferredId = null) {
   const earthIds = new Set((catalog?.items || [])
@@ -18,7 +18,8 @@ export function resolveEarthDatasetId(catalog, preferredId = null) {
     .map((item) => item.dataset_id));
   if (preferredId && earthIds.has(preferredId)) return preferredId;
   const configuredDefault = catalog?.default_earth_dataset_id;
-  return earthIds.has(configuredDefault) ? configuredDefault : null;
+  return earthIds.has(configuredDefault) ? configuredDefault
+    : (earthIds.has(EARTH_3HOURLY_DATASET_ID) ? EARTH_3HOURLY_DATASET_ID : null);
 }
 
 export function isThreeHourlyDataset(datasetId) {

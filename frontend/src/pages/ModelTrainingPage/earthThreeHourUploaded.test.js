@@ -2,14 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  EARTH_3HOURLY_DATASET_ID, EARTH_3HOURLY_UPLOAD_SCHEMA,
+  EARTH_3HOURLY_DATASET_ID, EARTH_3HOURLY_UPLOAD_SCHEMA, EARTH_3HOURLY_FULL_GRID_SCHEMA,
   getEarthUploadedSelectionBlocker, readEarthUploadedModelCompatibility,
   buildEarthTrainingHyperparameters,
 } from './earthTrainingConfig.js';
+import { UPLOADED_MODEL_VALIDATION_TIMEOUT } from './uploadedModelValidation.js';
 
 const selection = { modelSource: 'uploaded', uploadedModelId: 'm1', datasetId: EARTH_3HOURLY_DATASET_ID };
 const available = { package_id: 'm1', dataset_id: EARTH_3HOURLY_DATASET_ID, status: 'available', compatible: true,
   datasets: { earth_merra2_3hourly_v1: { schema: EARTH_3HOURLY_UPLOAD_SCHEMA } } };
+
+test('full-grid models have a separate schema and count global windows per batch', () => {
+  const compatibility = { ...available, contract_schema: EARTH_3HOURLY_FULL_GRID_SCHEMA,
+    datasets: { earth_merra2_3hourly_v1: { schema: EARTH_3HOURLY_FULL_GRID_SCHEMA, window: [20], horizon: [20] } } };
+  for (const batchSize of [1, 2, 3, 4, 8, 32, 64]) {
+    assert.equal(getEarthUploadedSelectionBlocker({ ...selection, compatibility, batchSize, windowValue: 20, horizon: 20 }), null);
+    assert.equal(buildEarthTrainingHyperparameters({ modelSource: 'uploaded', batchSize }).batch_size, batchSize);
+  }
+  for (const batchSize of [0, 65, 1.5, '', NaN]) assert.equal(getEarthUploadedSelectionBlocker({ ...selection, compatibility, batchSize }), 'earth_full_grid_batch_invalid');
+  assert.equal(getEarthUploadedSelectionBlocker({ ...selection, compatibility: { ...compatibility, package_id: 'other' }, batchSize: 1 }), 'earth_compatibility_unknown');
+});
 
 test('three-hour upload requires a verdict for the exact dataset and schema', () => {
   assert.equal(getEarthUploadedSelectionBlocker({ ...selection, compatibility: available }), null);
@@ -27,6 +39,22 @@ test('unknown and unavailable remain distinct with concrete reasons', () => {
   const failed = { ...available, compatible: false, status: 'unavailable', reasons: ['wrong output dtype'] };
   assert.equal(readEarthUploadedModelCompatibility(failed).known, true);
   assert.equal(getEarthUploadedSelectionBlocker({ ...selection, compatibility: failed }), 'wrong output dtype');
+});
+
+test('validation timeouts keep compatibility unknown and training blocked with a retry reason', () => {
+  for (const timeout of [
+    { code: UPLOADED_MODEL_VALIDATION_TIMEOUT, status: 'unknown' },
+    { status: 'unavailable', reasons: ['User model validation timed out after 30.0 seconds'] },
+  ]) {
+    const compatibility = { ...available, ...timeout };
+    const verdict = readEarthUploadedModelCompatibility(compatibility);
+    assert.equal(verdict.known, false);
+    assert.equal(verdict.compatible, false);
+    assert.equal(verdict.reason, UPLOADED_MODEL_VALIDATION_TIMEOUT);
+    assert.equal(getEarthUploadedSelectionBlocker({ ...selection, compatibility }), UPLOADED_MODEL_VALIDATION_TIMEOUT);
+    assert.equal(getEarthUploadedSelectionBlocker({ ...selection,
+      compatibility: { ...compatibility, package_id: 'other-model' } }), 'earth_compatibility_unknown');
+  }
 });
 
 test('three-hour upload payload carries parameters and preserves server-owned identity', () => {

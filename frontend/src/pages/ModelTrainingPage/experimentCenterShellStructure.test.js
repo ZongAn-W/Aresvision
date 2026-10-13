@@ -25,7 +25,7 @@ test('experiment center shell is a console with a directory, a workspace and an 
   );
   assert.match(cssSource, /--experiment-rail-width:\s*235px/);
   assert.match(cssSource, /--experiment-inspector-width:\s*284px/);
-  assert.match(cssSource, /--experiment-gap:\s*14px/);
+  assert.match(cssSource, /--experiment-gap:\s*16px/);
   // 监控视图为两列。
   assert.match(
     cssSource,
@@ -77,7 +77,7 @@ test('bottom run bar is fixed across the browser and reserving space below the g
   assert.match(shellSource, /createPortal\(node, document\.body\)/);
   assert.match(shellSource, /runBarPortal\(/);
   // 网格按实测运行条高度预留底部空间，最后一个字段不会被底栏遮住。
-  assert.match(shellSource, /paddingBottom: `\$\{runBarHeight \+ 20\}px`/);
+  assert.match(shellSource, /paddingBottom: `\$\{runBarHeight \+ 24\}px`/);
   assert.match(shellSource, /\{view === 'config' && runBar \? \(/);
 });
 
@@ -125,15 +125,11 @@ test('experiment directory keeps status grouping, search, tags and bulk tag acti
   assert.match(historySource, /TagManager/);
 });
 
-test('directory rows show name, task id, architecture, dataset, time, status and a core metric', () => {
+test('directory rows show only the experiment name and visible tags', () => {
   assert.match(directorySource, /className="experiment-directory-name"/);
-  assert.match(directorySource, /experiment-directory-id/);
-  assert.match(directorySource, /experiment-directory-metric/);
-  assert.match(directorySource, /EXPERIMENT_METRIC_KEYS/);
-  // 目录行日期按 locale 格式化；结束时间优先，未结束时回退开始时间。
-  // （原断言写的是 task.start_time，与实现不符，一直是失败项。）
-  assert.match(directorySource, /formatDirectoryDate\(task\.end_time \|\| task\.start_time, locale\)/);
-  assert.match(directorySource, /experiment-directory-badge/);
+  assert.doesNotMatch(directorySource, /experiment-directory-(?:badge|status-line|status-dot)|getTrainingStatusMeta/);
+  assert.match(directorySource, /className="experiment-directory-row-tags"[\s\S]*?\{tagControls\}/);
+  assert.doesNotMatch(directorySource, /<details|<time|experiment-directory-(?:id|metric|facts|footer|completeness)/);
 });
 
 test('directory mode does not reference props it never declares', () => {
@@ -152,11 +148,10 @@ test('directory mode does not reference props it never declares', () => {
   assert.deepEqual(rowUndeclared, [], `ExperimentDirectoryRow 引用了未声明的回调: ${rowUndeclared.join(', ')}`);
 });
 
-test('directory keeps only the progress row and the stop action for running tasks', () => {
-  assert.match(directorySource, /experiment-directory-progress/);
-  assert.match(directorySource, /role="progressbar"/);
-  assert.match(directorySource, /onStop\(task\.id\)/);
-  // 目录只负责找到实验：重命名、测试、删除都移到右侧结果工作区。
+test('directory leaves progress and training actions to the selected experiment workspace', () => {
+  assert.doesNotMatch(directorySource, /experiment-directory-progress|role="progressbar"/);
+  assert.doesNotMatch(directorySource, /onStop\(task\.id\)|onCancel\(task\.id\)/);
+  // 目录只负责找到实验与整理标签，训练和维护动作位于中间工作区。
   assert.doesNotMatch(directorySource, /onRename\(task\)/);
   assert.doesNotMatch(directorySource, /onDelete\(task\.id\)/);
   assert.doesNotMatch(directorySource, /onTest\(task\.id\)/);
@@ -185,14 +180,21 @@ test('view state selects exactly one pair of work areas', () => {
   assert.match(cssSource, /\.experiment-center-grid\[data-view='monitor'\]/);
 });
 
-test('header has two accessible view buttons', () => {
+test('header has three accessible view buttons', () => {
   assert.match(shellSource, /role="group" aria-label=\{t\('experimentCenter\.viewLabel'\)\}/);
   assert.match(shellSource, /aria-pressed=\{view === 'config'\}/);
   assert.match(shellSource, /aria-pressed=\{view === 'monitor'\}/);
+  assert.match(shellSource, /aria-pressed=\{view === 'matrix'\}/);
   assert.doesNotMatch(shellSource, /experiment-center-stage-nav/);
 });
 
-test('page controller owns the stage derivation and wires the three workspaces', () => {
+test('header exposes the experiment matrix as a third view and keeps it mounted', () => {
+  assert.match(shellSource, /view === 'matrix'/);
+  assert.match(shellSource, /t\('experimentCenter\.matrixView'\)/);
+  assert.match(shellSource, /data-stage-workspace="matrix"[\s\S]*workspace\?\.matrix/);
+});
+
+test('page controller owns the stage derivation and wires the experiment workspaces', () => {
   assert.match(pageSource, /getExperimentStage\(\{ activeTask, isCreating \}\)/);
   assert.match(pageSource, /<ExperimentCenterShell/);
   assert.match(pageSource, /<ExperimentDirectory/);
@@ -201,6 +203,7 @@ test('page controller owns the stage derivation and wires the three workspaces',
   assert.match(pageSource, /configure: configWorkspace,/);
   assert.match(pageSource, /monitor: monitorWorkspace,/);
   assert.match(pageSource, /result: resultWorkspace,/);
+  assert.match(pageSource, /matrix: matrixWorkspace,/);
   assert.match(pageSource, /inspector=\{configInspector\}/);
   assert.match(pageSource, /runBar=\{configRunBar\}/);
   assert.match(pageSource, /runBarHeight=\{runBarHeight\}/);

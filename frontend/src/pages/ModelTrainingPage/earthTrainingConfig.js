@@ -11,15 +11,17 @@
 
 import {
   TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1,
-  TRAINING_DATASET_EARTH_MERRA2_V2,
+  isRetiredEarthDataset,
   sanitizeNonNegativeInteger,
   sanitizePositiveInteger,
   sanitizePositiveNumber,
 } from './trainingParamSanitizers.js';
+import { isUploadedModelValidationTimeout, UPLOADED_MODEL_VALIDATION_TIMEOUT } from './uploadedModelValidation.js';
 
-export const EARTH_DATASET_ID = TRAINING_DATASET_EARTH_MERRA2_V2;
 export const EARTH_3HOURLY_DATASET_ID = TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1;
+export const EARTH_DATASET_ID = EARTH_3HOURLY_DATASET_ID;
 export const EARTH_3HOURLY_UPLOAD_SCHEMA = 'aresvision_earth_3hourly_uploaded_model_v1';
+export const EARTH_3HOURLY_FULL_GRID_SCHEMA = 'aresvision_earth_3hourly_fullgrid_model_v2';
 export const EARTH_MODEL_ARCHITECTURE = 'dlinear';
 /** 上传模型的架构标记；真正的代码由服务端固定的模型引用决定。 */
 export const EARTH_UPLOADED_ARCHITECTURE = 'uploaded';
@@ -28,8 +30,8 @@ export const EARTH_MODEL_SOURCE_OFFICIAL = 'official';
 export const EARTH_MODEL_SOURCE_UPLOADED = 'uploaded';
 export const EARTH_MODEL_SOURCES = [EARTH_MODEL_SOURCE_OFFICIAL, EARTH_MODEL_SOURCE_UPLOADED];
 export const EARTH_MODEL_SOURCE = EARTH_MODEL_SOURCE_OFFICIAL;
-export const EARTH_WINDOW = 7;
-export const EARTH_HORIZON = 3;
+export const EARTH_WINDOW = 56;
+export const EARTH_HORIZON = 24;
 export const EARTH_3HOURLY_WINDOW = 56;
 export const EARTH_3HOURLY_HORIZON = 24;
 export const EARTH_3HOURLY_FREQUENCY_HOURS = 3;
@@ -44,16 +46,6 @@ export const EARTH_TARGET_CHANNEL = 'TO3';
 export const EARTH_TARGET_UNIT = 'DU';
 
 export const EARTH_DATASET_PROFILES = Object.freeze({
-  [EARTH_DATASET_ID]: Object.freeze({
-    datasetId: EARTH_DATASET_ID,
-    frequencyHours: 24,
-    stepUnit: 'day',
-    step: 1,
-    window: EARTH_WINDOW,
-    horizon: EARTH_HORIZON,
-    gridShape: EARTH_DAILY_GRID_SHAPE,
-    modelSources: EARTH_MODEL_SOURCES,
-  }),
   [EARTH_3HOURLY_DATASET_ID]: Object.freeze({
     datasetId: EARTH_3HOURLY_DATASET_ID,
     frequencyHours: EARTH_3HOURLY_FREQUENCY_HOURS,
@@ -67,6 +59,7 @@ export const EARTH_DATASET_PROFILES = Object.freeze({
 });
 
 export function getEarthTrainingProfile(datasetId = EARTH_DATASET_ID) {
+  if (isRetiredEarthDataset(datasetId)) throw new Error('dataset_retired');
   const profile = EARTH_DATASET_PROFILES[String(datasetId || '').toLowerCase()]
     || EARTH_DATASET_PROFILES[EARTH_DATASET_ID];
   return {
@@ -93,6 +86,8 @@ export const EARTH_CHANNEL_META = {
 };
 
 export const EARTH_PARAM_BOUNDS = {
+  window: { min: 1, max: 240, fallback: 56 },
+  horizon: { min: 1, max: 240, fallback: 24 },
   epochs: { min: 1, max: 1000, fallback: 10 },
   batch_size: { min: 1, max: 64, fallback: 8 },
   seed: { min: 0, max: 2147483647, fallback: 11 },
@@ -100,18 +95,16 @@ export const EARTH_PARAM_BOUNDS = {
   linear_hidden_layers: { min: 1, max: 4, fallback: 2 },
 };
 
-export function normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio) {
-  const values = [trainRatio, validationRatio, testRatio].map((value, index) => {
-    const fallback = Object.values(EARTH_DEFAULT_SPLIT_RATIOS)[index];
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  });
+export function normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio, { allowEmptyValidation = false } = {}) {
+  const values = [trainRatio, validationRatio, testRatio].map((value) =>
+    ((typeof value === 'number' || (typeof value === 'string' && value.trim() !== ''))
+      ? Number(value) : NaN));
   const total = values.reduce((sum, value) => sum + value, 0);
   return {
     train_ratio: values[0],
     validation_ratio: values[1],
     test_ratio: values[2],
-    valid: values[0] > 0 && values[1] >= 0 && values[2] > 0 && values.every((value) => value < 1) && Math.abs(total - 1) <= 1e-6,
+    valid: values[0] > 0 && (allowEmptyValidation ? values[1] >= 0 : values[1] > 0) && values[2] > 0 && values.every((value) => value < 1) && Math.abs(total - 1) <= 1e-6,
     total,
   };
 }
@@ -148,6 +141,8 @@ export function getEarthChannelOptions() {
 export function buildEarthTrainingHyperparameters({
   datasetId = EARTH_DATASET_ID,
   selectedChannels = EARTH_OPTIONAL_CHANNELS,
+  windowValue,
+  horizon,
   epochs,
   batchSize,
   learningRate,
@@ -168,12 +163,17 @@ export function buildEarthTrainingHyperparameters({
     ? EARTH_MODEL_SOURCE_UPLOADED
     : EARTH_MODEL_SOURCE_OFFICIAL;
   const uploaded = requestedSource === EARTH_MODEL_SOURCE_UPLOADED;
+  const ratios = normalizeEarthSplitRatios(trainRatio, validationRatio, testRatio);
+  if (!ratios.valid) throw new Error('Earth ratios must all be positive and total 100%');
   const hyperparameters = {
+    train_ratio: ratios.train_ratio,
+    validation_ratio: ratios.validation_ratio,
+    test_ratio: ratios.test_ratio,
     training_dataset: profile.datasetId,
     model_architecture: uploaded ? EARTH_UPLOADED_ARCHITECTURE : EARTH_MODEL_ARCHITECTURE,
     model_source: requestedSource,
-    window: profile.window,
-    horizon: profile.horizon,
+    window: sanitizePositiveInteger(windowValue, profile.window, EARTH_PARAM_BOUNDS.window.min, EARTH_PARAM_BOUNDS.window.max),
+    horizon: sanitizePositiveInteger(horizon, profile.horizon, EARTH_PARAM_BOUNDS.horizon.min, EARTH_PARAM_BOUNDS.horizon.max),
     use_sphere: false,
     transfer_learning: false,
     selected_channels: normalizeEarthSelectedChannels(selectedChannels),
@@ -211,14 +211,15 @@ export function readEarthUploadedModelCompatibility(compatibility) {
     return { known: false, compatible: false, reason: 'earth_compatibility_unknown' };
   }
   const reasons = Array.isArray(compatibility.reasons) ? compatibility.reasons.filter(Boolean) : [];
+  const timedOut = isUploadedModelValidationTimeout(compatibility);
   const contracts = compatibility.contract || compatibility.earth_contract
     || (compatibility.dataset_id === EARTH_3HOURLY_DATASET_ID
       || (!compatibility.dataset_id && compatibility.datasets?.earth_merra2_3hourly_v1)
       ? compatibility.datasets?.earth_merra2_3hourly_v1 : compatibility.datasets?.earth_merra2) || {};
   return {
-    known: compatibility.status !== 'unknown',
-    compatible: compatibility.compatible === true && compatibility.status !== 'unknown',
-    reason: reasons[0] || null,
+    known: !timedOut && compatibility.status !== 'unknown',
+    compatible: !timedOut && compatibility.compatible === true && compatibility.status !== 'unknown',
+    reason: timedOut ? UPLOADED_MODEL_VALIDATION_TIMEOUT : reasons[0] || null,
     reasons,
     warnings: Array.isArray(compatibility.warnings) ? compatibility.warnings : [],
     outputShape: Array.isArray(compatibility.output_shape) ? compatibility.output_shape : null,
@@ -229,28 +230,40 @@ export function readEarthUploadedModelCompatibility(compatibility) {
     gridShape: Array.isArray(compatibility.grid_shape) ? compatibility.grid_shape : (Array.isArray(contracts.grid_shape) ? contracts.grid_shape : null),
     window: Number.isFinite(Number(compatibility.window ?? contracts.window)) ? Number(compatibility.window ?? contracts.window) : null,
     horizon: Number.isFinite(Number(compatibility.horizon ?? contracts.horizon)) ? Number(compatibility.horizon ?? contracts.horizon) : null,
+    windows: Array.isArray(contracts.window) ? contracts.window : null,
+    horizons: Array.isArray(contracts.horizon) ? contracts.horizon : null,
   };
 }
 
 /** 当前选中的上传模型是否可用于 Earth 训练；返回阻塞原因。 */
-export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId, compatibility, datasetId = EARTH_DATASET_ID } = {}) {
+export function getEarthUploadedSelectionBlocker({ modelSource, uploadedModelId, compatibility, datasetId = EARTH_DATASET_ID,
+  windowValue, horizon, batchSize } = {}) {
   if (modelSource !== EARTH_MODEL_SOURCE_UPLOADED) return null;
   const profile = getEarthTrainingProfile(datasetId);
   if (!profile.modelSources.includes(EARTH_MODEL_SOURCE_UPLOADED)) return 'dataset_training_configuration_not_supported';
   if (!uploadedModelId) return 'uploaded_model_required';
   const verdict = readEarthUploadedModelCompatibility(compatibility);
   if (compatibility?.package_id && compatibility.package_id !== uploadedModelId) return 'earth_compatibility_unknown';
+  if (verdict.reason === UPLOADED_MODEL_VALIDATION_TIMEOUT) return UPLOADED_MODEL_VALIDATION_TIMEOUT;
   if (!verdict.known) return 'earth_compatibility_unknown';
   if (profile.datasetId === EARTH_3HOURLY_DATASET_ID && verdict.dataset !== profile.datasetId) return 'earth_compatibility_unknown';
   if (!verdict.compatible) return verdict.reason || 'uploaded_model_not_earth_compatible';
   if (profile.datasetId === EARTH_3HOURLY_DATASET_ID
-    && (compatibility.status !== 'available' || verdict.contractSchema !== EARTH_3HOURLY_UPLOAD_SCHEMA)) return 'earth_compatibility_unknown';
+    && (compatibility.status !== 'available' || ![EARTH_3HOURLY_UPLOAD_SCHEMA, EARTH_3HOURLY_FULL_GRID_SCHEMA].includes(verdict.contractSchema))) return 'earth_compatibility_unknown';
+  if (verdict.contractSchema === EARTH_3HOURLY_FULL_GRID_SCHEMA
+      && batchSize !== undefined && (!Number.isInteger(Number(batchSize))
+        || Number(batchSize) < EARTH_PARAM_BOUNDS.batch_size.min
+        || Number(batchSize) > EARTH_PARAM_BOUNDS.batch_size.max)) return 'earth_full_grid_batch_invalid';
   const mismatches = [];
   if (verdict.dataset && verdict.dataset !== profile.datasetId) mismatches.push('checkpoint_dataset_incompatible');
   if (verdict.frequencyHours !== null && verdict.frequencyHours !== profile.frequencyHours) mismatches.push('checkpoint_frequency_incompatible');
   if (verdict.gridShape && JSON.stringify(verdict.gridShape) !== JSON.stringify(profile.gridShape)) mismatches.push('checkpoint_grid_incompatible');
-  if (verdict.window !== null && verdict.window !== profile.window) mismatches.push('checkpoint_window_incompatible');
-  if (verdict.horizon !== null && verdict.horizon !== profile.horizon) mismatches.push('checkpoint_horizon_incompatible');
+  const requestedWindow = windowValue === undefined ? profile.window : Number(windowValue);
+  const requestedHorizon = horizon === undefined ? profile.horizon : Number(horizon);
+  if (verdict.windows ? !verdict.windows.includes(requestedWindow)
+    : verdict.window !== null && verdict.window !== requestedWindow) mismatches.push('checkpoint_window_incompatible');
+  if (verdict.horizons ? !verdict.horizons.includes(requestedHorizon)
+    : verdict.horizon !== null && verdict.horizon !== requestedHorizon) mismatches.push('checkpoint_horizon_incompatible');
   if (mismatches.length) return mismatches[0];
   return null;
 }
@@ -266,16 +279,18 @@ export function readEarthDatasetAvailability(descriptor) {
     return { present: false, selectable: false, reason: 'catalog_missing' };
   }
   const available = descriptor.availability === 'available';
-  const wired = descriptor.capabilities?.training !== false;
+  const wired = !isRetiredEarthDataset(descriptor.dataset_id) && descriptor.capabilities?.training !== false;
   return {
     present: true,
     datasetId: descriptor.dataset_id || null,
     selectable: available && wired,
     availability: descriptor.availability,
-    reason: descriptor.availability_reason || (wired ? null : 'training_not_wired'),
+    reason: isRetiredEarthDataset(descriptor.dataset_id) ? 'dataset_retired'
+      : descriptor.availability_reason || (wired ? null : 'training_not_wired'),
     datasetVersion: descriptor.dataset_version || null,
     fingerprint: descriptor.dataset_fingerprint || null,
     splits: descriptor.splits || null,
+    time: descriptor.time || null,
     trainingProfile: descriptor.training_profile || null,
     frequencyHours: Number(descriptor.frequency_hours ?? descriptor.training_profile?.frequency_hours ?? 24),
     stepUnit: descriptor.step_unit || descriptor.training_profile?.step_unit || 'day',
@@ -287,7 +302,7 @@ export function readEarthDatasetAvailability(descriptor) {
   };
 }
 
-/** 日期划分与 7→3 样本数；样本数只从真实天数推算，不硬编码。 */
+/** Published three-hour split counts, including descriptors without explicit steps. */
 export function describeEarthSplitSamples(splits, window = EARTH_WINDOW, horizon = EARTH_HORIZON) {
   if (!splits || typeof splits !== 'object') return [];
   return ['train', 'validation', 'test']
@@ -297,7 +312,7 @@ export function describeEarthSplitSamples(splits, window = EARTH_WINDOW, horizon
       const hasExplicitSteps = Number.isFinite(Number(splits[name].steps));
       const steps = hasExplicitSteps ? Number(splits[name].steps) : (declaredDays * 24 / 3);
       const days = hasExplicitSteps ? steps / 8 : declaredDays;
-      const sampleUnits = hasExplicitSteps ? steps : days;
+      const sampleUnits = steps;
       return {
         name,
         start: splits[name].start,
@@ -344,7 +359,7 @@ export function classifyEarthTrainingError(errorOrCode) {
   const code = String(errorOrCode?.code || errorOrCode?.error_code || errorOrCode || '').toLowerCase();
   if (/(dataset|package|data).*?(unavailable|missing|invalid|changed)/.test(code)
     || code === 'catalog_missing') return 'dataset_unavailable';
-  if (/(configuration|config|not_supported|unsupported)/.test(code)) return 'configuration_unsupported';
+  if (code === 'dataset_retired' || /(configuration|config|not_supported|unsupported)/.test(code)) return 'configuration_unsupported';
   if (/(checkpoint|artifact|model).*?(incompat|invalid|mismatch|damaged)/.test(code)
     || code.includes('earth_compatibility')) return 'checkpoint_incompatible';
   return 'training_failed';
@@ -365,6 +380,9 @@ export function captureTrainingDraft(values) {
     useSphere: Boolean(values.useSphere),
     windowValue: values.windowValue,
     horizon: values.horizon,
+    trainRatio: values.trainRatio,
+    validationRatio: values.validationRatio,
+    testRatio: values.testRatio,
     transferEnabled: Boolean(values.transferEnabled),
     selectedChannels: Array.isArray(values.selectedChannels) ? [...values.selectedChannels] : [],
     customModelParams: values.customModelParams && typeof values.customModelParams === 'object'
@@ -401,7 +419,7 @@ export function applyEarthTrainingDefaults({ datasetId = EARTH_DATASET_ID, store
 
 /** 从火星切到 Earth 时恢复的 Earth 草稿；没有草稿则回到 Earth 默认值。 */
 export function resolveEarthTrainingRestore(snapshot) {
-  if (!snapshot) return null;
+  if (!snapshot || isRetiredEarthDataset(snapshot.trainingDataset)) return null;
   const modelSource = EARTH_MODEL_SOURCES.includes(snapshot.modelSource)
     ? snapshot.modelSource
     : EARTH_MODEL_SOURCE_OFFICIAL;
@@ -413,8 +431,11 @@ export function resolveEarthTrainingRestore(snapshot) {
       ? EARTH_UPLOADED_ARCHITECTURE
       : EARTH_MODEL_ARCHITECTURE,
     useSphere: false,
-    windowValue: EARTH_WINDOW,
-    horizon: EARTH_HORIZON,
+    windowValue: sanitizePositiveInteger(snapshot.windowValue, EARTH_WINDOW, 1, 240),
+    horizon: sanitizePositiveInteger(snapshot.horizon, EARTH_HORIZON, 1, 240),
+    trainRatio: snapshot.trainRatio ?? 0.7,
+    validationRatio: snapshot.validationRatio ?? 0.2,
+    testRatio: snapshot.testRatio ?? 0.1,
     transferEnabled: false,
     selectedChannels: normalizeEarthSelectedChannels(snapshot.selectedChannels),
     customModelParams: snapshot.customModelParams && typeof snapshot.customModelParams === 'object'
@@ -434,10 +455,61 @@ export function resolveMarsTrainingRestore(snapshot) {
     useSphere: Boolean(snapshot.useSphere),
     windowValue: snapshot.windowValue,
     horizon: snapshot.horizon,
+    trainRatio: snapshot.trainRatio ?? 0.7,
+    validationRatio: snapshot.validationRatio ?? 0.2,
+    testRatio: snapshot.testRatio ?? 0.1,
     transferEnabled: Boolean(snapshot.transferEnabled),
     selectedChannels: Array.isArray(snapshot.selectedChannels) ? [...snapshot.selectedChannels] : [],
     customModelParams: snapshot.customModelParams && typeof snapshot.customModelParams === 'object'
       ? { ...snapshot.customModelParams }
       : {},
   };
+}
+
+/** Preview the same raw UTC allocation as earth_raw_utc_timeline_v1. */
+export function describeEarthTaskSplits(time, ratios, window, horizon) {
+  const checked = normalizeEarthSplitRatios(ratios?.trainRatio, ratios?.validationRatio, ratios?.testRatio);
+  if (!checked.valid) return { valid: false, error: 'ratios', ranges: [] };
+  const count = time?.count;
+  const first = Date.parse(time?.start);
+  const last = Date.parse(time?.end);
+  const cadence = 3 * 60 * 60 * 1000;
+  if (!Number.isInteger(count) || count < 3 || !Number.isFinite(first)
+      || first + (count - 1) * cadence !== last) return { valid: false, error: 'timeline', ranges: [] };
+  if (!Number.isInteger(Number(window)) || !Number.isInteger(Number(horizon))
+      || Number(window) < 1 || Number(horizon) < 1) return { valid: false, error: 'windows', ranges: [] };
+  const values = [checked.train_ratio, checked.validation_ratio, checked.test_ratio];
+  // Exact decimal weights keep remainder ties identical to the server Decimal allocation.
+  const decimals = values.map(value => {
+    const [mantissa, exponent = '0'] = String(value).split('e');
+    const [integer, fraction = ''] = mantissa.split('.');
+    return { digits: BigInt(integer + fraction), places: fraction.length - Number(exponent) };
+  });
+  const places = Math.max(...decimals.map(value => value.places));
+  const weights = decimals.map(value => value.digits * 10n ** BigInt(places - value.places));
+  const total = weights.reduce((sum, value) => sum + value, 0n);
+  const numerators = weights.map(value => value * BigInt(count));
+  const sizes = numerators.map(value => Number(value / total));
+  const order = [0, 1, 2].sort((a, b) => {
+    const left = numerators[a] % total, right = numerators[b] % total;
+    return left === right ? a - b : left > right ? -1 : 1;
+  });
+  order.slice(0, count - sizes.reduce((sum, value) => sum + value, 0)).forEach(index => { sizes[index] += 1; });
+  let cursor = 0;
+  const ranges = ['train', 'validation', 'test'].map((name, index) => {
+    const start = cursor;
+    cursor += sizes[index];
+    return { name, raw_start: start, raw_end: cursor, step_count: sizes[index],
+      date_start: new Date(first + start * cadence).toISOString().replace('.000Z', 'Z'),
+      date_end: new Date(first + (cursor - 1) * cadence).toISOString().replace('.000Z', 'Z'),
+      window_count: Math.max(0, sizes[index] - Number(window) - Number(horizon) + 1) };
+  });
+  return { valid: ranges.every(item => item.window_count > 0),
+    error: ranges.some(item => item.window_count === 0) ? 'short_partition' : null, ranges };
+}
+
+export function getEarthSplitDefaults(defaults) {
+  const split = normalizeEarthSplitRatios(defaults?.trainRatio, defaults?.validationRatio, defaults?.testRatio);
+  return split.valid ? { trainRatio: split.train_ratio, validationRatio: split.validation_ratio, testRatio: split.test_ratio }
+    : { trainRatio: 0.7, validationRatio: 0.2, testRatio: 0.1 };
 }

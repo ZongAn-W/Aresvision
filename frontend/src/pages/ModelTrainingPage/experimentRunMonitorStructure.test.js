@@ -65,9 +65,14 @@ test('run monitor shows the active task id and empty states', () => {
 
 test('stop training only appears for pending or running tasks and is labelled', () => {
   assert.match(monitorSource, /isActiveTrainingStatus\(status\)/);
-  assert.match(monitorSource, /isActive && activeTask \?/);
+  assert.match(monitorSource, /isActive && status !== 'queued' && activeTask \?/);
   assert.match(monitorSource, /aria-label=\{`\$\{copy\.stopTraining\} #\$\{activeTask\.id\}`\}/);
   assert.match(monitorSource, /onClick=\{\(\) => onStop\(activeTask\.id\)\}/);
+  // 目录精简后，排队任务仍能在所选实验的监控区取消。
+  assert.match(monitorSource, /status === 'queued' && activeTask \?/);
+  assert.match(monitorSource, /aria-label=\{`\$\{copy\.cancelQueued\} #\$\{activeTask\.id\}`\}/);
+  assert.match(monitorSource, /onClick=\{\(\) => onCancel\(activeTask\.id\)\}/);
+  assert.match(pageSource, /onCancel=\{handleCancelTask\}/);
 });
 
 test('training context keeps task polling, log polling and websocket ownership', () => {

@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import keyword
 import multiprocessing
+import time
 from queue import Empty
 import sys
 import uuid
@@ -44,6 +45,18 @@ from training_backbones.uploaded_model_source_check import (
 
 
 EXPECTED_OUTPUT_SHAPE = [2, 3, 1, 8, 16]
+VALIDATION_TIMEOUT_CODE = "uploaded_model_validation_timeout"
+_DEFAULT_TIMEOUT = object()
+
+
+def validation_report_timed_out(report: dict[str, Any]) -> bool:
+    if report.get("code") == VALIDATION_TIMEOUT_CODE:
+        return True
+    errors = report.get("errors")
+    return isinstance(errors, list) and any(
+        isinstance(error, str) and error.startswith("User model validation timed out after ")
+        for error in errors
+    )
 
 #: Earth dry-run contract: the published global grid, the fixed 7 -> 3 window and
 #: both boundary channel counts (ozone only, and all five published channels). A
@@ -76,6 +89,7 @@ class UserModelValidationResult:
     earth_checked: bool = False
     earth_compatibilities: dict[str, Any] = field(default_factory=dict)
     mars_ok: bool | None = None
+    code: str | None = None
 
     def report_dict(self) -> dict[str, Any]:
         report = {
@@ -84,6 +98,8 @@ class UserModelValidationResult:
             "warnings": self.warnings,
             "output_shape": self.output_shape,
         }
+        if self.code is not None:
+            report["code"] = self.code
         if self.mars_ok is not None:
             report["mars"] = {"compatible": self.mars_ok}
         # Keep legacy reports unchanged for models without dataset declarations.
@@ -100,19 +116,31 @@ class UserModelValidationResult:
 
 
 class UserModelValidator:
-    def __init__(self, timeout_seconds: float | None = 30.0):
-        self.timeout_seconds = timeout_seconds
+    def __init__(self, timeout_seconds=_DEFAULT_TIMEOUT):
+        self._uses_default_timeout = timeout_seconds is _DEFAULT_TIMEOUT
+        self.timeout_seconds = (config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS
+                                if self._uses_default_timeout else timeout_seconds)
 
     def validate_file(self_or_file_path, file_path: Path | None = None, *, earth_probe=None) -> UserModelValidationResult:
         if isinstance(self_or_file_path, UserModelValidator):
             path = file_path
             timeout_seconds = self_or_file_path.timeout_seconds
+            uses_default_timeout = self_or_file_path._uses_default_timeout
         else:
             path = self_or_file_path
-            timeout_seconds = 30.0
+            timeout_seconds = config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS
+            uses_default_timeout = True
 
         if path is None:
             raise TypeError("validate_file() missing required file_path")
+
+        # Only server-provided task probes use the full-grid budget. Explicit
+        # timeouts (including test budgets and None) retain their semantics.
+        if (uses_default_timeout and isinstance(earth_probe, dict)
+                and earth_probe.get("contract_schema") == "aresvision_earth_3hourly_fullgrid_model_v2"):
+            timeout_seconds = max(
+                timeout_seconds, config.USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS
+            )
 
         if timeout_seconds is None:
             return UserModelValidator._validate_file_in_process(Path(path), earth_probe=earth_probe)
@@ -130,25 +158,36 @@ class UserModelValidator:
             target=_validate_file_child,
             args=(str(file_path), result_queue, earth_probe),
         )
-        process.start()
-        process.join(timeout_seconds)
-
-        if process.is_alive():
-            process.terminate()
-            process.join(1)
-            return UserModelValidationResult(
-                ok=False,
-                errors=[f"User model validation timed out after {timeout_seconds} seconds"],
-            )
-
+        deadline = time.monotonic() + timeout_seconds
+        payload = None
         try:
-            payload = result_queue.get(timeout=1)
-        except Empty:
-            exitcode = process.exitcode
-            return UserModelValidationResult(
-                ok=False,
-                errors=[f"User model validation process exited without a result: {exitcode}"],
-            )
+            process.start()
+            # Drain the queue while the child is alive. Joining first blocks
+            # its feeder thread when a complete validation report fills the
+            # pipe, incorrectly turning a successful probe into a timeout.
+            while time.monotonic() < deadline:
+                try:
+                    payload = result_queue.get(timeout=min(.1, max(0., deadline - time.monotonic())))
+                    break
+                except Empty:
+                    if not process.is_alive():
+                        break
+            process.join(max(0., deadline - time.monotonic()))
+            if process.is_alive():
+                process.terminate()
+                process.join(1)
+                if process.is_alive():
+                    process.kill()
+                    process.join(1)
+                return UserModelValidationResult(
+                    ok=False, code=VALIDATION_TIMEOUT_CODE,
+                    errors=[f"User model validation timed out after {timeout_seconds} seconds"],
+                )
+            if not isinstance(payload, dict) or process.exitcode != 0:
+                return UserModelValidationResult(
+                    ok=False,
+                    errors=[f"User model validation process exited without a result: {process.exitcode}"],
+                )
         finally:
             result_queue.close()
 
@@ -167,6 +206,7 @@ class UserModelValidator:
             earth_checked=bool(payload.get("earth_checked", False)),
             earth_compatibilities=dict(payload.get("earth_compatibilities", {})),
             mars_ok=payload.get("mars_ok"),
+            code=payload.get("code"),
         )
 
     @staticmethod
@@ -468,7 +508,7 @@ class UserModelValidator:
     @staticmethod
     def _validate_three_hour_module(module, datasets, param_schema, warnings, *, earth_probe=None):
         from training_backbones.earth_3hourly_uploaded_contract import (
-            CONTRACT_SCHEMA, RESERVED_PARAMETERS, channel_orders, dry_run,
+            EVAL_BATCH_POLICY, RESERVED_PARAMETERS, channel_orders, contract_profile, dry_run,
         )
 
         model_spec = module.MODEL_SPEC
@@ -488,14 +528,31 @@ class UserModelValidator:
                 code = "invalid_earth_training_parameters"
                 raise ValueError("; ".join(parameter_errors))
             orders = [earth_probe["input_channel_order"]] if earth_probe else channel_orders()
+            feed = datasets[EARTH_3HOURLY_FEED_KEY]
+            if ((earth_probe or {}).get('contract_schema') is not None
+                    and earth_probe['contract_schema'] != feed['schema']):
+                code = 'uploaded_model_contract_invalid'
+                raise ValueError('Frozen spatial contract disagrees with the model declaration')
+            execution = contract_profile(feed['schema'])
+            window = (earth_probe or {}).get('window', execution['probe_window'] if execution['probe_window'] in feed['window'] else feed['window'][0])
+            horizon = (earth_probe or {}).get('horizon', execution['probe_horizon'] if execution['probe_horizon'] in feed['horizon'] else feed['horizon'][0])
+            if window not in feed['window'] or horizon not in feed['horizon']:
+                code = 'uploaded_model_contract_invalid'
+                raise ValueError(f'Model does not declare window={window}, horizon={horizon}')
             for order in orders:
-                shape = dry_run(module.build_model, order, params)
+                shape = dry_run(module.build_model, order, params, window=window, horizon=horizon,
+                                batch_size=(earth_probe or {}).get("batch_size", execution['default_batch_size']),
+                                contract_schema=feed['schema'])
         except Exception as exc:
             errors = [f"Earth three-hour dry-run failed: {exc}"]
         verdict = {
             "compatible": not errors, "status": "unavailable" if errors else "available",
             "code": code if errors else None, "errors": errors, "output_shape": shape,
-            "contract_schema": CONTRACT_SCHEMA, "dataset_id": EARTH_3HOURLY_FEED_KEY,
+            "contract_schema": datasets[EARTH_3HOURLY_FEED_KEY]['schema'], "dataset_id": EARTH_3HOURLY_FEED_KEY,
+            "eval_batch_policy": EVAL_BATCH_POLICY if not errors else None,
+            "window": locals().get('window'), "horizon": locals().get('horizon'),
+            "batch_size": (earth_probe or {}).get('batch_size', locals().get('execution', {}).get('default_batch_size')),
+            "validation_scope": "task_configuration" if earth_probe else "declared_channels_probe_windows",
         }
         # The legacy verdict is independent of the three-hour run.
         legacy = None
@@ -657,11 +714,15 @@ class UserModelValidator:
     @staticmethod
     def _validate_earth_3hourly_compatibility(*, build_model, model_spec, param_schema, feed):
         """Exercise the server's actual spatial-tile invocation."""
-        from training_backbones.earth_3hourly_uploaded_contract import channel_orders, dry_run
+        from training_backbones.earth_3hourly_uploaded_contract import channel_orders, contract_profile, dry_run
         try:
             params = {name: schema["default"] for name, schema in param_schema.items()}
+            execution = contract_profile(feed['schema'])
             for order in channel_orders():
-                shape = dry_run(build_model, order, params)
+                shape = dry_run(build_model, order, params,
+                    window=execution['probe_window'] if execution['probe_window'] in feed['window'] else feed['window'][0],
+                    horizon=execution['probe_horizon'] if execution['probe_horizon'] in feed['horizon'] else feed['horizon'][0],
+                    batch_size=execution['default_batch_size'], contract_schema=feed['schema'])
             return True, [], shape
         except Exception as exc:  # noqa: BLE001 - stable upload verdict
             return False, [f"Earth three-hourly dry-run failed: {exc}"], None
@@ -858,6 +919,7 @@ def _validation_payload(result: UserModelValidationResult) -> dict[str, Any]:
     """Serialize a validation result for the timeout child process queue."""
     return {
         "ok": result.ok,
+        "code": result.code,
         "errors": result.errors,
         "warnings": result.warnings,
         "display_name": result.display_name,

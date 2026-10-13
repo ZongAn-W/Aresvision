@@ -15,7 +15,6 @@ import './experimentCenter.css';
 export default function ExperimentLogPanel({
   task,
   logs,
-  isLight,
   autoScrollPinned = true,
   logContainerRef,
   onScroll,
@@ -48,13 +47,13 @@ export default function ExperimentLogPanel({
       style={{
         border: 'none',
         borderRadius: 0,
-        background: isLight ? 'rgba(246,248,252,0.98)' : 'rgba(8,12,18,0.95)',
+        background: 'var(--surface-2)',
       }}
     >
-      <div className="experiment-monitor-log-toolbar" style={{ background: isLight ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.025)' }}>
+      <div className="experiment-monitor-log-toolbar" style={{ background: 'var(--surface-3)' }}>
         <div className="experiment-monitor-log-toolbar-left">
           <span className="experiment-monitor-log-dot" style={{ background: task ? statusMeta.color : C.ice40 }} />
-          <span style={{ color: C.ice, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 800 }}>
+          <span style={{ color: C.ice, fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', fontWeight: 600 }}>
             {task ? `task #${task.id}` : copy.selectedTask}
           </span>
         </div>
@@ -66,8 +65,8 @@ export default function ExperimentLogPanel({
             <span
               className="experiment-monitor-log-chip"
               style={{
-                color: autoScrollPinned ? C.green : '#c89448',
-                borderColor: autoScrollPinned ? 'rgba(74,207,172,0.18)' : 'rgba(200,148,72,0.20)',
+                color: autoScrollPinned ? 'var(--status-success)' : 'var(--status-warning)',
+                borderColor: `color-mix(in srgb, var(${autoScrollPinned ? '--status-success' : '--status-warning'}) 28%, transparent)`,
               }}
             >
               {autoScrollPinned ? copy.autoScrollOn : copy.autoScrollPaused}
@@ -83,7 +82,7 @@ export default function ExperimentLogPanel({
         aria-live="polite"
         aria-label={title || copy.liveLogs}
         className={`experiment-monitor-log-scroll ${!task || lines.length === 0 ? 'is-empty' : ''}`}
-        style={{ color: isLight ? 'rgba(23,33,47,0.90)' : C.ice80 }}
+        style={{ color: 'var(--text-primary)' }}
       >
         {!task ? (
           <div className="experiment-monitor-log-empty" style={{ color: C.ice50 }}>

@@ -9,24 +9,6 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-auth_dependencies = types.ModuleType("auth.dependencies")
-auth_dependencies.get_optional_user = lambda: None
-sys.modules["auth.dependencies"] = auth_dependencies
-
-models = types.ModuleType("database.models")
-models.User = object
-models.ModelTrainingTask = object
-models.PredictionAnalysisCache = object
-sys.modules["database.models"] = models
-
-analysis_service = types.ModuleType("services.analysis_service")
-analysis_service.AnalysisService = object
-sys.modules["services.analysis_service"] = analysis_service
-
-personal_service = types.ModuleType("services.personal_data_source_service")
-personal_service.SingleYearDataView = object
-sys.modules["services.personal_data_source_service"] = personal_service
-
 from routers import predict  # noqa: E402
 from schemas.predict import PredictRequest  # noqa: E402
 
@@ -370,11 +352,4 @@ async def test_trained_model_analysis_requires_authenticated_user_before_service
 
 
 if __name__ == "__main__":
-    asyncio.run(test_predict_run_uses_training_task_inference_when_task_id_is_present())
-    asyncio.run(test_predict_metrics_uses_training_task_test_set_metrics_when_task_id_is_present())
-    asyncio.run(test_trained_model_request_fails_when_training_inference_service_is_missing())
-    asyncio.run(test_permutation_importance_uses_training_task_service_when_task_id_is_present())
-    asyncio.run(test_error_distribution_uses_training_task_test_set_when_task_id_is_present())
-    asyncio.run(test_training_model_compare_uses_batch_test_set_metrics_service())
-    asyncio.run(test_trained_model_analysis_requires_authenticated_user_before_service_call())
-    print("trained model predict contract tests passed")
+    raise SystemExit(pytest.main([__file__, "--asyncio-mode=auto"]))

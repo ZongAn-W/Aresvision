@@ -33,6 +33,16 @@ UPLOADED_MODEL_DOWNLOAD_ASSETS = {
         "download_name": "aresvision_earth_3hourly_model_v1.md",
         "media_type": "text/markdown; charset=utf-8",
     },
+    "earth-3hourly-fullgrid-template": {
+        "path": REPO_ROOT / "docs" / "earth-3hourly-fullgrid-model-template.py",
+        "download_name": "aresvision_earth_3hourly_fullgrid_model_v2.py",
+        "media_type": "text/x-python; charset=utf-8",
+    },
+    "earth-3hourly-fullgrid-guide": {
+        "path": REPO_ROOT / "docs" / "earth-3hourly-fullgrid-model.md",
+        "download_name": "aresvision_earth_3hourly_fullgrid_model_v2.md",
+        "media_type": "text/markdown; charset=utf-8",
+    },
 }
 
 
@@ -90,6 +100,8 @@ def _normalize_validation_report(value: str | None) -> dict[str, Any]:
         "warnings": _normalize_string_list(parsed.get("warnings")),
         "output_shape": _normalize_output_shape(parsed.get("output_shape")),
     }
+    if isinstance(parsed.get("code"), str):
+        report["code"] = parsed["code"]
     # The Earth capability result is part of the upload contract now, so it must
     # survive serialization; the training page reads it before offering the model
     # for an Earth experiment. It is only published when the model opted in.

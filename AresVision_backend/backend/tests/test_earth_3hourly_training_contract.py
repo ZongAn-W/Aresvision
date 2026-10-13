@@ -52,13 +52,23 @@ def test_normalizer_selects_new_windows_without_changing_channel_order(entry):
 
 
 @pytest.mark.parametrize("hypers", [
-    {"window": 7}, {"horizon": 3}, {"window": 56.0}, {"horizon": True},
-    {"window": 55}, {"horizon": 25},
+    {"window": 0}, {"horizon": -1}, {"window": 56.0}, {"horizon": True},
+    {"window": 241}, {"horizon": 241},
 ])
 def test_new_task_never_coerces_or_downgrades_wrong_windows(hypers):
     with pytest.raises(DatasetRequestError) as error:
         normalize_earth_training_hyperparameters(hypers, dataset_id=EARTH_DATASET_3HOURLY_ID)
     assert (error.value.status_code, error.value.code) == (422, "invalid_earth_training_parameters")
+
+
+@pytest.mark.parametrize('window,horizon', [(16, 8), (55, 25), (240, 1), (1, 240)])
+def test_custom_threehour_windows_survive_normalization_and_spec(window, horizon):
+    normalized = normalize_earth_training_hyperparameters(
+        {'window': window, 'horizon': horizon}, dataset_id=EARTH_DATASET_3HOURLY_ID)
+    assert (normalized['window'], normalized['horizon']) == (window, horizon)
+    profile = earth_training_profile(EARTH_DATASET_3HOURLY_ID, normalized)
+    assert (profile['window'], profile['horizon']) == (window, horizon)
+    assert profile['frequency_hours'] == 3
 
 
 @pytest.mark.parametrize("daily_id", ["earth_merra2_daily_v1", "earth_merra2_daily_v2"])

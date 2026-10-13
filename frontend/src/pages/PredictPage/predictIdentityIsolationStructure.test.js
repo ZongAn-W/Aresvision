@@ -59,6 +59,24 @@ test('cached trained tasks are restored only after current-user task validation'
   assert.match(pageSource, /setPredictCache\(predictScope, restoredCache\)/);
 });
 
+test('training task loading keeps failure distinct from an empty successful result', () => {
+  assert.match(pageSource, /const \[trainingTasksError, setTrainingTasksError\] = useState\(null\)/);
+  assert.match(pageSource, /const loadTrainingTasks = useCallback\(\(\) =>/);
+  assert.match(pageSource, /fetchTasks\(\{ signal: controller\.signal \}\)/);
+  assert.match(pageSource, /setTrainingTasksLoaded\(true\)/);
+  assert.match(pageSource, /setTrainingTasksError\(requestError/);
+  assert.match(pageSource, /\.then\(\(items\) => \{[\s\S]*?setTrainingTasks\(Array\.isArray\(items\) \? items : \[\]\)/);
+});
+
+test('training task responses are guarded by request id, user, and scope', () => {
+  assert.match(pageSource, /trainingTasksRequestRef\.current\.controller\?\.abort\(\)/);
+  assert.match(pageSource, /trainingTasksRequestRef\.current\.id === requestId/);
+  assert.match(pageSource, /predictScopeRef\.current === scope/);
+  assert.match(pageSource, /user\?\.id === userId/);
+  assert.match(pageSource, /onRetryTrainingTasks=\{loadTrainingTasks\}/);
+  assert.match(pageSource, /reloadEarthContextAndTasks/);
+});
+
 test('single and comparison analyses restore only for their exact request keys', () => {
   assert.match(pageSource, /metricsKey:\s*buildPredictMetricsKey\(restoredContext\)/);
   assert.match(pageSource, /errorDistKey:\s*buildErrorDistributionKey\(restoredContext\)/);

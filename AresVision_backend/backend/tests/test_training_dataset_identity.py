@@ -1,14 +1,16 @@
 """Training request dataset identity: strict entry checks and persistence."""
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 import sys
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -16,6 +18,8 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from schemas.training import TrainingStartRequest, TrainingTaskResponse  # noqa: E402
+from database.engine import Base  # noqa: E402
+from database.models import ModelTrainingTask, User, UserModelPackage  # noqa: E402
 from services import training_service as training_module  # noqa: E402
 from services.dataset_identity import DatasetRequestError  # noqa: E402
 from services.dataset_registry import DatasetRegistry  # noqa: E402
@@ -29,38 +33,6 @@ IDENTITY_FIELDS = (
     "dataset_snapshot",
 )
 
-LEGACY_SCHEMA = """
-CREATE TABLE model_training_tasks (
-    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    model_script VARCHAR(255) NOT NULL,
-    model_source VARCHAR(20) NOT NULL DEFAULT 'official',
-    uploaded_model_id VARCHAR(36),
-    uploaded_model_version INTEGER,
-    hyperparameters TEXT NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending',
-    start_time DATETIME NOT NULL,
-    end_time DATETIME,
-    log_file_path VARCHAR(500),
-    output_model_path VARCHAR(500),
-    custom_model_name VARCHAR(255),
-    pid INTEGER,
-    metrics TEXT,
-    progress FLOAT DEFAULT 0.0,
-    current_epoch INTEGER DEFAULT 0,
-    total_epochs INTEGER DEFAULT 0,
-    current_loss FLOAT,
-    eta VARCHAR(50),
-    loss_history TEXT,
-    dataset_id VARCHAR(80),
-    dataset_version VARCHAR(40),
-    dataset_fingerprint VARCHAR(64),
-    dataset_identity_status VARCHAR(32),
-    dataset_snapshot TEXT
-)
-"""
-
-
 class _StubDataService:
     def get_available_years(self):
         return [27]
@@ -70,8 +42,16 @@ class RecordingTrainingService(training_module.TrainingService):
     """TrainingService whose subprocess launch is replaced by a recorder."""
 
     def __init__(self, sessions):
+        super().__init__()
         self.calls = []
         self._sessions = sessions
+        self.execution_finished = asyncio.Event()
+
+    async def _execute_training_task(self, *args, **kwargs):
+        try:
+            await super()._execute_training_task(*args, **kwargs)
+        finally:
+            self.execution_finished.set()
 
     async def _run_training_subprocess(self, task_id, script_name, hyperparameters, log_file,
                                        output_path, env_overrides=None, temp_data_root=None,
@@ -89,6 +69,7 @@ class RecordingTrainingService(training_module.TrainingService):
 def build_registry(tmp_path):
     return DatasetRegistry(
         tmp_path / "no_earth_package",
+        earth_3hourly_package_dir=tmp_path / "no_earth_3hourly_package",
         expected_manifest_sha256="a" * 64,
         expected_data_sha256="b" * 64,
     )
@@ -96,13 +77,20 @@ def build_registry(tmp_path):
 
 def prepare_engine(tmp_path):
     db_path = tmp_path / "identity.db"
-    connection = sqlite3.connect(db_path)
-    try:
-        connection.execute(LEGACY_SCHEMA)
-        connection.commit()
-    finally:
-        connection.close()
-    return create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True), db_path
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+
+    async def setup():
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with async_sessionmaker(engine)() as session:
+            session.add(User(
+                id=7, email="identity@example.com", username="identity",
+                password_hash="test", role="user",
+            ))
+            await session.commit()
+
+    asyncio.run(setup())
+    return engine, db_path
 
 
 def read_tasks(db_path):
@@ -133,18 +121,18 @@ def start_training(tmp_path, monkeypatch, *, hyperparameters, dataset_id=None, *
     monkeypatch.setattr(training_module, "MODELS_DIR", _ExistingModelsDir())
 
     async def run():
-        try:
-            return await service.start_training(
-                user_id=7,
-                model_script="demo3.py",
-                hyperparameters=hyperparameters,
-                custom_model_name=overrides.pop("custom_model_name", "identity-case"),
-                dataset_id=dataset_id,
-                dataset_registry=build_registry(tmp_path),
-                **overrides,
-            )
-        finally:
-            await asyncio.sleep(0)
+        task = await service.start_training(
+            user_id=7,
+            model_script="demo3.py",
+            hyperparameters=hyperparameters,
+            custom_model_name=overrides.pop("custom_model_name", "identity-case"),
+            dataset_id=dataset_id,
+            dataset_registry=build_registry(tmp_path),
+            **overrides,
+        )
+        await asyncio.wait_for(service.execution_finished.wait(), timeout=5)
+        assert service.calls, read_tasks(db_path)
+        return task
 
     try:
         task = asyncio.run(run())
@@ -245,7 +233,7 @@ def test_unsupported_datasets_are_rejected_before_any_side_effect(
     assert error.status_code == status
 
 
-def test_earth_training_is_bound_then_fails_on_the_unavailable_package(monkeypatch, tmp_path):
+def test_active_earth_training_fails_on_the_unavailable_package(monkeypatch, tmp_path):
     """Earth reaches its own path and stops before any database side effect.
 
     The registry here points at a directory that does not exist, so the release
@@ -265,7 +253,7 @@ def test_earth_training_is_bound_then_fails_on_the_unavailable_package(monkeypat
         with pytest.raises(DatasetRequestError) as exc:
             await training_module.TrainingService().start_training(
                 user_id=7, model_script="demo3.py", hyperparameters={},
-                custom_model_name="earth-unavailable", dataset_id="earth_merra2_daily_v1",
+                custom_model_name="earth-unavailable", dataset_id="earth_merra2_3hourly_v1",
                 dataset_registry=build_registry(tmp_path),
             )
         return exc.value
@@ -276,13 +264,8 @@ def test_earth_training_is_bound_then_fails_on_the_unavailable_package(monkeypat
     assert error.availability_reason == "package_missing"
 
 
-def test_earth_training_rejects_uploaded_models_before_loading_the_package(tmp_path, monkeypatch):
-    """An uploaded-model Earth request is refused with no package load or DB write.
-
-    The release is bound first, so an unverifiable package surfaces the
-    availability code; either way the uploaded model package is never loaded and
-    the database is never touched.
-    """
+def test_retired_earth_training_rejects_uploaded_models_before_loading_the_package(tmp_path, monkeypatch):
+    """Retirement precedes uploaded package loading and database writes."""
     class ForbiddenUserModelService:
         async def get_package_for_user(self, *args, **kwargs):
             raise AssertionError("Uploaded model package must not be loaded")
@@ -308,17 +291,14 @@ def test_earth_training_rejects_uploaded_models_before_loading_the_package(tmp_p
         return exc.value
 
     error = asyncio.run(run())
-    assert error.code in {
-        "dataset_unavailable",
-        "dataset_training_configuration_not_supported",
-    }
-    assert error.status_code in {409, 503}
+    assert error.code == "dataset_retired"
+    assert error.status_code == 409
 
 
-def test_earth_uploaded_configuration_is_refused_with_a_verifiable_package(
+def test_retired_earth_uploaded_training_is_refused_with_a_verifiable_package(
     earth_global_release, tmp_path, monkeypatch
 ):
-    """With a real package the uploaded-model refusal is the configuration code."""
+    """A valid historical package cannot bypass dataset retirement."""
     class ForbiddenUserModelService:
         async def get_package_for_user(self, *args, **kwargs):
             raise AssertionError("Uploaded model package must not be loaded")
@@ -345,7 +325,7 @@ def test_earth_uploaded_configuration_is_refused_with_a_verifiable_package(
         return exc.value
 
     error = asyncio.run(run())
-    assert error.code == "dataset_training_configuration_not_supported"
+    assert error.code == "dataset_retired"
     assert error.status_code == 409
 
 
@@ -404,17 +384,16 @@ def test_default_request_records_openmars_mcd(tmp_path, monkeypatch):
 
 
 def test_uploaded_model_training_records_identity_without_touching_runner_args(tmp_path, monkeypatch):
-    class FakePackage:
-        id = "4d24f680-5029-47d9-9890-a56a6247b20e"
-        user_id = 7
-        version = 1
-        validation_status = "valid"
-        storage_path = "D:/tmp/model.py"
-        param_schema = "{}"
+    from services.user_model_service import UserModelService
 
-    class FakeUserModelService:
-        async def get_package_for_user(self, package_id, user_id):
-            return FakePackage
+    source_path = tmp_path / "uploaded-model.source"
+    source_path.write_text("MODEL_SPEC = {}\n", encoding="utf-8")
+    package = UserModelPackage(
+        id="4d24f680-5029-47d9-9890-a56a6247b20e", user_id=7, version=1,
+        display_name="identity-model", original_filename="model.py",
+        validation_status="valid", storage_path=str(source_path), param_schema="{}",
+        content_hash=hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    )
 
     engine, db_path = prepare_engine(tmp_path)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -426,17 +405,23 @@ def test_uploaded_model_training_records_identity_without_touching_runner_args(t
     )
 
     async def run():
-        return await service.start_training(
+        async with sessions() as session:
+            session.add(package)
+            await session.commit()
+        task = await service.start_training(
             user_id=7,
             model_script="demo3.py",
             hyperparameters={"epochs": 1},
             custom_model_name="uploaded-identity",
             model_source="uploaded",
-            uploaded_model_id=FakePackage.id,
-            user_model_service=FakeUserModelService(),
+            uploaded_model_id=package.id,
+            user_model_service=UserModelService(sessionmaker=sessions),
             dataset_id="mcd_overview",
             dataset_registry=build_registry(tmp_path),
         )
+        await asyncio.wait_for(service.execution_finished.wait(), timeout=5)
+        assert service.calls, read_tasks(db_path)
+        return task
 
     try:
         task = asyncio.run(run())
@@ -448,6 +433,9 @@ def test_uploaded_model_training_records_identity_without_touching_runner_args(t
     row = read_tasks(db_path)[0]
     assert row["dataset_id"] == "mcd_overview"
     assert service.calls[0]["hyperparameters"]["training_dataset"] == "mcd_overview"
+    assert service.calls[0]["script_name"] == "__user_model_runner__"
+    assert service.calls[0]["hyperparameters"]["_uploaded_model_path"] == str(source_path)
+    assert service.calls[0]["earth_training_spec"] is None
 
 
 def test_identity_columns_never_become_cli_arguments(tmp_path, monkeypatch):
@@ -521,7 +509,7 @@ def _patch_cli(monkeypatch, module, namespace):
 
 
 @pytest.mark.parametrize("dataset_id,code", [
-    ("earth_merra2_daily_v1", "dataset_training_not_supported"),
+    ("earth_merra2_daily_v1", "dataset_retired"),
     ("missing", "unknown_dataset"),
     ("", "invalid_dataset_id"),
 ])
@@ -565,7 +553,7 @@ def test_official_cli_accepts_a_registered_mars_dataset(monkeypatch):
 
 
 @pytest.mark.parametrize("dataset_id,code", [
-    ("earth_merra2_daily_v1", "dataset_training_not_supported"),
+    ("earth_merra2_daily_v1", "dataset_retired"),
     ("missing", "unknown_dataset"),
 ])
 def test_uploaded_runner_cli_rejects_bad_dataset_before_loading_data(monkeypatch, dataset_id, code):
@@ -707,24 +695,10 @@ def _build_http_app(tmp_path, monkeypatch):
 
     from auth import dependencies as auth_dependencies
     from auth.security import create_access_token
-    from database import models
-    from database.engine import Base
     from routers import training as training_router
 
     engine, db_path = prepare_engine(tmp_path)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def setup():
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        async with sessions() as session:
-            session.add(models.User(
-                id=7, email="identity@example.com", username="identity",
-                password_hash="test", role="user",
-            ))
-            await session.commit()
-
-    asyncio.run(setup())
 
     async def no_subprocess(self, *args, **kwargs):
         return None
@@ -732,12 +706,23 @@ def _build_http_app(tmp_path, monkeypatch):
     monkeypatch.setattr(training_module, "async_session_maker", sessions)
     monkeypatch.setattr(auth_dependencies, "async_session_maker", sessions)
     monkeypatch.setattr(training_module.TrainingService, "_run_training_subprocess", no_subprocess)
+    service = training_module.TrainingService()
+    service._scheduler_started = True
+    monkeypatch.setattr(training_router, "training_service", service)
     monkeypatch.setattr(
         training_module, "build_task_output_path",
         lambda task_id, name, results_dir=None: Path(tmp_path) / f"{task_id}_{name}.pth",
     )
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            await engine.dispose()
+
+    app = FastAPI(lifespan=lifespan)
+    app.state.db_session = sessions
     app.state.dataset_registry = build_registry(tmp_path)
     app.include_router(training_router.router, prefix="/api")
     token = create_access_token({"sub": "7", "role": "user"})
@@ -763,6 +748,8 @@ def test_http_start_request_records_identity_and_keeps_legacy_key(tmp_path, monk
 
     assert response.status_code == 200, response.text
     body = response.json()
+    assert body["status"] == "queued"
+    assert body["queue_position"] == 1
     assert body["dataset_id"] == "mcd_overview"
     assert body["dataset_version"] is None
     assert body["dataset_fingerprint"] is None
@@ -771,13 +758,13 @@ def test_http_start_request_records_identity_and_keeps_legacy_key(tmp_path, monk
     assert body["dataset_snapshot"]["version_status"] == "unversioned"
 
     row = read_tasks(db_path)[0]
+    assert row["status"] == "queued"
+    assert row["queued_at"] is not None
     assert json.loads(row["hyperparameters"])["training_dataset"] == "mcd_overview"
 
 
 @pytest.mark.parametrize("payload,status,code", [
-    # Earth reaches its own bound path; with an unverifiable package the HTTP layer
-    # answers 503 and still creates no task.
-    ({"dataset_id": "earth_merra2_daily_v1"}, 503, "dataset_unavailable"),
+    ({"dataset_id": "earth_merra2_daily_v1"}, 409, "dataset_retired"),
     ({"dataset_id": "missing"}, 400, "unknown_dataset"),
     ({"dataset_id": ""}, 400, "invalid_dataset_id"),
     ({"dataset_id": "openmars_mcd", "hyperparameters": {"training_dataset": "mcd_overview"}},
@@ -824,16 +811,16 @@ def test_http_task_list_returns_identity_for_legacy_and_new_tasks(tmp_path, monk
         assert created.status_code == 200
 
         # A historical row with no identity at all must still serialize.
-        connection = sqlite3.connect(db_path)
-        try:
-            connection.execute(
-                "INSERT INTO model_training_tasks "
-                "(user_id, model_script, hyperparameters, status, custom_model_name, start_time) "
-                "VALUES (7, 'demo3.py', '{}', 'completed', 'legacy-row', '2026-01-01 00:00:00')"
-            )
-            connection.commit()
-        finally:
-            connection.close()
+        async def insert_legacy_task():
+            async with client.app.state.db_session() as session:
+                session.add(ModelTrainingTask(
+                    user_id=7, model_script="demo3.py", hyperparameters="{}",
+                    status="completed", custom_model_name="legacy-row",
+                    start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                ))
+                await session.commit()
+
+        asyncio.run(insert_legacy_task())
 
         listing = client.get("/api/training/tasks", headers=headers)
 

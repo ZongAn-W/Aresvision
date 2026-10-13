@@ -46,6 +46,7 @@ class UploadedModelReference:
     param_schema: dict[str, Any]
     custom_model_params: dict[str, Any]
     source_text: str | None = None
+    contract_schema: str | None = None
 
     def checkpoint_reference(self) -> dict[str, Any]:
         """Return the plain-data form stored inside an Earth checkpoint.
@@ -64,6 +65,7 @@ class UploadedModelReference:
             "custom_model_params": dict(self.custom_model_params),
             "source_text": self.source_text,
             "source_available": self.source_text is not None,
+            **({"contract_schema": self.contract_schema} if self.contract_schema is not None else {}),
         }
 
 
@@ -102,6 +104,7 @@ def build_reference(
     param_schema: Any,
     custom_model_params: Any,
     embed_source: bool = True,
+    contract_schema: str | None = None,
 ) -> UploadedModelReference:
     """Build a pinned reference from a ``UserModelPackage`` row.
 
@@ -133,6 +136,7 @@ def build_reference(
         param_schema=dict(param_schema or {}),
         custom_model_params=dict(custom_model_params or {}),
         source_text=source_text,
+        contract_schema=contract_schema,
     )
 
 

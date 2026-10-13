@@ -242,14 +242,59 @@ def _read_daily_mean(path: Path, variable: str, expected_unit: str, expected_dat
         return values.mean(axis=0, dtype="float64"), lat, lon
 
 
-def _source_fingerprint(index: Mapping[date, Mapping[str, Path]]) -> str:
+def sha256_file(path: Path) -> str:
+    """Hash a complete file in bounded memory and report source I/O failures clearly."""
+    path = Path(path)
+    try:
+        before = path.stat()
+        if not path.is_file():
+            raise ValueError(f"source file is not a readable regular file: {path}")
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                digest.update(block)
+        after = path.stat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"source file is missing while hashing: {path}") from exc
+    except PermissionError as exc:
+        raise ValueError(f"source file is not readable while hashing: {path}") from exc
+    except OSError as exc:
+        raise ValueError(f"source file could not be read while hashing: {path}: {exc}") from exc
+    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise ValueError(f"source file changed while hashing: {path.name}")
+    return digest.hexdigest()
+
+
+def _source_inventory(index: Mapping[date, Mapping[str, Path]]) -> list[dict]:
     payload = []
-    for day, pair in index.items():
+    for day in sorted(index):
+        pair = index[day]
         for product in ("slv", "rad"):
             path = pair[product]
+            try:
+                info = path.stat()
+                digest = sha256_file(path)
+                after = path.stat()
+            except FileNotFoundError as exc:
+                raise ValueError(f"source file is missing while building inventory: {path}") from exc
+            except PermissionError as exc:
+                raise ValueError(f"source file is not readable while building inventory: {path}") from exc
+            except OSError as exc:
+                raise ValueError(f"source file could not be inventoried: {path}: {exc}") from exc
+            if (info.st_size, info.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise ValueError(f"source file changed while hashing: {path.name}")
             payload.append({"date": day.isoformat(), "product": product,
-                            "name": path.name, "bytes": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns})
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                            "name": path.name, "bytes": info.st_size,
+                            "mtime_ns": info.st_mtime_ns, "sha256": digest})
+    return payload
+
+
+def _source_fingerprint(index: Mapping[date, Mapping[str, Path]]) -> str:
+    return _fingerprint_inventory(_source_inventory(index))
+
+
+def _fingerprint_inventory(inventory: list[dict]) -> str:
+    encoded = json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -308,7 +353,9 @@ def preprocess_merra2(
     output_dir.mkdir(parents=True, exist_ok=True)
     source_lat = source_lon = None
     source_lat_bounds = source_lon_bounds = None
-    source_fingerprint = _source_fingerprint({day: index[day] for day in dates})
+    selected_sources = {day: index[day] for day in dates}
+    source_inventory = _source_inventory(selected_sources)
+    source_fingerprint = _fingerprint_inventory(source_inventory)
     dates64 = np.asarray(dates, dtype="datetime64[D]")
     split = split_days(dates64, train_end, validation_end)
     fields = {name: np.empty((len(dates), len(target_lat), len(target_lon)), dtype="float32") for name in CHANNELS}
@@ -350,8 +397,6 @@ def preprocess_merra2(
         if day_index % 10 == 0 or day_index == len(dates) - 1:
             print(f"processed {day.isoformat()} ({day_index + 1}/{len(dates)})", flush=True)
 
-    if source_fingerprint != _source_fingerprint({day: index[day] for day in dates}):
-        raise ValueError("source archive changed during preprocessing")
     train_mask = split == SPLITS["train"]
     train_stats = {
         name: {"mean": float(fields[name][train_mask].mean(dtype="float64")),
@@ -396,10 +441,9 @@ def preprocess_merra2(
                     "date_end": dates[-1].isoformat(), "daily_file_count": len(dates),
                     "source_sha256": source_fingerprint},
         "source_sha256": source_fingerprint,
-        "source_fingerprint_basis": "SHA256 of canonical sorted date/product/name/bytes/mtime_ns inventory; not whole-file content hashes",
-        "source_files": [{"date": day.isoformat(), "product": product, "name": index[day][product].name,
-                          "bytes": index[day][product].stat().st_size, "mtime_ns": index[day][product].stat().st_mtime_ns}
-                         for day in dates for product in ("slv", "rad")],
+        "source_inventory_version": 2,
+        "source_fingerprint_basis": "SHA256 of canonical sorted date/product/name/bytes/mtime_ns/full-file-sha256 inventory",
+        "source_files": source_inventory,
         "data_file": output.name,
         "dimensions": {"time": len(dates), "lat": len(target_lat), "lon": len(target_lon), "bounds": 2},
         "time_start": dates[0].isoformat(), "time_end": dates[-1].isoformat(), "cadence": "daily mean",
@@ -423,11 +467,18 @@ def preprocess_merra2(
         manifest["splits"][name] = {"start": str(selected[0]), "end": str(selected[-1]), "days": int(len(selected))}
     manifest["data_bytes"] = output.stat().st_size
     manifest["data_sha256"] = _sha256(output)
+    final_source_inventory = _source_inventory(selected_sources)
+    if [item["sha256"] for item in source_inventory] != [item["sha256"] for item in final_source_inventory]:
+        raise ValueError("source archive changed during preprocessing")
+    if source_inventory != final_source_inventory:
+        raise ValueError("source archive metadata changed during preprocessing")
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     verification_dir = output_dir / "verification"
     verification_dir.mkdir(exist_ok=True)
     (verification_dir / "preprocess_report.json").write_text(json.dumps({
         "source_sha256": source_fingerprint, "data_sha256": manifest["data_sha256"],
+        "source_fingerprint_basis": manifest["source_fingerprint_basis"],
+        "source_files": source_inventory,
         "days": len(dates), "grid": [len(target_lat), len(target_lon)], "train_stats": train_stats,
         "variables_checked": len(quality_records), "missing_values": 0,
         "source_values_checked": sum(item["values_checked"] for item in quality_records),
@@ -437,11 +488,7 @@ def preprocess_merra2(
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def main() -> None:

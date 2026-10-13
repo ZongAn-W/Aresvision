@@ -11,7 +11,7 @@ MODEL_SPEC = {
         "earth_merra2_3hourly_v1": {
             "schema": "aresvision_earth_3hourly_uploaded_model_v1",
             "frequency_hours": 3, "step_unit": "hour", "step": 3, "time_zone": "UTC",
-            "window": [56], "horizon": [24], "grid": [[240, 480]],
+            "window": list(range(1, 241)), "horizon": list(range(1, 241)), "grid": [[240, 480]],
             "target": "TO3", "target_unit": "DU",
             "input_channels": ["TO3", "U10M", "V10M", "T2M", "SWGDN"],
             "input_units": ["DU", "m s-1", "m s-1", "K", "W m-2"],

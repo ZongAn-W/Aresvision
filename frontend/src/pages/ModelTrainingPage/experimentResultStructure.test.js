@@ -17,9 +17,12 @@ test('result panel shows the experiment name, status and weight availability', (
   assert.match(resultSource, /copy\.weightsUnavailable/);
 });
 
-test('result panel renders every supported metric only when a value exists', () => {
+test('result panel renders Earth missing metrics explicitly and keeps Mars filtering', () => {
   assert.match(resultSource, /EXPERIMENT_METRIC_KEYS/);
-  assert.match(resultSource, /\.filter\(\(key\) => summary\.metrics\[key\] !== undefined\)/);
+  assert.match(resultSource, /\.filter\(\(key\) => earth \|\| summary\.metrics\[key\] !== undefined\)/);
+  assert.match(resultSource, /experimentCenter\.metricNotProvided/);
+  assert.match(resultSource, /experimentCenter\.fullTestMetrics/);
+  assert.match(resultSource, /readExperimentMetrics\(activeTask\.metrics, 'validation'\)/);
   ['metricRmse', 'metricMae', 'metricMse', 'metricR2', 'metricMape', 'metricSmape']
     .forEach((key) => assert.match(resultSource, new RegExp(`experimentCenter\\.${key}`), `${key} should be rendered`));
   assert.match(resultSource, /formatExperimentMetricValue\(summary\.metrics\[key\]\)/);
@@ -94,8 +97,10 @@ test('result panel does not create a second poller, websocket or log request', (
 });
 
 test('prediction entry is only offered when the backend reports usable weights', () => {
-  assert.match(resultSource, /const modelAvailable = canUseTaskForPrediction\(activeTask\)/);
-  assert.match(resultSource, /modelAvailable \? \([\s\S]*?copy\.useForPrediction/);
+  assert.match(resultSource, /const predictionAvailable = canUseTaskForPrediction\(activeTask\)/);
+  assert.match(resultSource, /predictionAvailable \? \([\s\S]*?copy\.useForPrediction/);
+  assert.match(resultSource, /const retiredDataset = isRetiredEarthTask\(activeTask\)/);
+  assert.match(resultSource, /disabled=\{retiredDataset\}/);
   assert.match(resultSource, /copy\.modelUnavailableTitle/);
   assert.match(resultSource, /copy\.notCompletedReason/);
 });
@@ -108,7 +113,7 @@ test('prediction handoff keeps using the existing session handoff contract', () 
 });
 
 test('comparison navigation explicitly requests the compare mode', () => {
-  assert.match(pageSource, /navigateToPredict\(\{ mode: PREDICT_MODEL_MODE_COMPARE \}\)/);
+  assert.match(pageSource, /navigateToPredict\(\{ mode: isEarthTrainingDataset\(task\.dataset_id\)\s*\? PREDICT_MODEL_MODE_EARTH_COMPARE : PREDICT_MODEL_MODE_COMPARE \}\)/);
   assert.match(pageSource, /canUseTaskForPrediction\(task\)/);
   assert.match(modesSource, /export function readPredictModeFromHash/);
   assert.match(modesSource, /export function buildPredictHash/);
@@ -147,12 +152,11 @@ test('copy configuration restores uploaded-model custom params', () => {
   assert.match(block, /setModelSource\(config\.modelSource\)/);
   assert.match(block, /setSelectedUploadedModelId\(config\.selectedUploadedModelId\)/);
   // 回填后要登记来源模型，避免 schema 同步 effect 立刻把参数重置成默认值。
-  assert.match(block, /copiedCustomModelParamsRef\.current = config\.customModelParams/);
-  assert.match(pageSource, /const copiedCustomModelParamsRef = useRef\(''\)/);
-  assert.match(pageSource, /copiedCustomModelParamsRef\.current === selectedUploadedModelId/);
+  assert.match(block, /draftSessionRef\.current\.preserveCustomParams\(config\.trainingDataset, config\.selectedUploadedModelId\)/);
+  assert.match(pageSource, /draftSessionRef\.current\.syncCustomParams\(/);
   // 「新建实验」清空登记，回到正常默认参数流程。
   const createHandler = pageSource.slice(pageSource.indexOf('const handleCreateExperiment ='));
-  assert.match(createHandler.slice(0, createHandler.indexOf('const handleSelectTask')), /copiedCustomModelParamsRef\.current = ''/);
+  assert.match(createHandler.slice(0, createHandler.indexOf('const handleSelectTask')), /draftSessionRef\.current\.reset\(\)/);
 });
 
 test('uploaded model param form still receives state through the canvas and inspector', () => {

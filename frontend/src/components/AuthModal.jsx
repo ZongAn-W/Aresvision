@@ -1,42 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
+import CloseOutlined from '@mui/icons-material/CloseOutlined';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../contexts/ToastContext';
 import { useT } from '../i18n';
-import C from '../constants/colors';
 import { useScrollLock } from '../hooks/useScrollLock';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { apiSendCode, apiResetPassword } from '../services/api';
-
-function CloseIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-      <path d="M3 3L13 13M13 3L3 13" stroke="currentColor" strokeWidth="1.8"
-        strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
+import './ui/overlay.css';
 
 function Input({ label, type = 'text', value, onChange, placeholder, disabled, error, name, autoComplete }) {
-  const { settings } = useSettings();
-  const isLight = settings.theme === 'light';
-  const [focused, setFocused] = useState(false);
-
-  const borderColor = error
-    ? C.mars
-    : focused
-      ? C.blue
-      : 'var(--border-strong)';
+  const inputId = useId();
+  const errorId = `${inputId}-error`;
 
   return (
-    <div style={{ marginBottom: 16 }}>
-      <label style={{
-        display: 'block', fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600, letterSpacing: '0.08em',
-        color: 'var(--text-80)',
-        marginBottom: 6, textTransform: 'uppercase',
-      }}>
-        {label}
-      </label>
+    <div className="av-auth-field">
+      <label htmlFor={inputId}>{label}</label>
       <input
+        id={inputId}
         type={type}
         name={name}
         autoComplete={autoComplete}
@@ -44,49 +25,25 @@ function Input({ label, type = 'text', value, onChange, placeholder, disabled, e
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        style={{
-          width: '100%', boxSizing: 'border-box',
-          padding: '10px 14px',
-          background: 'var(--bg-muted)',
-          border: `1px solid ${borderColor}`,
-          borderRadius: 8,
-          color: 'var(--text)',
-          fontSize: 'calc(14px * var(--font-scale, 1))',
-          outline: 'none',
-          transition: 'border-color 0.15s',
-          fontFamily: 'inherit',
-        }}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
       />
       {error && (
-        <div style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: C.mars, marginTop: 5 }}>{error}</div>
+        <div id={errorId} className="av-auth-error" role="alert">{error}</div>
       )}
     </div>
   );
 }
 
-function TabBar({ tab, setTab, t, isLight }) {
-  const activeColor = C.blue;
-  const inactiveColor = 'var(--text-60)';
-  const borderBase = 'var(--border)';
-
+function TabBar({ tab, setTab, t }) {
   return (
-    <div style={{ display: 'flex', borderBottom: `1px solid ${borderBase}`, marginBottom: 24 }}>
+    <div className="av-auth-tabs">
       {['login', 'register'].map(k => (
         <button
           key={k}
+          type="button"
+          aria-pressed={tab === k}
           onClick={() => setTab(k)}
-          style={{
-            flex: 1, padding: '12px 0',
-            background: 'none', border: 'none', cursor: 'pointer',
-            fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 600, letterSpacing: '0.06em',
-            color: tab === k ? activeColor : inactiveColor,
-            borderBottom: tab === k ? `2px solid ${activeColor}` : '2px solid transparent',
-            marginBottom: -1,
-            transition: 'color 0.15s, border-color 0.15s',
-            fontFamily: 'inherit',
-          }}
         >
           {k === 'login' ? t('auth.loginTab') : t('auth.registerTab')}
         </button>
@@ -100,8 +57,11 @@ export default function AuthModal() {
   const { settings } = useSettings();
   const { showToast } = useToast();
   const t = useT();
-  const isLight = settings.theme === 'light';
+  const dialogRef = useRef(null);
+  const titleId = useId();
+  const fieldPrefix = useId();
   useScrollLock(authModalOpen);
+  useDialogFocus(authModalOpen, dialogRef, closeAuthModal);
 
   // ── 登录/注册 state ──
   const [tab, setTab] = useState(authModalTab);
@@ -168,23 +128,6 @@ export default function AuthModal() {
   }, [authModalOpen, authModalTab]);
 
   if (!authModalOpen) return null;
-
-  const L = isLight;
-  const overlayBg    = L ? 'rgba(220,224,240,0.72)' : 'rgba(0,0,8,0.75)';
-  const cardBg       = 'var(--bg-card-strong)';
-  const cardBorder   = 'var(--border)';
-  const cardShadow   = L
-    ? '0 16px 48px rgba(15,23,42,0.14), 0 4px 12px rgba(15,23,42,0.07)'
-    : '0 16px 48px rgba(0,0,0,0.40), 0 4px 12px rgba(0,0,0,0.24)';
-  const titleColor   = 'var(--text)';
-  const subtitleClr  = 'var(--text-60)';
-  const closeColor   = 'var(--text-60)';
-  const switchColor  = 'var(--text-60)';
-  const hintColor    = 'var(--text-60)';
-  const inputBg      = 'var(--bg-muted)';
-  const inputBorder  = 'var(--border-strong)';
-  const inputText    = 'var(--text)';
-  const labelColor   = 'var(--text-80)';
 
   // ── 注册/登录校验 ──
   const validate = () => {
@@ -271,7 +214,7 @@ export default function AuthModal() {
     }
 
     // Step 2
-    if (forgotNewPwd.length < 6) { setForgotError('密码至少需要 6 位'); return; }
+    if (forgotNewPwd.length < 6) { setForgotError(settings.language === 'zh' ? '密码至少需要 6 位' : 'Password must contain at least 6 characters'); return; }
     if (forgotNewPwd !== forgotConfirmPwd) { setForgotError(t('auth.errPasswordMismatch')); return; }
 
     setLoading(true);
@@ -292,403 +235,108 @@ export default function AuthModal() {
   const emailName    = tab === 'login' ? 'login-email'     : 'register-email';
   const passwordName = tab === 'login' ? 'login-password'  : 'register-password';
 
-  // ── 忘记密码视图 ──
+  const closeLabel = settings.language === 'zh' ? '关闭登录窗口' : 'Close authentication';
   const renderForgotPassword = () => (
-    <div>
-      {/* Back link */}
-      <button
-        type="button"
-        onClick={() => { setForgotMode(false); setForgotError(''); }}
-        style={{
-          background: 'none', border: 'none', cursor: 'pointer',
-          fontSize: 'calc(12px * var(--font-scale, 1))', color: C.blue, fontFamily: 'inherit',
-          padding: 0, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 4,
-        }}
-      >
+    <div aria-busy={loading}>
+      <button type="button" className="av-link-button" onClick={() => { setForgotMode(false); setForgotError(''); }}>
         {t('auth.forgotBackToLogin')}
       </button>
-
-      {/* Step indicator */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20, alignItems: 'center' }}>
-        {[1, 2].map(n => (
-          <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{
-              width: 24, height: 24, borderRadius: '50%', display: 'flex',
-              alignItems: 'center', justifyContent: 'center',
-              background: forgotStep >= n ? C.blue : (L ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.15)'),
-              fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700,
-              color: forgotStep >= n ? '#fff' : (L ? 'rgba(42,42,58,0.4)' : 'rgba(232,237,243,0.35)'),
-            }}>{n}</div>
-            {n < 2 && (
-              <div style={{
-                width: 32, height: 1,
-                background: forgotStep > 1 ? C.blue : (L ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.15)'),
-              }} />
-            )}
-          </div>
-        ))}
-        <span style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: hintColor, marginLeft: 6 }}>
-          {forgotStep === 1 ? t('auth.forgotStep1Hint') : t('auth.forgotStep2Hint')}
-        </span>
+      <div className="av-auth-subtitle" role="status">
+        {forgotStep} / 2 · {forgotStep === 1 ? t('auth.forgotStep1Hint') : t('auth.forgotStep2Hint')}
       </div>
-
-      {/* Step 1: email + code */}
       {forgotStep === 1 && (
         <>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600, letterSpacing: '0.08em', color: labelColor, marginBottom: 6, textTransform: 'uppercase' }}>
-              {t('auth.email')}
-            </label>
-            <input
-              type="email"
-              value={forgotEmail}
-              onChange={e => setForgotEmail(e.target.value)}
-              placeholder={t('auth.emailPlaceholder')}
-              disabled={loading}
-              style={{
-                width: '100%', boxSizing: 'border-box', padding: '10px 14px',
-                background: inputBg, border: `1px solid ${inputBorder}`,
-                borderRadius: 8, color: inputText, fontSize: 'calc(14px * var(--font-scale, 1))',
-                outline: 'none', transition: 'border-color 0.15s', fontFamily: 'inherit',
-              }}
-            />
-          </div>
-
-          {/* Code row */}
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600, letterSpacing: '0.08em', color: labelColor, marginBottom: 6, textTransform: 'uppercase' }}>
-              {t('auth.verificationCode')}
-            </label>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <input
-                type="text"
-                maxLength={6}
-                value={forgotCode}
-                onChange={e => setForgotCode(e.target.value.replace(/\D/g, ''))}
-                placeholder={t('auth.codePlaceholder')}
-                disabled={loading}
-                style={{
-                  flex: 1, boxSizing: 'border-box', padding: '10px 14px',
-                  background: L ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.05)',
-                  border: `1px solid ${L ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.15)'}`,
-                  borderRadius: 8, fontSize: 'calc(14px * var(--font-scale, 1))',
-                  color: L ? '#000000' : '#ffffff',
-                  outline: 'none', transition: 'border-color 0.15s', fontFamily: 'inherit',
-                }}
-              />
-              <button
-                type="button"
-                disabled={forgotCodeSending || forgotCodeCountdown > 0 || loading}
-                onClick={handleForgotSendCode}
-                style={{
-                  padding: '10px 16px', whiteSpace: 'nowrap', flexShrink: 0,
-                  background: (forgotCodeSending || forgotCodeCountdown > 0)
-                    ? (L ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)') : C.blue,
-                  border: `1px solid ${(forgotCodeSending || forgotCodeCountdown > 0)
-                    ? (L ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)') : C.blue}`,
-                  borderRadius: 8,
-                  color: (forgotCodeSending || forgotCodeCountdown > 0)
-                    ? (L ? 'rgba(42,42,58,0.4)' : 'rgba(232,237,243,0.35)') : '#fff',
-                  fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 600,
-                  cursor: (forgotCodeSending || forgotCodeCountdown > 0 || loading) ? 'default' : 'pointer',
-                  transition: 'all 0.15s', fontFamily: 'inherit',
-                }}
-              >
-                {forgotCodeSending ? t('auth.codeSending')
-                  : forgotCodeCountdown > 0 ? `${forgotCodeCountdown}s`
-                  : t('auth.sendCode')}
+          <Input label={t('auth.email')} type="email" value={forgotEmail} onChange={setForgotEmail}
+            placeholder={t('auth.emailPlaceholder')} disabled={loading} autoComplete="email" />
+          <div className="av-auth-field">
+            <label htmlFor={fieldPrefix + '-forgot-code'}>{t('auth.verificationCode')}</label>
+            <div className="av-auth-code-row">
+              <input id={fieldPrefix + '-forgot-code'} type="text" inputMode="numeric" autoComplete="one-time-code"
+                maxLength={6} value={forgotCode} onChange={e => setForgotCode(e.target.value.replace(/\D/g, ''))}
+                placeholder={t('auth.codePlaceholder')} disabled={loading} />
+              <button type="button" className="av-button" disabled={forgotCodeSending || forgotCodeCountdown > 0 || loading}
+                aria-busy={forgotCodeSending} onClick={handleForgotSendCode}>
+                {forgotCodeSending ? t('auth.codeSending') : forgotCodeCountdown > 0 ? forgotCodeCountdown + 's' : t('auth.sendCode')}
               </button>
             </div>
           </div>
         </>
       )}
-
-      {/* Step 2: new password */}
       {forgotStep === 2 && (
         <>
-          <Input
-            label={t('auth.newPassword')}
-            type="password"
-            value={forgotNewPwd}
-            onChange={setForgotNewPwd}
-            placeholder={t('auth.newPasswordPlaceholder')}
-            disabled={loading}
-            autoComplete="new-password"
-          />
-          <Input
-            label={t('auth.confirmPassword')}
-            type="password"
-            value={forgotConfirmPwd}
-            onChange={setForgotConfirmPwd}
-            placeholder={t('auth.confirmPasswordPlaceholder')}
-            disabled={loading}
-            autoComplete="new-password"
-          />
+          <Input label={t('auth.newPassword')} type="password" value={forgotNewPwd} onChange={setForgotNewPwd}
+            placeholder={t('auth.newPasswordPlaceholder')} disabled={loading} autoComplete="new-password" />
+          <Input label={t('auth.confirmPassword')} type="password" value={forgotConfirmPwd} onChange={setForgotConfirmPwd}
+            placeholder={t('auth.confirmPasswordPlaceholder')} disabled={loading} autoComplete="new-password" />
         </>
       )}
-
-      {forgotError && (
-        <div style={{
-          fontSize: 'calc(13px * var(--font-scale, 1))', color: C.mars, marginBottom: 14,
-          padding: '8px 12px', borderRadius: 7,
-          background: L ? 'rgba(220,80,50,0.07)' : 'rgba(220,80,50,0.12)',
-          border: '1px solid rgba(220,80,50,0.22)',
-        }}>
-          {forgotError}
-        </div>
-      )}
-
-      <button
-        type="button"
-        disabled={loading}
-        onClick={handleResetPassword}
-        style={{
-          width: '100%', padding: '11px 0',
-          background: loading
-            ? (L ? 'rgba(66,133,244,0.5)' : 'rgba(66,133,244,0.35)')
-            : C.blue,
-          border: 'none', borderRadius: 9,
-          color: '#fff', fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 700,
-          letterSpacing: '0.04em',
-          cursor: loading ? 'default' : 'pointer',
-          fontFamily: 'Orbitron, sans-serif',
-          transition: 'background 0.15s',
-        }}
-      >
-        {loading ? t('auth.forgotResetting')
-          : forgotStep === 1 ? t('auth.forgotNextBtn')
-          : t('auth.forgotResetBtn')}
+      {forgotError && <div className="av-alert" role="alert">{forgotError}</div>}
+      <button type="button" className="av-button av-button--primary av-auth-submit" disabled={loading} onClick={handleResetPassword}>
+        {loading ? t('auth.forgotResetting') : forgotStep === 1 ? t('auth.forgotNextBtn') : t('auth.forgotResetBtn')}
       </button>
     </div>
   );
 
   return (
-    <>
-      <style>{`
-        @keyframes _amodal { from { opacity:0; transform:scale(0.96) translateY(8px); } to { opacity:1; transform:scale(1) translateY(0); } }
-      `}</style>
-
-      <div
-        onClick={closeAuthModal}
-        style={{
-          position: 'fixed', inset: 0,
-          background: overlayBg,
-          backdropFilter: 'blur(6px)',
-          WebkitBackdropFilter: 'blur(6px)',
-          zIndex: 9000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          overscrollBehavior: 'contain',
-        }}
-      >
-        <div
-          onClick={e => e.stopPropagation()}
-          style={{
-            width: 400, maxWidth: 'calc(100vw - 48px)',
-            background: cardBg,
-            border: `1px solid ${cardBorder}`,
-            borderRadius: 16,
-            boxShadow: cardShadow,
-            backdropFilter: 'blur(24px)',
-            WebkitBackdropFilter: 'blur(24px)',
-            padding: '28px 32px 32px',
-            animation: '_amodal 0.18s ease-out',
-            position: 'relative',
-          }}
-        >
-          {/* Close */}
-          <button
-            onClick={closeAuthModal}
-            style={{
-              position: 'absolute', top: 18, right: 18,
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: closeColor, padding: 4, display: 'flex', borderRadius: 6,
-            }}
-          >
-            <CloseIcon />
-          </button>
-
-          {/* Header */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 700, letterSpacing: '0.12em', color: C.blue, fontFamily: 'Orbitron, sans-serif', marginBottom: 4 }}>
-              ASTRAATMOS
-            </div>
-            <div style={{ fontSize: 'calc(20px * var(--font-scale, 1))', fontWeight: 700, color: titleColor, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.02em' }}>
-              {forgotMode ? t('auth.forgotTitle') : (tab === 'login' ? t('auth.loginTitle') : t('auth.registerTitle'))}
-            </div>
-            <div style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: subtitleClr, marginTop: 4 }}>
-              {t('home.desc')}
-            </div>
-          </div>
-
-          {forgotMode ? (
-            renderForgotPassword()
-          ) : (
-            <>
-              {/* Tabs */}
-              <TabBar tab={tab} setTab={switchTab} t={t} isLight={L} />
-
-              {/* Form — keyed by tab so DOM resets, preventing autocomplete bleed */}
-              <form key={tab} onSubmit={handleSubmit} noValidate autoComplete={tab === 'login' ? 'on' : 'off'}>
-                <Input
-                  label={t('auth.email')}
-                  type="email"
-                  name={emailName}
-                  autoComplete={emailAC}
-                  value={email}
-                  onChange={setEmail}
-                  placeholder={t('auth.emailPlaceholder')}
-                  disabled={loading}
-                  error={errors.email}
-                />
-
-                {tab === 'register' && (
-                  <Input
-                    label={t('auth.username')}
-                    name="register-username"
-                    autoComplete="username"
-                    value={username}
-                    onChange={setUsername}
-                    placeholder={t('auth.usernamePlaceholder')}
-                    disabled={loading}
-                    error={errors.username}
-                  />
-                )}
-
-                <Input
-                  label={t('auth.password')}
-                  type="password"
-                  name={passwordName}
-                  autoComplete={passwordAC}
-                  value={password}
-                  onChange={setPassword}
-                  placeholder={t('auth.passwordPlaceholder')}
-                  disabled={loading}
-                  error={errors.password}
-                />
-
-                {/* 注册验证码行 */}
-                {tab === 'register' && (
-                  <div style={{ marginBottom: 16 }}>
-                    <label style={{
-                      display: 'block', fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 600, letterSpacing: '0.08em',
-                      color: labelColor, marginBottom: 6, textTransform: 'uppercase',
-                    }}>
-                      {t('auth.verificationCode')}
-                    </label>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <input
-                        type="text"
-                        maxLength={6}
-                        value={verificationCode}
-                        onChange={e => setVerificationCode(e.target.value.replace(/\D/g, ''))}
-                        placeholder={t('auth.codePlaceholder')}
-                        disabled={loading}
-                        style={{
-                          flex: 1, boxSizing: 'border-box', padding: '10px 14px',
-                          background: L ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.05)',
-                          border: `1px solid ${errors.verificationCode ? C.mars : L ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.15)'}`,
-                          borderRadius: 8, fontSize: 'calc(14px * var(--font-scale, 1))',
-                          color: L ? '#000000' : '#ffffff',
-                          outline: 'none', transition: 'border-color 0.15s', fontFamily: 'inherit',
-                        }}
-                      />
-                      <button
-                        type="button"
-                        disabled={codeSending || codeCountdown > 0 || loading}
-                        onClick={handleSendCode}
-                        style={{
-                          padding: '10px 16px', whiteSpace: 'nowrap', flexShrink: 0,
-                          background: (codeSending || codeCountdown > 0)
-                            ? (L ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)') : C.blue,
-                          border: `1px solid ${(codeSending || codeCountdown > 0)
-                            ? (L ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)') : C.blue}`,
-                          borderRadius: 8,
-                          color: (codeSending || codeCountdown > 0)
-                            ? (L ? 'rgba(42,42,58,0.4)' : 'rgba(232,237,243,0.35)') : '#fff',
-                          fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 600,
-                          cursor: (codeSending || codeCountdown > 0 || loading) ? 'default' : 'pointer',
-                          transition: 'all 0.15s', fontFamily: 'inherit',
-                        }}
-                      >
-                        {codeSending ? t('auth.codeSending')
-                          : codeCountdown > 0 ? `${codeCountdown}s`
-                          : t('auth.sendCode')}
-                      </button>
-                    </div>
-                    {errors.verificationCode && (
-                      <div style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: C.mars, marginTop: 5 }}>
-                        {errors.verificationCode}
-                      </div>
-                    )}
+    <div className="av-overlay-backdrop av-modal-backdrop" style={{ zIndex: 9000 }} onClick={closeAuthModal}>
+      <div ref={dialogRef} className="av-modal av-auth" role="dialog" aria-modal="true" aria-labelledby={titleId}
+        tabIndex={-1} onClick={e => e.stopPropagation()}>
+        <button type="button" className="av-icon-button av-auth-close" aria-label={closeLabel} title={closeLabel} onClick={closeAuthModal}>
+          <CloseOutlined />
+        </button>
+        <h2 id={titleId} className="av-dialog-title av-auth-title">
+          {forgotMode ? t('auth.forgotTitle') : tab === 'login' ? t('auth.loginTitle') : t('auth.registerTitle')}
+        </h2>
+        <p className="av-auth-subtitle">{t('home.desc')}</p>
+        {forgotMode ? renderForgotPassword() : (
+          <>
+            <TabBar tab={tab} setTab={switchTab} t={t} />
+            <form key={tab} onSubmit={handleSubmit} noValidate autoComplete={tab === 'login' ? 'on' : 'off'} aria-busy={loading}>
+              <Input label={t('auth.email')} type="email" name={emailName} autoComplete={emailAC}
+                value={email} onChange={setEmail} placeholder={t('auth.emailPlaceholder')} disabled={loading} error={errors.email} />
+              {tab === 'register' && (
+                <Input label={t('auth.username')} name="register-username" autoComplete="username" value={username}
+                  onChange={setUsername} placeholder={t('auth.usernamePlaceholder')} disabled={loading} error={errors.username} />
+              )}
+              <Input label={t('auth.password')} type="password" name={passwordName} autoComplete={passwordAC}
+                value={password} onChange={setPassword} placeholder={t('auth.passwordPlaceholder')} disabled={loading} error={errors.password} />
+              {tab === 'register' && (
+                <div className="av-auth-field">
+                  <label htmlFor={fieldPrefix + '-register-code'}>{t('auth.verificationCode')}</label>
+                  <div className="av-auth-code-row">
+                    <input id={fieldPrefix + '-register-code'} type="text" inputMode="numeric" autoComplete="one-time-code"
+                      maxLength={6} value={verificationCode} onChange={e => setVerificationCode(e.target.value.replace(/\D/g, ''))}
+                      placeholder={t('auth.codePlaceholder')} disabled={loading}
+                      aria-invalid={Boolean(errors.verificationCode)}
+                      aria-describedby={errors.verificationCode ? fieldPrefix + '-code-error' : undefined} />
+                    <button type="button" className="av-button" disabled={codeSending || codeCountdown > 0 || loading}
+                      aria-busy={codeSending} onClick={handleSendCode}>
+                      {codeSending ? t('auth.codeSending') : codeCountdown > 0 ? codeCountdown + 's' : t('auth.sendCode')}
+                    </button>
                   </div>
-                )}
-
-                {globalError && (
-                  <div style={{
-                    fontSize: 'calc(13px * var(--font-scale, 1))', color: C.mars, marginBottom: 14,
-                    padding: '8px 12px', borderRadius: 7,
-                    background: L ? 'rgba(220,80,50,0.07)' : 'rgba(220,80,50,0.12)',
-                    border: '1px solid rgba(220,80,50,0.22)',
-                  }}>
-                    {globalError}
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  style={{
-                    width: '100%', padding: '11px 0',
-                    background: loading
-                      ? (L ? 'rgba(66,133,244,0.5)' : 'rgba(66,133,244,0.35)')
-                      : C.blue,
-                    border: 'none', borderRadius: 9,
-                    color: '#fff', fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 700,
-                    letterSpacing: '0.04em',
-                    cursor: loading ? 'default' : 'pointer',
-                    fontFamily: 'Orbitron, sans-serif',
-                    transition: 'background 0.15s',
-                    marginTop: 4,
-                  }}
-                >
-                  {loading
-                    ? (tab === 'login' ? t('auth.loggingIn') : t('auth.registering'))
-                    : (tab === 'login' ? t('auth.loginBtn') : t('auth.registerBtn'))}
+                  {errors.verificationCode && <div id={fieldPrefix + '-code-error'} className="av-auth-error" role="alert">{errors.verificationCode}</div>}
+                </div>
+              )}
+              {globalError && <div className="av-alert" role="alert">{globalError}</div>}
+              <button type="submit" className="av-button av-button--primary av-auth-submit" disabled={loading}>
+                {loading ? tab === 'login' ? t('auth.loggingIn') : t('auth.registering')
+                  : tab === 'login' ? t('auth.loginBtn') : t('auth.registerBtn')}
+              </button>
+            </form>
+            <div style={{ textAlign: 'center', marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {tab === 'login' && (
+                <button type="button" className="av-link-button"
+                  onClick={() => { setForgotMode(true); setForgotStep(1); setGlobalError(''); }}>
+                  {t('auth.forgotPassword')}
                 </button>
-              </form>
-
-              {/* 忘记密码 + 切换 tab */}
-              <div style={{ textAlign: 'center', marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {tab === 'login' && (
-                  <button
-                    type="button"
-                    onClick={() => { setForgotMode(true); setForgotStep(1); setGlobalError(''); }}
-                    style={{
-                      background: 'none', border: 'none', cursor: 'pointer',
-                      fontSize: 'calc(12px * var(--font-scale, 1))', color: C.blue,
-                      textDecoration: 'underline', textUnderlineOffset: 3,
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    {t('auth.forgotPassword')}
-                  </button>
-                )}
-                <button
-                  onClick={() => switchTab(tab === 'login' ? 'register' : 'login')}
-                  style={{
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    fontSize: 'calc(13px * var(--font-scale, 1))', color: switchColor,
-                    textDecoration: 'underline', textUnderlineOffset: 3,
-                    fontFamily: 'inherit',
-                  }}
-                >
-                  {tab === 'login' ? t('auth.switchToRegister') : t('auth.switchToLogin')}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+              )}
+              <button type="button" className="av-link-button" onClick={() => switchTab(tab === 'login' ? 'register' : 'login')}>
+                {tab === 'login' ? t('auth.switchToRegister') : t('auth.switchToLogin')}
+              </button>
+            </div>
+          </>
+        )}
       </div>
-    </>
+    </div>
   );
 }

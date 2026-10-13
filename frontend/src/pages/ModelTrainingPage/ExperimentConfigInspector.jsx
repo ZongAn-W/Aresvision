@@ -1,4 +1,5 @@
 import { MODEL_ARCHITECTURES } from './experimentCenterModel';
+import { getUploadedModelValidationStatus } from './uploadedModelValidation';
 import './experimentCenter.css';
 
 /**
@@ -20,7 +21,6 @@ export default function ExperimentConfigInspector({
   readiness,
   copy,
   onEditCustomParams,
-  onRequestLogin,
   isZh,
 }) {
   const { modelSource, modelArchitecture, useSphere } = values;
@@ -30,7 +30,7 @@ export default function ExperimentConfigInspector({
   const architectureLabel = MODEL_ARCHITECTURES.find((item) => item.id === modelArchitecture)?.label
     || modelArchitecture
     || '--';
-  const uploadedValidation = selectedUploadedModel?.validation_status || '';
+  const uploadedValidation = getUploadedModelValidationStatus(selectedUploadedModel);
   const canTrain = Boolean(readiness?.canTrain);
   const blockers = readiness?.blockers || [];
   const blockerCodes = new Set(blockers.map((item) => item.code));
@@ -47,7 +47,8 @@ export default function ExperimentConfigInspector({
   // 逐条给出「需要用户处理」的原因；与字段旁的错误一一对应，不重复播报已通过项。
   const issues = [];
   if (!user) {
-    issues.push({ key: 'login', group: 'name', label: copy.checkLogin, action: onRequestLogin, actionLabel: copy.inspectorGoLogin });
+    // 登录入口集中在底部运行条；检查器只保留辅助说明。
+    issues.push({ key: 'login', group: 'name', label: copy.checkParamsNeedLogin });
   }
   if (!hasName) {
     issues.push({ key: 'name', group: 'name', label: modelNameError || copy.checkNameMissing, action: 'name', actionLabel: copy.inspectorFixName });
@@ -57,7 +58,7 @@ export default function ExperimentConfigInspector({
       key: 'model',
       group: 'model',
       label: isUploaded
-        ? (selectedUploadedModel ? copy.checkModelInvalid : copy.checkModelMissing)
+        ? (selectedUploadedModel ? (uploadedValidation === 'timeout' ? copy.uploadedModelTimeout : copy.checkModelInvalid) : copy.checkModelMissing)
         : copy.checkModelMissing,
       action: 'model',
       actionLabel: isZh ? '定位' : 'Locate',
@@ -161,10 +162,10 @@ export default function ExperimentConfigInspector({
                 <div className="experiment-inspector-value" data-inspector-value="true" title={group.value}>{group.value}</div>
               )}
               {group.id === 'model' ? <div className="experiment-inspector-sub" data-inspector-field="model-source">{isUploaded
-                ? (selectedUploadedModel ? `${copy.modelSourceUploaded} · v${selectedUploadedModel.version ?? '--'} · ${uploadedValidation === 'valid' ? copy.uploadedModelValid : (uploadedValidation === 'pending' ? copy.uploadedModelPending : copy.uploadedModelInvalid)}` : copy.modelSourceUploaded)
+                ? (selectedUploadedModel ? `${copy.modelSourceUploaded} · v${selectedUploadedModel.version ?? '--'} · ${uploadedValidation === 'valid' ? copy.uploadedModelValid : (uploadedValidation === 'pending' ? copy.uploadedModelPending : uploadedValidation === 'timeout' ? copy.uploadedModelTimeout : copy.uploadedModelInvalid)}` : copy.modelSourceUploaded)
                 : `${copy.modelSourceOfficial}${useSphere ? ` · ${copy.sphereToggle}: ${copy.enabled}` : ''}`}</div> : null}
-              {groupIssues.length ? <ul className="experiment-inspector-blockers">{groupIssues.map((issue) => <li key={issue.key} data-inspector-issue={issue.key}>
-                <span className="experiment-inspector-issue-mark" aria-hidden="true">!</span>
+              {groupIssues.length ? <ul className="experiment-inspector-blockers">{groupIssues.map((issue) => <li key={issue.key} className={issue.key === 'login' ? 'is-guest' : undefined} data-inspector-issue={issue.key}>
+                {issue.key !== 'login' ? <span className="experiment-inspector-issue-mark" aria-hidden="true">!</span> : null}
                 <span className="experiment-inspector-issue-text">{issue.label}</span>
                 {issue.action ? <button type="button" className="experiment-inspector-issue-action" onClick={() => handleIssueAction(issue)}>{issue.actionLabel || (isZh ? '定位' : 'Locate')}</button> : null}
               </li>)}</ul> : <div className="experiment-inspector-readiness-row" data-ok="true"><span className="experiment-inspector-check" aria-hidden="true">✓</span>{isZh ? '当前无问题' : 'No issues found'}</div>}

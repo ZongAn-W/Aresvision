@@ -16,7 +16,7 @@ test('prediction page derives and clamps the horizon from selected trained model
   assert.match(pageSource, /selectedTrainingOption\?\.task/);
   assert.match(pageSource, /selectedCompareTrainingTasks/);
   assert.match(pageSource, /setPredStep\(\(current\)\s*=>\s*clampPredictionHorizon\(current, predictionHorizonLimit\)\)/);
-  assert.match(pageSource, /predictionHorizonLimit=\{predictionHorizonLimit\}/);
+  assert.match(pageSource, /predictionHorizonLimit=\{isEarthMode \? earthContext\?\.horizon \?\? null : predictionHorizonLimit\}/);
   assert.match(pageSource, /performanceData,\s*performanceKey,\s*predictionHorizonLimit,\s*predStep,/);
 });
 
@@ -32,6 +32,14 @@ test('prediction sidebar uses a model-bound numeric horizon control', () => {
 test('prediction action is disabled without a valid trained-model horizon', () => {
   assert.match(sidebarSource, /predictionHorizonLimit == null/);
   assert.match(sidebarSource, /predStep > predictionHorizonLimit/);
+});
+
+test('Earth comparison uses saved test metrics without horizon-based blocking', () => {
+  assert.match(sidebarSource, /const usesSavedTestMetrics = isCompareMode && planetAdapter\.id === 'earth'/);
+  assert.match(sidebarSource, /const invalidPredictionHorizon = !usesSavedTestMetrics/);
+  assert.match(sidebarSource, /data-saved-comparison-horizon/);
+  assert.match(sidebarSource, /disabled=\{loading \|\| runDisabled\s*\|\| invalidPredictionHorizon\s*\|\| \(isCompareMode && !compareSelection\.canCompare\)\}/);
+  assert.match(sidebarSource, /至少选择两个已完成的训练模型/);
 });
 
 test('prediction introduction follows the selected training task instead of promising three steps', () => {

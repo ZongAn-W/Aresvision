@@ -5,15 +5,15 @@ import DynamicModelParamsForm from './DynamicModelParamsForm';
 import ModelArchitectureSelector from './ModelArchitectureSelector';
 import { TagPicker } from '../../components/TrainingTags/TagControls';
 import {
-  TRAINING_DATASET_EARTH_MERRA2_V2,
   TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1,
   TRAINING_DATASET_MCD_OVERVIEW,
   TRAINING_DATASET_OPENMARS_MCD,
   getModelStructureParamLabel,
   isRecurrentArchitecture,
 } from './trainingParamSanitizers';
-import { EARTH_MODEL_ARCHITECTURE, EARTH_PARAM_BOUNDS, getEarthTrainingProfile, isEarthTrainingDataset } from './earthTrainingConfig';
+import { EARTH_MODEL_ARCHITECTURE, EARTH_PARAM_BOUNDS, getEarthTrainingProfile, isEarthTrainingDataset, describeEarthTaskSplits } from './earthTrainingConfig';
 import { getExperimentArchitectureLabel } from './experimentCenterModel';
+import { getUploadedModelValidationStatus } from './uploadedModelValidation';
 import './experimentCenter.css';
 
 const OPEN_INTERVAL_FLOAT_FIELDS = new Set(['initial_history_weight', 'initial_translation_weight']);
@@ -170,6 +170,7 @@ export default function ExperimentConfigWorkspace({
     valid: copy.uploadedModelValid,
     invalid: copy.uploadedModelInvalid,
     pending: copy.uploadedModelPending,
+    timeout: copy.uploadedModelTimeout,
     ready: copy.uploadedModelReady,
     unnamed: copy.uploadedModelUnnamed,
     noFilename: copy.uploadedModelNoFilename,
@@ -215,13 +216,16 @@ export default function ExperimentConfigWorkspace({
     : {};
   const boundFor = (key, fallback) => earthBounds[key] || fallback;
 
+  const taskSplitPreview = describeEarthTaskSplits(earthDatasetAvailability?.time,
+    { trainRatio, validationRatio, testRatio }, windowValue, horizon);
   const uploadedModel = selectedUploadedModel;
-  const uploadedValidationStatus = uploadedModel?.validation_status || '';
+  const uploadedValidationStatus = getUploadedModelValidationStatus(uploadedModel);
   const uploadedStatusLabel = uploadedValidationStatus === 'valid'
     ? copy.uploadedModelValid
     : uploadedValidationStatus === 'pending'
       ? copy.uploadedModelPending
-      : copy.uploadedModelInvalid;
+      : uploadedValidationStatus === 'timeout'
+        ? copy.uploadedModelTimeout : copy.uploadedModelInvalid;
   const modelBlockState = isUploaded
     ? (uploadedModel
         ? (uploadedValidationStatus === 'valid' ? 'valid' : 'invalid')
@@ -231,20 +235,20 @@ export default function ExperimentConfigWorkspace({
   const parameterFields = [
     {
       key: 'windowValue',
-      label: copy.windowLabel,
+      label: isEarth ? `${copy.windowLabel} (${isZh ? '三小时步' : '3-hour steps'})` : copy.windowLabel,
       code: copy.codeWindow,
       step: '1',
       min: '1',
-      max: '30',
+      max: isEarth ? '240' : '30',
       locked: true,
     },
     {
       key: 'horizon',
-      label: copy.horizonLabel,
+      label: isEarth ? `${copy.horizonLabel} (${isZh ? '三小时步' : '3-hour steps'})` : copy.horizonLabel,
       code: copy.codeHorizon,
       step: '1',
       min: '1',
-      max: '30',
+      max: isEarth ? '240' : '30',
       locked: true,
     },
     {
@@ -286,7 +290,6 @@ export default function ExperimentConfigWorkspace({
   const datasetOptions = [
     { value: TRAINING_DATASET_OPENMARS_MCD, label: copy.datasetOpenMarsMcd },
     { value: TRAINING_DATASET_MCD_OVERVIEW, label: copy.datasetMcdOverview },
-    { value: TRAINING_DATASET_EARTH_MERRA2_V2, label: copy.datasetEarthMerra2V2 },
     { value: TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1, label: copy.datasetEarthMerra23HourlyV1 },
   ];
   return (
@@ -355,7 +358,7 @@ export default function ExperimentConfigWorkspace({
             <div className="experiment-earth-contract" data-earth-training-contract="true">
               <span>{earthProfile.frequencyHours === 3 ? 'UTC · 3-hourly' : 'UTC · daily'}</span>
               <span>{`${earthProfile.gridShape[0]}×${earthProfile.gridShape[1]}`}</span>
-              <span>{`${earthProfile.window} → ${earthProfile.horizon} steps`}</span>
+              <span>{`${windowValue} → ${horizon} steps`}</span>
               <span>TO3 · DU</span>
               {earthDatasetAvailability?.selectable === false ? (
                 <strong data-earth-unavailable="true">{earthDatasetAvailability.reason || copy.earthUnavailableFallback}</strong>
@@ -547,6 +550,22 @@ export default function ExperimentConfigWorkspace({
             {activeTab === 'payload' ? (
               <div data-config-group="payload">
                 <h4 className="experiment-expert-heading">{copy.sectionPayload}</h4>
+                {isEarth ? <>
+                  <div className="experiment-param-grid">
+                    {parameterFields.filter((field) => ['windowValue', 'horizon'].includes(field.key)).map((field) => (
+                      <label className="experiment-param-cell" key={field.key} data-parameter={field.key}>
+                        <span className="experiment-param-label">{field.label}</span>
+                        <input type="number" value={values[field.key]} min={field.min} max={field.max} step="1"
+                          aria-label={field.label} onChange={(event) => onFoldChange(field.key, event.target.value)} />
+                      </label>
+                    ))}
+                  </div>
+                  <p className="experiment-expert-note" data-earth-window-duration="true">
+                    {isZh
+                      ? `输入 ${Number(windowValue) * 3 / 24} 天 → 输出 ${Number(horizon) * 3 / 24} 天；每步 3 小时，改变窗口后需重新训练。`
+                      : `Input ${Number(windowValue) * 3 / 24} days → output ${Number(horizon) * 3 / 24} days; each step is 3 hours. Changing windows requires training a new model.`}
+                  </p>
+                </> : null}
                 <div className="experiment-payload-bar" role="group" aria-label={t('modelTraining.inputChannels')}>
                   <span className="experiment-payload-lock" data-payload-base="true">
                     <span>{isEarth ? copy.earthBaseInput : copy.inspectorBaseInput}</span>
@@ -581,7 +600,7 @@ export default function ExperimentConfigWorkspace({
               <div data-config-group="training">
                 <h4 className="experiment-expert-heading">{copy.sectionTraining}</h4>
                 <div className="experiment-param-grid">
-                  {parameterFields.map((field) => (
+                  {parameterFields.filter((field) => !isEarth || !['windowValue', 'horizon'].includes(field.key)).map((field) => (
                     <label className="experiment-param-cell" key={field.key} data-parameter={field.key}>
                       <span className="experiment-param-label">
                         {field.label}
@@ -710,36 +729,35 @@ export default function ExperimentConfigWorkspace({
               <>
                 <h4 className="experiment-expert-heading">{copy.expertTabStrategy}</h4>
                 <p className="experiment-expert-note">{copy.expertStrategyHint}</p>
+                {isEarth ? (
+                  <div className="experiment-earth-splits" data-earth-task-split-preview="true">
+                    <p className="experiment-expert-note">{isZh
+                      ? '按完整 UTC 三小时时间轴连续划分；比例均须大于 0、合计 100%。窗口完整留在各分区内，归一化只拟合训练区间。'
+                      : 'Split the full UTC 3-hour timeline chronologically. All ratios must be positive and total 100%. Windows stay within partitions; normalization fits training only.'}</p>
+                    {taskSplitPreview.ranges.map(item => (
+                      <div className="experiment-earth-split" key={item.name} data-earth-split={item.name}>
+                        <span>{item.name}</span><b>{item.date_start} → {item.date_end}</b>
+                        <small>{item.step_count} {isZh ? '时间步' : 'time steps'} · {item.window_count} {isZh ? '窗口' : 'windows'}</small>
+                      </div>
+                    ))}
+                    {!taskSplitPreview.valid ? <p role="alert">{isZh
+                      ? '划分无效：请检查比例总和、非空验证集和各分区长度（至少输入窗口 + 输出窗口）；数据目录须提供完整时间轴。'
+                      : 'Invalid split: check ratio sum, positive validation and partition length (at least window + horizon); a complete catalog timeline is required.'}</p> : null}
+                  </div>
+                ) : null}
                 <div className="experiment-expert-fields">
-                  {isEarth ? (
-                    <>
-                      {[
-                        [isZh ? '训练集比例 (%)' : 'Train ratio (%)', 70],
-                        [isZh ? '验证集比例 (%)' : 'Validation ratio (%)', 20],
-                        [isZh ? '测试集比例 (%)' : 'Test ratio (%)', 10],
-                      ].map(([label, value]) => (
-                        <label className="experiment-expert-field" key={label} data-earth-fixed-split="true">
-                          <span>{label}</span>
-                          <input type="number" value={value} disabled readOnly aria-readonly="true" />
-                        </label>
-                      ))}
-                    </>
-                  ) : (
-                    <>
-                      <label className="experiment-expert-field">
-                        <span>{isZh ? '训练集比例 (%)' : 'Train ratio (%)'}</span>
-                        <input type="number" min="1" max="98" step="1" value={Number(trainRatio) * 100} onChange={(event) => onSplitRatioChange?.('trainRatio', Number(event.target.value) / 100)} />
-                      </label>
-                      <label className="experiment-expert-field">
-                        <span>{isZh ? '验证集比例 (%)' : 'Validation ratio (%)'}</span>
-                        <input type="number" min="0" max="98" step="1" value={Number(validationRatio) * 100} onChange={(event) => onSplitRatioChange?.('validationRatio', Number(event.target.value) / 100)} />
-                      </label>
-                      <label className="experiment-expert-field">
-                        <span>{isZh ? '测试集比例 (%)' : 'Test ratio (%)'}</span>
-                        <input type="number" min="1" max="98" step="1" value={Number(testRatio) * 100} onChange={(event) => onSplitRatioChange?.('testRatio', Number(event.target.value) / 100)} />
-                      </label>
-                    </>
-                  )}
+                  {[
+                    ['trainRatio', trainRatio, isZh ? '训练集比例 (%)' : 'Train ratio (%)'],
+                    ['validationRatio', validationRatio, isZh ? '验证集比例 (%)' : 'Validation ratio (%)'],
+                    ['testRatio', testRatio, isZh ? '测试集比例 (%)' : 'Test ratio (%)'],
+                  ].map(([key, value, label]) => (
+                    <label className="experiment-expert-field" key={key} data-earth-task-split={isEarth ? key : undefined}>
+                      <span>{label}</span>
+                      <input type="number" min={isEarth ? '0.01' : key === 'validationRatio' ? '0' : '1'} max={isEarth ? '99.99' : '98'} step={isEarth ? '0.01' : '1'}
+                        value={value === '' ? '' : Number(value) * 100}
+                        onChange={(event) => onSplitRatioChange?.(key, event.target.value === '' ? '' : Number(event.target.value) / 100)} />
+                    </label>
+                  ))}
                   <label className="experiment-expert-field">
                     <span>{copy.randomSeed}</span>
                     <input

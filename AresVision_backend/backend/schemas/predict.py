@@ -36,6 +36,7 @@ class PredictFieldData(BaseModel):
 
 
 class PredictResponse(BaseModel):
+    export_ref: dict[str, Any] | None = None
     ground_truth: list[PredictFieldData]
     prediction: list[PredictFieldData]
     residual: list[PredictFieldData]
@@ -72,6 +73,7 @@ class SplitMetadata(BaseModel):
 
 
 class EvalMetricsResponse(BaseModel):
+    export_ref: dict[str, Any] | None = None
     overall: StepMetrics
     per_step: list[StepMetrics]
     aggregation: MetricAggregation | None = None
@@ -85,6 +87,7 @@ class TrainingModelCompareRequest(BaseModel):
 
 
 class TrainingModelMetrics(BaseModel):
+    export_ref: dict[str, Any] | None = None
     overall: StepMetrics
     per_step: list[StepMetrics]
     aggregation: MetricAggregation | None = None
@@ -139,6 +142,8 @@ class PermutationImportanceItem(BaseModel):
 
 
 class PermutationImportanceResponse(BaseModel):
+    export_ref: dict[str, Any] | None = None
+    sampling: dict[str, Any] | None = None
     items: list[PermutationImportanceItem]
     baseline_metric: str
     baseline_value: float

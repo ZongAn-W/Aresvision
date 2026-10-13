@@ -1,76 +1,40 @@
-import { useEffect, useRef, createContext, useContext } from 'react';
+import { useId, useRef } from 'react';
+import CloseOutlined from '@mui/icons-material/CloseOutlined';
 import { useSettings } from '../contexts/SettingsContext';
 import { useT } from '../i18n';
-import C from '../constants/colors';
 import { useScrollLock } from '../hooks/useScrollLock';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { DEFAULT_TRAINING_DEFAULTS } from '../utils/trainingDefaults';
-
-/* ─── 面板内 isLight 上下文 ─── */
-const LightCtx = createContext(false);
+import './ui/overlay.css';
 
 /* ─── 小工具组件 ─── */
 
 function SectionHeader({ label }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{
-        fontSize: 'calc(10px * var(--font-scale, 1))',
-        fontWeight: 700,
-        letterSpacing: 0.8,
-        fontFamily: 'var(--font-display)',
-        color: C.mars,
-        marginBottom: 6,
-      }}>
-        {label}
-      </div>
-      <div style={{ height: 1, background: `linear-gradient(to right, ${C.mars}40, transparent)` }} />
-    </div>
-  );
+  return <h3 className="av-settings-section">{label}</h3>;
 }
 
 function Divider() {
-  return <div style={{ height: 1, background: 'var(--border)', margin: '20px 0' }} />;
+  return <div className="av-settings-divider" />;
 }
 
 /** 二选一 / 多选一 pill 按钮组 */
 function ChipGroup({ options, value, onChange, cols = 2 }) {
-  const isLight = useContext(LightCtx);
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: `repeat(${cols}, 1fr)`,
-      gap: 6,
-    }}>
+    <div className="av-segmented" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
       {options.map(opt => {
         const active = value === opt.value;
         return (
           <button
             key={opt.value}
+            type="button"
+            className="av-segment"
+            aria-pressed={active}
             onClick={() => onChange(opt.value)}
             title={opt.desc || opt.label}
-            style={{
-              padding: '7px 10px',
-              borderRadius: 6,
-              border: active
-                ? `1px solid ${C.blue}66`
-                : `1px solid var(--border)`,
-              background: active
-                ? `${C.blue}1a`
-                : 'var(--bg-muted)',
-              color: active ? C.blue : 'var(--text-60)',
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              fontWeight: active ? 600 : 400,
-              cursor: 'pointer',
-              transition: 'all 0.18s',
-              textAlign: 'center',
-              lineHeight: 1.3,
-            }}
           >
             {opt.label}
             {opt.sub && (
-              <div style={{ fontSize: 'calc(9px * var(--font-scale, 1))', color: active ? `${C.blue}aa` : 'var(--text-30)', marginTop: 1 }}>
-                {opt.sub}
-              </div>
+              <small>{opt.sub}</small>
             )}
           </button>
         );
@@ -82,9 +46,9 @@ function ChipGroup({ options, value, onChange, cols = 2 }) {
 /** 行内标签 + 控件 */
 function SettingRow({ label, children }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
-      <span style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--text-60)', flexShrink: 0 }}>{label}</span>
-      <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+    <div className="av-setting-row">
+      <span>{label}</span>
+      <div>
         {children}
       </div>
     </div>
@@ -96,20 +60,13 @@ function NumberSetting({ label, value, min, max, step = 1, onChange }) {
     <SettingRow label={label}>
       <input
         type="number"
+        className="av-number-input"
+        aria-label={label}
         min={min}
         max={max}
         step={step}
         value={value ?? ''}
         onChange={onChange}
-        style={{
-          width: 112,
-          padding: '5px 7px',
-          border: '1px solid var(--border)',
-          borderRadius: 5,
-          background: 'var(--bg-muted)',
-          color: 'var(--text)',
-          fontSize: 'calc(11px * var(--font-scale, 1))',
-        }}
       />
     </SettingRow>
   );
@@ -117,31 +74,17 @@ function NumberSetting({ label, value, min, max, step = 1, onChange }) {
 
 /** 紧凑型 pill 切换（用于行内 unit 选择等） */
 function InlinePill({ options, value, onChange }) {
-  const isLight = useContext(LightCtx);
   return (
-    <div style={{
-      display: 'flex',
-      background: 'var(--bg-muted)',
-      borderRadius: 6, padding: 2, gap: 2,
-    }}>
+    <div className="av-segmented av-segmented--inline">
       {options.map(opt => {
         const active = value === opt.value;
         return (
           <button
             key={opt.value}
+            type="button"
+            className="av-segment"
+            aria-pressed={active}
             onClick={() => onChange(opt.value)}
-            style={{
-              padding: '4px 10px',
-              border: 'none',
-              borderRadius: 5,
-              background: active ? `${C.blue}33` : 'transparent',
-              color: active ? C.blue : 'var(--text-30)',
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              fontWeight: active ? 600 : 400,
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-              whiteSpace: 'nowrap',
-            }}
           >
             {opt.label}
           </button>
@@ -154,30 +97,9 @@ function InlinePill({ options, value, onChange }) {
 /** Checkbox */
 function Checkbox({ label, checked, onChange }) {
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
-      <div
-        onClick={() => onChange(!checked)}
-        style={{
-          width: 16,
-          height: 16,
-          borderRadius: 4,
-          border: checked ? `1px solid ${C.blue}` : `1px solid var(--text-30)`,
-          background: checked ? `${C.blue}33` : 'transparent',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          transition: 'all 0.15s',
-          cursor: 'pointer',
-        }}
-      >
-        {checked && (
-          <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
-            <path d="M1 4L3.5 6.5L9 1" stroke={C.blue} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )}
-      </div>
-      <span style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--text-60)' }}>{label}</span>
+    <label className="av-checkbox">
+      <input type="checkbox" checked={Boolean(checked)} onChange={event => onChange(event.target.checked)} />
+      <span>{label}</span>
     </label>
   );
 }
@@ -188,7 +110,8 @@ export default function SettingsPanel({ open, onClose }) {
   const { settings, updateSetting } = useSettings();
   const t = useT();
   const panelRef = useRef(null);
-  const isLight = settings.theme === 'light';
+  const titleId = useId();
+  const closeLabel = settings.language === 'zh' ? '关闭设置' : 'Close preferences';
   const trainingDefaults = settings.trainingDefaults || DEFAULT_TRAINING_DEFAULTS;
   const ratioTotal = ['trainRatio', 'validationRatio', 'testRatio']
     .reduce((total, key) => total + (Number(trainingDefaults[key]) || 0), 0);
@@ -205,145 +128,67 @@ export default function SettingsPanel({ open, onClose }) {
     updateSetting(`trainingDefaults.${key}`, String(Number(rawValue) / 100));
   };
   useScrollLock(open);
+  useDialogFocus(open, panelRef, onClose);
 
-  // 点击面板外侧关闭
-  useEffect(() => {
-    if (!open) return;
-    const handleClick = (e) => {
-      if (panelRef.current && !panelRef.current.contains(e.target)) {
-        onClose();
-      }
-    };
-    // 延迟绑定，避免与触发按钮的点击事件冲突
-    const timer = setTimeout(() => document.addEventListener('mousedown', handleClick), 0);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener('mousedown', handleClick);
-    };
-  }, [open, onClose]);
-
-  // ESC 关闭
-  useEffect(() => {
-    const handleKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [onClose]);
-
-  // 浅色/深色主题对应的 CSS 变量值，覆盖页面级主题
   return (
-    <LightCtx.Provider value={isLight}>
+    <>
       {/* 遮罩 */}
       <div
+        className="av-overlay-backdrop"
+        onClick={onClose}
         style={{
-          position: 'fixed',
-          inset: 0,
-          background: isLight ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.4)',
           zIndex: 2999,
           opacity: open ? 1 : 0,
           pointerEvents: open ? 'auto' : 'none',
           transition: 'opacity 0.25s',
-          backdropFilter: 'blur(2px)',
-          overscrollBehavior: 'contain',
         }}
       />
 
       {/* 面板主体 */}
       <div
         ref={panelRef}
+        className="av-drawer av-settings"
+        data-open={open}
+        role="dialog"
+        aria-modal={open ? true : undefined}
+        aria-labelledby={titleId}
+        tabIndex={-1}
         inert={!open}
         aria-hidden={!open}
         style={{
-          position: 'fixed',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 'min(360px, 100vw)',
           zIndex: 3000,
-          background: 'var(--bg-card-strong)',
-          backdropFilter: 'blur(18px)',
-          borderLeft: isLight
-            ? '1px solid var(--border)'
-            : '1px solid var(--border)',
-          display: 'flex',
-          flexDirection: 'column',
-          transform: open ? 'translateX(0)' : 'translateX(100%)',
-          transition: 'transform 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
-          boxShadow: !open ? 'none' : isLight
-            ? '-20px 0 60px rgba(15,23,42,0.10)'
-            : '-20px 0 60px rgba(0,0,0,0.32)',
+          boxShadow: open ? 'var(--shadow-panel)' : 'none',
         }}
       >
         {/* 面板头部 */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 24px',
-          height: 70,
-          borderBottom: '1px solid var(--border)',
-          flexShrink: 0,
-        }}>
-          <div>
-            <div style={{
-              fontSize: 'calc(16px * var(--font-scale, 1))',
-              fontWeight: 700,
-              color: C.mars,
-              fontFamily: 'var(--font-body)',
-            }}>
-              {t('settings.title')}
-            </div>
-          </div>
+        <div className="av-drawer-header">
+          <h2 id={titleId} className="av-dialog-title">{t('settings.title')}</h2>
           <button
+            type="button"
+            className="av-icon-button"
+            aria-label={closeLabel}
+            title={closeLabel}
+            data-dialog-autofocus
             onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              width: 32,
-              height: 32,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-60)',
-              transition: 'all 0.15s',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.borderColor = 'var(--border-strong)';
-              e.currentTarget.style.color = 'var(--text)';
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.borderColor = 'var(--border)';
-              e.currentTarget.style.color = 'var(--text-60)';
-            }}
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
+            <CloseOutlined />
           </button>
         </div>
 
         {/* 可滚动内容区 */}
-        <div style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 0,
-        }}>
+        <div className="av-drawer-body">
 
           {/* ── 显示偏好 ── */}
           <SectionHeader label={t('settings.appearance.label')} />
-          <p style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: 'var(--text-30)', marginBottom: 12, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
             {t('settings.appearance.desc')}
           </p>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, marginBottom: 12 }}>
             <div style={{
               width: 44,
-              fontSize: 'calc(11px * var(--font-scale, 1))',
+              fontSize: 'calc(var(--type-label) * var(--font-scale, 1))',
               fontWeight: 600,
-              color: 'var(--text-60)',
+              color: 'var(--text-secondary)',
               textAlign: 'right',
             }}>
               A
@@ -351,6 +196,7 @@ export default function SettingsPanel({ open, onClose }) {
             
             <input
               type="range"
+              aria-label={t('settings.appearance.label')}
               min="0.7"
               max="1.5"
               step="0.1"
@@ -359,16 +205,16 @@ export default function SettingsPanel({ open, onClose }) {
               style={{
                 flex: 1,
                 cursor: 'pointer',
-                accentColor: C.blue,
-                height: 4,
+                accentColor: 'var(--line-active)',
+                minHeight: 32,
               }}
             />
             
             <div style={{
               width: 44,
-              fontSize: 'calc(14px * var(--font-scale, 1))',
+              fontSize: 'calc(var(--type-body) * var(--font-scale, 1))',
               fontWeight: 600,
-              color: 'var(--text)',
+              color: 'var(--text-primary)',
               textAlign: 'left',
             }}>
               A
@@ -377,26 +223,19 @@ export default function SettingsPanel({ open, onClose }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 8px' }}>
             <button
               onClick={() => updateSetting('appearance.uiScale', 1)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: (settings.appearance?.uiScale || 1) !== 1 ? C.blue : 'var(--text-30)',
-                fontSize: 'calc(10px * var(--font-scale, 1))',
-                cursor: 'pointer',
-                padding: 0,
-                textDecoration: (settings.appearance?.uiScale || 1) !== 1 ? 'underline' : 'none',
-              }}
+              type="button"
+              className="av-link-button"
             >
               {t('settings.appearance.scaleMedium') || 'Reset'}
             </button>
             <div style={{
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              color: C.blue,
-              background: 'rgba(74, 158, 255, 0.10)',
+              fontSize: 'calc(var(--type-label) * var(--font-scale, 1))',
+              color: 'var(--brand-ice)',
+              background: 'var(--surface-2)',
               padding: '2px 8px',
               borderRadius: 4,
               fontWeight: 600,
-              fontFamily: 'var(--font-display)'
+              fontVariantNumeric: 'tabular-nums'
             }}>
               {Math.round((settings.appearance?.uiScale || 1) * 100)}%
             </div>
@@ -405,7 +244,7 @@ export default function SettingsPanel({ open, onClose }) {
 
           {/* ── 训练默认值 ── */}
           <SectionHeader label={t('settings.training.label')} />
-          <p style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: 'var(--text-30)', marginBottom: 12, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
             {t('settings.training.desc')}
           </p>
           {[
@@ -443,7 +282,7 @@ export default function SettingsPanel({ open, onClose }) {
               onChange={event => updateRatio(key, event.target.value)}
             />
           ))}
-          <p role="status" data-valid={ratioTotalValid ? 'true' : 'false'} style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: ratioTotalValid ? 'var(--text-30)' : C.mars, margin: '0 0 12px', lineHeight: 1.5 }}>
+          <p className="av-helper" role="status" data-valid={ratioTotalValid ? 'true' : 'false'} style={{ color: ratioTotalValid ? 'var(--text-secondary)' : 'var(--status-danger)', margin: '0 0 12px' }}>
             {ratioTotalValid
               ? t('settings.training.ratioTotalValid', { total: ratioTotalPercent })
               : t('settings.training.ratioTotalInvalid', { total: ratioTotalPercent })}
@@ -464,7 +303,7 @@ export default function SettingsPanel({ open, onClose }) {
           />
           <Checkbox label={t('settings.training.transferEnabled')} checked={trainingDefaults.transferEnabled === true} onChange={value => updateSetting('trainingDefaults.transferEnabled', value)} />
           <SettingRow label={t('settings.training.freezeMode')}>
-            <select value={trainingDefaults.transferFreezeMode || 'none'} onChange={event => updateSetting('trainingDefaults.transferFreezeMode', event.target.value)} style={{ width: 112, padding: '5px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg-muted)', color: 'var(--text)', fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+            <select aria-label={t('settings.training.freezeMode')} value={trainingDefaults.transferFreezeMode || 'none'} onChange={event => updateSetting('trainingDefaults.transferFreezeMode', event.target.value)}>
               <option value="none">{t('settings.training.freezeNone')}</option>
               <option value="backbone">{t('settings.training.freezeBackbone')}</option>
               <option value="head">{t('settings.training.freezeHead')}</option>
@@ -528,7 +367,7 @@ export default function SettingsPanel({ open, onClose }) {
 
           {/* ── 数据精度 ── */}
           <SectionHeader label={t('settings.precision.label')} />
-          <p style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: 'var(--text-30)', marginBottom: 12, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
             {t('settings.precision.desc')}
           </p>
           <ChipGroup
@@ -547,11 +386,11 @@ export default function SettingsPanel({ open, onClose }) {
 
           {/* ── 导出偏好 ── */}
           <SectionHeader label={t('settings.export.label')} />
-          <p style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: 'var(--text-30)', marginBottom: 12, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
             {t('settings.export.desc')}
           </p>
 
-          <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: 'var(--text-60)', marginBottom: 6 }}>{t('settings.export.format')}</div>
+          <div style={{ fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', color: 'var(--text-secondary)', marginBottom: 6 }}>{t('settings.export.format')}</div>
           <ChipGroup
             cols={3}
             options={[
@@ -563,7 +402,7 @@ export default function SettingsPanel({ open, onClose }) {
             onChange={v => updateSetting('export.format', v)}
           />
 
-          <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: 'var(--text-60)', margin: '12px 0 6px' }}>{t('settings.export.dpi')}</div>
+          <div style={{ fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', color: 'var(--text-secondary)', margin: '12px 0 6px' }}>{t('settings.export.dpi')}</div>
           <ChipGroup
             cols={3}
             options={[
@@ -575,7 +414,7 @@ export default function SettingsPanel({ open, onClose }) {
             onChange={v => updateSetting('export.dpi', v)}
           />
 
-          <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: 'var(--text-60)', margin: '12px 0 6px' }}>{t('settings.export.fontSize')}</div>
+          <div style={{ fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', color: 'var(--text-secondary)', margin: '12px 0 6px' }}>{t('settings.export.fontSize')}</div>
           <ChipGroup
             cols={3}
             options={[
@@ -598,15 +437,8 @@ export default function SettingsPanel({ open, onClose }) {
         </div>
 
         {/* 面板底部 */}
-        <div style={{
-          padding: '16px 24px',
-          borderTop: '1px solid var(--border)',
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-          <span style={{ fontSize: 'calc(10px * var(--font-scale, 1))', color: 'var(--text-30)' }}>{t('settings.autoSave')}</span>
+        <div className="av-drawer-footer">
+          <span className="av-helper">{t('settings.autoSave')}</span>
           <button
             onClick={() => {
               if (window.confirm(t('settings.resetConfirm'))) {
@@ -614,29 +446,13 @@ export default function SettingsPanel({ open, onClose }) {
                 window.location.reload();
               }
             }}
-            style={{
-              background: 'transparent',
-              border: `1px solid rgba(199,91,57,0.3)`,
-              borderRadius: 6,
-              padding: '5px 12px',
-              color: `${C.mars}cc`,
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.borderColor = `${C.mars}77`;
-              e.currentTarget.style.color = C.mars;
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.borderColor = `rgba(199,91,57,0.3)`;
-              e.currentTarget.style.color = `${C.mars}cc`;
-            }}
+            type="button"
+            className="av-button av-button--compact av-button--danger"
           >
             {t('settings.reset')}
           </button>
         </div>
       </div>
-    </LightCtx.Provider>
+    </>
   );
 }

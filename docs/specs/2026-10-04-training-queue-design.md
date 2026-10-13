@@ -14,7 +14,21 @@ Existing `pending` rows remain readable for compatibility, but newly published t
 
 ## Persistence and scheduling
 
-The task table stores `queued_at` and a nullable `queue_position` for deterministic FIFO ordering and inspection. A single application-owned scheduler claims the oldest queued task only when no training subprocess is running. Claiming is atomic with the status change to prevent duplicate launches. On startup, orphaned `running` tasks are marked failed and the scheduler resumes queued tasks from the database. The scheduler is stopped with the application lifespan.
+The task table stores `queued_at` and a nullable `queue_position` for deterministic FIFO ordering and inspection. A single application-owned scheduler conditionally changes the oldest `queued` task to `running`, waits for its preparation and subprocess to finish, then proceeds to the next task. Cancellation uses the same conditional status transition so a task already claimed for execution cannot be cancelled as queued. The scheduler is stopped with the application lifespan.
+
+On startup, orphaned `running` tasks follow the existing completion recovery policy: Earth checkpoints must pass strict artifact reload; Mars uses the existing saved-log/nonempty-file policy. Other interrupted runs fail. The scheduler then resumes queued tasks from the database. This execution-preparation change does not alter those completion policies.
+
+## Execution preparation and restart
+
+`TrainingService._prepare_training_execution` is the shared preparation module for admission, live execution and restart recovery. It derives runner selection, arguments, log/output paths and internal Earth spec from persisted task facts. There is no process-local queue plan or environment override needed to resume a task. Runner selection must match the saved dataset and model source, and parameters are parsed without silently renormalizing a saved task.
+
+Mars transfer tasks retain the source task ID or uploaded weight ID. At actual execution, the module resolves the weight path again and checks source ownership, availability, status, a nonempty file and the existing task-model compatibility rules. Task-source access uses the task owner's **current** administrator role; administrator privileges do not allow access to another account's uploaded weights. An accepted task can therefore fail before launch if its dependency is deleted, becomes invalid, or permission is revoked while queued. Legacy tasks without a user may use userless shared task weights, but cannot use another user's private weights.
+
+Mars uploaded models retain package ID/version, source path, parameter schema and custom parameters. New tasks also save the server-resolved source SHA-256. Execution checks the stored package's owner/valid status, version, path and file digest; old tasks lacking a frozen digest are checked against their existing package digest. It never substitutes a user's newer upload. Mars still requires its original source file; Earth retains its embedded frozen-source contract.
+
+Earth preparation continues to rebuild the internal spec from verified dataset identity, fixed task split and frozen uploaded source. It rechecks the active release and server path, keeps new-task split requirements, and rejects retired daily datasets. It does not recompute partitions or revalidate a user's current upload in place of the frozen reference.
+
+Preparation failures set `failed`, `end_time` and a readable `metrics.error`. Existing structured dataset errors keep their error code; other preparation errors use `training_execution_preparation_failed`. No subprocess is started, and the scheduler continues with the next queued task. No database columns or public request fields are added.
 
 ## API contract
 
@@ -29,4 +43,6 @@ The training page groups queued tasks separately, shows their queue position, an
 
 ## Verification
 
-Backend tests cover FIFO ordering, one active subprocess, cancellation rules, and startup recovery. Frontend tests cover status metadata, grouping, queue position display, and the cancel API action. README documentation describes the state model and endpoints.
+`tests/test_training_queue_recovery.py` exercises the real scheduler and temporary SQLite rows with a subprocess recorder: official/uploaded Mars models, task/uploaded-weight transfer sources, live/restarted execution, missing/invalid dependencies, changed permissions, FIFO, cancellation, and preparation failure followed by later tasks. Earth preparation/runner, uploaded-model and task-split tests use the shared preparation entry; existing artifact tests retain the completion gate.
+
+Run backend files separately with the workspace's configured conda interpreter, `--asyncio-mode=auto`, `-p no:cacheprovider` and a new external English `--basetemp` for each run. The tests use synthetic data and subprocess stand-ins where stated; they do not establish real training accuracy. Frontend status/grouping/cancel behavior is unchanged.

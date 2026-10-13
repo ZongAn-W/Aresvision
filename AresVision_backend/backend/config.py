@@ -59,13 +59,12 @@ EARTH_MERRA2_3HOURLY_DIR = Path(os.getenv(
 )).expanduser()
 
 EARTH_DEFAULT_DATASET_IDS = frozenset({
-    "earth_merra2_daily_v2",
     "earth_merra2_3hourly_v1",
 })
 
 
 def resolve_default_earth_dataset_id(value: Optional[str]) -> str:
-    dataset_id = (value or "earth_merra2_daily_v2").strip().lower()
+    dataset_id = (value or "earth_merra2_3hourly_v1").strip().lower()
     if dataset_id not in EARTH_DEFAULT_DATASET_IDS:
         raise ValueError(
             "ARESVISION_DEFAULT_EARTH_DATASET_ID must name a supported Earth entry dataset"
@@ -155,6 +154,14 @@ MAX_UPLOAD_SIZE_MB = int(os.getenv("ARESVISION_MAX_UPLOAD_SIZE_MB", "512"))
 ALLOWED_NC_EXTENSIONS = [".nc", ".nc4", ".netcdf"]
 MAX_USER_MODEL_SIZE_KB = int(os.getenv("MAX_USER_MODEL_SIZE_KB", "256"))
 ALLOWED_USER_MODEL_EXTENSIONS = [".py"]
+USER_MODEL_VALIDATION_TIMEOUT_SECONDS = int(os.getenv("USER_MODEL_VALIDATION_TIMEOUT_SECONDS", "120"))
+if USER_MODEL_VALIDATION_TIMEOUT_SECONDS <= 0:
+    raise ValueError("USER_MODEL_VALIDATION_TIMEOUT_SECONDS must be a positive integer")
+USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS = int(os.getenv(
+    "USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS", "300"
+))
+if USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS <= 0:
+    raise ValueError("USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS must be a positive integer")
 MAX_TRAINING_WEIGHT_SIZE_MB = int(os.getenv("MAX_TRAINING_WEIGHT_SIZE_MB", "500"))
 USER_MODEL_TRAINING_TIMEOUT_SECONDS = int(os.getenv("USER_MODEL_TRAINING_TIMEOUT_SECONDS", "7200"))
 

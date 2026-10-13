@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import hashlib
 import asyncio
 import logging
 import traceback
@@ -24,13 +25,14 @@ from config import (
     EARTH_MERRA2_DIR,
     EARTH_MERRA2_V1_DIR,
     EARTH_MERRA2_3HOURLY_DIR,
+    EARTH_TRAINING_CACHE_DIR,
     MCD_VARIABLES,
     TRAINING_RESULTS_DIR,
     TRAINING_SCRIPTS_DIR,
     USER_UPLOADS_DIR,
 )
 from database.engine import async_session_maker
-from database.models import ModelTrainingTask, PredictionAnalysisCache, TrainingTaskTag
+from database.models import ModelTrainingTask, PredictionAnalysisCache, TrainingTaskTag, User
 from services.data_service import DataService
 from services.dataset_identity import (
     DatasetRequestError,
@@ -38,6 +40,8 @@ from services.dataset_identity import (
     is_earth_training_task,
     resolve_dataset_id,
     require_training_dataset,
+    require_active_dataset,
+    training_task_dataset_id,
 )
 from services.dataset_registry import DatasetRegistry
 from services.earth_training_artifact import (
@@ -46,9 +50,16 @@ from services.earth_training_artifact import (
     verify_earth_model_reload_isolated,
 )
 from services.earth_training_contract import (
+    EARTH_3HOURLY_METRICS_SCHEMA_V2,
+    EARTH_3HOURLY_METRICS_SCHEMA_V3,
+    EARTH_METRICS_SCHEMA_KEY,
+    EARTH_METRICS_AGGREGATION_KEY,
     EARTH_TRAINING_SCRIPT,
     build_earth_training_spec,
     canonical_channel_order,
+    earth_3hourly_metrics_contract,
+    earth_task_metrics_contract,
+    earth_spec_metrics_contract,
     is_earth_dataset_id,
     require_earth_training_configuration,
 )
@@ -59,6 +70,7 @@ from services.uploaded_model_source import (
 )
 from services.user_model_validator import UserModelValidator
 from training_backbones.uploaded_model_earth_gate import (
+    EarthCompatibility,
     evaluate_package_earth_compatibility,
 )
 from services.personal_data_source_service import PersonalDataSourceService
@@ -118,13 +130,11 @@ def _task_was_stopped(raw_metrics: Any) -> bool:
 
 class TrainingService:
     def __init__(self, earth_model_validator: Any | None = None):
-        # The uploaded-model EARTH compatibility dry-run is the same one the upload
-        # page runs, so it is shared rather than reimplemented. Injected in tests.
+        # Retained for legacy daily compatibility; three-hour tasks reuse upload proofs.
         self._earth_model_validator = earth_model_validator
         self._scheduler_started = False
         self._scheduler_task: asyncio.Task | None = None
         self._queue_event: asyncio.Event | None = None
-        self._queue_specs: dict[int, dict[str, Any]] = {}
 
     async def start(self) -> None:
         if self._scheduler_started:
@@ -150,10 +160,31 @@ class TrainingService:
 
                 task.end_time = recovery_time
                 task.pid = None
+                earth_artifact = None
+                if saved_marker and is_earth_training_task(task):
+                    try:
+                        require_active_dataset(training_task_dataset_id(task))
+                        earth_artifact = await asyncio.to_thread(
+                            load_earth_training_artifact, output_path,
+                            {key: getattr(task, key, None) for key in (
+                                "dataset_id", "dataset_version", "dataset_fingerprint",
+                                "dataset_identity_status", "dataset_snapshot")},
+                            json.loads(task.hyperparameters or "{}"), task.id,
+                        )
+                        from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA
+                        if earth_artifact.model_config.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA:
+                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path,
+                                timeout_seconds=config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS)
+                        else:
+                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
+                    except Exception as exc:
+                        task.status = "failed"
+                        task.metrics = json.dumps({"error_code": "invalid_earth_training_artifact", "error": str(exc)})
+                        continue
                 if saved_marker:
                     task.status = "completed"
                     task.progress = 100.0
-                    parsed_metrics = self._extract_metrics_from_log(log_path)
+                    parsed_metrics = earth_artifact.metrics if earth_artifact is not None else self._extract_metrics_from_log(log_path)
                     task.metrics = json.dumps(
                         parsed_metrics or {"note": "completed after server restart"}
                     )
@@ -193,8 +224,6 @@ class TrainingService:
     async def _scheduler_loop(self) -> None:
         while self._scheduler_started:
             task_id = None
-            spec = None
-            recovered_task = None
             async with async_session_maker() as session:
                 result = await session.execute(
                     select(ModelTrainingTask)
@@ -204,11 +233,13 @@ class TrainingService:
                 )
                 task = result.scalars().first()
                 if task is not None:
-                    task.status = "running"
-                    task.start_time = datetime.now(timezone.utc)
-                    task.queue_position = None
-                    task_id = task.id
-                    spec = self._queue_specs.pop(task_id, None)
+                    claim = await session.execute(
+                        update(ModelTrainingTask)
+                        .where(ModelTrainingTask.id == task.id, ModelTrainingTask.status == "queued")
+                        .values(status="running", start_time=datetime.now(timezone.utc), queue_position=None)
+                    )
+                    if claim.rowcount:
+                        task_id = task.id
                     await session.commit()
                     await self._recalculate_queue_positions(session)
                     await session.commit()
@@ -219,49 +250,144 @@ class TrainingService:
                 except asyncio.TimeoutError:
                     pass
                 continue
-            if spec is None:
-                async with async_session_maker() as session:
-                    row = await session.get(ModelTrainingTask, task_id)
-                    recovered_task = row
-                    spec = {
-                        "script_name": row.model_script,
-                        "hyperparameters": json.loads(row.hyperparameters or "{}"),
-                        "log_file": Path(row.log_file_path),
-                        "output_path": Path(row.output_model_path),
-                        "env_overrides": {},
-                        "temp_data_root": None,
-                        "earth_training_spec": None,
-                    }
-            try:
-                if recovered_task is not None and getattr(recovered_task, "dataset_id", None) == EARTH_DATASET_3HOURLY_ID:
-                    # Only the newly opened dataset uses this recovery path.
-                    # Historical daily queue payloads keep their existing flow.
-                    spec["earth_training_spec"] = await asyncio.to_thread(
-                        self._restore_3hourly_training_spec, recovered_task
-                    )
-                await self._run_training_subprocess(task_id, **spec)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("Queued training task %s failed", task_id)
-                async with async_session_maker() as session:
-                    row = await session.get(ModelTrainingTask, task_id)
-                    if row is not None and row.status == "running":
-                        row.status = "failed"
-                        row.end_time = datetime.now(timezone.utc)
-                        row.metrics = json.dumps({"error": str(exc)})
-                        await session.commit()
+            await self._execute_training_task(task_id)
+
+    async def _execute_training_task(
+        self, task_id: int, *, dataset_registry: DatasetRegistry | None = None,
+        training_weight_service: Any | None = None, user_model_service: Any | None = None,
+    ) -> None:
+        """Launch fresh and recovered tasks from the same persisted facts."""
+        try:
+            async with async_session_maker() as session:
+                task = await session.get(ModelTrainingTask, task_id)
+                if task is None or task.status != "running":
+                    return
+            spec = await self._prepare_training_execution(
+                task, dataset_registry=dataset_registry,
+                training_weight_service=training_weight_service, user_model_service=user_model_service,
+            )
+            await self._run_training_subprocess(task_id, **spec)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Training task %s could not be prepared for execution", task_id)
+            async with async_session_maker() as session:
+                row = await session.get(ModelTrainingTask, task_id)
+                if row is not None and row.status == "running":
+                    row.status = "failed"
+                    row.end_time = datetime.now(timezone.utc)
+                    row.metrics = json.dumps({
+                        "error_code": getattr(exc, "code", "training_execution_preparation_failed"),
+                        "error": str(exc),
+                    })
+                    await session.commit()
+
+    async def _prepare_training_execution(
+        self,
+        task: Any,
+        *,
+        dataset_registry: DatasetRegistry | None = None,
+        training_weight_service: Any | None = None,
+        user_model_service: Any | None = None,
+        is_admin: bool | None = None,
+    ) -> dict[str, Any]:
+        """Own runner selection, dependency checks and restart-safe launch details.
+
+        This also validates admission after the task id has been allocated. No
+        launch details are cached in memory: actual execution rechecks the saved
+        task and its dependencies, including current transfer-source permission.
+        """
+        try:
+            hyperparameters = json.loads(task.hyperparameters)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Training task hyperparameters are damaged") from exc
+        if not isinstance(hyperparameters, dict):
+            raise ValueError("Training task hyperparameters must be an object")
+        dataset_id = resolve_dataset_id(getattr(task, "dataset_id", None), hyperparameters)
+        require_active_dataset(dataset_id)
+        _normalize_training_data_source(hyperparameters.get("_data_source"))
+        earth = is_earth_dataset_id(dataset_id)
+        model_source = getattr(task, "model_source", None) or hyperparameters.get("model_source", "official")
+        if model_source not in ("official", "uploaded"):
+            raise ValueError("Training task model source is invalid")
+        if hyperparameters.get("model_source", model_source) != model_source:
+            raise ValueError("Training task model source does not match its saved parameters")
+        expected_script = EARTH_TRAINING_SCRIPT if earth else (
+            "__user_model_runner__" if model_source == "uploaded" else UNIFIED_TRAINING_SCRIPT
+        )
+        if task.model_script != expected_script:
+            raise ValueError("Training task runner does not match its dataset and model source")
+        runner_path = (
+            Path(__file__).parent.parent / "training_backbones" / "user_model_runner.py"
+            if expected_script == "__user_model_runner__" else MODELS_DIR.joinpath(expected_script)
+        )
+        if not runner_path.exists():
+            raise FileNotFoundError(f"Training runner {expected_script} is missing")
+        for name in ("log_file_path", "output_model_path"):
+            if not isinstance(getattr(task, name, None), str) or not getattr(task, name).strip():
+                raise ValueError(f"Training task {name} is missing")
+
+        earth_spec = None
+        env_overrides = {}
+        if earth:
+            earth_spec = await asyncio.to_thread(
+                self._restore_3hourly_training_spec, task, dataset_registry
+            )
+        else:
+            require_training_dataset(dataset_id)
+            if model_source == "uploaded":
+                if user_model_service is None:
+                    from services.user_model_service import UserModelService
+                    user_model_service = UserModelService(sessionmaker=async_session_maker)
+                package = await user_model_service.get_package_for_user(
+                    task.uploaded_model_id, task.user_id
+                )
+                if (package.validation_status != "valid"
+                        or package.version != task.uploaded_model_version
+                        or package.id != hyperparameters.get("_uploaded_model_id")
+                        or package.version != hyperparameters.get("_uploaded_model_version")):
+                    raise ValueError("Training task uploaded model no longer matches its frozen reference")
+                source_path = Path(package.storage_path)
+                if source_path != Path(hyperparameters.get("_uploaded_model_path") or ""):
+                    raise ValueError("Training task uploaded model path does not match its frozen reference")
+                source_hash = await asyncio.to_thread(
+                    lambda: hashlib.sha256(source_path.read_bytes()).hexdigest()
+                )
+                expected_hash = hyperparameters.get("_uploaded_model_content_hash", package.content_hash)
+                if source_hash != package.content_hash or source_hash != expected_hash:
+                    raise ValueError("Training task uploaded model source has changed")
+            if (hyperparameters.get("transfer_learning")
+                    and hyperparameters.get("transfer_source_type") == "upload"
+                    and training_weight_service is None):
+                from services.training_weight_service import TrainingWeightService
+                training_weight_service = TrainingWeightService(sessionmaker=async_session_maker)
+            env_overrides = await self._resolve_transfer_source(
+                user_id=task.user_id, hyperparameters=hyperparameters,
+                training_weight_service=training_weight_service, is_admin=is_admin,
+            )
+        return {
+            "script_name": expected_script,
+            "hyperparameters": hyperparameters,
+            "log_file": Path(task.log_file_path),
+            "output_path": Path(task.output_model_path),
+            "env_overrides": env_overrides,
+            "temp_data_root": None,
+            "earth_training_spec": earth_spec,
+        }
 
     async def cancel_training(self, task_id: int) -> bool:
         async with async_session_maker() as session:
             task = await session.get(ModelTrainingTask, task_id)
             if task is None or task.status != "queued":
                 return False
-            task.status = "cancelled"
-            task.end_time = datetime.now(timezone.utc)
-            task.queue_position = None
-            task.metrics = json.dumps({"note": "Cancelled while queued"})
-            self._queue_specs.pop(task_id, None)
+            cancelled = await session.execute(
+                update(ModelTrainingTask)
+                .where(ModelTrainingTask.id == task_id, ModelTrainingTask.status == "queued")
+                .values(status="cancelled", end_time=datetime.now(timezone.utc),
+                        queue_position=None, metrics=json.dumps({"note": "Cancelled while queued"}))
+            )
+            if not cancelled.rowcount:
+                return False
             await self._recalculate_queue_positions(session)
             await session.commit()
         self._wake_scheduler()
@@ -339,6 +465,22 @@ class TrainingService:
                 hyperparameters=hyperparameters or {}, dataset_id=resolved_dataset_id,
             )
 
+        earth_task_split = None
+        if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from services.earth_task_split import build_earth_task_split, timeline_from_snapshot
+            from services.training_split import TrainingSplitError
+            normalized = require_earth_training_configuration(
+                model_source=earth_source, uploaded_model_id=uploaded_model_id,
+                hyperparameters=hyperparameters or {}, dataset_id=resolved_dataset_id,
+            )
+            try:
+                earth_task_split = build_earth_task_split(
+                    timeline_from_snapshot(dataset_binding["dataset_snapshot"]),
+                    normalized["window"], normalized["horizon"], normalized,
+                )
+            except TrainingSplitError as exc:
+                raise DatasetRequestError("invalid_earth_training_parameters", str(exc), status_code=422) from exc
+
         source = _normalize_training_data_source(data_source)
 
         async with async_session_maker() as session:
@@ -362,6 +504,9 @@ class TrainingService:
                     custom_model_params=(hyperparameters or {}).get("custom_model_params"),
                     dataset_id=resolved_dataset_id,
                     input_channel_order=canonical_channel_order((hyperparameters or {}).get("selected_channels")),
+                    window=(hyperparameters or {}).get('window', 56),
+                    horizon=(hyperparameters or {}).get('horizon', 24),
+                    batch_size=normalized["batch_size"] if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID else 8,
                 )
         elif model_source == "uploaded":
             model_script, raw_hypers = await self._resolve_uploaded_training_entrypoint(
@@ -391,6 +536,7 @@ class TrainingService:
             preserved_keys.extend([
                 "_uploaded_model_id",
                 "_uploaded_model_version",
+                "_uploaded_model_content_hash",
                 "_uploaded_model_name",
                 "_uploaded_model_filename",
                 "_uploaded_model_path",
@@ -419,6 +565,14 @@ class TrainingService:
         payload_hypers.pop("tag_ids", None)
         payload_hypers.pop("tags", None)
         payload_hypers["_data_source"] = source
+        if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+            metrics_contract = earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V3)
+            payload_hypers[EARTH_METRICS_SCHEMA_KEY] = metrics_contract["schema"]
+            payload_hypers[EARTH_METRICS_AGGREGATION_KEY] = metrics_contract["aggregation"]
+        if earth_task_split is not None:
+            from services.earth_task_split import EARTH_TASK_SPLIT_POLICY, TASK_SPLIT_POLICY_KEY
+            payload_hypers["_earth_task_split"] = earth_task_split
+            payload_hypers[TASK_SPLIT_POLICY_KEY] = EARTH_TASK_SPLIT_POLICY
         if earth_training and earth_reference is not None:
             # Record the pinned uploaded model identity on the task so history,
             # copy-config and prediction can all name the exact trained model. The
@@ -432,19 +586,16 @@ class TrainingService:
             payload_hypers["custom_model_params"] = dict(earth_reference.custom_model_params)
             if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
                 payload_hypers["_earth_uploaded_reference"] = earth_reference.checkpoint_reference()
-        if earth_training:
-            # Earth has no transfer source; the parameter contract already rejects it.
-            transfer_env_overrides = {}
-        else:
-            transfer_env_overrides = await self._resolve_transfer_source(
+                from training_backbones.earth_3hourly_uploaded_contract import contract_schema_for_reference
+                payload_hypers["_earth_uploaded_contract_schema"] = contract_schema_for_reference(payload_hypers["_earth_uploaded_reference"])
+                payload_hypers["_earth_uploaded_reference"]["contract_schema"] = payload_hypers["_earth_uploaded_contract_schema"]
+        if not earth_training:
+            await self._resolve_transfer_source(
                 user_id=user_id,
                 is_admin=is_admin,
                 hyperparameters=payload_hypers,
                 training_weight_service=training_weight_service,
             )
-        # The internal spec is built after the task id exists; the CLI payload is
-        # never used to pass identity fields to the Earth subprocess.
-        earth_training_spec = None
 
         async with async_session_maker() as session:
             # Recheck in the same transaction that writes the task and its associations.
@@ -478,47 +629,20 @@ class TrainingService:
             task.output_model_path = str(output_path)
             await add_task_tag_links(session, [task_id], [tag.id for tag in tags])
 
-            env_overrides: dict[str, str] = dict(transfer_env_overrides)
-            temp_data_root: Path | None = None
-
-            if earth_training:
-                # Built only now: the spec carries the real task id and the
-                # server-generated binding, and travels through the environment
-                # rather than the command line. Only the documented Earth
-                # parameters are forwarded - internal service fields (``_``
-                # prefixed) must never reach the runner.
-                earth_training_spec = build_earth_training_spec(
-                    task_id=task_id,
-                    dataset_binding=dataset_binding,
-                    hyperparameters={
-                        key: value
-                        for key, value in payload_hypers.items()
-                        if not key.startswith("_")
-                    },
-                    uploaded_model=(
-                        earth_reference.checkpoint_reference()
-                        if earth_reference is not None
-                        else None
-                    ),
+            # Validate through the same preparation used at actual execution.
+            # Only task facts are committed; no environment or plan survives
+            # solely in this process's memory.
+            await self._prepare_training_execution(
+                task, dataset_registry=registry,
+                training_weight_service=training_weight_service,
+                user_model_service=user_model_service, is_admin=is_admin,
+            )
+            if earth_reference is not None:
+                logger.info(
+                    "Earth task %s pinned uploaded model %s v%s (%s…)",
+                    task_id, earth_reference.package_id,
+                    earth_reference.version, earth_reference.content_hash[:12],
                 )
-                if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
-                    # This path originates in the verified server registry and
-                    # travels only through the internal subprocess environment.
-                    # It is never accepted as a client hyperparameter or exposed
-                    # in the public identity snapshot.
-                    earth_training_spec["data_path"] = str(Path(registry.get_earth_snapshot(
-                        resolved_dataset_id, expected_fingerprint=dataset_binding["dataset_fingerprint"]
-                    ).data_path).resolve())
-                if earth_reference is not None:
-                    # The child never reads the user's current upload; it gets the
-                    # pinned source through this server-side channel only.
-                    logger.info(
-                        "Earth task %s pinned uploaded model %s v%s (%s…)",
-                        task_id,
-                        earth_reference.package_id,
-                        earth_reference.version,
-                        earth_reference.content_hash[:12],
-                    )
 
             await session.commit()
             logger.info(
@@ -529,17 +653,6 @@ class TrainingService:
                 payload_hypers.get("_effective_data_source", source),
             )
 
-            if not hasattr(self, "_queue_specs"):
-                self._queue_specs = {}
-            self._queue_specs[task_id] = {
-                "script_name": model_script,
-                "hyperparameters": payload_hypers,
-                "log_file": log_file,
-                "output_path": output_path,
-                "env_overrides": env_overrides,
-                "temp_data_root": temp_data_root,
-                "earth_training_spec": earth_training_spec,
-            }
             if getattr(self, "_scheduler_started", False):
                 await self._recalculate_queue_positions(session)
                 await session.commit()
@@ -547,7 +660,11 @@ class TrainingService:
             else:
                 task.status = "running"
                 await session.commit()
-                asyncio.create_task(self._run_training_subprocess(task_id, **self._queue_specs.pop(task_id)))
+                asyncio.create_task(self._execute_training_task(
+                    task_id, dataset_registry=registry,
+                    training_weight_service=training_weight_service,
+                    user_model_service=user_model_service,
+                ))
 
             return task
 
@@ -557,17 +674,31 @@ class TrainingService:
             EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2",
             legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
             earth_3hourly_package_dir=EARTH_MERRA2_3HOURLY_DIR,
+            verification_cache_dir=EARTH_TRAINING_CACHE_DIR,
         )
 
-    def _restore_3hourly_training_spec(self, task: Any) -> dict:
-        """Rebuild a queued server spec from its frozen task identity after restart."""
+    def _restore_3hourly_training_spec(
+        self, task: Any, dataset_registry: DatasetRegistry | None = None,
+    ) -> dict:
+        """Build the Earth runner spec from frozen task facts at every launch."""
         raw_hypers = json.loads(task.hyperparameters or "{}")
+        from services.earth_task_split import required_task_split
+        from services.training_split import TrainingSplitError
+        try:
+            task_split = required_task_split(raw_hypers)
+        except TrainingSplitError as exc:
+            raise DatasetRequestError("invalid_earth_training_parameters", str(exc), status_code=409) from exc
         public_hypers = {key: value for key, value in raw_hypers.items() if not key.startswith("_")}
         normalized = require_earth_training_configuration(
             model_source=raw_hypers.get("model_source", "official"),
             uploaded_model_id=raw_hypers.get("_uploaded_model_id"),
             hyperparameters=public_hypers, dataset_id=task.dataset_id,
         )
+        metrics_contract = earth_task_metrics_contract(raw_hypers, executable=True)
+        if metrics_contract is None:
+            # Truly old unmarked queue rows predate area weighting. Keep their
+            # existing statistical meaning rather than upgrading while launching.
+            metrics_contract = earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V2, executable=True)
         binding = {
             key: getattr(task, key, None) for key in (
                 "dataset_id", "dataset_version", "dataset_fingerprint",
@@ -582,7 +713,7 @@ class TrainingService:
                 "A queued three-hourly task must retain its verified dataset identity",
                 status_code=409,
             )
-        release = self._default_dataset_registry().get_earth_snapshot(
+        release = (dataset_registry or self._default_dataset_registry()).get_earth_snapshot(
             EARTH_DATASET_3HOURLY_ID, expected_fingerprint=binding["dataset_fingerprint"],
         )
         reference = raw_hypers.get("_earth_uploaded_reference")
@@ -592,9 +723,25 @@ class TrainingService:
                     or reference.get("version") != task.uploaded_model_version
                     or reference.get("content_hash") != raw_hypers.get("_uploaded_model_content_hash")):
                 raise DatasetRequestError("uploaded_model_reference_missing", "Queued task has no matching frozen model reference", status_code=409)
+            from training_backbones.earth_3hourly_uploaded_contract import contract_schema_for_reference
+            try:
+                schema = contract_schema_for_reference(reference)
+            except (ValueError, TypeError) as exc:
+                raise DatasetRequestError('uploaded_model_contract_invalid', str(exc), status_code=409) from exc
+            if raw_hypers.get('_earth_uploaded_contract_schema', schema) != schema:
+                raise DatasetRequestError('uploaded_model_contract_invalid', 'Frozen spatial contract disagrees with the model source', status_code=409)
+        if task_split is not None:
+            from services.earth_task_split import validate_earth_task_split
+            try:
+                validate_earth_task_split(task_split, release.dates,
+                                          normalized["window"], normalized["horizon"], normalized)
+            except TrainingSplitError as exc:
+                raise DatasetRequestError("invalid_earth_training_parameters", str(exc), status_code=409) from exc
         spec = build_earth_training_spec(
+            task_split=task_split,
             task_id=task.id, dataset_binding=binding, hyperparameters=normalized,
             uploaded_model=raw_hypers.get("_earth_uploaded_reference"),
+            metrics_contract=metrics_contract,
         )
         spec["data_path"] = str(Path(release.data_path).resolve())
         return spec
@@ -610,6 +757,7 @@ class TrainingService:
         uploaded_only_keys = {
             "_uploaded_model_id",
             "_uploaded_model_version",
+            "_uploaded_model_content_hash",
             "_uploaded_model_name",
             "_uploaded_model_filename",
             "_uploaded_model_path",
@@ -633,6 +781,9 @@ class TrainingService:
         custom_model_params: Any,
         dataset_id: str = "earth_merra2_daily_v2",
         input_channel_order: list[str] | None = None,
+        window: int = 56,
+        horizon: int = 24,
+        batch_size: int = 8,
     ) -> tuple[dict, list[str]]:
         """Pin one uploaded model for an Earth run.
 
@@ -687,24 +838,58 @@ class TrainingService:
                 status_code=422,
             )
 
-        verdict = await asyncio.to_thread(
-            evaluate_package_earth_compatibility, package, validator=self._earth_validator(),
-            dataset_id=dataset_id,
-            earth_probe={"input_channel_order": input_channel_order, "custom_model_params": resolved_params}
-            if dataset_id == EARTH_DATASET_3HOURLY_ID else None,
-        )
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from services.user_model_service import UserModelService
+            from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+
+            stored = await asyncio.to_thread(
+                UserModelService.earth_compatibility_for_package, package, dataset_id=dataset_id,
+            )
+            verdict = EarthCompatibility(
+                compatible=stored['compatible'], reasons=stored['reasons'],
+                warnings=stored['warnings'], datasets=stored['datasets'],
+                output_shape=stored['output_shape'], code=stored['code'],
+                dataset_id=dataset_id, status=stored['status'],
+            )
+            if (verdict.code == 'uploaded_model_compatibility_unknown'
+                    and dataset_id not in verdict.datasets):
+                verdict.code = 'uploaded_model_not_earth_3hourly_compatible'
+            if verdict.compatible:
+                maximum = contract_profile(stored['contract_schema'])['max_batch_size']
+                if not 1 <= batch_size <= maximum:
+                    raise DatasetRequestError('invalid_earth_training_parameters',
+                        f"Earth training requires batch_size between 1 and {maximum}", status_code=422)
+        else:
+            verdict = await asyncio.to_thread(
+                evaluate_package_earth_compatibility, package, validator=self._earth_validator(),
+                dataset_id=dataset_id,
+            )
         if not verdict.compatible:
+            from services.user_model_validator import VALIDATION_TIMEOUT_CODE
+            prefix = ("Earth upload validation did not finish: "
+                      if verdict.code == VALIDATION_TIMEOUT_CODE else
+                      "The uploaded model is not compatible with this Earth dataset: ")
             raise DatasetRequestError(
                 verdict.code or "uploaded_model_not_earth_compatible",
-                "The uploaded model is not compatible with this Earth dataset: "
-                + "; ".join(verdict.reasons or ["unsupported model"]), status_code=422,
+                prefix + "; ".join(verdict.reasons or ["unsupported model"]), status_code=422,
             )
+
+        contract_schema = None
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+            contract_schema = (verdict.datasets.get(dataset_id) or {}).get('schema')
+            try:
+                contract_profile(contract_schema)
+            except (ValueError, TypeError) as exc:
+                raise DatasetRequestError('uploaded_model_contract_invalid',
+                    'The Earth upload report contains no supported spatial contract', status_code=422) from exc
 
         reference = build_reference(
             package=package,
             param_schema=param_schema,
             custom_model_params=resolved_params,
             embed_source=True,
+            contract_schema=contract_schema,
         )
         # The server must be able to prove the code it pins is the code it validated.
         resolve_source_text_strict(
@@ -717,7 +902,7 @@ class TrainingService:
         warnings = list(verdict.warnings)
         if verdict.output_shape:
             warnings.append(
-                "Earth dry-run output shape: " + "x".join(str(v) for v in verdict.output_shape)
+                "Earth upload validation output shape: " + "x".join(str(v) for v in verdict.output_shape)
             )
         return reference, warnings
 
@@ -753,6 +938,7 @@ class TrainingService:
         payload["model_source"] = "uploaded"
         payload["_uploaded_model_id"] = getattr(package, "id", uploaded_model_id)
         payload["_uploaded_model_version"] = getattr(package, "version", None)
+        payload["_uploaded_model_content_hash"] = getattr(package, "content_hash", None)
         payload["_uploaded_model_name"] = getattr(package, "display_name", None)
         payload["_uploaded_model_filename"] = getattr(package, "original_filename", None)
         payload["_uploaded_model_path"] = getattr(package, "storage_path", None)
@@ -765,7 +951,7 @@ class TrainingService:
         user_id: int | None,
         hyperparameters: dict,
         training_weight_service: Any | None,
-        is_admin: bool = False,
+        is_admin: bool | None = False,
     ) -> dict[str, str]:
         if not hyperparameters.get("transfer_learning"):
             return {}
@@ -783,7 +969,7 @@ class TrainingService:
             if getattr(record, "status", None) != "ready":
                 raise ValueError("Uploaded transfer weight must be ready before training")
             weight_path = Path(getattr(record, "storage_path", "") or "")
-            if not weight_path.exists():
+            if not is_valid_model_weight_file(weight_path):
                 raise FileNotFoundError("Uploaded transfer weight file is missing")
             return {"ARESVISION_TRANSFER_WEIGHT_PATH": str(weight_path)}
 
@@ -793,10 +979,13 @@ class TrainingService:
 
         async with async_session_maker() as session:
             source_task = await session.get(ModelTrainingTask, source_task_id)
+            if is_admin is None:
+                owner = await session.get(User, user_id) if user_id is not None else None
+                is_admin = bool(owner is not None and owner.is_active and owner.role == "admin")
 
         if source_task is None:
             raise ValueError("Transfer source task not found")
-        if not is_admin and user_id is not None and getattr(source_task, "user_id", None) not in (None, user_id):
+        if not is_admin and getattr(source_task, "user_id", None) not in (None, user_id):
             raise PermissionError("No permission to access this transfer source task")
         if getattr(source_task, "status", None) != "completed":
             raise ValueError("Transfer source task must be completed")
@@ -1039,6 +1228,7 @@ class TrainingService:
         async with async_session_maker() as session:
             task = await session.get(ModelTrainingTask, task_id)
             if task:
+                require_active_dataset(training_task_dataset_id(task))
                 task.status = "running"
                 task.total_epochs = total_epochs
                 await session.commit()
@@ -1065,7 +1255,7 @@ class TrainingService:
         args.extend(["--output_path", str(output_path)])
 
         with open(log_file, "w", encoding="utf-8") as f:
-            f.write(f"--- 训练任务 {task_id} 已启动 ---\\n")
+            f.write(f"--- 训练任务 {task_id} 已启动 ---\n")
             f.flush()
 
         try:
@@ -1148,6 +1338,32 @@ class TrainingService:
             if earth_training_spec is not None and model_artifact_valid:
                 try:
                     expected_hypers = dict(earth_training_spec["hyperparameters"])
+                    if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+                        from services.earth_task_split import (
+                            TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, required_task_split,
+                        )
+                        frozen_hypers = hyperparameters
+                        async with async_session_maker() as session:
+                            frozen_task = await session.get(ModelTrainingTask, task_id)
+                            if frozen_task is not None:
+                                frozen_hypers = json.loads(frozen_task.hyperparameters or "{}")
+                        task_split = required_task_split(frozen_hypers)
+                        if task_split != earth_training_spec.get("task_split"):
+                            raise EarthArtifactError("Training spec partitions do not match the frozen task")
+                        expected_hypers.update({
+                            key: frozen_hypers[key]
+                            for key in (TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, EARTH_METRICS_SCHEMA_KEY,
+                                        EARTH_METRICS_AGGREGATION_KEY)
+                            if key in frozen_hypers
+                        })
+                        execution_contract = earth_spec_metrics_contract(earth_training_spec)
+                        frozen_contract = earth_task_metrics_contract(frozen_hypers, executable=True)
+                        if frozen_contract is None:
+                            frozen_contract = earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V2, executable=True)
+                        if execution_contract != frozen_contract:
+                            raise EarthArtifactError("Training spec metrics do not match the frozen task contract")
+                    if "task_split" in earth_training_spec:
+                        expected_hypers["_earth_task_split"] = earth_training_spec["task_split"]
                     uploaded = earth_training_spec.get("uploaded_model")
                     if uploaded:
                         expected_hypers.update({
@@ -1164,7 +1380,14 @@ class TrainingService:
                         earth_training_spec["task_id"],
                     )
                     if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
-                        await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
+                        if any(earth_artifact.metrics.get(key) != value for key, value in execution_contract.items()):
+                            raise EarthArtifactError("Earth checkpoint metrics do not match the frozen execution contract")
+                        from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA
+                        if earth_artifact.model_config.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA:
+                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path,
+                                timeout_seconds=config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS)
+                        else:
+                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
                 except Exception as exc:  # noqa: BLE001 - reported as a task failure
                     earth_artifact_error = exc
                     model_artifact_valid = False
@@ -1355,8 +1578,13 @@ class TrainingService:
             task = await session.get(ModelTrainingTask, task_id)
             if not task:
                 raise FileNotFoundError("Task not found")
-            if task.status != "completed":
-                raise ValueError("只能重命名已完成训练的模型")
+            # The display name belongs to the experiment record, so it is safe
+            # to edit it while queued/running as well as after completion.
+            # Keep the status check deliberately open for historical and
+            # cancelled records; permission is enforced by the router.
+            allowed_statuses = {"queued", "pending", "running", "completed", "failed", "cancelled"}
+            if str(task.status or "").lower() not in allowed_statuses:
+                raise ValueError("当前状态不允许重命名")
 
             existing = await session.execute(
                 select(ModelTrainingTask).where(
@@ -1408,7 +1636,6 @@ class TrainingService:
                 return False
 
             queued = task.status == "queued"
-            getattr(self, "_queue_specs", {}).pop(task_id, None)
 
             if task.status == "running":
                 await self.stop_training(task_id)
@@ -1473,7 +1700,8 @@ class TrainingService:
         return {"id": task_id, "status": "testing"}
 
     def _parse_progress_from_log(self, line: str, total_epochs: int, start_time: float, history: dict = None) -> dict | None:
-        batch_pattern = r"Epoch\s+(\d+)/(\d+)\s+Batch\s+(\d+)/(\d+)\s+Loss=([\d\.]+)"
+        number_pattern = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+        batch_pattern = rf"Epoch\s+(\d+)/(\d+)\s+Batch\s+(\d+)/(\d+)\s+Loss=({number_pattern})"
         batch_match = re.search(batch_pattern, line)
         if batch_match:
             current_ep = int(batch_match.group(1))
@@ -1504,7 +1732,14 @@ class TrainingService:
                 "eta": eta,
             }
 
-        epoch_pattern = r"Epoch\s+(\d+)/(\d+)\s+Loss=([\d\.]+)(?:\s+Val Loss=([\d\.]+))?"
+        # Keep the metric label between train and validation loss optional: the
+        # Earth runner annotates it as ``(area-weighted normalized MSE)``.  The
+        # old expression stopped at ``Loss=...`` and therefore silently stored
+        # every Earth validation value as ``null``.
+        epoch_pattern = (
+            rf"Epoch\s+(\d+)/(\d+)\s+Loss=({number_pattern})"
+            rf"(?:\s+\([^\r\n]*?\))?(?:\s+Val Loss=({number_pattern}))?"
+        )
         epoch_match = re.search(epoch_pattern, line)
         if epoch_match:
             current_ep = int(epoch_match.group(1))
@@ -1514,9 +1749,17 @@ class TrainingService:
             effective_total_epochs = max(total_epochs, total_ep_from_log)
             progress = (current_ep / max(1, effective_total_epochs)) * 100
 
-            if history is not None and len(history["train"]) < current_ep:
-                history["train"].append(loss)
-                history["val"].append(val_loss if val_loss is not None else None)
+            if history is not None:
+                # Progress can be replayed after a restart.  Fill a missing
+                # validation value for an already recorded epoch instead of
+                # treating the existing ``null`` as final.
+                while len(history["train"]) < current_ep:
+                    history["train"].append(None)
+                while len(history["val"]) < current_ep:
+                    history["val"].append(None)
+                history["train"][current_ep - 1] = loss
+                if val_loss is not None:
+                    history["val"][current_ep - 1] = val_loss
 
             elapsed = time.time() - start_time
             if current_ep > 0:

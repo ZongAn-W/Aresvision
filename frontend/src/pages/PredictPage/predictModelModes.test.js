@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import zh from '../../i18n/zh.js';
+import en from '../../i18n/en.js';
 
 import {
   DEFAULT_PREDICT_MODEL_MODE,
@@ -7,12 +9,36 @@ import {
   buildPredictHash,
   normalizePredictModelMode,
   readPredictModeFromHash,
+  predictModeSelection,
+  composePredictMode,
 } from './predictModelModes.js';
 
 test('predict model source options hide the system model mode', () => {
   // 地球历史预测是与火星两种模式并列的独立模式；旧 system 模式仍然隐藏。
-  assert.deepEqual(PREDICT_MODEL_MODES, ['trained', 'trained_compare', 'earth']);
+  assert.deepEqual(PREDICT_MODEL_MODES, ['trained', 'trained_compare', 'earth', 'earth_compare']);
   assert.equal(PREDICT_MODEL_MODES.includes('system'), false);
+});
+
+test('planet changes preserve the chosen analysis and legacy hashes resolve to the same selections', () => {
+  assert.deepEqual(predictModeSelection('earth'), { planet: 'earth', analysis: 'single' });
+  assert.deepEqual(predictModeSelection('trained_compare'), { planet: 'mars', analysis: 'compare' });
+  for (const planet of ['earth', 'mars']) {
+    for (const analysis of ['single', 'compare']) {
+      const mode = composePredictMode(planet, analysis);
+      assert.deepEqual(predictModeSelection(mode), { planet, analysis });
+      assert.equal(readPredictModeFromHash(buildPredictHash({ from: 'training', mode })), mode);
+    }
+  }
+});
+
+test('both languages supply the planet controls and Earth prediction copy in the predict namespace', () => {
+  for (const dictionary of [zh, en]) {
+    for (const key of ['planetSelection', 'analysisSelection', 'earthCompareNote', 'earthOriginLabel', 'earthDatasetRetired']) {
+      assert.equal(typeof dictionary.predict[key], 'string', key);
+    }
+    assert.equal(typeof dictionary.predict.planet.earth, 'string');
+    assert.equal(typeof dictionary.predict.analysis.compare, 'string');
+  }
 });
 
 test('从 hash query 读取地球历史预测模式', () => {

@@ -1,0 +1,268 @@
+/* ─── 关于页 ───
+   仅使用 index.css 的主题令牌，深浅主题与字号缩放自动跟随。
+   分节标题沿用技术栈小标签的样式约定（11px、大写字距、等宽展示字体）。 */
+
+.about-page {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 100px 40px 60px;
+}
+
+.about-page__mark {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.about-page__intro {
+  max-width: 700px;
+  margin: 0 auto 40px;
+  text-align: center;
+  font-size: calc(15px * var(--font-scale, 1));
+  line-height: 1.8;
+}
+
+.about-page__note {
+  margin: 20px 0 0;
+  text-align: center;
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.7;
+}
+
+.about-section-label {
+  margin-bottom: 20px;
+  font-family: var(--font-display);
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--brand-primary);
+}
+
+.about-section-label + * {
+  margin-top: 0;
+}
+
+.about-block {
+  margin-bottom: 20px;
+}
+
+.about-block:last-of-type {
+  margin-bottom: 0;
+}
+
+.about-card-title {
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: calc(13px * var(--font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.about-lead,
+.about-body-text {
+  margin: 0;
+  font-size: calc(13px * var(--font-scale, 1));
+  line-height: 1.8;
+  color: var(--text-60);
+}
+
+.about-lead {
+  max-width: 760px;
+}
+
+/* ── 星球覆盖 ── */
+
+.about-planet-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.about-planet-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+}
+
+.about-planet-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: calc(14px * var(--font-scale, 1));
+  font-weight: 700;
+}
+
+.about-planet-head span {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-60);
+  white-space: nowrap;
+}
+
+/* ── 能力清单 ── */
+
+.about-cap-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* ── 实验链路 ── */
+
+.about-workflow {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.about-workflow li {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-muted);
+}
+
+.about-workflow__index {
+  font-family: var(--font-display);
+  font-size: calc(12px * var(--font-scale, 1));
+  font-weight: 700;
+  color: var(--brand-primary);
+  line-height: 1.4;
+}
+
+.about-workflow__body {
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.7;
+  color: var(--text-60);
+}
+
+/* ── 数据资源 ── */
+
+.about-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.about-source-body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.8;
+  color: var(--text-60);
+  white-space: pre-line;
+}
+
+/* ── 模型生态 ── */
+
+.about-model-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 16px;
+}
+
+/* ── 技术栈 ── */
+
+.about-tech-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.about-tech-desc {
+  margin: 0 0 12px;
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.7;
+  color: var(--text-60);
+}
+
+.about-tech-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.about-tech-list li {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line-subtle);
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.6;
+  color: var(--text-60);
+}
+
+/* ── 能力边界 ── */
+
+.about-boundary-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.about-boundary-list li {
+  position: relative;
+  padding-left: 18px;
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.8;
+  color: var(--text-60);
+}
+
+.about-boundary-list li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: calc(0.9em - 2px);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--brand-accent);
+}
+
+/* ── 响应式 ── */
+
+@media (max-width: 900px) {
+  .about-planet-grid,
+  .about-cap-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .about-workflow {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .about-tech-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .about-page {
+    padding: 88px 20px 48px;
+  }
+
+  .about-planet-grid,
+  .about-cap-grid,
+  .about-source-grid,
+  .about-model-grid,
+  .about-workflow,
+  .about-tech-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .about-planet-head span {
+    white-space: normal;
+  }
+}

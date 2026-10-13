@@ -108,6 +108,17 @@ Incomplete versioned checkpoints are rejected. See the
 
 ## Declaring Which Dataset Feeds a Model
 
+Active Earth training uses `earth_merra2_3hourly_v1` and its independent
+[v1 tile](earth-3hourly-uploaded-model.md) or
+[v2 full-grid](earth-3hourly-fullgrid-model.md) contract. Task creation reuses the
+compatibility report saved by upload or manual revalidation, verifies ownership,
+valid status, concrete dataset/schema evidence, source hash, parameter schema and
+batch range, then freezes the source/schema/parameters and queues the task. It no
+longer runs another dry-run for the task's actual windows, channels, batch or
+custom parameters. Runtime output/gradient checks and checkpoint strict reload
+remain required. The daily `earth_merra2` declaration and examples below document
+the historical, retired daily feed.
+
 By default an uploaded model is **Mars-only**. To train it on Earth MERRA-2 data it must
 opt in explicitly:
 
@@ -345,6 +356,26 @@ MODEL_SPEC = {
 
 ## Validation Rules
 
+Upload and manual revalidation use a bounded child process,
+with a default budget of 120 seconds. Set the positive integer
+`USER_MODEL_VALIDATION_TIMEOUT_SECONDS` in the backend environment and restart the
+backend to change it. All execution checks remain required. A timeout terminates
+the child and records `validation_report.code="uploaded_model_validation_timeout"`;
+the package stays invalid until revalidation succeeds. Earth compatibility reports
+`status="unknown"`, `compatible=false` and the same code, and the UI displays
+"Validation timed out. Please retry." Existing reports containing only the legacy
+timeout error text receive the same treatment. This budget is separate from the
+30-second checkpoint completion/reload gate.
+
+Explicit `earth_probe` calls for Earth full-grid v2 configurations use the larger
+of the ordinary budget and `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`
+(default 300 seconds). This setting remains available for explicit probes; task
+creation reuses the saved upload report and does not use this budget.
+Upload short-window probes, Mars and v1 tile checks retain the ordinary budget;
+explicit validator timeouts remain authoritative. The process result is drained
+before joining its sender to avoid false timeouts for large reports. The process
+must still exit successfully within the deadline. See [full-grid admission](earth-3hourly-fullgrid-model.md).
+
 Version 1 accepts these import roots:
 
 - `torch`
@@ -390,3 +421,7 @@ class RepeatLastFrame(nn.Module):
 def build_model(config):
     return RepeatLastFrame(config["horizon"])
 ```
+
+## Earth task partitions
+
+The active three-hour Earth feed shares `earth_raw_utc_timeline_v1` with the official DLinear. Positive train/validation/test ratios (default 0.7/0.2/0.1) allocate the entire raw UTC timeline before any windows are built. Normalization fits only the task train interval; uploaded backtests must keep their full input and target inside one task partition. Release files, manifest splits and fingerprint remain unchanged. Frozen task boundaries survive queue recovery and strict checkpoint reload; older three-hour artifacts retain manifest semantics. Comparison requires the same test time range and window definition. See [Earth task partitions](earth-task-splits.md).

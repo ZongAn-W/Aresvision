@@ -29,8 +29,10 @@ function formatValue(value) {
   return value == null || value === '' ? '--' : String(value);
 }
 
-function metricValue(item, metric) {
-  const value = Number(item?.metrics?.overall?.[metric]);
+export function metricValue(item, metric) {
+  const raw = item?.metrics?.overall?.[metric];
+  if (raw == null || raw === '' || typeof raw === 'boolean') return null;
+  const value = Number(raw);
   return Number.isFinite(value) ? value : null;
 }
 
@@ -40,7 +42,8 @@ export function normalizeCompareDataSource() {
 
 export function buildCompareModelSummary(task) {
   const hypers = parseHyperparameters(task?.hyperparameters);
-  const selectedChannels = normalizeChannels(hypers.selected_channels);
+  const earth = task?.is_earth_task === true || String(task?.dataset_id || hypers.training_dataset || '').startsWith('earth_');
+  const selectedChannels = earth ? ['TO3', ...(Array.isArray(hypers.selected_channels) ? hypers.selected_channels.filter(c => c !== 'TO3') : [])] : normalizeChannels(hypers.selected_channels);
   const modelSource = String(hypers.model_source || task?.model_source || 'official').toLowerCase();
   const architecture = String(hypers.model_architecture || (modelSource === 'uploaded' ? 'uploaded' : 'predrnnv2')).toLowerCase();
   const dataSource = normalizeCompareDataSource(hypers._effective_data_source || hypers._data_source);
@@ -61,7 +64,7 @@ export function buildCompareModelSummary(task) {
 
 export function sortCompareItems(items = [], options = {}) {
   const metric = options.metric || 'rmse';
-  const direction = options.direction || (metric === 'rmse' || metric === 'mae' ? 'asc' : 'desc');
+  const direction = options.direction || (['r2', 'ssim'].includes(metric) ? 'desc' : 'asc');
   const fallback = direction === 'asc' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
 
   return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
@@ -108,11 +111,12 @@ export function getCompareSelectionState(selectedIds = []) {
 export function buildStepCurveTraces(items = [], metric = 'rmse') {
   return (Array.isArray(items) ? items : []).map((item) => {
     const steps = Array.isArray(item?.metrics?.per_step) ? item.metrics.per_step : [];
+    const validSteps = steps.filter((step) => Number.isFinite(Number(step.step)) && step[metric] != null && Number.isFinite(Number(step[metric])));
     return {
       taskId: Number(item?.task_id),
       name: item?.model_name || `Task #${item?.task_id}`,
-      x: steps.map((step) => Number(step.step)).filter((step) => Number.isFinite(step)),
-      y: steps.map((step) => Number(step[metric])).filter((value) => Number.isFinite(value)),
+      x: validSteps.map((step) => Number(step.step)),
+      y: validSteps.map((step) => Number(step[metric])),
     };
   }).filter((trace) => trace.x.length > 0 && trace.y.length > 0);
 }

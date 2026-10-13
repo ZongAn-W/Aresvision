@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Plot from 'react-plotly.js';
 import C from '../constants/colors';
@@ -6,20 +6,26 @@ import { useT } from '../i18n';
 import { useSettings } from '../contexts/SettingsContext';
 import { performTaskAction } from '../services/api';
 import { getMetricAggregationLabel, getSplitLabel } from '../pages/PredictPage/predictionMetricMeta';
+import EarthDiagnosticPanel from '../pages/PredictPage/EarthDiagnosticPanel.jsx';
+import { isEarthTask } from '../pages/PredictPage/earthPredictModel.js';
+import { earthDiagnosticErrorText } from '../pages/PredictPage/earthDiagnosticsModel.js';
 
 /**
  * 模型测试结果弹窗
  * 展示核心指标卡片 & 真实值 vs 预测值的密度散点图
  */
-export default function ModelTestModal({ taskId, onClose }) {
+export default function ModelTestModal({ taskId, task, onClose }) {
   const t = useT();
   const { settings } = useSettings();
   const isLight = settings.theme === 'light';
   const isZh = settings?.language !== 'en';
+  const earth = isEarthTask(task);
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
+  const [retry, setRetry] = useState(0);
+  const requestEpoch = useRef(0);
 
   // 锁定背景滚动
   useEffect(() => {
@@ -32,11 +38,15 @@ export default function ModelTestModal({ taskId, onClose }) {
   }, [taskId]);
 
   useEffect(() => {
-    if (!taskId) return;
-    
+    const epoch = ++requestEpoch.current;
+    const controller = new AbortController();
+    setData(null);
+    setError(null);
+    if (!taskId || earth) { setLoading(false); return () => controller.abort(); }
     setLoading(true);
-    performTaskAction(taskId, 'test')
+    performTaskAction(taskId, 'test', { signal: controller.signal })
       .then(res => {
+        if (controller.signal.aborted || epoch !== requestEpoch.current) return;
         if (res.status === 'success') {
           setData(res.data);
         } else {
@@ -44,10 +54,12 @@ export default function ModelTestModal({ taskId, onClose }) {
         }
       })
       .catch(err => {
-        setError(err.response?.data?.detail || err.message);
+        if (controller.signal.aborted || epoch !== requestEpoch.current) return;
+        setError(earthDiagnosticErrorText(err));
       })
-      .finally(() => setLoading(false));
-  }, [taskId]);
+      .finally(() => { if (!controller.signal.aborted && epoch === requestEpoch.current) setLoading(false); });
+    return () => controller.abort();
+  }, [taskId, earth, retry]);
 
   if (!taskId) return null;
 
@@ -208,34 +220,36 @@ export default function ModelTestModal({ taskId, onClose }) {
 
   const modalContent = (
     <div style={overlayStyle} onClick={onClose}>
-      <div style={modalStyle} onClick={e => e.stopPropagation()}>
+      <div style={modalStyle} role="dialog" aria-modal="true" aria-label={t('modelTest.title')} onClick={e => e.stopPropagation()}>
         <div style={headerStyle}>
           <div>
             <h2 style={{ margin: 0, fontSize: 'calc(18px * var(--font-scale, 1))', fontWeight: 800, color: C.mars }}>{t('modelTest.title')}</h2>
             <div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700, opacity: 0.4, letterSpacing: 1, marginTop: 2 }}>{t('modelTest.subtitle')} — TASK #{taskId}</div>
           </div>
-          <button style={closeBtnStyle} onClick={onClose}>&times;</button>
+          <button style={closeBtnStyle} aria-label={isZh ? '关闭测试结果' : 'Close test results'} onClick={onClose}>&times;</button>
         </div>
 
         <div style={contentStyle}>
-          {loading && (
+          {earth ? <EarthDiagnosticPanel key={taskId} taskId={taskId} identity={task} autoLoad /> : null}
+          {!earth && loading && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 400, gap: 16 }}>
               <div className="loading-spinner" style={{ width: 40, height: 40, border: `3px solid ${C.mars}22`, borderTop: `3px solid ${C.mars}`, borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
               <div style={{ fontSize: 'calc(14px * var(--font-scale, 1))', fontWeight: 600, opacity: 0.6 }}>{t('modelTest.loading')}</div>
             </div>
           )}
 
-          {error && (
+          {!earth && error && (
             <div style={{ padding: 40, textAlign: 'center' }}>
               <div style={{ fontSize: 'calc(48px * var(--font-scale, 1))', marginBottom: 16 }}>⚠️</div>
               <h3 style={{ margin: '0 0 8px 0', color: C.mars }}>{t('modelTest.error')}</h3>
               <p style={{ margin: 0, opacity: 0.6, fontSize: 'calc(14px * var(--font-scale, 1))' }}>{error}</p>
+              <button type="button" onClick={() => setRetry((n) => n + 1)} style={{ marginTop: 16, cursor: 'pointer' }}>{isZh ? '重试' : 'Retry'}</button>
               <button onClick={onClose} style={{ marginTop: 24, padding: '8px 24px', borderRadius: 8, background: C.mars, color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 700 }}>{t('explore.upload.closeResult')}</button>
             </div>
           )}
 
-          {data && (
-            <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 24, alignItems: 'start' }}>
+          {!earth && data && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 24, alignItems: 'start' }}>
               {/* Left Column: Metrics */}
               <div>
                 <div style={{ fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 800, marginBottom: 16, opacity: 0.8, display: 'flex', alignItems: 'center', gap: 8 }}>

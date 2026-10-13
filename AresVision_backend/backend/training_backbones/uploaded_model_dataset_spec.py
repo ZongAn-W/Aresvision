@@ -42,7 +42,7 @@ Backward compatibility rules:
 from __future__ import annotations
 
 from typing import Any
-from training_backbones.earth_3hourly_uploaded_contract import FEED
+from training_backbones.earth_3hourly_uploaded_contract import FEED, FULL_GRID_FEED, FULL_GRID_CONTRACT_SCHEMA
 
 #: Keys of the independent Earth feeds inside ``MODEL_SPEC.datasets``.
 EARTH_FEED_KEY = "earth_merra2"
@@ -160,8 +160,14 @@ def normalize_earth_3hourly_feed(feed: Any) -> dict[str, Any]:
             return len(actual) == len(expected) and all(exact(a, b) for a, b in zip(actual, expected))
         return actual == expected
 
-    for key, value in FEED.items():
+    expected_feed = FULL_GRID_FEED if feed.get("schema") == FULL_GRID_CONTRACT_SCHEMA else FEED
+    for key, value in expected_feed.items():
         actual = feed.get(key)
+        if key in ('window', 'horizon'):
+            values = _normalize_positive_ints(actual, f'{EARTH_3HOURLY_FEED_KEY}.{key}')
+            if len(values) != len(set(values)) or any(v > 240 for v in values):
+                raise DatasetCapabilityError(f'{key} must contain unique integers between 1 and 240')
+            continue
         if not exact(actual, value):
             raise DatasetCapabilityError(
                 f"MODEL_SPEC.datasets.{EARTH_3HOURLY_FEED_KEY}.{key} must equal {value!r}"

@@ -1,17 +1,17 @@
 /* ─── AstraAtmos「大气之 A」品牌色与导航品牌入口 ───
-   变量只定义在品牌命名空间 --brand-*，不替换 C.blue / C.mars、
+   变量引用全局品牌令牌，不替换 C.blue / C.mars、
    科学图表色带或业务状态色。深色为主题默认值，与 index.css 的
    [data-theme="light"] 约定一致。 */
 
 :root {
-  --brand-primary: #9ad9ef;
-  --brand-accent: #f19a78;
+  --brand-primary: var(--brand-ice);
+  --brand-accent: var(--brand-orange);
   --brand-on-primary: #081c29;
 }
 
 [data-theme="light"] {
-  --brand-primary: #236387;
-  --brand-accent: #c76543;
+  --brand-primary: var(--brand-ice);
+  --brand-accent: var(--brand-orange);
   --brand-on-primary: #ffffff;
 }
 
@@ -66,6 +66,48 @@
 .brand-home-button:focus-visible {
   outline: 2px solid var(--brand-primary);
   outline-offset: 4px;
+}
+
+.brand-home-button__subtitle {
+  font-size: calc(var(--type-helper) * var(--font-scale));
+  color: var(--text-secondary);
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 500;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms, box-shadow 150ms;
+}
+
+.nav-link.is-active {
+  background: var(--surface-2);
+  color: var(--brand-ice);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--brand-ice);
+}
+
+.nav-user-button { min-height: var(--control-height); border-radius: var(--radius-control) !important; border-color: var(--line-subtle) !important; }
+.nav-notification-button { width: 40px; height: 40px; justify-content: center; padding: 0 !important; }
+.nav-user-button:hover, .home-nav__links > button:hover { background: var(--bg-muted-strong) !important; }
+.nav-user-menu { border-radius: var(--radius-panel) !important; box-shadow: var(--shadow-panel) !important; }
+.nav-user-menu button { display: block; width: 100%; border: 0; background: transparent; text-align: left; min-height: var(--control-height); }
+
+@media (min-width: 1101px) and (max-width: 1440px) {
+  .nav-glass { padding-inline: 28px !important; }
+  .home-nav__links > button { padding-inline: 10px !important; }
 }
 
 @media (max-width: 430px) {

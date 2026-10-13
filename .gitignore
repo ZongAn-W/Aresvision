@@ -5,6 +5,7 @@
 /scratch/
 /projects/
 /Data/
+/work/
 /docs/superpowers/
 /frontend/output/
 /backup/
@@ -78,6 +79,7 @@ AresVision_backend/backend/data/user_uploads/
 
 # Backend runtime outputs
 AresVision_backend/backend/logs/
+AresVision_backend/backend/data/recovery/
 # Local server stdout/stderr redirections (development only)
 /AresVision_backend/backend/uvicorn*.log
 /serve-prod*.log

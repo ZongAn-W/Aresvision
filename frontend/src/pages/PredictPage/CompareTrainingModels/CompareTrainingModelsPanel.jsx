@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import C from '../../../constants/colors';
-import GlowCard from '../../../components/GlowCard';
+import { Button, Panel, SegmentedControl } from '../../../components/ui/Controls';
 import { fmtNum } from '../../../utils/fmt';
 import { METRIC_META } from '../PredictComponents';
 import {
@@ -11,10 +11,21 @@ import {
   buildStepCurveTraces,
   normalizeCompareDataSource,
   sortCompareItems,
+  metricValue,
 } from './compareTrainingModelsData';
+import { EARTH_METRIC_META } from '../../../utils/earthMetricMeta.js';
 import { getMetricAggregationLabel, getSplitLabel } from '../predictionMetricMeta';
+import ResearchExportButton from '../ResearchExportButton';
+import { useSettings } from '../../../contexts/SettingsContext';
+import { ozoneLabel, convertOzone } from '../../../utils/units';
+import { convertCompareMetrics } from '../researchExportModel';
 
 const GOOD_METRICS = new Set(['r2', 'ssim']);
+
+function metricLabel(metric, unit) {
+  const valueUnit = ['rmse', 'mae'].includes(metric.key) ? unit : (metric.unit === '1' ? '' : metric.unit);
+  return metric.name + (valueUnit ? ` (${valueUnit})` : '');
+}
 
 function withAlpha(color, alpha) {
   if (!color) return `rgba(255,255,255,${alpha})`;
@@ -27,78 +38,53 @@ function withAlpha(color, alpha) {
   return color;
 }
 
-function MetricTabs({ activeMetric, setActiveMetric }) {
+function MetricTabs({ activeMetric, setActiveMetric, metrics = METRIC_META }) {
   return (
-    <div style={{ display: 'flex', gap: 6, padding: 4, borderRadius: 14, background: C.bgMuted, border: `1px solid ${C.border}`, flexWrap: 'wrap' }}>
-      {METRIC_META.map((metric) => {
-        const active = activeMetric === metric.key;
-        return (
-          <button
-            key={metric.key}
-            type="button"
-            onClick={() => setActiveMetric(metric.key)}
-            style={{
-              minHeight: 34,
-              padding: '7px 12px',
-              borderRadius: 10,
-              border: 'none',
-              background: active ? 'rgba(121,187,255,0.16)' : 'transparent',
-              color: active ? C.blue : C.ice60,
-              fontSize: 'calc(11px * var(--font-scale, 1))',
-              fontWeight: active ? 800 : 600,
-              cursor: 'pointer',
-            }}
-          >
-            {metric.name}
-          </button>
-        );
-      })}
-    </div>
+    <SegmentedControl value={activeMetric} onChange={setActiveMetric} className="prediction-compare__metric-tabs"
+      options={metrics.map(metric => ({ value: metric.key, label: metric.name,
+        description: metric.zh ? `${metric.zh} / ${metric.en}` : metric.name }))} />
   );
 }
 
 function LoadingState({ isZh }) {
   return (
-    <GlowCard style={{ padding: 24 }}>
+    <Panel className="prediction-panel">
       <div style={{ minHeight: 180, display: 'grid', placeItems: 'center', gap: 12 }}>
         <div style={{ width: 28, height: 28, border: `3px solid ${C.border}`, borderTop: `3px solid ${C.green}`, borderRadius: '50%', animation: 'spin-slow 0.9s linear infinite' }} />
         <div style={{ color: C.ice60, fontSize: 'calc(12px * var(--font-scale, 1))' }}>
           {isZh ? '正在计算多模型测试集指标…' : 'Computing multi-model test-set metrics...'}
         </div>
       </div>
-    </GlowCard>
+    </Panel>
   );
 }
 
 function EmptyState({ isZh, selectedCount }) {
   return (
-    <GlowCard style={{ padding: 24 }}>
-      <div style={{ padding: '34px 20px', borderRadius: 16, border: `1px dashed ${C.borderStrong}`, background: C.bgMuted, textAlign: 'center' }}>
-        <div style={{ color: selectedCount >= 2 ? C.green : C.mars, fontSize: 'calc(13px * var(--font-scale, 1))', fontWeight: 800 }}>
+    <Panel className="prediction-panel">
+      <div style={{ padding: '16px 4px', textAlign: 'center' }}>
+        <div style={{ color: 'var(--text-primary)', fontSize: 'calc(var(--type-control) * var(--font-scale, 1))', fontWeight: 600 }}>
           {selectedCount >= 2
             ? (isZh ? '点击左侧“开始对比”生成结果' : 'Start comparison from the sidebar')
             : (isZh ? '至少选择 2 个训练模型' : 'Select at least 2 trained models')}
         </div>
-        <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.65, marginTop: 8 }}>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', lineHeight: 1.5, marginTop: 8 }}>
           {isZh
             ? '对比结果会基于完整测试集指标，而不是当前预测窗口。'
             : 'Comparison results use full test-set metrics rather than the current prediction window.'}
         </div>
       </div>
-    </GlowCard>
+    </Panel>
   );
 }
 
-function SummaryTable({ items, precision, isZh }) {
+function SummaryTable({ items, precision, isZh, unit, metrics, planet }) {
   const [sortMetric, setSortMetric] = useState('rmse');
   const [direction, setDirection] = useState('asc');
   const sorted = useMemo(() => sortCompareItems(items, { metric: sortMetric, direction }), [direction, items, sortMetric]);
   const columns = [
     { key: 'model', label: isZh ? '模型名' : 'Model' },
-    { key: 'rmse', label: 'RMSE' },
-    { key: 'mae', label: 'MAE' },
-    { key: 'ssim', label: 'SSIM' },
-    { key: 'r2', label: 'R²' },
+    ...metrics.map(metric => ({ key: metric.key, label: metricLabel(metric, unit) })),
     { key: 'architecture', label: isZh ? '架构' : 'Architecture' },
     { key: 'channels', label: isZh ? '输入通道' : 'Channels' },
     { key: 'window', label: 'Window' },
@@ -112,52 +98,45 @@ function SummaryTable({ items, precision, isZh }) {
       return;
     }
     setSortMetric(metric);
-    setDirection(metric === 'rmse' || metric === 'mae' ? 'asc' : 'desc');
+    setDirection(GOOD_METRICS.has(metric) ? 'desc' : 'asc');
   };
 
   return (
-    <GlowCard style={{ padding: 20 }}>
+    <Panel className="prediction-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+          <div className="prediction-chart-title">
             {isZh ? '多模型综合排名' : 'Multi-model ranking'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
             {isZh
-              ? '整体指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；默认按 RMSE 升序，支持切换 RMSE / MAE / SSIM / R² 排序。'
-              : 'Overall metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; default sorting is RMSE ascending, with RMSE, MAE, SSIM, and R² available.'}
+              ? '整体指标使用完整测试集；默认按 RMSE 升序，支持按已提供的指标排序。'
+              : 'Overall metrics summarize the full test set. Sort by RMSE ascending or another available metric.'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {METRIC_META.map((metric) => (
-            <button
+          {metrics.map((metric) => (
+            <Button size="compact"
               key={metric.key}
               type="button"
               onClick={() => setSort(metric.key)}
-              style={{
-                minHeight: 34,
-                padding: '7px 11px',
-                borderRadius: 10,
-                border: `1px solid ${sortMetric === metric.key ? withAlpha(metric.color, 0.46) : C.border}`,
-                background: sortMetric === metric.key ? withAlpha(metric.color, 0.12) : C.bgMuted,
-                color: sortMetric === metric.key ? metric.color : C.ice60,
-                fontSize: 'calc(11px * var(--font-scale, 1))',
-                fontWeight: 800,
-                cursor: 'pointer',
-              }}
+              aria-pressed={sortMetric === metric.key}
+              style={{ background: sortMetric === metric.key ? 'var(--surface-3)' : 'transparent',
+                color: sortMetric === metric.key ? 'var(--brand-ice)' : 'var(--text-secondary)',
+                boxShadow: sortMetric === metric.key ? 'inset 0 -2px var(--line-active)' : 'none' }}
             >
               {metric.name}{sortMetric === metric.key ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
 
-      <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+      <div style={{ overflowX: 'auto', borderTop: '1px solid var(--line-subtle)' }}>
         <table style={{ width: '100%', minWidth: 920, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: C.bgMuted }}>
               {columns.map((column) => (
-                <th key={column.key} style={{ padding: '11px 12px', textAlign: 'left', color: C.ice50, fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 800, textTransform: 'uppercase' }}>
+                <th key={column.key} style={{ padding: '11px 12px', textAlign: 'left', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', fontWeight: 600 }}>
                   {column.label}
                 </th>
               ))}
@@ -171,26 +150,26 @@ function SummaryTable({ items, precision, isZh }) {
               const splitLabel = getSplitLabel(item.metrics, isZh);
               return (
                 <tr key={item.task_id} style={{ borderTop: `1px solid ${C.border}` }}>
-                  <td style={{ padding: '12px', color: C.ice, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 800 }}>
-                    <span style={{ color: index === 0 ? C.green : C.ice40, marginRight: 8 }}>#{index + 1}</span>
+                  <td style={{ padding: '12px', color: C.ice, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', fontWeight: 600 }}>
+                    <span style={{ color: index === 0 ? C.green : C.ice40, marginRight: 8 }}>{metricValue(item, sortMetric) == null ? '--' : `#${index + 1}`}</span>
                     {item.model_name || `Task #${item.task_id}`}
-                    <div style={{ color: C.ice40, fontSize: 'calc(10px * var(--font-scale, 1))', marginTop: 3 }}>Task #{item.task_id}</div>
-                    <div style={{ color: C.blue, fontSize: 'calc(9px * var(--font-scale, 1))', lineHeight: 1.35, marginTop: 5, fontWeight: 700 }}>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', marginTop: 3 }}>Task #{item.task_id}</div>
+                    <div style={{ color: 'var(--brand-ice)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', lineHeight: 1.5, marginTop: 5, fontWeight: 600 }}>
                       {aggregationLabel}
                     </div>
                     {splitLabel && (
-                      <div style={{ color: C.ice40, fontSize: 'calc(9px * var(--font-scale, 1))', lineHeight: 1.35, marginTop: 2 }}>
+                      <div style={{ color: 'var(--text-secondary)', fontSize: 'calc(var(--type-micro) * var(--font-scale, 1))', lineHeight: 1.5, marginTop: 2 }}>
                         {splitLabel}
                       </div>
                     )}
                   </td>
-                  {['rmse', 'mae', 'ssim', 'r2'].map((metric) => (
-                    <td key={metric} style={{ padding: '12px', color: GOOD_METRICS.has(metric) ? C.green : C.mars, fontSize: 'calc(12px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-                      {overall[metric] == null ? '--' : fmtNum(overall[metric], precision)}
+                  {metrics.map(({ key: metric }) => (
+                    <td key={metric} style={{ padding: '12px', color: GOOD_METRICS.has(metric) ? C.success : C.action, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', fontWeight: 700, fontFamily: 'var(--font-display)', fontVariantNumeric: 'tabular-nums' }}>
+                      {metricValue(item, metric) == null ? (isZh ? '未提供' : 'Not provided') : fmtNum(overall[metric], precision)}
                     </td>
                   ))}
                   <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700 }}>{item.architecture || '--'}</td>
-                  <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700 }}>{(item.selected_channels || []).join(' / ') || 'O3 only'}</td>
+                  <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: 700 }}>{(item.selected_channels || []).join(' / ') || (planet === 'earth' ? 'TO3' : 'O3 only')}</td>
                   <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{hypers.window ?? '--'}</td>
                   <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{hypers.horizon ?? '--'}</td>
                   <td style={{ padding: '12px', color: C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{normalizeCompareDataSource(hypers._effective_data_source || hypers._data_source)}</td>
@@ -200,28 +179,30 @@ function SummaryTable({ items, precision, isZh }) {
           </tbody>
         </table>
       </div>
-    </GlowCard>
+    </Panel>
   );
 }
 
-function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor }) {
+function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor, unit, metrics }) {
   const [activeMetric, setActiveMetric] = useState('rmse');
-  const metricMeta = METRIC_META.find((metric) => metric.key === activeMetric) || METRIC_META[0];
+  const metricMeta = metrics.find((metric) => metric.key === activeMetric) || METRIC_META[0];
   const sorted = useMemo(() => sortCompareItems(items, { metric: activeMetric }), [activeMetric, items]);
   const color = GOOD_METRICS.has(activeMetric) ? C.green : C.mars;
 
   return (
-    <GlowCard style={{ padding: 20 }}>
+    <Panel className="prediction-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+          <div className="prediction-chart-title">
             {isZh ? '多模型指标柱状图' : 'Metric comparison'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
-            {isZh ? '整体指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；切换指标查看模型间差距，RMSE/MAE 越低越好，SSIM/R² 越高越好。' : 'Overall metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; switch metrics to inspect gaps. Lower RMSE/MAE is better and higher SSIM/R² is better.'}
+            {unit === 'DU' && metrics.some(metric => metric.key === 'mse')
+              ? (isZh ? '完整测试集：MSE/RMSE/MAE/MAPE/SMAPE 越低越好，R² 越高越好。' : 'Full test set: lower MSE/RMSE/MAE/MAPE/SMAPE and higher R² are better.')
+              : (isZh ? '整体指标使用完整测试集；RMSE/MAE 越低越好，SSIM/R² 越高越好。' : 'Overall metrics summarize the full test set; lower RMSE/MAE and higher SSIM/R² are better.')}
           </div>
         </div>
-        <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} />
+        <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} metrics={metrics} />
       </div>
 
       <Plot
@@ -229,13 +210,13 @@ function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor }) {
           {
             type: 'bar',
             orientation: 'h',
-            x: sorted.map((item) => Number(item.metrics?.overall?.[activeMetric]) || 0),
+            x: sorted.map((item) => metricValue(item, activeMetric)),
             y: sorted.map((item) => item.model_name || `Task #${item.task_id}`),
             marker: {
               color: sorted.map((_, index) => withAlpha(color, Math.max(0.42, 0.96 - index * 0.06))),
               line: { color: withAlpha(color, 0.9), width: 1 },
             },
-            customdata: sorted.map((item) => [item.task_id, fmtNum(item.metrics?.overall?.[activeMetric] || 0, precision)]),
+            customdata: sorted.map((item) => [item.task_id, metricValue(item, activeMetric) == null ? '--' : fmtNum(metricValue(item, activeMetric), precision)]),
             hovertemplate: `<b>%{y}</b><br>Task #%{customdata[0]}<br>${metricMeta.name}: <b>%{customdata[1]}</b><extra></extra>`,
           },
         ]}
@@ -246,18 +227,18 @@ function MetricBars({ items, precision, isZh, plotTextColor, plotGridColor }) {
           paper_bgcolor: 'rgba(0,0,0,0)',
           plot_bgcolor: 'rgba(0,0,0,0)',
           font: { color: plotTextColor, family: 'var(--font-body)' },
-          xaxis: { title: metricMeta.name, gridcolor: plotGridColor, zerolinecolor: plotGridColor },
+          xaxis: { title: metricLabel(metricMeta, unit), gridcolor: plotGridColor, zerolinecolor: plotGridColor },
           yaxis: { type: 'category', automargin: true, autorange: 'reversed' },
           showlegend: false,
         }}
         config={{ displayModeBar: false, responsive: true }}
-        style={{ width: '100%' }}
+        style={{ width: '100%', height: Math.max(300, sorted.length * 46 + 100), flexShrink: 0 }}
       />
-    </GlowCard>
+    </Panel>
   );
 }
 
-function ParameterMatrix({ items, isZh }) {
+function ParameterMatrix({ items, isZh, planet }) {
   const rows = useMemo(() => buildCompareParameterRows(items), [items]);
   const columns = [
     { key: 'modelName', label: isZh ? '模型名' : 'Model' },
@@ -265,7 +246,7 @@ function ParameterMatrix({ items, isZh }) {
     { key: 'modelSource', label: isZh ? '模型来源' : 'Source' },
     { key: 'architecture', label: isZh ? '架构' : 'Architecture' },
     { key: 'selectedChannels', label: isZh ? '输入通道' : 'Channels' },
-    { key: 'useSphere', label: 'SPHERE' },
+    ...(planet === 'earth' ? [] : [{ key: 'useSphere', label: 'SPHERE' }]),
     { key: 'window', label: 'Window' },
     { key: 'horizon', label: 'Horizon' },
     { key: 'epochs', label: isZh ? '轮次' : 'Epochs' },
@@ -277,19 +258,19 @@ function ParameterMatrix({ items, isZh }) {
   ];
 
   return (
-    <GlowCard style={{ padding: 20 }}>
-      <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+    <Panel className="prediction-panel">
+      <div className="prediction-chart-title">
         {isZh ? '模型参数矩阵' : 'Parameter matrix'}
       </div>
       <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5, marginBottom: 14 }}>
         {isZh ? '横向对比训练配置，帮助解释指标差异。' : 'Compare training configurations side by side to explain metric differences.'}
       </div>
-      <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+      <div style={{ overflowX: 'auto', borderTop: '1px solid var(--line-subtle)' }}>
         <table style={{ width: '100%', minWidth: 1120, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: C.bgMuted }}>
               {columns.map((column) => (
-                <th key={column.key} style={{ padding: '11px 12px', textAlign: 'left', color: C.ice50, fontSize: 'calc(10px * var(--font-scale, 1))', fontWeight: 800, textTransform: 'uppercase' }}>
+                <th key={column.key} style={{ padding: '11px 12px', textAlign: 'left', color: 'var(--text-secondary)', fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', fontWeight: 600 }}>
                   {column.label}
                 </th>
               ))}
@@ -299,7 +280,7 @@ function ParameterMatrix({ items, isZh }) {
             {rows.map((row) => (
               <tr key={row.taskId} style={{ borderTop: `1px solid ${C.border}` }}>
                 {columns.map((column) => (
-                  <td key={column.key} title={String(row[column.key] ?? '--')} style={{ padding: '12px', color: column.key === 'modelName' ? C.ice : C.ice70, fontSize: 'calc(11px * var(--font-scale, 1))', fontWeight: column.key === 'modelName' ? 800 : 600, maxWidth: column.key === 'modelName' ? 190 : 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td key={column.key} title={String(row[column.key] ?? '--')} style={{ padding: '12px', color: column.key === 'modelName' ? C.ice : C.ice70, fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', fontWeight: 600, maxWidth: column.key === 'modelName' ? 190 : 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {row[column.key] ?? '--'}
                   </td>
                 ))}
@@ -308,37 +289,42 @@ function ParameterMatrix({ items, isZh }) {
           </tbody>
         </table>
       </div>
-    </GlowCard>
+    </Panel>
   );
 }
 
-function StepCurves({ items, isZh, plotTextColor, plotGridColor }) {
+function StepCurves({ items, isZh, plotTextColor, plotGridColor, unit, metrics, planet }) {
   const [activeMetric, setActiveMetric] = useState('rmse');
-  const metricMeta = METRIC_META.find((metric) => metric.key === activeMetric) || METRIC_META[0];
+  const metricMeta = metrics.find((metric) => metric.key === activeMetric) || METRIC_META[0];
   const traces = useMemo(() => buildStepCurveTraces(items, activeMetric), [activeMetric, items]);
 
   return (
-    <GlowCard style={{ padding: 20 }}>
+    <Panel className="prediction-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-            {isZh ? 'Step 1 / 2 / 3 逐步性能' : 'Step-by-step performance'}
+          <div className="prediction-chart-title">
+            {isZh ? '逐步性能' : 'Step-by-step performance'}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
-            {isZh ? '逐步指标按完整测试集汇总，RMSE/MAE/R² 按像素合并；查看预测步长增加时各模型如何变化。' : 'Per-step metrics summarize the full test set, with RMSE/MAE/R² pooling pixels; inspect how each model changes as the forecast step increases.'}
+            {isZh ? '逐步指标使用完整测试集，查看提前量增加时各模型如何变化。' : 'Per-step metrics summarize the full test set; inspect how each model changes as the lead increases.'}
           </div>
         </div>
-        <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} />
+        <MetricTabs activeMetric={activeMetric} setActiveMetric={setActiveMetric} metrics={metrics} />
       </div>
 
+      {['rmse', 'mae', 'r2', 'ssim'].includes(activeMetric) ? (
+        <ResearchExportButton sources={items.filter(item => item.metrics?.per_step?.every(row => Number.isFinite(row[activeMetric]))).map((item) => item.metrics?.export_ref)}
+          sourceLabels={items.filter(item => item.metrics?.per_step?.every(row => Number.isFinite(row[activeMetric]))).map((item) => item.model_name || `Task #${item.task_id}`)} kind="step_curves" metric={activeMetric} />
+      ) : null}
+
       <Plot
-        data={traces.map((trace) => ({
+        data={traces.map((trace, index) => ({
           type: 'scatter',
           mode: 'lines+markers',
-          x: trace.x.map((step) => `Step ${step}`),
+          x: trace.x.map((step) => planet === 'earth' ? step * 3 : step),
           y: trace.y,
           name: trace.name,
-          line: { width: 2 },
+          line: { width: 2, dash: ['solid', 'dash', 'dashdot', 'dot'][index % 4] },
           marker: { size: 7 },
           hovertemplate: `<b>${trace.name}</b><br>%{x}<br>${metricMeta.name}: <b>%{y:.4f}</b><extra></extra>`,
         }))}
@@ -349,65 +335,54 @@ function StepCurves({ items, isZh, plotTextColor, plotGridColor }) {
           paper_bgcolor: 'rgba(0,0,0,0)',
           plot_bgcolor: 'rgba(0,0,0,0)',
           font: { color: plotTextColor, family: 'var(--font-body)' },
-          xaxis: { title: isZh ? '预测步' : 'Forecast step', gridcolor: plotGridColor },
-          yaxis: { title: metricMeta.name, gridcolor: plotGridColor, zerolinecolor: plotGridColor },
-          legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 10 } },
+          xaxis: { title: planet === 'earth' ? (isZh ? '提前量（小时）' : 'Lead (hours)') : (isZh ? '预测步' : 'Forecast step'), gridcolor: plotGridColor },
+          yaxis: { title: metricLabel(metricMeta, unit), gridcolor: plotGridColor, zerolinecolor: plotGridColor },
+          legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 11 } },
         }}
         config={{ displayModeBar: false, responsive: true }}
-        style={{ width: '100%' }}
+        style={{ width: '100%', height: 340, flexShrink: 0 }}
       />
-    </GlowCard>
+    </Panel>
   );
 }
 
 function LazyDiagnosticCard({ title, description, buttonText, loading, data, onLoad, children, isZh }) {
   return (
-    <GlowCard style={{ padding: 20 }}>
+    <Panel className="prediction-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap' }}>
         <div style={{ maxWidth: 680 }}>
-          <div style={{ color: C.ice, fontSize: 'calc(15px * var(--font-scale, 1))', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+          <div className="prediction-chart-title">
             {title}
           </div>
           <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.55, marginTop: 5 }}>
             {description}
           </div>
         </div>
-        <button
+        <Button
           type="button"
           onClick={onLoad}
           disabled={loading}
-          style={{
-            minHeight: 38,
-            padding: '9px 13px',
-            borderRadius: 12,
-            border: `1px solid ${data ? 'rgba(99,232,191,0.34)' : C.borderStrong}`,
-            background: data ? 'rgba(99,232,191,0.10)' : C.bgMuted,
-            color: loading ? C.ice40 : data ? C.green : C.ice70,
-            fontSize: 'calc(11px * var(--font-scale, 1))',
-            fontWeight: 800,
-            cursor: loading ? 'not-allowed' : 'pointer',
-          }}
         >
           {loading ? (isZh ? '计算中…' : 'Computing...') : data ? (isZh ? '刷新' : 'Refresh') : buttonText}
-        </button>
+        </Button>
       </div>
       {loading ? (
-        <div style={{ height: 220, display: 'grid', placeItems: 'center', background: C.bgMuted, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+        <div style={{ height: 220, display: 'grid', placeItems: 'center', background: 'var(--surface-2)', borderRadius: 'var(--radius-control)' }}>
           <div style={{ display: 'grid', gap: 10, justifyItems: 'center' }}>
             <div style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTop: `2px solid ${C.green}`, borderRadius: '50%', animation: 'spin-slow 0.8s linear infinite' }} />
             <div style={{ color: C.ice50, fontSize: 'calc(11px * var(--font-scale, 1))' }}>{isZh ? '正在读取完整测试集结果' : 'Reading full test-set results'}</div>
           </div>
         </div>
       ) : data ? children : (
-        <div style={{ padding: '28px 18px', borderRadius: 12, border: `1px dashed ${C.borderStrong}`, background: C.bgMuted, color: C.ice50, textAlign: 'center', fontSize: 'calc(11px * var(--font-scale, 1))', lineHeight: 1.6 }}>
+        <div style={{ padding: '20px 8px', borderTop: '1px solid var(--line-subtle)', color: 'var(--text-secondary)', textAlign: 'center', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))', lineHeight: 1.5 }}>
           {isZh ? '该模块计算较重，点击按钮后按需加载。' : 'This module is computed on demand because it can be heavier.'}
         </div>
       )}
-    </GlowCard>
+    </Panel>
   );
 }
 
-function ErrorDistributionCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor }) {
+function ErrorDistributionCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor, unit }) {
   const traces = useMemo(() => buildErrorHistogramTraces(data?.items || []), [data]);
 
   return (
@@ -437,9 +412,9 @@ function ErrorDistributionCompare({ data, loading, onLoad, isZh, plotTextColor, 
           paper_bgcolor: 'rgba(0,0,0,0)',
           plot_bgcolor: 'rgba(0,0,0,0)',
           font: { color: plotTextColor, family: 'var(--font-body)' },
-          xaxis: { title: isZh ? '预测误差' : 'Prediction error', gridcolor: plotGridColor, zerolinecolor: plotGridColor },
+          xaxis: { title: `${isZh ? '预测减参考' : 'Prediction - reference'} (${unit})`, gridcolor: plotGridColor, zerolinecolor: plotGridColor },
           yaxis: { title: isZh ? '数量' : 'Count', gridcolor: plotGridColor },
-          legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 10 } },
+          legend: { orientation: 'h', y: -0.24, x: 0, font: { size: 11 } },
         }}
         config={{ displayModeBar: false, responsive: true }}
         style={{ width: '100%' }}
@@ -454,7 +429,7 @@ function PfiCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor 
   return (
     <LazyDiagnosticCard
       title={isZh ? 'PFI 特征重要性矩阵' : 'PFI importance matrix'}
-      description={isZh ? '行是模型，列是特征，颜色和数值表示完整测试集置换重要性。' : 'Rows are models and columns are features; color and value show full test-set permutation importance.'}
+      description={isZh ? '行是模型，列是特征；ΔR² 来自各模型最多 40 个抽样测试窗口，保留负值。' : 'Rows are models and columns are features; ΔR² uses up to 40 sampled test windows per model, retaining negative values.'}
       buttonText={isZh ? '加载 PFI 对比' : 'Load PFI'}
       loading={loading}
       data={data}
@@ -492,7 +467,7 @@ function PfiCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor 
           style={{ width: '100%' }}
         />
       ) : (
-        <div style={{ padding: 24, border: `1px dashed ${C.borderStrong}`, borderRadius: 12, color: C.ice50, textAlign: 'center', fontSize: 'calc(11px * var(--font-scale, 1))' }}>
+        <div style={{ padding: 24, borderTop: '1px solid var(--line-subtle)', color: 'var(--text-secondary)', textAlign: 'center', fontSize: 'calc(var(--type-helper) * var(--font-scale, 1))' }}>
           {isZh ? '暂无 PFI 数据。' : 'No PFI data available.'}
         </div>
       )}
@@ -501,6 +476,7 @@ function PfiCompare({ data, loading, onLoad, isZh, plotTextColor, plotGridColor 
 }
 
 export default function CompareTrainingModelsPanel({
+  planet = 'mars',
   data,
   loading,
   errorDistributionData,
@@ -515,44 +491,57 @@ export default function CompareTrainingModelsPanel({
   plotTextColor,
   plotGridColor,
 }) {
-  const items = Array.isArray(data?.items) ? data.items : [];
+  const { settings } = useSettings();
+  const earth = planet === 'earth';
+  const unit = earth ? 'DU' : ozoneLabel(settings.units.ozone);
+  const rawItems = Array.isArray(data?.items) ? data.items : [];
+  const items = earth ? rawItems : convertCompareMetrics(rawItems, settings.units.ozone);
+  const metrics = earth ? EARTH_METRIC_META : METRIC_META.filter(metric => items.some(item => Number.isFinite(item.metrics?.overall?.[metric.key])));
+  const convertedErrors = errorDistributionData ? { ...errorDistributionData, items: errorDistributionData.items?.map((item) => ({
+    ...item, distribution: { ...item.distribution, hist_errors: { ...item.distribution?.hist_errors,
+      bin_edges: item.distribution?.hist_errors?.bin_edges?.map((v) => convertOzone(v, settings.units.ozone)),
+    } },
+  })) } : null;
 
   if (loading) return <LoadingState isZh={isZh} />;
   if (!items.length) return <EmptyState isZh={isZh} selectedCount={selectedCount} />;
 
   return (
     <div style={{ display: 'grid', gap: 20 }}>
-      <SummaryTable items={items} precision={precision} isZh={isZh} />
-      <MetricBars
+      <SummaryTable items={items} precision={precision} isZh={isZh} unit={unit} metrics={metrics} planet={planet} />
+      <MetricBars metrics={metrics}
+        unit={unit}
         items={items}
         precision={precision}
         isZh={isZh}
         plotTextColor={plotTextColor}
         plotGridColor={plotGridColor}
       />
-      <StepCurves
+      <StepCurves metrics={metrics} planet={planet}
+        unit={unit}
         items={items}
         isZh={isZh}
         plotTextColor={plotTextColor}
         plotGridColor={plotGridColor}
       />
-      <ErrorDistributionCompare
-        data={errorDistributionData}
+      {!earth ? <ErrorDistributionCompare
+        unit={unit}
+        data={convertedErrors}
         loading={errorDistributionLoading}
         onLoad={onLoadErrorDistribution}
         isZh={isZh}
         plotTextColor={plotTextColor}
         plotGridColor={plotGridColor}
-      />
-      <PfiCompare
+      /> : null}
+      {!earth ? <PfiCompare
         data={pfiData}
         loading={pfiLoading}
         onLoad={onLoadPfi}
         isZh={isZh}
         plotTextColor={plotTextColor}
         plotGridColor={plotGridColor}
-      />
-      <ParameterMatrix items={items} isZh={isZh} />
+      /> : null}
+      <ParameterMatrix items={items} isZh={isZh} planet={planet} />
     </div>
   );
 }

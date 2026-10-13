@@ -22,9 +22,9 @@ function stripComments(source) {
     .join('\n');
 }
 
-test('训练页把旧日频和三小时 Earth 数据集列为独立选项', () => {
-  assert.match(workspaceSource, /TRAINING_DATASET_EARTH_MERRA2_V2/);
-  assert.match(workspaceSource, /datasetEarthMerra2V2/);
+test('训练页只提供三小时 Earth 数据集选项', () => {
+  assert.doesNotMatch(workspaceSource, /TRAINING_DATASET_EARTH_MERRA2_V2/);
+  assert.doesNotMatch(workspaceSource, /datasetEarthMerra2V2/);
   assert.match(workspaceSource, /TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1/);
   assert.match(workspaceSource, /datasetEarthMerra23HourlyV1/);
   assert.match(workspaceSource, /data-training-dataset-option=\{option\.value\}/);
@@ -35,16 +35,14 @@ test('训练页把旧日频和三小时 Earth 数据集列为独立选项', () =
 test('切换数据集走 Earth 专用换挡逻辑，而不是原始 setter', () => {
   assert.match(pageSource, /onTrainingDatasetChange: handleTrainingDatasetChange/);
   assert.match(pageSource, /const handleTrainingDatasetChange = useCallback/);
-  // 草稿快照函数已在早前提交中改名（旧断言停留在 captureMarsTrainingSnapshot）。
-  assert.match(pageSource, /captureTrainingDraft\(/);
-  assert.match(pageSource, /resolveMarsTrainingRestore\(marsSnapshotRef\.current\)/);
-  // Earth 生效时切到规范通道顺序与 profile 窗口；有 Earth 草稿时优先恢复草稿通道。
-  assert.match(pageSource, /setWindow\(earthProfile\.window\)/);
-  assert.match(pageSource, /setHorizon\(earthProfile\.horizon\)/);
+  // 行为由 trainingDraftSession.test.js 和浏览器真实切换回归验证；这里只守接线。
+  assert.match(pageSource, /draftSessionRef\.current\.switchDataset\(/);
+  assert.match(pageSource, /setWindow\(next\.windowValue\)/);
+  assert.match(pageSource, /setHorizon\(next\.horizon\)/);
   assert.match(pageSource, /datasetId: trainingDataset/);
   assert.match(
     pageSource,
-    /setSelectionChannels|setSelectedChannels\(restore \? restore\.selectedChannels : \[\.\.\.EARTH_OPTIONAL_CHANNELS\]\)/,
+    /setSelectedChannels\(next\.selectedChannels\)/,
   );
 });
 
@@ -84,11 +82,12 @@ test('Earth 模式隐藏火星专属控件（模型来源切换、SPHERE、迁�
   assert.match(workspaceSource, /data-earth-model-block="true"/);
   // Earth 的专家页签不含迁移学习；模型结构页签也不出现（DLinear 只有线性隐藏层数）。
   assert.match(workspaceSource, /\? \['payload', 'training', \.\.\.\(isUploaded \? \['customParams'\] : \[\]\), 'strategy', 'tags'\]/);
-  assert.match(workspaceSource, /data-earth-fixed-split="true"/);
-  assert.match(workspaceSource, /disabled readOnly/);
+  assert.match(workspaceSource, /data-earth-task-split=/);
+  assert.match(workspaceSource, /data-earth-task-split-preview="true"/);
+  assert.doesNotMatch(workspaceSource, /data-earth-fixed-split/);
 });
 
-test('predict 页面接入 Earth 模式而不是扩展火星模式', () => {
+test('predict 页面共用行星和分析方式选择，Earth 数据仍走独立接口', () => {
   const predictSource = readFileSync(new URL('../PredictPage.jsx', import.meta.url), 'utf8');
   assert.match(predictSource, /PREDICT_MODEL_MODE_EARTH/);
   assert.match(predictSource, /<EarthPredictPanel/);
@@ -97,6 +96,7 @@ test('predict 页面接入 Earth 模式而不是扩展火星模式', () => {
   // 结果身份包含起点，切换任务/起点会清空旧结果。
   assert.match(predictSource, /buildEarthPredictKey\(/);
   assert.match(predictSource, /setEarthResult\(null\)/);
-  // 地球模式隐藏火星侧栏与火星场图。
-  assert.match(predictSource, /isEarthMode \? '1fr' : '300px 1fr'/);
+  assert.match(predictSource, /<PredictModeSelector/);
+  assert.match(predictSource, /<EarthCompareWorkspace/);
+  assert.match(predictSource, /adapter=\{isEarthMode \? earthAdapter : marsAdapter\}/);
 });

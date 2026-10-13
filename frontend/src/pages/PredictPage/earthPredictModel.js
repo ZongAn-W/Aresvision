@@ -11,8 +11,8 @@ export const EARTH_PREDICT_QUERY_VALUE = 'earth';
 export const EARTH_PLANET = 'earth';
 export const EARTH_TARGET_UNIT = 'DU';
 
-export const EARTH_METRIC_KEYS = ['rmse', 'mae'];
-export const EARTH_FIELD_KINDS = ['prediction', 'reference', 'residual'];
+export const EARTH_METRIC_KEYS = ['mse', 'rmse', 'mae', 'r2', 'mape', 'smape'];
+export const EARTH_FIELD_KINDS = ['reference', 'prediction', 'residual'];
 export const EARTH_3HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1';
 
 /** Return the cadence advertised by the server, retaining daily defaults. */
@@ -113,6 +113,10 @@ export function buildEarthFieldPayload({ response, dayIndex, kind, colormap, col
   const lon = response?.grid?.longitude;
   if (!Array.isArray(lat) || !Array.isArray(lon) || lat.length === 0 || lon.length === 0) return null;
   if (day.field.length !== lat.length || day.field[0]?.length !== lon.length) return null;
+  const validAxis = axis => axis.every(Number.isFinite) && (axis.length < 2
+    || axis.slice(1).every((value, index) => axis[1] > axis[0] ? value > axis[index] : value < axis[index]));
+  if (!validAxis(lat) || !validAxis(lon)
+    || day.field.some(row => !Array.isArray(row) || row.length !== lon.length || !row.every(Number.isFinite))) return null;
   const range = colorRange || {};
   const min = Number.isFinite(range.min) ? range.min : day.minVal;
   const max = Number.isFinite(range.max) ? range.max : day.maxVal;
@@ -136,9 +140,10 @@ export function buildEarthFieldPayload({ response, dayIndex, kind, colormap, col
  *
  * 预测/参考共用色阶才能直接比高低；残差用对称区间才能看出偏差方向。
  */
-export function resolveEarthColorRanges(response) {
+export function resolveEarthColorRanges(response, dayIndex = null) {
   const collect = (kind) => {
-    const days = Array.isArray(response?.[kind]) ? response[kind] : [];
+    const allDays = Array.isArray(response?.[kind]) ? response[kind] : [];
+    const days = Number.isInteger(dayIndex) ? allDays.slice(dayIndex, dayIndex + 1) : allDays;
     const mins = days.map((day) => Number(day?.minVal)).filter(Number.isFinite);
     const maxs = days.map((day) => Number(day?.maxVal)).filter(Number.isFinite);
     if (mins.length === 0 || maxs.length === 0) return null;
@@ -154,11 +159,15 @@ export function resolveEarthColorRanges(response) {
   const residualMagnitude = residual
     ? Math.max(Math.abs(residual.min), Math.abs(residual.max))
     : 0;
+  if (physical && physical.min === physical.max) {
+    const pad = Math.max(Math.abs(physical.min) * .01, 1e-6);
+    physical.min -= pad; physical.max += pad;
+  }
   return {
     physical,
     residual: residualMagnitude > 0
       ? { min: -residualMagnitude, max: residualMagnitude }
-      : residual,
+      : residual ? { min: -1, max: 1 } : null,
   };
 }
 
@@ -169,7 +178,7 @@ export function earthFieldLabel(kind, labels = {}) {
   return kind;
 }
 
-/** 误差指标按 RMSE/MAE 取用；非有限值不展示，避免出现 NaN 卡片。 */
+/** 六项指标只读取有限值，缺失项保留为空。 */
 export function readEarthMetric(metrics, key) {
   const value = metrics?.overall?.[key];
   return Number.isFinite(value) ? value : null;
@@ -214,6 +223,8 @@ export function pickDefaultOrigin(origins, today = null) {
 }
 
 const EARTH_ERROR_MESSAGES = {
+  dataset_retired: 'earthDatasetRetired',
+  earth_comparison_incompatible: 'earthComparisonIncompatible',
   earth_prediction_origin_out_of_range: 'earthOriginOutOfRange',
   invalid_earth_prediction_origin: 'earthOriginInvalid',
   dataset_version_changed: 'earthDatasetChanged',
@@ -250,7 +261,8 @@ export function isEarthTask(task) {
  */
 export function getEarthTrainingModelOptions(tasks = []) {
   return (Array.isArray(tasks) ? tasks : [])
-    .filter((task) => task?.status === 'completed' && task?.model_available === true && isEarthTask(task))
+    .filter((task) => task?.status === 'completed' && task?.model_available === true
+      && task.dataset_id === EARTH_3HOURLY_DATASET_ID)
     .map((task) => {
       const base = task.custom_model_name || `Task #${task.id}`;
       const identity = readEarthTaskModelIdentity(task);

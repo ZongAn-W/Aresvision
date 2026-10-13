@@ -26,6 +26,13 @@ const C = {
   borderHover: 'var(--border-hover)',
   green:       '#63e8bf',
   purple:      '#b39bff',
+  brand:       'var(--brand-ice)',
+  action:      'var(--brand-orange)',
+  success:     'var(--status-success)',
+  warning:     'var(--status-warning)',
+  danger:      'var(--status-danger)',
+  diagnostic:  'var(--status-diagnostic)',
+  ice45:       'var(--text-muted)',
 };
 
 export default C;

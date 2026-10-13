@@ -122,6 +122,7 @@ async def run_prediction(
         model_info.pop("requested_mars_year", None)
         model_info.pop("mars_year", None)
         return {
+            "export_ref": result.get("export_ref"),
             "ground_truth": result["ground_truth"],
             "prediction": result["prediction"],
             "residual": result["residual"],

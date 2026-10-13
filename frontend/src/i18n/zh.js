@@ -116,7 +116,7 @@ const zh = {
     },
     training: {
       label: '训练默认值',
-      desc: '用于新建训练实验的初始参数；复制已有实验时会优先使用原实验配置。',
+      desc: '新建实验及当前草稿中未手动修改的参数随默认值更新；手动修改和复制的配置保持原值。地球支持任务级窗口和数据比例；各分区比例须大于 0。',
       strategyLabel: '训练策略默认值',
       epochs: '训练轮次',
       batchSize: '批大小',
@@ -1002,7 +1002,7 @@ const zh = {
     testSetNote: '* 注：测试集包含模型未学习过的 MY28 早期数据，真实反映了模型的泛化能力。',
     fallbackWarning: '注意：此预测使用了由于缺失而自动选择的回退模型',
     fallbackReason: '原因：',
-    initPrompt: '配置参数并点击"开始预测"以运行 PredRNNv2 推理',
+    initPrompt: '选择已训练模型，开始预测',
     initDesc: '模型将基于选定的 Ls 起始时刻，遵循所选训练任务的输入与输出窗口配置，\n预测火星全球臭氧柱浓度空间分布。',
     summary: ({ lsStart, year, horizon, varCount, varNames, rmse, ssim, r2 }) =>
       `<strong>预测完成</strong>：起始 Ls=${lsStart}°，MY${year}，共预测 ${horizon} 步。\n` +
@@ -1067,6 +1067,68 @@ const zh = {
       reliability: '数据可靠性：1σ 置信区间覆盖',
       emptyDesc: '从已勾选的模型组合中生成当前指标的极坐标频谱视图。',
     },
+    planetSelection: '行星',
+    analysisSelection: '分析方式',
+    planet: { earth: '地球', mars: '火星' },
+    analysis: { single: '单模型分析', compare: '多模型对比' },
+    earthCompareNote: '完整测试集：MSE（DU²）、RMSE/MAE（DU）、R²（无量纲）、MAPE/SMAPE（%）。模型须使用相同数据发布、输入输出窗口与测试窗口；旧产物缺项不参与该项排名。',
+    earthComparisonIncompatible: '所选模型的数据发布、测试窗口或指标口径不同，无法直接比较。',
+    earthTitle: '地球历史预测（MERRA-2 · TO3 · DU）',
+    earthNote: '从已完成的地球训练任务恢复权重，按所选历史预测起点读取此前 7 天输入，输出随后 3 天的预测场、参考场与残差场。参考场来自同一发布数据集，因此只提供有参考日期的起点。',
+    earthThreeHourlyNote: '从三小时地球任务恢复权重，按训练时保存的输入与输出窗口读取历史数据，生成各 UTC 时间步的预测场、参考场和残差场。窗口在模型训练页配置，每步 3 小时。',
+    earthTaskLabel: '地球训练任务',
+    earthTaskPlaceholder: '请选择已完成的地球任务',
+    earthNoCompletedTask: '还没有已完成的三小时地球训练任务。请先在训练页选择地球 MERRA-2 三小时数据集完成训练。',
+    earthDatasetRetired: '日频地球数据集已停用。旧任务仅保留记录与产物，请使用三小时数据集重新训练。',
+    earthOriginLabel: '历史预测起点',
+    earthOriginRangeUnknown: '载入任务后显示可选起点范围',
+    earthOriginOutOfRange: '该起点不在当前可选范围内：所需输入步和参考步必须全部存在。',
+    earthRun: '生成预测',
+    earthRunning: '预测中…',
+    earthReload: '刷新可选范围',
+    earthLoadingContext: '正在读取任务的数据集身份与可选日期…',
+    earthEmptyReady: '已就绪：选择预测起点后点击「生成预测」。',
+    earthEmptyNoTask: '请选择已完成的地球训练任务。',
+    earthFieldEmpty: '该天没有可展示的场',
+    earthDayTabsLabel: '预测时间步',
+    earthOriginLine: ({ origin, first, last, threeHourly = false, window = 56, horizon = 24 } = {}) => threeHourly
+      ? `预测起点 ${origin} UTC · 输入 ${first} 至 ${last}（${window} 步）· 输出 ${horizon} 步（+3h 至 +${horizon * 3}h）`
+      : `预测起点 ${origin} · 输入 ${first} 至 ${last}（7 天）· 输出随后 3 天`,
+    earthOriginSplit: ({ split } = {}) => `历史起点分区：${split}`,
+    earthRangeLabel: '色阶范围',
+    earthValidCells: '有效格点',
+    earthLeadHeader: '提前量',
+    earthDateHeader: '日期',
+    earthReferenceNote: '参考场取自同一发布的对应 UTC 时间戳；残差为预测减参考（DU）。本次预测窗口按「起点 × 提前量 × 格点」等权评价：MSE 为 DU²，RMSE/MAE 为 DU，R² 无量纲，MAPE/SMAPE 为 %。',
+    earthResidualUnit: 'DU（预测 − 参考）',
+    earthResidualMode: '零中心',
+    earthPhysicalMode: '物理场',
+    earthDayUnit: '天',
+    earthStepUnit: '步',
+    earthDailyFrequency: '24h（日频）',
+    earthFactFrequency: '频率',
+    earthTimestampHeader: 'UTC 时间戳',
+    earthDaySuffix: '天',
+    earthFactDataset: '数据集',
+    earthFactModel: '模型',
+    earthModelOfficial: 'DLinear（官方）',
+    earthModelUploadedFallback: '用户上传模型',
+    earthFactGrid: '网格',
+    earthFactWindow: '窗口',
+    earthFactChannels: '输入通道',
+    earthFactBestEpoch: '最佳轮次',
+    earthFactTestRmse: '测试集 RMSE',
+    earthFieldPrediction: '预测场',
+    earthFieldReference: '参考场',
+    earthFieldResidual: '残差场',
+    earthOriginInvalid: '预测起点不是有效的 UTC 日期或日期时间。',
+    earthDatasetChanged: '该任务训练时使用的数据集发布已变化，请重新训练后再预测。',
+    earthArtifactInvalid: '模型产物与任务身份不符或已损坏，无法用于预测。',
+    earthTaskNotCompleted: '该任务尚未成功完成，暂时不能预测。',
+    earthNotAnEarthTask: '所选任务不是地球任务，请使用地球训练任务。',
+    earthDatasetUnavailable: '当前服务器上的地球数据包不可用，请检查数据状态后重试。',
+    earthPredictionDataUnavailable: '所选 Earth 数据切片不可用或不完整，请检查数据发布后重试。',
+    earthTrainingProfileUnsupported: '当前 Earth 训练配置不受预测页支持。',
   },
 
   ai: {
@@ -1123,12 +1185,13 @@ const zh = {
     subtitle: '配置、训练与结果',
     eyebrow: 'Atmospheric mission control / 01',
     newExperimentTitle: '新建实验',
-    intro: '左侧整理实验，右侧按“配置实验、训练监控、实验结果”三个阶段处理当前实验。',
-    stageConfigure: '配置实验',
-    stageMonitor: '训练监控',
+    intro: '按“实验配置、训练监视、实验矩阵”三个入口处理当前实验。',
+    stageConfigure: '实验配置',
+    stageMonitor: '训练监视',
     stageResult: '实验结果',
     viewLabel: '实验中心视图',
-    monitorResultsView: '训练监控 / 实验结果',
+    monitorResultsView: '训练监视',
+    matrixView: '实验矩阵',
     stageNavLabel: '实验中心阶段',
     directoryTitle: '实验目录',
     directoryCount: ({ count }) => `${count} 个实验`,
@@ -1157,6 +1220,9 @@ const zh = {
     metricR2: 'R² 决定系数',
     metricMape: 'MAPE 平均绝对百分比误差',
     metricSmape: 'SMAPE 对称平均绝对百分比误差',
+    fullTestMetrics: '完整测试集评价指标',
+    validationMetrics: '验证集评价指标',
+    metricNotProvided: '未提供',
     groupIdentity: '实验身份',
     groupModel: '模型与预测设置',
     groupTraining: '训练设置',
@@ -1179,61 +1245,6 @@ const zh = {
     copyConfigWarningCustomParams: '原任务的自定义模型参数缺失，请检查上传模型参数。',
     copyConfigSuccess: '已复制该实验的完整训练配置，请确认后手动开始实验。',
     compareModeHint: '已进入模型比较模式，请选择至少两个已完成模型。',
-    earthTitle: '地球历史预测（MERRA-2 · TO3 · DU）',
-    earthNote: '从已完成的地球训练任务恢复权重，按所选历史预测起点读取此前 7 天输入，输出随后 3 天的预测场、参考场与残差场。参考场来自同一发布数据集，因此只提供有参考日期的起点。',
-    earthThreeHourlyNote: '从 3 小时 Earth 任务恢复权重，读取此前 56 个时间步（7 天），返回未来 24 个 UTC 时间步（3 天）的预测场、参考场和残差场。',
-    earthTaskLabel: '地球训练任务',
-    earthTaskPlaceholder: '请选择已完成的地球任务',
-    earthNoCompletedTask: '还没有已完成的地球训练任务。请先在训练页选择 earth_merra2_daily_v2 完成一次官方 DLinear 训练。',
-    earthOriginLabel: '历史预测起点',
-    earthOriginRangeUnknown: '载入任务后显示可选起点范围',
-    earthOriginOutOfRange: '该起点不在当前可选范围内：所需输入步和参考步必须全部存在。',
-    earthRun: '生成三天预测',
-    earthRunning: '预测中…',
-    earthReload: '刷新可选范围',
-    earthLoadingContext: '正在读取任务的数据集身份与可选日期…',
-    earthEmptyReady: '已就绪：选择预测起点后点击「生成三天预测」。',
-    earthEmptyNoTask: '请选择已完成的地球训练任务。',
-    earthFieldEmpty: '该天没有可展示的场',
-    earthDayTabsLabel: '未来三天',
-    earthOriginLine: ({ origin, first, last, threeHourly = false } = {}) => threeHourly
-      ? `预测起点 ${origin} UTC · 输入 ${first} 至 ${last}（56 步）· 输出 24 步（+3h 至 +72h）`
-      : `预测起点 ${origin} · 输入 ${first} 至 ${last}（7 天）· 输出随后 3 天`,
-    earthOriginSplit: ({ split } = {}) => `历史起点分区：${split}`,
-    earthRangeLabel: '色阶范围',
-    earthValidCells: '有效格点',
-    earthLeadHeader: '提前量',
-    earthDateHeader: '日期',
-    earthReferenceNote: '参考场取自同一发布数据集的对应日期或 UTC 时间戳；残差为预测减参考。指标在本次预测窗口内按「起点 × 提前量 × 格点」等权聚合，单位为 DU。',
-    earthResidualUnit: 'DU（预测 − 参考）',
-    earthResidualMode: '零中心',
-    earthPhysicalMode: '物理场',
-    earthDayUnit: '天',
-    earthStepUnit: '步',
-    earthDailyFrequency: '24h（日频）',
-    earthFactFrequency: '频率',
-    earthTimestampHeader: 'UTC 时间戳',
-    earthDaySuffix: '天',
-    earthFactDataset: '数据集',
-    earthFactModel: '模型',
-    earthModelOfficial: 'DLinear（官方）',
-    earthModelUploadedFallback: '用户上传模型',
-    earthFactGrid: '网格',
-    earthFactWindow: '窗口',
-    earthFactChannels: '输入通道',
-    earthFactBestEpoch: '最佳轮次',
-    earthFactTestRmse: '测试集 RMSE',
-    earthFieldPrediction: '预测场',
-    earthFieldReference: '参考场',
-    earthFieldResidual: '残差场',
-    earthOriginInvalid: '预测起点不是有效的 UTC 日期或日期时间。',
-    earthDatasetChanged: '该任务训练时使用的数据集发布已变化，请重新训练后再预测。',
-    earthArtifactInvalid: '模型产物与任务身份不符或已损坏，无法用于预测。',
-    earthTaskNotCompleted: '该任务尚未成功完成，暂时不能预测。',
-    earthNotAnEarthTask: '所选任务不是地球任务，请使用地球训练任务。',
-    earthDatasetUnavailable: '当前服务器上的地球数据包不可用，请检查数据状态后重试。',
-    earthPredictionDataUnavailable: '所选 Earth 数据切片不可用或不完整，请检查数据发布后重试。',
-    earthTrainingProfileUnsupported: '当前 Earth 训练配置不受预测页支持。',
   },
 
   modelTraining: {
@@ -1293,7 +1304,7 @@ const zh = {
     earlyStopNote: '0 = 禁用早停；建议值：5–20',
     layer: 'Layer',
     confirmDelete: '确认删除',
-    confirmDeleteMsg: ({ id }) => `确认要删除训练任务 #${id} 及其关联的所有日志和模型文件吗？此操作不可恢复。`,
+    confirmDeleteMsg: ({ id }) => `确认要删除实验记录 #${id} 及其关联的日志、模型权重和预测分析缓存吗？此操作不可恢复。`,
     deleting: '正在删除...',
     cancel: '取消',
     nameRequired: '模型命名不能为空',
@@ -1395,29 +1406,130 @@ const zh = {
     title: '关于项目',
     subtitle: '关于 AstraAtmos',
     description:
-      'AstraAtmos（行星大气实验室）是面向行星大气科学研究的数据分析、模型训练与预测实验平台，' +
-      '当前支持火星臭氧训练与预测，以及地球 MERRA-2 数据分析。地球训练与预测尚未开放，更多行星与变量预测任务将逐步扩展。',
+      'AstraAtmos（行星大气实验室）把行星大气的数据管理、模型训练、时空预测、模型对比与三维可视化' +
+      '收在同一个 Web 平台里，从火星臭氧研究起步，现已同时开放火星与地球两条实验链路。',
+    missionTitle: '平台定位',
+    missionBody:
+      '平台不替代任何再分析或气候模式数据源，而是把「看懂数据 → 训练模型 → 检验预测 → 比较模型」' +
+      '做成一条可复核的链路。所有预测结果都来自你自己训练并保存权重的任务，平台不使用预训练基线直接给出结论；' +
+      '数据身份、训练配置与评价口径随任务一并冻结，便于追溯某一次结果是怎么来的。',
+    planets: {
+      label: '当前覆盖',
+      marsTitle: '火星大气',
+      marsBody:
+        'OpenMARS 再分析臭氧与 MCD 6.1 气候模拟共同构成火星数据基础，在 Ls 太阳黄经时间轴上做三维球面总览，' +
+        '并以臭氧为目标、风场/温度/沙尘/辐射为可选辅助输入训练时空预测模型。',
+      marsMeta: '网格 36 × 72 · 时间轴 Ls',
+      earthTitle: '地球大气',
+      earthBody:
+        'MERRA-2 三小时全球数据支撑地球总览、官方 DLinear 与独立契约上传模型的训练，以及按 UTC 历史起点回看' +
+        '随后 72 小时的预测、参考与残差场。',
+      earthMeta: '240 × 480（0.75°）· UTC 三小时',
+      futureTitle: '后续扩展',
+      futureBody:
+        '更多行星、更多预测变量与更长的预报时效仍在计划中；已停用的日频地球数据集只保留历史记录，不再用于运行。',
+      futureMeta: '计划中',
+    },
+    caps: {
+      label: '能力清单',
+      dataTitle: '数据管理',
+      dataBody:
+        '统一读取 OpenMARS、MCD、MERRA-2 与 MOLA 地形；支持 .nc/.nc4/.netcdf 上传、字段与单位校验、' +
+        '数据贡献审核，以及服务器管理数据集与个人上传来源的区分。',
+      trainTitle: '模型训练',
+      trainBody:
+        '29 个内置时空与时间序列架构，加上按独立契约接入的自定义 PyTorch 模型；可配置输入/输出窗口、' +
+        '气象通道、超参数与任务级数据划分，训练进度、Loss 曲线与日志实时可见。',
+      predictTitle: '预测与回测',
+      predictBody:
+        '火星按 Ls 起点预测，地球按 UTC 历史起点回测；参考场、预测场与残差三联对照，' +
+        '按时间步查看指标，并按行星使用球面或地球地图展示。',
+      compareTitle: '模型对比与诊断',
+      compareBody:
+        '多模型在同一测试口径下排名与逐步曲线比较；误差分布、散点、残差直方图与置换重要性（PFI）' +
+        '解释模型表现，Earth 与 Mars 分别使用各自的指标口径与单位。',
+      vizTitle: '三维可视化',
+      vizBody:
+        '火星与地球共用行星观测台外壳：三维球体与二维地图切换、Ls/UTC 时间轴播放、点位探查、' +
+        '等值线 / 距平 / 风向量 / 昼夜线等分析图层，以及主题组合看板。',
+      exportTitle: '科研图导出',
+      exportBody:
+        '当前步三联图、散点、多模型逐步曲线与 PFI 可导出 PDF、SVG、300/600 DPI PNG，' +
+        '并附带 .mat 数据与 MATLAB 重建脚本；导出只重画已有结果，不重新推理。',
+    },
+    workflowTitle: '实验链路',
+    workflowSteps: [
+      { title: '建立数据', body: '接入服务器数据集或上传自己的 NetCDF，确认变量与单位。' },
+      { title: '配置实验', body: '选择模型来源（上传或官方）、数据集、通道、窗口与划分比例。' },
+      { title: '训练与监控', body: '排队执行训练子进程，实时查看进度、Loss 与运行日志。' },
+      { title: '评价与对比', body: '读取完整测试集指标，比较多个模型并查看诊断图表。' },
+      { title: '可视与导出', body: '在三维工作台复查预测场，导出可复核的科研图与数据包。' },
+    ],
+    step: ({ n, title }) => `0${n} · ${title}`,
+    sourcesTitle: '数据资源',
+    openmarsTitle: 'OpenMARS 再分析数据',
+    openmarsContent:
+      '变量：o3col（臭氧柱浓度，μm-atm）\n' +
+      '维度：Ls × lat(36) × lon(72) × lev(35)\n' +
+      '坐标：5° 经纬网格，按 Ls 太阳黄经对齐\n' +
+      '读取：源文件含垂直层维，平台在读取时按层求均值，使用其三维场\n' +
+      '用途：三维臭氧总览、火星臭氧预测目标',
+    mcdTitle: 'MCD 6.1 气候模拟数据',
+    mcdContent:
+      '变量：U/V 风场、温度、沙尘光学厚度、太阳下行辐射通量（源数据另含气压）\n' +
+      '网格：lat(36) × lon(72)，按 Ls 与地方时组织\n' +
+      '读取：总览数据集使用逐日聚合序列，运行时开放风场、温度与辐射\n' +
+      '用途：火星观测总览与训练辅助输入通道（D 通道仅在训练路径可用）',
+    earthTitle: 'MERRA-2 三小时数据',
+    earthContent:
+      '变量：TO3（臭氧柱浓度，DU）、U10M、V10M、T2M、SWGDN\n' +
+      '网格：240 × 480 全球 0.75° 保面重网格\n' +
+      '覆盖：2020–2021 全部 5848 个 UTC 三小时时间步\n' +
+      '用途：地球总览、训练与历史回测（唯一活动地球数据集）',
+    othersTitle: '其他资源',
+    othersContent:
+      'NOMAD 网格观测数据（臭氧叠加与观测计数）\n' +
+      'MOLA 地形资源（火星球面地形参考）\n' +
+      '上传的 NetCDF 文件（总览来源，不等同于训练数据）',
+    modelsTitle: '模型生态',
+    modelsLead:
+      '官方模型与自定义上传模型共用同一套训练、评估与预测流程；平台统一负责数据加载、训练循环、评估和权重保存。',
+    modelsOfficialTitle: '官方模型',
+    modelsUploadedTitle: '上传模型',
+    modelsOfficial:
+      '内置 29 个架构：PredRNNv2、PredRNN++、ConvLSTM、SimVP、DLinear、Informer、Autoformer、PatchTST、' +
+      'TimeMixer、TimeXer、TSMixer、Crossformer、Earthformer、ETSformer、FEDformer、iTransformer、' +
+      'MAU、N-BEATS、N-HiTS、Pyraformer、RNN-CNN-RNN、CNN-RNN-CNN-RNN-CNN，以及 SimVP-3DConv、' +
+      'SimVP-Hybrid3D、ConvLSTM-MST、DLinear-MST、ConvLSTM-PhaseGated-MST、ConvLSTM-MST-Feature、' +
+      'ConvLSTM-Climatology-Anomaly 等实验变体。',
+    modelsUploaded:
+      '上传模型：声明 MODEL_SPEC 与 build_model 后由平台执行，上传与手动重新校验都会在隔离进程中做 dry-run；' +
+      '地球分块 v1（24×48）与全图 v2（240×480）使用各自的独立契约，未知或校验失败不能创建任务。',
+    techLabel: 'TECHNOLOGY STACK',
     techCats: {
       frontend: '前端',
       backend: '后端',
-      model: '模型',
-      data: '数据',
+      model: '模型与训练',
+      data: '数据与存储',
     },
-    openmarsTitle: 'OpenMARS 再分析数据',
-    openmarsContent:
-      '变量：o3col（臭氧柱浓度, μm-atm）\n' +
-      '维度：Ls × lat(36) × lon(72) × lev(35)\n' +
-      '覆盖：MY27 完整年 (Ls 2°–360°)\n' +
-      '分辨率：5° 经纬网格',
-    mcdTitle: 'MCD 6.1 气候模拟数据',
-    mcdContent:
-      '变量：U/V Wind, Pressure, Temperature, DOD, Solar Flux\n' +
-      '维度：sol(669) × hour(8) × lat(36) × lon(72)\n' +
-      '覆盖：MY27 完整 (5352 时间步)\n' +
-      '时间对齐：Ls 插值到 OpenMARS 格点',
-    teamRoles: ['全栈开发', '数据科学', 'UI/UX', '模型训练'],
-    member: ({ n }) => `成员 ${n}`,
-    competition: '全国大学生计算机应用能力大赛 · 大数据赛道',
+    techDesc: {
+      frontend: '单页应用、三维球体与手势控制，图表统一由 Plotly 渲染。',
+      backend: '异步 API、账号鉴权与外部 AI 接口客户端。',
+      model: 'PyTorch 训练与推理，指标由 scikit-learn；matplotlib 用于科研图导出。',
+      data: 'NetCDF 科学数据读写与本地持久化。',
+    },
+    boundariesTitle: '能力边界与命名',
+    boundaryItems: [
+      '上传成功只代表可用于数据总览，不代表已加入训练集；训练与预测固定使用服务器管理的数据集。',
+      '预测只走已训练模型，不提供「不训练直接出结果」的预训练基线；缺少训练任务的结果会被拒绝。',
+      '地球仅使用三小时数据集，已停用的日频数据返回 dataset_retired；无参考真值的未来外推与地火混合比较尚未开放。',
+      'Earth 页面诊断图暂不提供科研导出；MATLAB 重建脚本提供可编辑入口，未做跨版本像素一致性验证。',
+      '平台不承诺预测精度、RAG 知识库、实时卫星接入或 VR 能力；实际效果取决于数据质量、训练配置与模型权重。',
+      '「MCD 6.1」沿用项目既有版本标注，代码与数据清单未记录该版本号；火星源数据只以 MY 火星年标记。',
+      'AresVision（智绘赤星）为产品原名，目录、仓库地址、启动脚本、环境变量与存储键沿用该名称以兼容既有部署，改名无需迁移数据。',
+    ],
+    footerNote:
+      '本页只描述当前已实现的能力；计划中或未开放的部分已在上述条目中单独标注。',
   },
 
   auth: {

@@ -18,7 +18,11 @@ test('gesture camera preview is a compact edge HUD inside the canvas', () => {
 
 test('globe legend uses compact edge styling and avoids the tall source-row legend', () => {
   assert.match(globeLegendSource, /className="overview-globe-legend-compact[^\"]*"/);
-  assert.match(globeLegendSource, /const panelWidth = gestureEnabled \? 150 : 158/);
+  const widths = globeLegendSource.match(/const panelWidth = gestureEnabled \? (\d+) : (\d+)/);
+  assert.ok(widths, 'legend keeps an explicit compact width in both interaction states');
+  for (const width of widths.slice(1).map(Number)) {
+    assert.ok(width >= 240 && width <= 280, 'legend fits readable values without dominating the globe');
+  }
   assert.match(globeLegendSource, /source-dot-strip/);
   assert.doesNotMatch(globeLegendSource, /display:\s*'grid',\s*gap:\s*8/);
 });

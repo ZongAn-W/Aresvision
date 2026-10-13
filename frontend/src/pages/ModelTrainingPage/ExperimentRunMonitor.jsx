@@ -22,6 +22,7 @@ export default function ExperimentRunMonitor({
   logContainerRef,
   onScroll,
   onStop,
+  onCancel,
   copy,
 }) {
   const t = useT();
@@ -45,6 +46,20 @@ export default function ExperimentRunMonitor({
           isLight={isLight}
           status={status}
         />
+        {status === 'queued' && activeTask ? (
+          <div className="experiment-center-actions">
+            <span className="training-tag-hint">{copy.queuePosition(activeTask.queue_position)}</span>
+            <button
+              type="button"
+              className="experiment-center-button"
+              aria-label={`${copy.cancelQueued} #${activeTask.id}`}
+              disabled={isProcessing}
+              onClick={() => onCancel(activeTask.id)}
+            >
+              {copy.cancelQueued}
+            </button>
+          </div>
+        ) : null}
         {failure?.hasReason ? (
           <div className="experiment-result-note" data-tone={failure.stopped ? 'warning' : 'error'} role="status">
             <strong>{t(failure.messageKey)}</strong>
@@ -75,11 +90,11 @@ export default function ExperimentRunMonitor({
         title={copy.liveLogs}
         hint={copy.liveLogsHint}
         emptyLabel={copy.waitingLogs}
-        actions={isActive && activeTask ? (
+        actions={isActive && status !== 'queued' && activeTask ? (
           <button
             type="button"
             className="experiment-center-button"
-            style={{ color: '#d95c5c', borderColor: 'rgba(217,92,92,0.28)', background: 'rgba(217,92,92,0.08)' }}
+            style={{ color: 'var(--status-danger)', borderColor: 'color-mix(in srgb, var(--status-danger) 28%, transparent)', background: 'transparent' }}
             aria-label={`${copy.stopTraining} #${activeTask.id}`}
             disabled={isProcessing}
             onClick={() => onStop(activeTask.id)}

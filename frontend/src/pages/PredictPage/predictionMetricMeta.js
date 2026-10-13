@@ -1,3 +1,5 @@
+import { getEarthMetricPolicyLabel } from '../../utils/earthMetricMeta.js';
+
 const AGGREGATION_LABELS = {
   mean_over_forecast_steps: {
     zh: '整体（各预测步平均）',
@@ -16,6 +18,11 @@ function formatPercent(value) {
 }
 
 export function getMetricAggregationLabel(metrics, isZh = true) {
+  if (typeof metrics?.aggregation === 'string'
+    && (metrics.aggregation.startsWith('forecast_origin_lead_')
+      || metrics.aggregation.startsWith('user_forecast_origin_lead_'))) {
+    return getEarthMetricPolicyLabel(metrics, isZh);
+  }
   const label = AGGREGATION_LABELS[metrics?.aggregation?.overall];
   if (!label) return isZh ? '整体指标' : 'Overall metrics';
   return isZh ? label.zh : label.en;
@@ -23,6 +30,9 @@ export function getMetricAggregationLabel(metrics, isZh = true) {
 
 export function getSplitLabel(metrics, isZh = true) {
   const splitMeta = metrics?.split_meta;
+  if (splitMeta?.source === 'published_manifest_splits' && splitMeta.test_range) return isZh
+    ? `发布测试分区：${splitMeta.test_range.date_start} — ${splitMeta.test_range.date_end} · ${splitMeta.window_count} 个窗口`
+    : `Published test split: ${splitMeta.test_range.date_start} — ${splitMeta.test_range.date_end} · ${splitMeta.window_count} windows`;
   if (!splitMeta?.ratios) return '';
 
   if (splitMeta.legacy_compatibility) {

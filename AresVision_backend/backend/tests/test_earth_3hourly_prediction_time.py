@@ -22,6 +22,7 @@ from services.earth_training_artifact import (
     threehour_origin_index,
     threehour_origin_split,
 )
+from services.earth_task_split import build_earth_task_split
 
 
 @pytest.fixture
@@ -71,8 +72,54 @@ def test_targets_are_24_exact_centres_at_three_to_72_hours(release):
     ("2021-01-01T01:30:00Z", "validation"),
     ("2021-07-01T01:30:00Z", "test"),
 ])
-def test_split_is_the_published_origin_label_even_when_input_crosses_boundary(release, origin, split):
+def test_legacy_split_is_the_published_origin_label(release, origin, split):
     assert threehour_origin_split(release, origin) == split
+
+
+def test_task_split_range_accepts_only_complete_single_partition_windows(release):
+    task_split = build_earth_task_split(
+        release.dates, 56, 24,
+        {"train_ratio": 0.5, "validation_ratio": 0.25, "test_ratio": 0.25},
+    )
+    origins = threehour_available_origin_range(
+        release, strict_split=True, task_split=task_split,
+    )
+    assert origins["count"] == sum(
+        entry["window_count"] for entry in task_split["ranges"].values()
+    )
+    assert origins["count"] < threehour_available_origin_range(release)["count"]
+
+    train_end = task_split["ranges"]["train"]["raw_end"]
+    last_train_index = train_end - task_split["horizon"] - 1
+    first_crossing_index = train_end - task_split["horizon"]
+    last_train_origin = _origin_for_index(release, last_train_index)
+    first_crossing_origin = _origin_for_index(release, first_crossing_index)
+
+    assert threehour_origin_index(
+        release, last_train_origin, strict_split=True, task_split=task_split,
+    ) == last_train_index
+    assert threehour_origin_split(
+        release, last_train_origin, task_split=task_split,
+    ) == "train"
+    with pytest.raises(EarthArtifactError) as error:
+        threehour_origin_index(
+            release, first_crossing_origin, strict_split=True, task_split=task_split,
+        )
+    assert error.value.code == "earth_prediction_origin_out_of_range"
+    with pytest.raises(EarthArtifactError) as error:
+        threehour_origin_split(
+            release, first_crossing_origin, task_split=task_split,
+        )
+    assert error.value.code == "earth_prediction_origin_out_of_range"
+    with pytest.raises(EarthArtifactError) as error:
+        threehour_forecast_timestamps(
+            release, first_crossing_origin, strict_split=True, task_split=task_split,
+        )
+    assert error.value.code == "earth_prediction_origin_out_of_range"
+
+
+def _origin_for_index(release, index):
+    return np.datetime_as_string(release.dates[index], unit="s") + "Z"
 
 
 @pytest.mark.parametrize("origin", [

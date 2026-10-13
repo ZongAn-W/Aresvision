@@ -18,7 +18,7 @@ from schemas.training import (
     TrainingWeightFileListResponse,
     TrainingWeightFileResponse,
 )
-from services.dataset_identity import DatasetRequestError
+from services.dataset_identity import DatasetRequestError, is_earth_training_task
 from services.inference_service import InferenceService, require_mars_prediction_task
 from services.training_service import TrainingService
 from services.training_weight_service import TrainingWeightService
@@ -340,8 +340,11 @@ async def perform_task_action(
         raise HTTPException(status_code=400, detail="Cannot perform action on incomplete task")
 
     if action == "test":
-        # Earth tasks are predicted through the Earth historical endpoint. The
-        # rejection happens before the Mars inference data environment is built.
+        if is_earth_training_task(task):
+            from routers.earth_predict import diagnostics_for_task
+            from schemas.earth_diagnostics import EarthDiagnosticsRequest
+            results = await diagnostics_for_task(request, task, EarthDiagnosticsRequest(training_task_id=task_id), current_user)
+            return {"status": "success", "data": results}
         try:
             require_mars_prediction_task(task)
         except DatasetRequestError as exc:
@@ -356,7 +359,8 @@ async def perform_task_action(
                 data_service=getattr(request.app.state, "data_service", None),
                 personal_source_service=getattr(request.app.state, "personal_data_source_service", None),
             )
-            results = await inference_service.get_test_results(task_id, data_dirs=data_dirs)
+            from services.inference_compute import run_inference_compute
+            results = await run_inference_compute(lambda: inference_service.get_test_results(task_id, data_dirs=data_dirs))
             return {"status": "success", "data": results}
         except DatasetRequestError:
             raise

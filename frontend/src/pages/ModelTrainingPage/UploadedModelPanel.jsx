@@ -1,21 +1,23 @@
 import React, { useRef, useState } from 'react';
 import C from '../../constants/colors';
+import { getUploadedModelValidationErrors, getUploadedModelValidationStatus } from './uploadedModelValidation';
 import './experimentCenter.css';
 
 function getStatusColor(status) {
   if (status === 'valid') return C.green;
-  if (status === 'pending') return '#c89448';
+  if (status === 'pending' || status === 'timeout') return '#c89448';
   return '#d95c5c';
 }
 
 function getStatusLabel(status, labels) {
   if (status === 'valid') return labels.valid;
   if (status === 'pending') return labels.pending;
+  if (status === 'timeout') return labels.timeout;
   return labels.invalid;
 }
 
 function ValidationMessages({ report, labels, fieldHintStyle }) {
-  const errors = Array.isArray(report?.errors) ? report.errors : [];
+  const errors = getUploadedModelValidationErrors(report, labels.timeout);
   const warnings = Array.isArray(report?.warnings) ? report.warnings : [];
 
   if (errors.length === 0 && warnings.length === 0) {
@@ -117,6 +119,7 @@ export default function UploadedModelPanel({
   const [manageOpen, setManageOpen] = useState(false);
   const [renamingId, setRenamingId] = useState(null);
   const selected = models.find((item) => item.id === selectedId) || null;
+  const selectedStatus = getUploadedModelValidationStatus(selected);
   const paramCount = Object.keys(selected?.param_schema || {}).length;
   const selectedName = selected?.display_name || selected?.original_filename || labels.noFilename;
 
@@ -144,15 +147,15 @@ export default function UploadedModelPanel({
       ) : null}
 
       {selected ? (
-        <div className="experiment-uploaded-card" data-uploaded-model-card="true">
+        <div className="experiment-uploaded-card" data-uploaded-model-card="true" data-validation-status={selectedStatus}>
           <div className="experiment-uploaded-body">
             <div className="experiment-uploaded-name" title={selectedName}>{selectedName}</div>
             <div className="experiment-uploaded-meta">
               {`v${selected.version ?? '--'} · ${labels.summaryParamCount ? labels.summaryParamCount(paramCount) : `${paramCount}`}`}
             </div>
           </div>
-          <span className="experiment-uploaded-status" data-tone={statusTone} data-validation-status={selected.validation_status} data-uploaded-model-status="true">
-            {statusLabel || getStatusLabel(selected.validation_status, labels)}
+          <span className="experiment-uploaded-status" data-tone={statusTone} data-validation-status={selectedStatus} data-uploaded-model-status="true">
+            {statusLabel || getStatusLabel(selectedStatus, labels)}
           </span>
         </div>
       ) : (
@@ -204,6 +207,7 @@ export default function UploadedModelPanel({
             <div className="experiment-uploaded-list" role="list">
               {models.map((model) => {
                 const active = selectedId === model.id;
+                const validationStatus = getUploadedModelValidationStatus(model);
                 return (
                   <button
                     key={model.id}
@@ -218,8 +222,8 @@ export default function UploadedModelPanel({
                     <span className="experiment-uploaded-item-name" title={model.original_filename || ''}>
                       {model.display_name || model.original_filename || labels.unnamed}
                     </span>
-                    <span className="experiment-uploaded-item-status" style={{ color: getStatusColor(model.validation_status) }}>
-                      {getStatusLabel(model.validation_status, labels)}
+                    <span className="experiment-uploaded-item-status" style={{ color: getStatusColor(validationStatus) }}>
+                      {getStatusLabel(validationStatus, labels)}
                     </span>
                     <span className="experiment-uploaded-item-meta">
                       {`v${model.version ?? '--'} / ${model.original_filename || labels.noFilename}`}

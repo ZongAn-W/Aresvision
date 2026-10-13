@@ -6,7 +6,7 @@ three-hour release, along with the real grid, DU fields and ordered lead metrics
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Optional
+from typing import Annotated, Any, ClassVar, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
@@ -28,6 +28,9 @@ class _ConditionalTemporalFields(BaseModel):
         for name in self.conditional_fields:
             if name not in self.model_fields_set:
                 result.pop(name, None)
+                alias = type(self).model_fields[name].serialization_alias
+                if alias:
+                    result.pop(alias, None)
         return result
 
 
@@ -66,28 +69,38 @@ class EarthPredictFieldDay(BaseModel):
 class EarthLeadMetric(_ConditionalTemporalFields):
     model_config = MODEL_CONFIG
 
-    conditional_fields = frozenset({"lead_day", "lead_step", "lead_hours"})
+    conditional_fields = frozenset({"lead_day", "lead_step", "lead_hours", "mse", "r2", "mape", "smape", "target_statistics"})
 
     lead_day: Optional[int] = Field(default=None, ge=1)
     lead_step: Optional[int] = Field(default=None, ge=1)
     lead_hours: Optional[int] = Field(default=None, ge=1)
     rmse: float
     mae: float
+    mse: Optional[float] = None
+    r2: Optional[float] = None
+    mape: Optional[float] = None
+    smape: Optional[float] = None
+    target_statistics: Optional[dict[str, float]] = None
 
 
-class EarthHorizonMetric(BaseModel):
+class EarthHorizonMetric(_ConditionalTemporalFields):
     model_config = MODEL_CONFIG
+    conditional_fields = frozenset({"mse", "r2", "mape", "smape"})
 
     horizon_hours: int = Field(..., ge=1)
     lead_steps: int = Field(..., ge=1)
     rmse: float
     mae: float
+    mse: Optional[float] = None
+    r2: Optional[float] = None
+    mape: Optional[float] = None
+    smape: Optional[float] = None
 
 
 class EarthPredictMetrics(_ConditionalTemporalFields):
     model_config = MODEL_CONFIG
 
-    conditional_fields = frozenset({"by_horizon"})
+    conditional_fields = frozenset({"by_horizon", "metrics_schema", "metric_units", "metric_policy"})
 
     unit: str
     target: str
@@ -96,6 +109,9 @@ class EarthPredictMetrics(_ConditionalTemporalFields):
     overall: dict[str, float] = Field(default_factory=dict)
     by_lead: list[EarthLeadMetric] = Field(default_factory=list)
     by_horizon: Optional[list[EarthHorizonMetric]] = None
+    metrics_schema: Optional[str] = Field(default=None, alias="schema")
+    metric_units: Optional[dict[str, str]] = None
+    metric_policy: Optional[dict[str, Any]] = None
 
 
 class EarthPredictOrigins(_ConditionalTemporalFields):
@@ -190,7 +206,16 @@ class EarthPredictRequest(BaseModel):
     forecast_origin: str = Field(..., min_length=8, max_length=40)
 
 
+class EarthCompareRequest(BaseModel):
+    model_config = MODEL_CONFIG
+
+    task_ids: list[Annotated[int, Field(strict=True, ge=1)]] = Field(..., min_length=2, max_length=32)
+
+
+
+
 class EarthPredictResponse(_ConditionalTemporalFields):
+    export_ref: Optional[dict[str, Any]] = None
     model_config = MODEL_CONFIG
 
     conditional_fields = frozenset({
@@ -234,6 +259,7 @@ class EarthPredictResponse(_ConditionalTemporalFields):
 
 
 __all__ = [
+    "EarthCompareRequest",
     "EarthLeadMetric",
     "EarthHorizonMetric",
     "EarthPredictContextResponse",

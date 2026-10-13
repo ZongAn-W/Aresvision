@@ -3,7 +3,8 @@
  * Vite proxy: 前端 /api/* → localhost:8000/api/*
  */
 
-import { endAuthenticatedPredictionSession } from '../stores/authPredictionSession.js';
+import { handleUnauthorizedResponse } from '../stores/authPredictionSession.js';
+import { researchExportErrorMessage } from './researchExportErrors.js';
 
 const BASE = '/api';
 
@@ -19,12 +20,8 @@ async function authedFetch(url, options = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
   const res = await fetch(url, { ...options, headers });
-  if (res.status === 401) {
-    // token 过期或无效，清除本地状态，触发全局事件让 AuthContext 响应
-    endAuthenticatedPredictionSession();
-    localStorage.removeItem('aresvision_token');
-    window.dispatchEvent(new Event('aresvision:logout'));
-  }
+  // Token 过期或无效时清理私有预测会话并触发 AuthContext 全局登出。
+  handleUnauthorizedResponse(res);
   return res;
 }
 
@@ -772,6 +769,23 @@ export function getUserModelDownloadUrl(kind) {
   return `${BASE}/user-models/downloads/${encodeURIComponent(kind)}`;
 }
 
+export async function researchExportCapabilities({ signal } = {}) {
+  const res = await authedFetch(`${BASE}/predict/research-export/capabilities`, { signal });
+  if (!res.ok) await throwResponseError(res);
+  return res.json();
+}
+
+export async function requestResearchExport(payload, { preview = false, signal, language = 'zh' } = {}) {
+  const res = await authedFetch(`${BASE}/predict/research-export/${preview ? 'preview' : 'download'}`, {
+    method: 'POST', body: JSON.stringify(payload), signal,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(researchExportErrorMessage(body?.detail, res.status, language));
+  }
+  return res.blob();
+}
+
 export async function renameUserModel(modelId, displayName) {
   const res = await authedFetch(`${BASE}/user-models/${encodeURIComponent(modelId)}`, {
     method: 'PATCH',
@@ -833,8 +847,8 @@ export async function deleteUserModel(modelId) {
   return res.json();
 }
 
-export async function fetchTasks() {
-  const res = await authedFetch(`${BASE}/training/tasks`);
+export async function fetchTasks(options = {}) {
+  const res = await authedFetch(`${BASE}/training/tasks`, options);
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }
@@ -908,13 +922,20 @@ export async function deleteTrainingTask(taskId) {
   return res.json();
 }
 
-export async function performTaskAction(taskId, action) {
+export async function performTaskAction(taskId, action, { signal } = {}) {
   const res = await authedFetch(`${BASE}/training/tasks/${taskId}/action?action=${encodeURIComponent(action)}`, {
     method: 'POST',
+    signal,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || `${res.status}`);
+    const detail = err.detail;
+    const message = typeof detail === 'string' ? detail
+      : detail?.message || (detail != null ? JSON.stringify(detail) : `${res.status}`);
+    const error = new Error(message);
+    error.code = detail?.code || 'task_action_failed';
+    error.status = res.status;
+    throw error;
   }
   return res.json();
 }

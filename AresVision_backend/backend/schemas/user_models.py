@@ -24,6 +24,7 @@ class UserModelEarthDatasetVerdict(UserModelEarthVerdict):
 
 class UserModelValidationReport(BaseModel):
     ok: bool = False
+    code: Optional[str] = None
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     output_shape: Optional[List[int]] = None
