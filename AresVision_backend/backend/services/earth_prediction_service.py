@@ -193,12 +193,19 @@ def _load_checkpoint(task: Any):
                                 "time", "grid", "splits", "frequency_hours", "step_unit", "step")):
                 raise EarthArtifactError("The task snapshot does not match its checkpoint")
         return checkpoint
-    except (EarthArtifactError, ValueError, TypeError, KeyError, OverflowError) as exc:
-        raise DatasetRequestError(
-            getattr(exc, "code", "invalid_earth_training_artifact"),
-            str(exc),
-            status_code=409,
-        ) from exc
+    except DatasetRequestError:
+        raise
+    except Exception as exc:
+        # Checkpoint loaders can raise filesystem, deserialization, and model
+        # construction exceptions. Keep their details out of the HTTP contract:
+        # they may include an absolute path or an internal traceback fragment.
+        code = getattr(exc, "code", "invalid_earth_training_artifact")
+        message = (
+            "The Earth dataset release changed since this checkpoint was created"
+            if code == "dataset_version_changed"
+            else "The Earth model artifact/checkpoint is unavailable or invalid"
+        )
+        raise DatasetRequestError(code, message, status_code=409) from exc
 
 
 def _sync_release(registry: DatasetRegistry, binding: Mapping[str, Any]):
@@ -368,25 +375,29 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
     )
 
 
-def _model_source_warnings(checkpoint: Any) -> list[str]:
-    """Describe the uploaded model file state for the prediction page."""
+def _model_source_state(checkpoint: Any) -> tuple[str, list[str]]:
+    """Return current source-file state and UI warnings without rebuilding code."""
     if checkpoint.model_source != MODEL_SOURCE_UPLOADED:
-        return []
+        return "official", []
     reference = checkpoint.uploaded_model or {}
     report = verify_reference_source(reference)
     if report["status"] == "available":
-        return []
+        return "available", []
     if report["status"] == "missing":
-        return [
+        return "missing", [
             "the original uploaded model file is unavailable; prediction uses the "
             "verified copy stored inside the checkpoint"
         ]
     if report["status"] == "tampered":
-        return [
+        return "tampered", [
             f"the uploaded model file no longer matches the trained version ({report['detail']}); "
             "prediction will use the verified copy stored inside the checkpoint"
         ]
-    return [f"the uploaded model file state is unknown: {report['detail']}"]
+    return "unknown", [f"the uploaded model file state is unknown: {report['detail']}"]
+
+
+def _model_source_warnings(checkpoint: Any) -> list[str]:
+    return _model_source_state(checkpoint)[1]
 
 
 def _origin_index(release, origin: Any, window: int, horizon: int) -> int:
@@ -562,7 +573,7 @@ def run_earth_prediction(
 def _threehour_checkpoint_sha(task):
     try:
         return file_sha256(Path(task.output_model_path))
-    except OSError as exc:
+    except (OSError, TypeError, ValueError) as exc:
         raise DatasetRequestError("invalid_earth_training_artifact",
                                   "The Earth checkpoint cannot be read", status_code=409) from exc
 
@@ -649,6 +660,12 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
     cache = EARTH_PREDICTION_CACHE if cache is None else cache
     cached = cache.get(key)
     if cached is not None:
+        if _threehour_checkpoint_sha(task) != checkpoint_sha:
+            raise DatasetRequestError("invalid_earth_training_artifact",
+                                      "The checkpoint changed during prediction", status_code=409)
+        source_status, source_warnings = _model_source_state(checkpoint)
+        cached["warnings"] = list(source_warnings)
+        cached["model_source_status"] = source_status
         return _serialize_threehour_result(cached)
     order = checkpoint.training_contract["input_channel_order"]
     inputs, reference = _read_threehour_forecast_block(release, index, order, checkpoint.normalization,
@@ -710,6 +727,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
         raise DatasetRequestError("invalid_earth_training_artifact", str(exc), status_code=409) from exc
     published_grid = checkpoint.dataset_binding["dataset_snapshot"]["grid"]
     identity = checkpoint.model_identity()
+    source_status, source_warnings = _model_source_state(checkpoint)
     result = {
         "planet": "earth", "task_id": task.id,
         "dataset_id": EARTH_DATASET_3HOURLY_ID,
@@ -724,7 +742,8 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
         "input_timestamps": [iso(value) for value in release.dates[index - window + 1:index + 1]],
         "target_dates": timestamps, "target_timestamps": timestamps,
         "model_architecture": identity.get("model_architecture"), "model_source": identity.get("model_source"),
-        "model": identity, "warnings": list(warnings), "metrics": metrics, "cache_key": key,
+        "model": identity, "model_source_status": source_status,
+        "warnings": list(dict.fromkeys([*warnings, *source_warnings])), "metrics": metrics, "cache_key": key,
         "grid": {"shape": [240, 480], "latitude": release.latitude.tolist(), "longitude": release.longitude.tolist(),
                  **{name: published_grid.get(name) for name in (
                      "latitude_range", "longitude_range", "latitude_step", "longitude_step", "coverage", "wrap_longitude")}},

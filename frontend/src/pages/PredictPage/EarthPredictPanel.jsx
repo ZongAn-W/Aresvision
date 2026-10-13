@@ -11,7 +11,8 @@ import './earthPredictPanel.css';
 
 /** Earth owns adaptation and context details; the workspace owns all display interactions. */
 export default function EarthPredictPanel({ copy, adapter, context, result, loading, selectedDay, onSelectDay,
-  selectedTaskId, taskOptions, identityKey, origin, scope, modelsLoading = false }) {
+  selectedTaskId, taskOptions, identityKey, origin, scope, modelsLoading = false,
+  modelsError = null, onRetryModels }) {
   const { settings } = useSettings();
   const normalized = useMemo(() => adapter.normalizeResult(result), [adapter, result]);
   const modelIdentity = readEarthResponseModelIdentity(result || context);
@@ -42,7 +43,8 @@ export default function EarthPredictPanel({ copy, adapter, context, result, load
     </Panel> : null}
     <SingleModelWorkbench adapter={workbenchAdapter} result={normalized} metrics={result?.metrics} loading={loading}
       activeStep={selectedDay} onStepChange={onSelectDay} identityKey={identityKey}
-      hasAvailableModels={taskOptions.length > 0} modelsLoading={modelsLoading}>
+      hasAvailableModels={taskOptions.length > 0} modelsLoading={modelsLoading}
+      modelsError={modelsError} onRetryModels={onRetryModels}>
       {result ? <ForecastMetricDetails result={result} adapter={adapter} precision={settings.precision} /> : null}
       {result ? <p className="earth-predict-note" data-earth-reference-note>{copy.referenceNote}</p> : null}
       <EarthDiagnosticPanel key={`${scope}:${selectedTaskId || 'no-task'}`} taskId={selectedTaskId}

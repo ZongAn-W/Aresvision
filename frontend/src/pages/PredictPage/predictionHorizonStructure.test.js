@@ -34,6 +34,14 @@ test('prediction action is disabled without a valid trained-model horizon', () =
   assert.match(sidebarSource, /predStep > predictionHorizonLimit/);
 });
 
+test('Earth comparison uses saved test metrics without horizon-based blocking', () => {
+  assert.match(sidebarSource, /const usesSavedTestMetrics = isCompareMode && planetAdapter\.id === 'earth'/);
+  assert.match(sidebarSource, /const invalidPredictionHorizon = !usesSavedTestMetrics/);
+  assert.match(sidebarSource, /data-saved-comparison-horizon/);
+  assert.match(sidebarSource, /disabled=\{loading \|\| runDisabled\s*\|\| invalidPredictionHorizon\s*\|\| \(isCompareMode && !compareSelection\.canCompare\)\}/);
+  assert.match(sidebarSource, /至少选择两个已完成的训练模型/);
+});
+
 test('prediction introduction follows the selected training task instead of promising three steps', () => {
   assert.doesNotMatch(zhSource, /预测后续最多 3 个时间步/);
   assert.doesNotMatch(enSource, /predict up to 3 future steps/);

@@ -23,6 +23,10 @@ import math
 import multiprocessing
 import os
 import re
+import copy
+import hashlib
+import threading
+from collections import OrderedDict
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,6 +76,7 @@ from services.earth_model_source import (
     build_uploaded_earth_model,
     earth_forward_for_model,
 )
+from services.uploaded_model_source import verify_reference_source
 from training_backbones.earth_daily_model import (
     earth_model_config,
     forecaster_from_config,
@@ -117,6 +122,88 @@ class EarthArtifactError(ValueError):
     def __init__(self, message: str, *, code: str = "invalid_earth_training_artifact"):
         super().__init__(message)
         self.code = code
+
+
+# Uploaded source execution is trusted only after the strict checkpoint shape
+# checks below and the eval-independence probe.  Keep the successful runtime
+# proof bounded and keyed to every identity that can change its meaning.  The
+# cache stores a private CPU model prototype; callers receive a deep copy so a
+# prediction cannot mutate a model used by another request.  A per-key event
+# makes concurrent context/compare/run reads wait for one build+probe rather
+# than fan out duplicate full-grid work.
+_RUNTIME_MODEL_CACHE_LIMIT = 8
+_RUNTIME_MODEL_CACHE: "OrderedDict[tuple, tuple[torch.nn.Module, tuple[str, ...]]]" = OrderedDict()
+_RUNTIME_MODEL_INFLIGHT: dict[tuple, threading.Event] = {}
+_RUNTIME_MODEL_LOCK = threading.RLock()
+
+
+def _runtime_checkpoint_digest(checkpoint: "EarthCheckpoint") -> str:
+    path = Path(str(getattr(checkpoint, "path", "") or ""))
+    try:
+        if path.is_file():
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+    except OSError:
+        # The strict loader will report an unavailable artifact to the caller;
+        # use the payload identity only to avoid turning a cache lookup into a
+        # second filesystem error.
+        pass
+    digest = hashlib.sha256()
+    for name, value in sorted((checkpoint.payload.get("model_state_dict") or {}).items()):
+        digest.update(str(name).encode("utf-8"))
+        if isinstance(value, torch.Tensor):
+            digest.update(value.detach().to("cpu").contiguous().numpy().tobytes())
+        else:
+            digest.update(repr(value).encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _runtime_model_cache_key(checkpoint: "EarthCheckpoint") -> tuple:
+    config = checkpoint.model_config
+    uploaded = checkpoint.uploaded_model or {}
+    source_hash = str(uploaded.get("content_hash") or "")
+    # The embedded source is authoritative for execution, but an on-disk
+    # replacement must still invalidate a prior runtime proof and be reported
+    # by the normal source guard.  Include its status/digest in the key without
+    # exposing a path in any user-facing error.
+    try:
+        source_state = verify_reference_source(uploaded)
+        source_identity = str(source_state.get("status") or "") + ":" + str(source_state.get("detail") or "")
+    except Exception:
+        source_identity = "unknown"
+    schema = str(config.get("contract_schema") or "")
+    binding = checkpoint.dataset_binding or {}
+    dataset_identity = (
+        str(binding.get("dataset_id") or ""),
+        str(binding.get("dataset_version") or ""),
+        str(binding.get("dataset_fingerprint") or ""),
+    )
+    shape = tuple(int(value) for value in (config.get("spatial_tile_shape") or
+                                           (config.get("height"), config.get("width"))))
+    channels = int(config.get("input_channels", 0))
+    # Include the checkpoint path as a tenant boundary.  The digest still
+    # invalidates the entry when a file is replaced in place.
+    return (
+        _runtime_checkpoint_digest(checkpoint), schema, source_hash, source_identity,
+        dataset_identity, str(config.get("implementation_id") or ""),
+        int(config.get("window", 0)), channels, shape,
+        "earth_eval_runtime_probe_v2",
+        str(getattr(checkpoint, "path", "") or ""),
+    )
+
+
+def clear_earth_runtime_model_cache() -> None:
+    """Drop validated uploaded-model prototypes after identity changes/tests."""
+    with _RUNTIME_MODEL_LOCK:
+        _RUNTIME_MODEL_CACHE.clear()
+
+
+def earth_runtime_model_cache_info() -> dict[str, int]:
+    with _RUNTIME_MODEL_LOCK:
+        return {"entries": len(_RUNTIME_MODEL_CACHE), "inflight": len(_RUNTIME_MODEL_INFLIGHT)}
 
 
 # ── metrics ────────────────────────────────────────────────────────────────
@@ -1322,6 +1409,8 @@ def load_earth_training_artifact(
 
 def build_earth_model_from_checkpoint(
     checkpoint: EarthCheckpoint,
+    *,
+    use_runtime_cache: bool = True,
 ) -> tuple[torch.nn.Module, tuple[str, ...]]:
     """Rebuild the model from the checkpoint and load its weights ``strict=True``.
 
@@ -1332,42 +1421,91 @@ def build_earth_model_from_checkpoint(
     rather than a silent rebuild with different code.
     """
     warnings: tuple[str, ...] = ()
-    if checkpoint.model_source == MODEL_SOURCE_UPLOADED:
-        reference = checkpoint.uploaded_model or {}
-        try:
-            model, _config, warnings = build_uploaded_earth_model(
-                reference=reference,
-                input_channel_order=checkpoint.model_config.get("input_channel_order") or [],
-                window=int(checkpoint.model_config.get("window", EARTH_WINDOW)),
-                horizon=int(checkpoint.model_config.get("horizon", EARTH_HORIZON)),
-                height=int(checkpoint.model_config.get("height", 36)),
-                width=int(checkpoint.model_config.get("width", 72)),
-                dataset_id=checkpoint.dataset_binding.get("dataset_id"),
-                contract_schema=checkpoint.model_config.get("contract_schema"),
-            )
-        except EarthModelBuildError as exc:
-            raise EarthArtifactError(str(exc), code=exc.code) from exc
-    else:
-        model = forecaster_from_config(checkpoint.model_config)
+    runtime_key = None
+    inflight_event = None
+    if use_runtime_cache and checkpoint.model_source == MODEL_SOURCE_UPLOADED:
+        runtime_key = _runtime_model_cache_key(checkpoint)
+        # Single-flight: a waiter never builds or probes a second full-grid
+        # model.  It retries the lookup after the owner publishes its result.
+        while True:
+            with _RUNTIME_MODEL_LOCK:
+                cached = _RUNTIME_MODEL_CACHE.get(runtime_key)
+                if cached is not None:
+                    _RUNTIME_MODEL_CACHE.move_to_end(runtime_key)
+                    try:
+                        return copy.deepcopy(cached[0]), cached[1]
+                    except Exception:
+                        # A custom module may not support deepcopy.  Remove the
+                        # unusable prototype and rebuild it for this caller.
+                        _RUNTIME_MODEL_CACHE.pop(runtime_key, None)
+                inflight_event = _RUNTIME_MODEL_INFLIGHT.get(runtime_key)
+                if inflight_event is None:
+                    inflight_event = threading.Event()
+                    _RUNTIME_MODEL_INFLIGHT[runtime_key] = inflight_event
+                    break
+            inflight_event.wait()
     try:
-        model.load_state_dict(checkpoint.payload["model_state_dict"], strict=True)
-    except Exception as exc:
-        raise EarthArtifactError(
-            f"The Earth checkpoint weights do not fit the model: {exc}"
-        ) from exc
-    model.eval()
-    if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID and checkpoint.model_source == MODEL_SOURCE_UPLOADED:
-        from training_backbones.earth_3hourly_uploaded_contract import contract_profile, validate_eval_batch_independence
-        execution = contract_profile(checkpoint.model_config["contract_schema"])
+        if checkpoint.model_source == MODEL_SOURCE_UPLOADED:
+            reference = checkpoint.uploaded_model or {}
+            try:
+                model, _config, warnings = build_uploaded_earth_model(
+                    reference=reference,
+                    input_channel_order=checkpoint.model_config.get("input_channel_order") or [],
+                    window=int(checkpoint.model_config.get("window", EARTH_WINDOW)),
+                    horizon=int(checkpoint.model_config.get("horizon", EARTH_HORIZON)),
+                    height=int(checkpoint.model_config.get("height", 36)),
+                    width=int(checkpoint.model_config.get("width", 72)),
+                    dataset_id=checkpoint.dataset_binding.get("dataset_id"),
+                    contract_schema=checkpoint.model_config.get("contract_schema"),
+                )
+            except EarthModelBuildError as exc:
+                raise EarthArtifactError(str(exc), code=exc.code) from exc
+        else:
+            model = forecaster_from_config(checkpoint.model_config)
         try:
-            validate_eval_batch_independence(
-                model, window=checkpoint.model_config["window"],
-                channels=checkpoint.model_config["input_channels"], horizon=checkpoint.model_config["horizon"],
-                batch_size=(checkpoint.run.get("hyperparameters") or {}).get("batch_size", 1 if execution["full_grid"] else 8),
+            model.load_state_dict(checkpoint.payload["model_state_dict"], strict=True)
+        except Exception as exc:
+            raise EarthArtifactError(
+                f"The Earth checkpoint weights do not fit the model: {exc}"
+            ) from exc
+        model.eval()
+        if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID and checkpoint.model_source == MODEL_SOURCE_UPLOADED:
+            from training_backbones.earth_3hourly_uploaded_contract import (
+                RUNTIME_PROBE_BATCH_SIZE, RUNTIME_PROBE_MAX_INPUT_ELEMENTS,
+                contract_profile, validate_eval_batch_independence,
             )
-        except (ValueError, TypeError, RuntimeError) as exc:
-            raise EarthArtifactError(str(exc)) from exc
-    return model, warnings
+            execution = contract_profile(checkpoint.model_config["contract_schema"])
+            try:
+                # Runtime reads use a fixed, bounded batch and input-element
+                # budget.  The training batch remains validated in the frozen
+                # task contract but cannot amplify this safety probe.
+                validate_eval_batch_independence(
+                    model, window=checkpoint.model_config["window"],
+                    channels=checkpoint.model_config["input_channels"], horizon=checkpoint.model_config["horizon"],
+                    batch_size=(checkpoint.run.get("hyperparameters") or {}).get("batch_size", 1 if execution["full_grid"] else 8),
+                    probe_batch_size=RUNTIME_PROBE_BATCH_SIZE,
+                    max_input_elements=RUNTIME_PROBE_MAX_INPUT_ELEMENTS,
+                )
+            except (ValueError, TypeError, RuntimeError) as exc:
+                raise EarthArtifactError(str(exc)) from exc
+        if runtime_key is not None:
+            try:
+                prototype = copy.deepcopy(model)
+            except Exception:
+                prototype = None
+            if prototype is not None:
+                with _RUNTIME_MODEL_LOCK:
+                    _RUNTIME_MODEL_CACHE[runtime_key] = (prototype, warnings)
+                    _RUNTIME_MODEL_CACHE.move_to_end(runtime_key)
+                    while len(_RUNTIME_MODEL_CACHE) > _RUNTIME_MODEL_CACHE_LIMIT:
+                        _RUNTIME_MODEL_CACHE.popitem(last=False)
+        return model, warnings
+    finally:
+        if runtime_key is not None:
+            with _RUNTIME_MODEL_LOCK:
+                event = _RUNTIME_MODEL_INFLIGHT.pop(runtime_key, None)
+                if event is not None:
+                    event.set()
 
 
 def verify_earth_model_reload_isolated(path: Any, *, timeout_seconds: float = 30.0) -> None:

@@ -30,6 +30,8 @@ export default function PredictDisplay({
   adapter,
   hasAvailableModels = false,
   modelsLoading = false,
+  modelsError = null,
+  onRetryModels,
 }) {
   const t = useT();
   const { settings } = useSettings();
@@ -77,11 +79,17 @@ export default function PredictDisplay({
               {isZh ? '选择已完成模型，开始预测' : 'Select a completed model to start predicting'}
             </h3>
             <p className="prediction-display__empty-description">
-              {isZh ? '需要先选择具有有效输出窗口的训练模型' : 'Choose a trained model with a valid output horizon.'}
+              {modelsError
+                ? (isZh ? '训练任务加载失败，当前无法确认可用模型。' : 'Training models could not be loaded, so available models are unknown.')
+                : (isZh ? '需要先选择具有有效输出窗口的训练模型' : 'Choose a trained model with a valid output horizon.')}
             </p>
           </div>
           {modelsLoading ? (
             <Button size="compact" disabled>{isZh ? '正在加载模型…' : 'Loading models…'}</Button>
+          ) : modelsError ? (
+            <Button size="compact" onClick={onRetryModels} disabled={!onRetryModels} className="prediction-display__empty-action">
+              {isZh ? '重试加载模型' : 'Retry loading models'}
+            </Button>
           ) : hasAvailableModels ? (
             <Button size="compact" onClick={openModelSelection} className="prediction-display__empty-action">
               {isZh ? '选择训练模型' : 'Select a model'}

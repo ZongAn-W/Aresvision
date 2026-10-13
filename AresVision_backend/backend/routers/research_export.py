@@ -10,7 +10,9 @@ from auth.dependencies import get_current_user
 from database.models import User
 from schemas.research_export import ResearchExportRequest
 from services.dataset_identity import DatasetRequestError
-from services.research_export_sources import EXPORT_SOURCES, ExportUnavailable, task_guard
+from services.research_export_sources import (
+    EXPORT_SOURCES, ArtifactGuardError, ExportUnavailable, task_guard,
+)
 from services.research_figure import prepare_figure, render_figure, build_bundle, resolve_fonts
 
 router = APIRouter(prefix="/predict/research-export", tags=["Scientific export"])
@@ -86,6 +88,11 @@ async def _export(request, payload, user, preview=False):
         if not preview:
             headers["Content-Disposition"] = f'attachment; filename="astraatmos-{payload.kind}.{fmt}"'
         return Response(content, media_type=media, headers=headers)
+    except ArtifactGuardError as exc:
+        raise HTTPException(
+            409,
+            detail={"code": "invalid_earth_training_artifact", "message": "The Earth model artifact is unavailable"},
+        ) from exc
     except PermissionError as exc:
         raise HTTPException(403, detail=str(exc)) from exc
     except (ExportUnavailable, FileNotFoundError) as exc:

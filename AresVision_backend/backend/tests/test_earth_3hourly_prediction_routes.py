@@ -308,7 +308,41 @@ def test_http_invalid_checkpoint_is_stably_rejected(threehour_app):
     path.write_bytes(b"invalid serialized artifact")
     response = threehour_app["client"].post("/api/earth/predict/run", json={"training_task_id": task_id, "forecast_origin": ORIGIN})
     assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_earth_training_artifact"
+    assert "traceback" not in response.text.lower()
+    assert str(path) not in response.text
+
+
+def test_http_missing_checkpoint_is_stably_rejected_without_path_details(threehour_app):
+    task_id, path = seed_task(threehour_app)
+    path.unlink()
+    response = threehour_app["client"].post(
+        "/api/earth/predict/run", json={"training_task_id": task_id, "forecast_origin": ORIGIN}
+    )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_earth_training_artifact"
+    assert "artifact" in detail["message"].lower()
+    assert str(path) not in response.text
+    assert "traceback" not in response.text.lower()
+
+
+def test_http_unreadable_checkpoint_is_stably_rejected_without_internal_details(threehour_app, monkeypatch):
+    task_id, path = seed_task(threehour_app)
+    import services.earth_prediction_service as service
+
+    def unreadable(*args, **kwargs):
+        raise PermissionError(f"cannot read {path}")
+
+    monkeypatch.setattr(service, "load_earth_training_artifact", unreadable)
+    response = threehour_app["client"].post(
+        "/api/earth/predict/run", json={"training_task_id": task_id, "forecast_origin": ORIGIN}
+    )
+    assert response.status_code == 409
     assert response.json()["detail"]["code"] == "invalid_earth_training_artifact"
+    assert str(path) not in response.text
+    assert "traceback" not in response.text.lower()
 
 
 def test_http_invalid_checkpoint_run_record_is_rejected_before_response_validation(threehour_app):

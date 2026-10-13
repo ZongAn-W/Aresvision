@@ -33,6 +33,12 @@ RESERVED_PARAMETERS = frozenset({
     "global_grid_shape", "device", "normalization", "contract_schema", "implementation_id",
 })
 EVAL_BATCH_POLICY = "earth_eval_sample_independent_v1"
+# Runtime checkpoint reads use a separate, bounded probe budget.  The training
+# batch remains part of the frozen contract, but is never used to size these
+# safety probes (a full-grid training batch of 64 would allocate several GiB).
+RUNTIME_PROBE_VERSION = "earth_eval_runtime_probe_v2"
+RUNTIME_PROBE_BATCH_SIZE = 2
+RUNTIME_PROBE_MAX_INPUT_ELEMENTS = 70_000_000
 
 
 def contract_profile(schema=CONTRACT_SCHEMA):
@@ -149,7 +155,8 @@ def forward(model, inputs, *, horizon=24):
     return output
 
 
-def validate_eval_batch_independence(model, *, window, channels, horizon, batch_size=8):
+def validate_eval_batch_independence(model, *, window, channels, horizon, batch_size=8,
+                                     probe_batch_size=None, max_input_elements=None):
     """Reject eval outputs that depend on batch neighbours, order or call state."""
     import torch
 
@@ -177,8 +184,20 @@ def validate_eval_batch_independence(model, *, window, channels, horizon, batch_
     model.eval()
     try:
         with torch.no_grad():
-            batches = {1, 2, batch_size} if execution["full_grid"] else {2, 3, batch_size}
+            # ``probe_batch_size`` is deliberately independent of the training
+            # batch.  Legacy callers omit it and retain the historical probe;
+            # checkpoint/runtime callers pass the bounded value explicitly.
+            effective_batch = batch_size if probe_batch_size is None else probe_batch_size
+            if type(effective_batch) is not int or not 1 <= effective_batch <= execution["max_batch_size"]:
+                raise ValueError("Earth runtime probe batch size is invalid")
+            batches = ({1, 2, effective_batch} if execution["full_grid"]
+                       else {2, 3, effective_batch})
+            max_elements = max_input_elements
+            if max_elements is not None and (type(max_elements) is not int or max_elements < 1):
+                raise ValueError("Earth runtime probe input budget is invalid")
             for batch in sorted(batches):
+                if max_elements is not None and batch * window * channels * execution["shape"][0] * execution["shape"][1] > max_elements:
+                    raise ValueError("Earth runtime probe exceeds its input budget")
                 inputs = torch.randn((batch, window, channels, *execution["shape"]), generator=generator, dtype=torch.float32)
                 inputs[1:] = inputs[1:] * 0.5 + 2.0
                 together = probe(inputs)

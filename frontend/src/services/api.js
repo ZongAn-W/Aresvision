@@ -3,7 +3,7 @@
  * Vite proxy: 前端 /api/* → localhost:8000/api/*
  */
 
-import { endAuthenticatedPredictionSession } from '../stores/authPredictionSession.js';
+import { handleUnauthorizedResponse } from '../stores/authPredictionSession.js';
 import { researchExportErrorMessage } from './researchExportErrors.js';
 
 const BASE = '/api';
@@ -20,12 +20,8 @@ async function authedFetch(url, options = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
   const res = await fetch(url, { ...options, headers });
-  if (res.status === 401) {
-    // token 过期或无效，清除本地状态，触发全局事件让 AuthContext 响应
-    endAuthenticatedPredictionSession();
-    localStorage.removeItem('aresvision_token');
-    window.dispatchEvent(new Event('aresvision:logout'));
-  }
+  // Token 过期或无效时清理私有预测会话并触发 AuthContext 全局登出。
+  handleUnauthorizedResponse(res);
   return res;
 }
 
@@ -851,8 +847,8 @@ export async function deleteUserModel(modelId) {
   return res.json();
 }
 
-export async function fetchTasks() {
-  const res = await authedFetch(`${BASE}/training/tasks`);
+export async function fetchTasks(options = {}) {
+  const res = await authedFetch(`${BASE}/training/tasks`, options);
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }

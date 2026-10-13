@@ -30,7 +30,10 @@ from services.earth_prediction_service import (
     build_prediction_context,
     run_earth_prediction,
     compare_earth_test_metrics,
+    _load_checkpoint,
+    _require_completed_earth_task,
 )
+from services.research_export_sources import ArtifactGuardError, task_guard, register_earth
 
 logger = logging.getLogger("aresvision.earth.predict")
 
@@ -50,6 +53,14 @@ def _error_response(exc: Exception) -> HTTPException:
                 "code": "dataset_unavailable",
                 "message": "The registered Earth dataset is not available",
                 "availability_reason": exc.reason,
+            },
+        )
+    if isinstance(exc, ArtifactGuardError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "invalid_earth_training_artifact",
+                "message": "The Earth model artifact is unavailable",
             },
         )
     raise exc
@@ -97,7 +108,6 @@ async def get_earth_diagnostics_context(
 async def diagnostics_for_task(request: Request, task, payload: EarthDiagnosticsRequest, current_user: User):
     """Shared by the Earth page and the legacy task action=test entry."""
     from services.earth_diagnostics import compute_earth_diagnostics
-    from services.research_export_sources import task_guard
     try:
         require_active_dataset(training_task_dataset_id(task))
         from services.earth_prediction_service import _require_completed_earth_task
@@ -186,7 +196,7 @@ async def compare_earth_models(request: Request, payload: EarthCompareRequest,
         raise HTTPException(422, detail={"code": "invalid_earth_comparison", "message": "Select distinct positive task IDs"})
     tasks = [await _load_task(request, task_id, current_user) for task_id in payload.task_ids]
     try:
-        from services.research_export_sources import task_guard, register_earth_metrics
+        from services.research_export_sources import register_earth_metrics
         for task in tasks:
             require_active_dataset(training_task_dataset_id(task))
         guards = [task_guard(task) if task.output_model_path else None for task in tasks]
@@ -198,7 +208,7 @@ async def compare_earth_models(request: Request, payload: EarthCompareRequest,
         return result
     except (DatasetRequestError, EarthPackageError) as exc:
         raise _error_response(exc) from exc
-    except OSError as exc:
+    except ArtifactGuardError as exc:
         raise HTTPException(409, detail={"code": "invalid_earth_training_artifact", "message": "Model artifact is unavailable"}) from exc
 
 
@@ -213,12 +223,26 @@ async def run_earth_predict(
     registry = _registry(request)
     try:
         require_active_dataset(training_task_dataset_id(task))
-        from services.research_export_sources import task_guard
+        _require_completed_earth_task(task)
+        # Validate the artifact before task_guard() so missing, unreadable, or
+        # malformed checkpoints never fall through to the generic 500 branch.
+        _load_checkpoint(task)
         export_guard = task_guard(task)
         result = await run_inference_compute(lambda: asyncio.to_thread(
             run_earth_prediction, task, payload.forecast_origin, registry
         ))
+        current_task = await _load_task(request, payload.training_task_id, current_user)
+        _require_completed_earth_task(current_task)
+        if task_guard(current_task) != export_guard:
+            raise DatasetRequestError(
+                "invalid_earth_training_artifact",
+                "The model artifact changed during prediction",
+                status_code=409,
+            )
+        result = await asyncio.to_thread(register_earth, result, current_task, current_user.id)
     except (DatasetRequestError, EarthPackageError) as exc:
+        raise _error_response(exc) from exc
+    except ArtifactGuardError as exc:
         raise _error_response(exc) from exc
     except Exception as exc:  # pragma: no cover - surfaced for troubleshooting
         logger.exception(
@@ -227,7 +251,4 @@ async def run_earth_predict(
             payload.forecast_origin,
         )
         raise HTTPException(status_code=500, detail=f"Earth prediction failed: {exc}") from exc
-    from services.research_export_sources import register_earth
-    if task_guard(task) != export_guard:
-        raise HTTPException(409, detail="Model changed while retrieving result; refresh the prediction")
-    return await asyncio.to_thread(register_earth, result, task, current_user.id)
+    return result

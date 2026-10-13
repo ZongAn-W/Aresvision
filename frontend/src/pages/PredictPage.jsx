@@ -130,6 +130,9 @@ export default function PredictPage() {
   const [trainingTasksScope, setTrainingTasksScope] = useState(null);
   const [trainingTasksLoading, setTrainingTasksLoading] = useState(false);
   const [trainingTasksLoaded, setTrainingTasksLoaded] = useState(false);
+  const [trainingTasksError, setTrainingTasksError] = useState(null);
+  const trainingTasksRequestRef = useRef({ id: 0, controller: null });
+  const previousModelModeRef = useRef(modelMode);
   const [selectedTrainingTaskId, setSelectedTrainingTaskId] = useState(null);
   const [selectedCompareTrainingTaskIds, setSelectedCompareTrainingTaskIds] = useState([]);
   const [activeHorizon, setActiveHorizon] = useState(0);
@@ -340,6 +343,7 @@ export default function PredictPage() {
     setTrainingTasksScope(null);
     setTrainingTasksLoading(false);
     setTrainingTasksLoaded(false);
+    setTrainingTasksError(null);
     setCompareConfigs([]);
     setSelectedCompareIds([]);
 
@@ -372,6 +376,7 @@ export default function PredictPage() {
     setFullscreen3D(null);
     earthContextRequestRef.current?.abort();
     earthRunRequestRef.current?.abort();
+    trainingTasksRequestRef.current.controller?.abort();
     setEarthTaskId(''); setEarthOrigin(''); setEarthContext(null);
     setEarthResult(null); setEarthResultError(null); setEarthContextError(null);
     setEarthLoading(false); setEarthContextLoading(false);
@@ -379,45 +384,69 @@ export default function PredictPage() {
     if (!predictScope) return;
   }, [predictScope, requestCoordinator]);
 
+  const loadTrainingTasks = useCallback(() => {
+    const scope = predictScope;
+    const userId = user?.id;
+    if (!scope || !userId) return Promise.resolve([]);
+
+    trainingTasksRequestRef.current.controller?.abort();
+    const requestId = trainingTasksRequestRef.current.id + 1;
+    const controller = new AbortController();
+    trainingTasksRequestRef.current = { id: requestId, controller };
+    const isCurrent = () => (
+      trainingTasksRequestRef.current.id === requestId
+      && trainingTasksRequestRef.current.controller === controller
+      && predictScopeRef.current === scope
+      && user?.id === userId
+    );
+
+    setTrainingTasksLoading(true);
+    setTrainingTasksError(null);
+
+    return fetchTasks({ signal: controller.signal })
+      .then((items) => {
+        if (!isCurrent()) return items;
+        setTrainingTasks(Array.isArray(items) ? items : []);
+        setTrainingTasksScope(scope);
+        setTrainingTasksLoaded(true);
+        return items;
+      })
+      .catch((requestError) => {
+        if (!isCurrent() || requestError?.name === 'AbortError') return undefined;
+        setTrainingTasksError(requestError instanceof Error ? requestError : new Error(String(requestError || '')));
+        return undefined;
+      })
+      .finally(() => {
+        if (!isCurrent()) return;
+        setTrainingTasksLoading(false);
+        trainingTasksRequestRef.current = { id: requestId, controller: null };
+      });
+  }, [predictScope, user?.id]);
+
   useEffect(() => {
     if (isLoading) return undefined;
 
     if (!user) {
+      trainingTasksRequestRef.current.controller?.abort();
+      trainingTasksRequestRef.current = {
+        id: trainingTasksRequestRef.current.id + 1,
+        controller: null,
+      };
       setTrainingTasks([]);
       setTrainingTasksScope(null);
       setTrainingTasksLoading(false);
       setTrainingTasksLoaded(false);
+      setTrainingTasksError(null);
       setSelectedTrainingTaskId(null);
       setSelectedCompareTrainingTaskIds([]);
       return undefined;
     }
 
-    let active = true;
-    setTrainingTasksLoading(true);
-    setTrainingTasksLoaded(false);
-    setTrainingTasksScope(null);
-
-    fetchTasks()
-      .then((items) => {
-        if (!active) return;
-        setTrainingTasks(Array.isArray(items) ? items : []);
-        setTrainingTasksScope(predictScope);
-      })
-      .catch(() => {
-        if (!active) return;
-        setTrainingTasks([]);
-        setTrainingTasksScope(predictScope);
-      })
-      .finally(() => {
-        if (!active) return;
-        setTrainingTasksLoading(false);
-        setTrainingTasksLoaded(true);
-      });
-
+    loadTrainingTasks();
     return () => {
-      active = false;
+      trainingTasksRequestRef.current.controller?.abort();
     };
-  }, [isLoading, predictScope, user?.id]);
+  }, [isLoading, loadTrainingTasks, user?.id]);
 
   useEffect(() => {
     if (!predictScope || predictScopeRef.current !== predictScope) return;
@@ -1041,6 +1070,15 @@ export default function PredictPage() {
     setPfiData(null);
   }, [modelMode]);
 
+  // A mode switch is a useful recovery action after a transient task-directory failure.
+  // Only retry when the mode actually changed, so a persistent outage does not loop.
+  useEffect(() => {
+    const changed = previousModelModeRef.current !== modelMode;
+    previousModelModeRef.current = modelMode;
+    if (!changed || !trainingTasksError || trainingTasksLoading) return;
+    loadTrainingTasks();
+  }, [loadTrainingTasks, modelMode, trainingTasksError, trainingTasksLoading]);
+
   // ── 地球历史预测 ───────────────────────────────────────────────────
   const earthTasks = useMemo(() => trainingTasksScope === predictScope ? trainingTasks : [], [trainingTasksScope, predictScope, trainingTasks]);
   const earthTaskOptions = useMemo(() => getEarthTrainingModelOptions(earthTasks), [earthTasks]);
@@ -1060,7 +1098,7 @@ export default function PredictPage() {
     if (!Number.isFinite(normalized) || normalized <= 0) {
       setEarthContext(null);
       setEarthContextError(null);
-      return;
+      return null;
     }
     const controller = new AbortController();
     const scope = predictScopeRef.current;
@@ -1089,15 +1127,23 @@ export default function PredictPage() {
           : pickDefaultOrigin(payload?.origins)
         );
       });
+      return payload;
     } catch (requestError) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return null;
       setEarthContext(null);
       const resolved = resolveEarthPredictErrorMessage(requestError);
       setEarthContextError(resolved.key ? translateRef.current(`predict.${resolved.key}`) : resolved.fallback);
+      return null;
     } finally {
       if (!controller.signal.aborted) setEarthContextLoading(false);
     }
   }, []);
+
+  const reloadEarthContextAndTasks = useCallback(() => {
+    const tasksRequest = loadTrainingTasks();
+    loadEarthContext(earthTaskId);
+    return tasksRequest;
+  }, [earthTaskId, loadEarthContext, loadTrainingTasks]);
 
   useEffect(() => {
     if (modelMode !== PREDICT_MODEL_MODE_EARTH) return;
@@ -1105,10 +1151,9 @@ export default function PredictPage() {
       setEarthTaskId(String(earthTaskOptions[0].id));
       return;
     }
-    if (selectedEarthTask) loadEarthContext(earthTaskId);
-    else { setEarthTaskId(''); setEarthContext(null); }
+    if (!selectedEarthTask) { setEarthTaskId(''); setEarthContext(null); }
     return () => earthContextRequestRef.current?.abort();
-  }, [modelMode, earthTaskId, selectedEarthTask, earthTaskOptions, loadEarthContext]);
+  }, [modelMode, earthTaskId, selectedEarthTask, earthTaskOptions]);
 
   /** 切换模式或任务时丢弃地球结果，避免显示上一个任务/起点的场。 */
   useLayoutEffect(() => {
@@ -1155,10 +1200,16 @@ export default function PredictPage() {
    */
   const handleRunEarthPredict = useCallback(async () => {
     const taskId = Number(earthTaskId);
-    if (!Number.isFinite(taskId) || taskId <= 0 || !earthOrigin || earthLoading || !earthContext) return;
-    const adapter = earthPredictionAdapter({ context: earthContext, isZh: settings.language !== 'en', colormap: settings.colormap });
-    if (!adapter.origin.selectable(earthOrigin)) return;
-    const requestIdentity = { taskId, origin: earthOrigin, context: earthContext, scope: predictScopeRef.current };
+    if (!Number.isFinite(taskId) || taskId <= 0 || earthLoading || earthContextLoading) return;
+    const context = earthContext && Number(earthContext.task_id) === taskId
+      ? earthContext
+      : await loadEarthContext(taskId);
+    if (!context) return;
+    const adapter = earthPredictionAdapter({ context, isZh: settings.language !== 'en', colormap: settings.colormap });
+    const origin = adapter.origin.selectable(earthOrigin) ? earthOrigin : pickDefaultOrigin(context.origins);
+    if (!origin) return;
+    if (origin !== earthOrigin) setEarthOrigin(origin);
+    const requestIdentity = { taskId, origin, context, scope: predictScopeRef.current };
     const controller = new AbortController();
     earthRunRequestRef.current?.abort();
     earthRunRequestRef.current = controller;
@@ -1167,7 +1218,7 @@ export default function PredictPage() {
     setEarthResult(null);
     setEarthResultKey(null);
     try {
-      const payload = await runEarthPrediction(adapter.request({ taskId, origin: earthOrigin }), { signal: controller.signal });
+      const payload = await runEarthPrediction(adapter.request({ taskId, origin }), { signal: controller.signal });
       if (controller.signal.aborted || earthRunRequestRef.current !== controller) return;
       if (!earthResponseMatchesRequest(payload, requestIdentity, predictScopeRef.current)) {
         throw new Error(settings.language !== 'en' ? '预测响应身份已变化，请刷新起点范围后重试。' : 'Prediction identity changed. Reload the origin range and retry.');
@@ -1196,7 +1247,7 @@ export default function PredictPage() {
     } finally {
       if (!controller.signal.aborted) setEarthLoading(false);
     }
-  }, [earthContext, earthLoading, earthOrigin, earthTaskId, settings.language, settings.colormap, t]);
+  }, [earthContext, earthContextLoading, earthLoading, earthOrigin, earthTaskId, loadEarthContext, settings.language, settings.colormap, t]);
 
   const earthCopy = useMemo(() => ({
     title: t('predict.earthTitle'),
@@ -1275,7 +1326,8 @@ export default function PredictPage() {
       ) : null}
 
       {isEarthCompareMode ? <EarthCompareWorkspace key={predictScope} tasks={earthTasks} scope={predictScope}
-        tasksLoading={trainingTasksLoading} isLight={isLight} precision={precision} isZh={settings?.language !== 'en'}
+        tasksLoading={trainingTasksLoading} tasksError={trainingTasksError} onRetryTasks={loadTrainingTasks}
+        isLight={isLight} precision={precision} isZh={settings?.language !== 'en'}
         plotTextColor={plotTextColor} plotGridColor={plotGridColor} /> : null}
       <div className={isEarthCompareMode ? undefined : 'predict-workspace'}>
         {!isEarthCompareMode ? (
@@ -1286,12 +1338,13 @@ export default function PredictPage() {
           originDisabled={isEarthMode && !earthContext}
           originHint={isEarthMode ? (earthOrigin && earthContext && !earthAdapter.origin.selectable(earthOrigin)
             ? earthCopy.originOutOfRange : earthContext?.origins ? earthCopy.originRange(earthContext.origins.start, earthContext.origins.end, earthContext.origins.count) : earthCopy.originRangeUnknown) : null}
-          onReloadContext={isEarthMode ? () => loadEarthContext(earthTaskId) : undefined}
+          onReloadContext={isEarthMode && (earthContext || earthContextError) ? reloadEarthContextAndTasks : undefined}
           contextLoading={isEarthMode && earthContextLoading}
           contextError={isEarthMode ? earthContextError : null}
-          runDisabled={isEarthMode && (!earthContext || !earthAdapter.origin.selectable(earthOrigin))}
+          deferContext={isEarthMode}
+          runDisabled={isEarthMode && (!earthTaskId || (earthContext && earthOrigin && !earthAdapter.origin.selectable(earthOrigin)))}
           isLight={isLight}
-          loading={isEarthMode ? earthLoading : modelMode === PREDICT_MODEL_MODE_COMPARE ? compareTrainingLoading : loading}
+          loading={isEarthMode ? (earthLoading || earthContextLoading) : modelMode === PREDICT_MODEL_MODE_COMPARE ? compareTrainingLoading : loading}
           requestContextLocked={requestContextLocked}
           error={isEarthMode ? earthResultError : activeError}
           modelMode={isEarthMode ? PREDICT_MODEL_MODE_TRAINED : modelMode}
@@ -1301,6 +1354,8 @@ export default function PredictPage() {
           selectedCompareTrainingTaskIds={selectedCompareTrainingTaskIds}
           setSelectedCompareTrainingTaskIds={setSelectedCompareTrainingTaskIds}
           trainingTasksLoading={trainingTasksLoading}
+           trainingTasksError={trainingTasksError}
+           onRetryTrainingTasks={loadTrainingTasks}
           selectedTrainingOption={isEarthMode ? selectedEarthTask : selectedTrainingOption}
           analysisVisibility={analysisVisibility}
           lsStart={lsStart}
@@ -1322,7 +1377,9 @@ export default function PredictPage() {
             <>
               {earthTaskOptions.length === 0 ? (
                 <div className="predict-mode-hint" role="status" data-earth-no-task-hint="true">
-                  {t('predict.earthNoCompletedTask')}
+                  {trainingTasksError
+                    ? (settings?.language === 'en' ? 'Training models could not be loaded. Retry to try again.' : '训练任务加载失败，请重试。')
+                    : t('predict.earthNoCompletedTask')}
                 </div>
               ) : null}
               <EarthPredictPanel
@@ -1333,13 +1390,15 @@ export default function PredictPage() {
                 copy={earthCopy}
                 context={earthContext}
                 result={earthResult}
-                loading={earthLoading}
+                loading={earthLoading || earthContextLoading}
                 origin={earthOrigin}
                 selectedDay={earthDay}
                 onSelectDay={setEarthDay}
                 taskOptions={earthTaskOptions}
-                selectedTaskId={earthTaskId}
+                selectedTaskId={earthContext ? earthTaskId : null}
                 modelsLoading={trainingTasksLoading}
+                modelsError={trainingTasksError}
+                onRetryModels={loadTrainingTasks}
               />
             </>
           ) : null}
@@ -1348,6 +1407,7 @@ export default function PredictPage() {
           <SingleModelWorkbench key={`${predictScope}:mars:${selectedTrainingTaskId}`}
             adapter={marsAdapter} result={activeResults} metrics={activeMetrics} metricsLoading={metricsLoading}
             hasAvailableModels={trainingModelOptions.length > 0} modelsLoading={trainingTasksLoading}
+            modelsError={trainingTasksError} onRetryModels={loadTrainingTasks}
             viewMode={viewMode} setViewMode={setViewMode}
             fullscreen={fullscreen3D} onFullscreenChange={setFullscreen3D}
             loading={loading} activeStep={activeHorizon} onStepChange={setActiveHorizon}

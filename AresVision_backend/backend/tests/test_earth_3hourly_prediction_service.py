@@ -18,7 +18,7 @@ from services.dataset_identity import DatasetRequestError
 from services.earth_dataset import fit_threehour_normalization
 from services.earth_model_source import ModelSourcePlan, build_earth_model_for_plan, earth_forward_for_model
 from services.earth_prediction_cache import EarthPredictionCache, build_earth_prediction_cache_key
-from services.earth_prediction_service import build_prediction_context, run_earth_prediction
+from services.earth_prediction_service import build_prediction_context, run_earth_prediction, _model_source_state
 from services.earth_training_artifact import (
     build_checkpoint_payload, build_metrics_block, compute_earth_metrics,
     save_earth_artifact_atomic,
@@ -197,6 +197,48 @@ def test_real_prediction_reads_bounded_windows_returns_du_fields_and_uses_saved_
         run_earth_prediction(changed, ORIGIN, bundle.registry, device="cpu")
     assert (error.value.status_code, error.value.code) == (409, "dataset_version_changed")
     assert len(calls) == before
+
+
+def test_cached_threehour_prediction_rechecks_checkpoint_after_cache_read(threehour_prediction_bundle, monkeypatch):
+    import services.earth_prediction_service as service
+
+    bundle = threehour_prediction_bundle
+    cache = EarthPredictionCache()
+    monkeypatch.setattr(service, "EARTH_PREDICTION_CACHE", cache)
+    run_earth_prediction(bundle.task, ORIGIN, bundle.registry, device="cpu", cache=cache)
+    monkeypatch.setattr(service, "earth_forward_for_model",
+                        lambda *args, **kwargs: pytest.fail("the cached result should not rerun inference"))
+    original_sha = service._threehour_checkpoint_sha(bundle.task)
+    calls = {"count": 0}
+    def change_after_cache_key(task):
+        calls["count"] += 1
+        return original_sha if calls["count"] == 1 else "changed"
+    monkeypatch.setattr(service, "_threehour_checkpoint_sha", change_after_cache_key)
+
+    with pytest.raises(DatasetRequestError) as error:
+        run_earth_prediction(bundle.task, ORIGIN, bundle.registry, device="cpu", cache=cache)
+    assert (error.value.status_code, error.value.code) == (409, "invalid_earth_training_artifact")
+
+
+def test_uploaded_source_warning_state_refreshes_without_rebuilding(tmp_path):
+    from services.uploaded_model_source import hash_source_bytes
+
+    source = tmp_path / "uploaded_model.py"
+    content = b"MODEL_SPEC = {}\n"
+    source.write_bytes(content)
+    reference = {"source_path": str(source), "content_hash": hash_source_bytes(content), "source_text": "MODEL_SPEC = {}\n"}
+    checkpoint = SimpleNamespace(model_source="uploaded", uploaded_model=reference)
+
+    assert _model_source_state(checkpoint) == ("available", [])
+    source.unlink()
+    status, warnings = _model_source_state(checkpoint)
+    assert status == "missing" and warnings
+    source.write_bytes(b"tampered")
+    status, warnings = _model_source_state(checkpoint)
+    assert status == "tampered" and warnings
+    source.write_bytes(content)
+    assert _model_source_state(checkpoint) == ("available", [])
+    assert _model_source_state(SimpleNamespace(model_source="official", uploaded_model=None)) == ("official", [])
 
 
 @pytest.mark.parametrize("origin,code", [

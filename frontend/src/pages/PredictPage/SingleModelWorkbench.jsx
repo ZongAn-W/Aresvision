@@ -11,6 +11,7 @@ import PredictStatus from './PredictStatus';
 export default function SingleModelWorkbench({ adapter, result, loading, metrics, metricsLoading,
   metricPresentation, activeStep = 0, onStepChange, identityKey, error, onRetry, children,
   hasAvailableModels = false, modelsLoading = false,
+  modelsError = null, onRetryModels,
   viewMode: controlledView, setViewMode: onViewChange,
   fullscreen: controlledFullscreen, onFullscreenChange }) {
   const t = useT();
@@ -35,7 +36,8 @@ export default function SingleModelWorkbench({ adapter, result, loading, metrics
       activeHorizon={step} setActiveHorizon={onStepChange} loading={loading}
       truthField={truthField} predField={predField} residField={residField}
       stepLabel={() => ''} TRIPTYCH_PANELS={panels} setFullscreen3D={setFullscreen}
-      hasAvailableModels={hasAvailableModels} modelsLoading={modelsLoading} />
+      hasAvailableModels={hasAvailableModels} modelsLoading={modelsLoading}
+      modelsError={modelsError} onRetryModels={onRetryModels} />
     {result || metrics || metricsLoading || loading ? <PredictMetrics metrics={metrics} loading={metricsLoading || loading} presentation={metricPresentation || adapter.presentation.metrics}
       modelMode="trained" precision={settings.precision} ozoneUnit={settings.units.ozone} /> : null}
     {adapter.secondaryMetrics ? <PredictMetrics metrics={adapter.secondaryMetrics.data} loading={adapter.secondaryMetrics.loading}

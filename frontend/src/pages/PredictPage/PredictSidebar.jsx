@@ -228,6 +228,8 @@ function ModelSourceControl({
   selectedCompareTrainingTaskIds,
   setSelectedCompareTrainingTaskIds,
   trainingTasksLoading,
+  trainingTasksError,
+  onRetryTrainingTasks,
   selectedTrainingOption,
   requestContextLocked,
   isLight,
@@ -282,6 +284,16 @@ function ModelSourceControl({
       />
 
       <TagFilter tags={tagState.tags} {...tagFilter} onChange={setTagFilter} isZh={isZh} disabled={tagState.loading || requestContextLocked} />
+      {trainingTasksError ? (
+        <div role="alert" className="training-tag-toolbar" style={{ color: C.mars, marginTop: 10 }}>
+          <span>{isZh ? '训练任务加载失败，无法确认可用模型。' : 'Training models could not be loaded, so available models are unknown.'}</span>
+          {onRetryTrainingTasks ? (
+            <button className="training-tag-button" type="button" onClick={onRetryTrainingTasks} disabled={trainingTasksLoading}>
+              {isZh ? '重试加载模型' : 'Retry loading models'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {tagState.error && <div role="alert" className="training-tag-toolbar" style={{ color: C.mars }}>
         {tagState.error}<button className="training-tag-button" onClick={() => tagState.refresh().catch(() => {})}>{isZh ? '重试标签' : 'Retry tags'}</button>
       </div>}
@@ -300,7 +312,9 @@ function ModelSourceControl({
           />
 
           <div className="predict-sidebar__description">
-            {hasTrainingModels
+            {trainingTasksError
+              ? (isZh ? '无法确认可用模型，请重试加载。' : 'Available models are unknown; retry loading models.')
+              : hasTrainingModels
               ? `${isZh ? '当前模型' : 'Current model'}: ${selectedTrainingOption?.label || '--'}`
               : (isZh ? '暂无可用模型。请先在模型训练中完成一个实验，再返回选择模型。' : 'No model available. Complete an experiment in Model Training, then select its model here.')}
           </div>
@@ -409,6 +423,11 @@ function ModelSourceControl({
           </div>}
 
           <div style={{ maxHeight: 280, overflowY: 'auto', overflowX: 'hidden', paddingRight: 4, display: 'grid', gap: 8 }}>
+            {trainingTasksLoading ? (
+              <div className="predict-sidebar__description" role="status" style={{ padding: 16, background: 'var(--surface-2)', textAlign: 'center' }}>
+                {isZh ? '正在加载训练模型…' : 'Loading trained models…'}
+              </div>
+            ) : null}
             {filteredCompareOptions.map((option) => {
               const active = selectedCompareTrainingTaskIds.includes(option.id);
               const summary = buildCompareModelSummary(option.task);
@@ -456,7 +475,7 @@ function ModelSourceControl({
               );
             })}
 
-            {!trainingTasksLoading && filteredCompareOptions.length === 0 ? (
+            {!trainingTasksLoading && !trainingTasksError && filteredCompareOptions.length === 0 ? (
               <div className="predict-sidebar__description" style={{ padding: 16, background: 'var(--surface-2)', textAlign: 'center' }}>
                 {hasTrainingModels
                   ? (isZh ? '没有匹配的训练模型。' : 'No matching trained models.')
@@ -519,6 +538,7 @@ export default function PredictSidebar({
   onReloadContext,
   contextLoading = false,
   contextError,
+  deferContext = false,
   runDisabled = false,
   isLight,
   loading,
@@ -531,6 +551,8 @@ export default function PredictSidebar({
   selectedCompareTrainingTaskIds = [],
   setSelectedCompareTrainingTaskIds,
   trainingTasksLoading = false,
+  trainingTasksError = null,
+  onRetryTrainingTasks,
   selectedTrainingOption,
   analysisVisibility = {},
   lsStart,
@@ -552,12 +574,15 @@ export default function PredictSidebar({
   const isCompareMode = modelMode === PREDICT_MODEL_MODE_COMPARE;
   const compareSelection = getCompareSelectionState(selectedCompareTrainingTaskIds);
   const planetAdapter = adapter || createMarsPredictionAdapter({ isZh, horizonLimit: predictionHorizonLimit });
+  const usesSavedTestMetrics = isCompareMode && planetAdapter.id === 'earth';
+  const invalidPredictionHorizon = !usesSavedTestMetrics && !deferContext
+    && (predictionHorizonLimit == null || predStep > predictionHorizonLimit);
   const disabledReason = loading ? null
     : contextLoading ? (isZh ? '正在读取预测起点，请稍候' : 'Loading forecast origins; please wait')
     : contextError ? (isZh ? '预测起点读取失败，请重试' : 'Forecast origins could not be loaded; please retry')
     : isCompareMode && !compareSelection.canCompare ? (isZh ? '请至少选择两个已完成的训练模型' : 'Select at least two completed training models')
-    : predictionHorizonLimit == null ? (isZh ? '请选择已完成的训练模型' : 'Select a completed training model')
-    : predStep > predictionHorizonLimit ? (isZh ? '预测步长不能超过模型输出窗口' : 'The prediction horizon exceeds the model output window')
+    : !usesSavedTestMetrics && !deferContext && predictionHorizonLimit == null ? (isZh ? '请选择已完成的训练模型' : 'Select a completed training model')
+    : !usesSavedTestMetrics && !deferContext && predStep > predictionHorizonLimit ? (isZh ? '预测步长不能超过模型输出窗口' : 'The prediction horizon exceeds the model output window')
     : runDisabled ? (isZh ? '请选择有效范围内的预测起点' : 'Select a forecast origin within the available range')
     : null;
 
@@ -571,6 +596,8 @@ export default function PredictSidebar({
         selectedCompareTrainingTaskIds={selectedCompareTrainingTaskIds}
         setSelectedCompareTrainingTaskIds={setSelectedCompareTrainingTaskIds}
         trainingTasksLoading={trainingTasksLoading}
+        trainingTasksError={trainingTasksError}
+        onRetryTrainingTasks={onRetryTrainingTasks}
         selectedTrainingOption={selectedTrainingOption}
         requestContextLocked={requestContextLocked}
         isLight={isLight}
@@ -580,7 +607,9 @@ export default function PredictSidebar({
       <Panel className="prediction-panel">
         <SectionTitle
           title={t('predict.sidebar.predictionControl')}
-          subtitle={isCompareMode
+          subtitle={usesSavedTestMetrics
+            ? (isZh ? '完整测试集指标' : 'Full test-set metrics')
+            : isCompareMode
             ? (isZh ? '选择对比使用的测试集预测步长。' : 'Choose the test-set horizon used for comparison.')
             : planetAdapter.horizon.hint}
           accent={isCompareMode ? C.green : C.mars}
@@ -591,7 +620,16 @@ export default function PredictSidebar({
             onChange={onOriginChange || setLsStart} disabled={originDisabled || requestContextLocked} />
           {originHint ? <p className="prediction-control-hint">{originHint}</p> : null}
         </div> : null}
-        <div style={{ marginBottom: 12 }}>
+        {usesSavedTestMetrics ? <div style={{ marginBottom: 12 }}>
+          <div className="predict-sidebar__description">
+            {isZh ? '测试集输出窗口' : 'Test-set output window'}
+          </div>
+          <p className="predict-sidebar__saved-horizon" data-saved-comparison-horizon>
+            {predictionHorizonLimit != null ? planetAdapter.horizon.label
+              : compareSelection.count === 0 ? (isZh ? '尚未选择模型' : 'No models selected')
+              : (isZh ? '所选模型的输出窗口不同或缺失' : 'Selected output windows differ or are missing')}
+          </p>
+        </div> : <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 'calc(var(--type-label) * var(--font-scale, 1))', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: 8 }}>
             {t('predict.horizon')}
           </div>
@@ -629,15 +667,14 @@ export default function PredictSidebar({
               ? (isZh ? '请选择具有有效输出窗口的训练模型' : 'Select a trained model with a valid output horizon')
               : planetAdapter.horizon.hint}
           </div>
-        </div>
+        </div>}
 
         <div className="predict-sidebar__actions">
           <ActionButton
             onClick={handlePredict}
             describedBy={disabledReason ? 'prediction-run-disabled-reason' : undefined}
             disabled={loading || runDisabled
-              || predictionHorizonLimit == null
-              || predStep > predictionHorizonLimit
+              || invalidPredictionHorizon
               || (isCompareMode && !compareSelection.canCompare)}
             accent={isCompareMode ? C.green : C.mars}
           >
@@ -655,7 +692,8 @@ export default function PredictSidebar({
 
         <PredictStatus loading={contextLoading} message={contextLoading ? (isZh ? '正在读取预测起点…' : 'Loading forecast origins…') : null}
           error={contextError} onRetry={onReloadContext} retryLabel={isZh ? '重试' : 'Retry'} />
-        <PredictStatus error={error} onRetry={handlePredict} retryLabel={isZh ? '重试预测' : 'Retry prediction'} />
+        <PredictStatus error={error} onRetry={handlePredict} retryLabel={isCompareMode
+          ? (isZh ? '重试对比' : 'Retry comparison') : (isZh ? '重试预测' : 'Retry prediction')} />
       </Panel>
 
       {canShowInputVariables ? (

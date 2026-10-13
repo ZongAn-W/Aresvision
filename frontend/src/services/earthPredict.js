@@ -6,6 +6,8 @@
  * 预测页区分「日期越界」「数据集指纹变化」「权重损坏」「无权限」。
  */
 
+import { handleUnauthorizedResponse } from '../stores/authPredictionSession.js';
+
 const BASE = '/api';
 const EARTH_PREDICT_PATH = `${BASE}/earth/predict`;
 
@@ -67,7 +69,10 @@ async function request(path, { method = 'GET', body, signal } = {}) {
     if (error?.name === 'AbortError') throw error;
     throw new EarthPredictApiError('Network request failed', { code: 'network_error' });
   }
-  if (!response.ok) throw await readError(response);
+  if (!response.ok) {
+    handleUnauthorizedResponse(response);
+    throw await readError(response);
+  }
   try {
     return await response.json();
   } catch {

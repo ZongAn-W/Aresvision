@@ -40,6 +40,8 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 2026-10-10 Earth 上传模型新增[全图 v2](docs/earth-3hourly-fullgrid-model.md)：输入/输出完整 240×480，训练、历史回测和诊断不做空间分块，batch 为 1–64 个全球时间窗口，默认 1、可运行大小取决于模型和显存；原 v1 的 24×48 任务继续兼容。新 schema 冻结到任务和 checkpoint，完整图执行及 eval 独立性严格检查；缓存和归一化准备输出进度。验证覆盖合成全图训练/重载、预测/诊断、旧契约回归及本机 batch=1 的 GPU 前向/反向，尚不代表完整真实数据收敛或精度验收。
 
+2026-10-13 Earth 单模型页面改为按需启动：进入页面只读取已完成训练任务目录，不再自动加载预测上下文、重载 checkpoint 或检查诊断可用性；点击“开始预测”后才执行上下文/数据身份校验、历史预测和后续诊断入口。详见[共用单模型预测工作台](docs/shared-single-model-prediction.md)与[地球训练与历史预测](docs/earth-training.md)。
+
 2026-10-10 地球与火星单模型预测使用同一套[单模型预测工作台](docs/shared-single-model-prediction.md)：模型侧栏、参考/预测/残差三联图与单图、时间步、指标、诊断图表外壳及全屏操作共用组件；无模型且无结果时显示紧凑准备面板，可进入模型选择或训练，已有结果但指标尚未取得时显示 `--`，实际 Earth 响应缺项仍显示“未提供”。行星适配层保留各自 API、时间轴、坐标、单位、评价范围和导出能力。Earth 每次运行完整任务 horizon，展示步只改变查看内容，保持 UTC/DU、独立手动抽样诊断、ΔRMSE PFI 和地球地图全屏；Mars 保持 Ls、训练步长上限、ΔR² PFI 与球面。验证包含前端测试/生产构建、合成浏览器桌面与 390px 交互，以及后端契约回归；既有 Mars 坐标失败单独列出，不代表真实训练精度或全分辨率浏览器性能验收。
 
 Earth 三小时 v1/v2 上传模型创建任务时复用上传或手动重新校验保存的兼容报告，核对归属、valid 状态、具体 dataset/schema 的验证证据、源码 SHA-256、参数 schema 和 batch 范围后冻结配置并排队，不再按实际 window/horizon、通道、batch 和自定义参数重复执行隔离 dry-run。上传及手动重新校验的 dry-run、实际训练的输出/梯度检查和完成前 checkpoint 严格重载继续保留，见[上传模型契约](docs/earth-3hourly-uploaded-model.md)。
@@ -158,6 +160,9 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 ### 预测与模型对比
 
 - 预测页按「行星 → 分析方式」选择地球/火星与单模型/多模型，两者都复用模型选择、标签筛选与比较图表。地球多模型通过 `POST /api/earth/predict/training-models/compare` 读取严格验证 checkpoint 保存的六项完整测试集指标，展示正确方向的排名、总体柱状图、任务 horizon 对应的提前小时曲线及参数矩阵；只允许相同发布指纹、测试范围、窗口数量与指标口径，差异返回 409 `earth_comparison_incompatible`。旧产物缺项显示“未提供”并排除该项排名，不重新推理。地球多模型未开放误差分布/PFI；单模型另有独立手动测试分区诊断。训练结果跳转自动选择对应行星；单次历史回测指标与完整测试集指标分别注明口径。
+- 模型任务目录按当前账号及行星/分析方式作用域加载，并明确区分加载中、加载成功但没有可用模型和加载失败三种状态。`/api/training/tasks` 首次或刷新失败时显示中英文错误与“重试加载模型”入口；已有有效任务时刷新失败保留旧任务，不误报为暂无模型。切换行星、单模型/多模型、账号或执行重试会重新协调请求，迟到响应不能覆盖当前作用域。
+- Earth 历史回测、多模型比较和训练后诊断收到 HTTP 401 时，会清理私有预测会话、移除失效 token 并触发全局登出；AuthContext 响应后回到登录入口。Earth 的结构化 409/422/500 错误和取消请求仍保留原有错误契约。
+- Earth 多模型比较每次提交都会先使当前选择的旧结果失效；同选择重试或收到 409/500 后清空表格、曲线、参数矩阵和科研导出引用，迟到响应也不能恢复旧结果。成功响应只绑定当前模型选择和任务目录作用域；Mars 多模型比较继续使用原有请求协调与结果缓存契约。
 
 - 地球与火星单模型复用 `PredictSidebar`，结果由 [SingleModelWorkbench.jsx](frontend/src/pages/PredictPage/SingleModelWorkbench.jsx) 组装三联图/单图、时间步、指标卡片、诊断图表与全屏外壳。三场顺序统一为参考、预测、残差，共用深浅主题、色带与数值精度设置；桌面侧栏与结果并排，窄屏上下排列。Earth 展示步同时显示提前小时和 UTC 时间，每次运行完整任务 horizon；全屏使用地球地图，Mars 全屏使用球面。请求转换、真实坐标、物理单位、指标范围与科研导出能力由[行星适配层](docs/shared-single-model-prediction.md#行星适配层)保留。
 
@@ -170,7 +175,8 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 - 新火星 checkpoint 使用 `aresvision_mars_forecast_checkpoint_v1`，保存每个输入通道的完整空间均值/尺度、目标 `target_mean/target_scale`、训练契约和数据文件指纹；预测直接复用这些参数，不重新拟合。旧纯 `state_dict` 任务保留 legacy compatibility，响应标记 `normalization_source=legacy_refit`。
 - Earth 新任务先按请求比例划分完整原始 UTC 时间轴，再在 train / validation / test 内独立生成完整窗口。checkpoint 保存 `split_policy=earth_raw_utc_timeline_v1`、请求比例、实际索引/UTC 边界和计数，normalization 仅拟合任务 train；发布身份不改写。新策略 checkpoint 的官方 DLinear 和上传模型共用严格历史预测边界：输入窗口、forecast origin 和目标窗口必须全部属于同一任务分区，跨分区起点直接返回 422 `earth_prediction_origin_out_of_range`；`origin_split` 表示完整窗口分区。无 task split 的旧三小时任务继续按 manifest 解释并保持兼容历史行为，新策略元数据损坏时拒绝。比较须使用相同 test 时间范围与窗口口径。
 - 单模型选择与多模型对比支持按标签筛选，筛选保留已有选择；对比的“全选当前结果”追加当前可见模型，并显示筛选外的已选数量。
-- 火星已训练模型的请求步长范围为 `1–30`，且不能超过该模型训练时的输出步长；火星多模型对比采用所选模型输出步长的最小值作为上限。地球单模型使用任务保存的 horizon，多模型要求相同 window/horizon 与测试窗口；默认输出 24 步 / 72 小时。
+- 火星已训练模型的请求步长范围为 `1–30`，且不能超过该模型训练时的输出步长；火星多模型对比采用所选模型输出步长的最小值作为上限。地球单模型使用任务保存的 horizon，多模型须兼容相同 window/horizon 与测试窗口；默认输出 24 步 / 72 小时。
+- 地球多模型的输出窗口为只读展示，比较直接消费已保存的完整测试集指标；选择至少两个可用模型即可提交。任务摘要的输出窗口缺失或不同不会再静默禁用按钮，服务端从 checkpoint 核验兼容性并返回具体错误。
 - 预测输入完整基础为 **6 通道**：臭氧、纬向风、经向风、温度、沙尘光学厚度和太阳下行辐射通量；具体通道组合由所选模型的训练配置决定。
 - 提供预测请求协调、用户会话缓存隔离和预测分析持久化缓存。
 - 图旁「导出科研图」支持 Mars/Earth 当前步三联图、Mars 当前步普通散点、多模型逐步指标与 Mars 单模型 PFI；Earth 抽样诊断图继续禁用科研导出。PDF/SVG 保留文字与曲线矢量质量，PNG 支持 300/600 DPI，可选 `.mat` + `.m` 重建包。多模型导出面板单独选择本图的 2–8 个模型；页面可继续对比更多模型，分组导出。Mars RMSE/MAE、误差分布横轴随单位同步换算；Earth 保持 DU。当前预测窗口、完整测试集指标和抽样 PFI 分别标注；Mars PFI 为最多 40 窗口的 ΔR²，Earth 诊断 PFI 为固定种子 1–8 窗口的 ΔRMSE（DU），详见[科研图导出](docs/research-figure-export.md)。
