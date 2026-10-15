@@ -535,7 +535,6 @@ export default function PredictSidebar({
   onOriginChange,
   originDisabled = false,
   originHint,
-  onReloadContext,
   contextLoading = false,
   contextError,
   deferContext = false,
@@ -685,13 +684,10 @@ export default function PredictSidebar({
           {disabledReason ? <p id="prediction-run-disabled-reason" className="predict-sidebar__disabled-reason" role="status">
             {disabledReason}
           </p> : null}
-          {onReloadContext ? <ActionButton secondary onClick={onReloadContext} disabled={loading || contextLoading}>
-            {isZh ? '刷新起点范围' : 'Reload origin range'}
-          </ActionButton> : null}
         </div>
 
         <PredictStatus loading={contextLoading} message={contextLoading ? (isZh ? '正在读取预测起点…' : 'Loading forecast origins…') : null}
-          error={contextError} onRetry={onReloadContext} retryLabel={isZh ? '重试' : 'Retry'} />
+          error={contextError} onRetry={handlePredict} retryLabel={isZh ? '重试' : 'Retry'} />
         <PredictStatus error={error} onRetry={handlePredict} retryLabel={isCompareMode
           ? (isZh ? '重试对比' : 'Retry comparison') : (isZh ? '重试预测' : 'Retry prediction')} />
       </Panel>

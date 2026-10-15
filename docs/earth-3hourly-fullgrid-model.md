@@ -5,6 +5,20 @@ the complete global map in one call. Existing v1 tile models remain supported.
 Download [the PyTorch template](earth-3hourly-fullgrid-model-template.py) and upload
 it as a new model; changing an existing uploaded source invalidates its hash.
 
+Optional `MODEL_SPEC.derived_inputs` works identically for this schema: `ls`
+provides per-window `[batch, window]` solar longitude and `topography` provides
+finite float32 `[batch,1,240,480]` ETOPO orography in metres on the input device.
+The fixed calls are `model(x)`, `model(x, ls)`, `model(x, topography)` and
+`model(x, ls, topography)`. Terrain does not add a meteorological channel or a
+time axis and is not normalized using meteorological statistics. The server
+protects the shared asset from in-place model operations. `season_algorithm`
+and terrain content/grid/processing identities are frozen independently when
+declared; old checkpoints gain no new fields. Semantics, exact declarations and refusal rules are in
+[the v1 contract document](earth-3hourly-uploaded-model.md#季节坐标-derived_inputs).
+The [terrain and season template](earth-3hourly-fullgrid-topography-model-template.py)
+actually consumes both tensors. The existing SimVP remains independent of terrain.
+See [asset construction and validation](earth-topography-asset.md).
+
 | Property | Full-Grid Contract |
 | --- | --- |
 | Schema | `aresvision_earth_3hourly_fullgrid_model_v2` |
@@ -20,7 +34,8 @@ it as a new model; changing an existing uploaded source invalidates its hash.
 The feed uses the same fields as v1, with the v2 schema and
 `spatial_tile_shape=[240,480]`. This retained field name describes the actual call
 size; v2 does not spatially subdivide inputs, outputs or diagnostic permutations.
-No coordinates, separate time embeddings or halo arguments are supplied.
+No coordinate arrays or halo arguments are supplied. Optional derived tensors
+are explicit arguments outside the meteorological channel list.
 
 The SimVP template has lighter defaults: spatial hidden dimension 8, temporal
 hidden dimension 16 and 2 temporal blocks. Original 32/64/3 parameters remain
@@ -34,7 +49,10 @@ that a model or GPU can hold 64 global windows. The server never
 silently reduces resolution, batch or precision when a task runs out of memory.
 
 Upload checks all 16 channel combinations on complete maps, using declared short
-windows 2->1 when available, otherwise the first declared values. Reports record
+windows 2->1 when available, otherwise the first declared values. A terrain
+declaration requires the configured verified asset for every probe; a missing or
+invalid asset fails only models that declare it, without a zero-field fallback.
+Reports record
 `validation_scope=declared_channels_probe_windows`; admission is not proof for
 every time configuration. Task creation reuses the report saved by upload or
 manual revalidation. It checks ownership, valid status, evidence for the concrete
@@ -103,6 +121,8 @@ Historical prediction uses one model call per origin. Diagnostics/PFI process on
 complete origin at a time, preserve whole-window channel permutation and DU
 metrics, and keep at most the recipient/source windows resident. The final global
 evaluation covers all selected leads/cells. V1 continues using spatial tiles.
+PFI retains the recipient's static terrain while permuting meteorological inputs;
+terrain is not automatically added to the channel permutation list.
 
 The local 8 GB RTX 4060 passed a synthetic float32 20->20, five-channel, batch-1
 forward/backward probe with 32/64/3 parameters. This short GPU-only probe is not an

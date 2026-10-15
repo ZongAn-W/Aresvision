@@ -17,7 +17,7 @@ TASK_SPLIT_BOUNDARY_VERSION = "earth_task_split_complete_window_v1"
 def build_earth_prediction_cache_key(*, planet, dataset_id, dataset_version,
                                      dataset_fingerprint, task_id, forecast_origin,
                                      target_timestamps, checkpoint_sha256="",
-                                     split_boundary_policy="legacy_compatibility"):
+                                     split_boundary_policy="legacy_compatibility", topography_identity=None):
     identity = {
         "schema": "earth_backtest_cache_v1", "planet": planet,
         "dataset_id": dataset_id, "dataset_version": dataset_version,
@@ -26,6 +26,8 @@ def build_earth_prediction_cache_key(*, planet, dataset_id, dataset_version,
         "checkpoint_sha256": checkpoint_sha256,
         "split_boundary_policy": split_boundary_policy,
     }
+    if topography_identity is not None:
+        identity["topography"] = topography_identity
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     return hashlib.sha256(encoded).hexdigest()
 

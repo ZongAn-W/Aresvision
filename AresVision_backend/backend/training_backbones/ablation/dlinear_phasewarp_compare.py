@@ -333,13 +333,18 @@ class GridPointDLinearO3(nn.Module):
         self.backbone = DLinearBackbone(seq_len=seq_len, pred_len=pred_len, feature_dim=feature_dim, linear_hidden_layers=linear_hidden_layers)
         self.target_head = nn.Linear(feature_dim, 1)
 
-    def forward(self, x, ls):
+    def forward(self, x, ls=None):
         (batch_size, seq_len, channels, lat_size, lon_size) = x.shape
         x_point = x.permute(0, 3, 4, 1, 2).reshape(batch_size * lat_size * lon_size, seq_len, channels)
-        ls_point = ls[:, None, None, :].expand(batch_size, lat_size, lon_size, seq_len).reshape(batch_size * lat_size * lon_size, seq_len)
         if self.phase_warp is not None:
+            # The phase-warp front end is the only consumer of the Ls sequence.
+            if ls is None:
+                raise ValueError("This DLinear configuration requires an Ls sequence input")
+            ls_point = ls[:, None, None, :].expand(batch_size, lat_size, lon_size, seq_len).reshape(batch_size * lat_size * lon_size, seq_len)
             features = self.phase_warp(x_point, ls_point)
         else:
+            # Without the front end the sequence is unused, so it is neither
+            # materialised nor required: a single-argument call is valid.
             features = x_point
         pred_features = self.backbone(features)
         pred_o3 = self.target_head(pred_features).squeeze(-1)

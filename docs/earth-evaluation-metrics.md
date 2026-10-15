@@ -88,7 +88,7 @@ v2 checkpoint 的每步元素数必须等于保存的分区窗口数 × 240 × 4
 - [EarthPredictPanel.jsx](../frontend/src/pages/PredictPage/EarthPredictPanel.jsx)
 - [EarthCompareWorkspace.jsx](../frontend/src/pages/PredictPage/EarthCompareWorkspace.jsx)
 - [PredictSidebar.jsx](../frontend/src/pages/PredictPage/PredictSidebar.jsx)
-- [earthPredictPanel.css](../frontend/src/pages/PredictPage/earthPredictPanel.css)
+- [singleModelWorkbench.css](../frontend/src/pages/PredictPage/singleModelWorkbench.css)
 - [CompareTrainingModelsPanel.jsx](../frontend/src/pages/PredictPage/CompareTrainingModels/CompareTrainingModelsPanel.jsx)
 - [compareTrainingModelsData.js](../frontend/src/pages/PredictPage/CompareTrainingModels/compareTrainingModelsData.js)
 - [zh.js](../frontend/src/i18n/zh.js)

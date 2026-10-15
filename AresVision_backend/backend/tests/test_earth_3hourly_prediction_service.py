@@ -30,6 +30,31 @@ DATASET_ID = "earth_merra2_3hourly_v1"
 ORIGIN = "2020-01-21T01:30:00Z"
 
 
+def test_release_identity_gate_does_not_require_default_window(synthetic_training_release):
+    """A short verified release can predict a model trained with a short window."""
+    from dataclasses import replace
+    from services.earth_prediction_service import _sync_release
+    from services.earth_training_artifact import EarthArtifactError, threehour_available_origin_range
+
+    parent = synthetic_training_release
+    metadata = copy.deepcopy(parent.metadata)
+    dates = parent.dates[:24]
+    metadata["time"].update(end="2020-01-03T22:30:00Z", count=24)
+    metadata["splits"] = {
+        "train": {"start": "2020-01-01", "end": "2020-01-03", "days": 3, "steps": 24},
+        "validation": {"start": None, "end": None, "days": 0, "steps": 0},
+        "test": {"start": None, "end": None, "days": 0, "steps": 0},
+    }
+    release = replace(parent, metadata=metadata, dates=dates)
+    registry = registry_for(release)
+    binding = registry.build_training_binding(DATASET_ID)
+    binding["dataset_snapshot"] = json.loads(binding["dataset_snapshot"])
+    assert _sync_release(registry, binding) is release
+    assert threehour_available_origin_range(release, window=7, horizon=1)["count"] == 17
+    with pytest.raises(EarthArtifactError, match="56-step"):
+        threehour_available_origin_range(release)
+
+
 @pytest.fixture(scope="module")
 def threehour_prediction_bundle(synthetic_training_release, tmp_path_factory):
     release = synthetic_training_release
@@ -166,9 +191,11 @@ def test_real_prediction_reads_bounded_windows_returns_du_fields_and_uses_saved_
         inputs[:, index] = (inputs[:, index] - bundle.normalization["mean"][index]) / bundle.normalization["scale"][index]
     bundle.model.eval()
     with torch.no_grad():
-        expected_prediction = earth_forward_for_model(
-            bundle.model, torch.from_numpy(inputs[None].astype("float32")),
-            model_source="official", horizon=24, height=2, width=3,
+        # Corner equality is a property of the grid-point model, not of the
+        # spatial contract: the shared contract fixes every call to 24x48, so a
+        # 2x3 patch is only meaningful when the model is called directly.
+        expected_prediction = bundle.model(
+            torch.from_numpy(inputs[None].astype("float32"))
         )[0, :, 0].numpy()
     expected_prediction = expected_prediction * bundle.normalization["scale"][0] + bundle.normalization["mean"][0]
     np.testing.assert_allclose(arrays["prediction"][:, :2, :3], expected_prediction, rtol=1e-5, atol=1e-4)

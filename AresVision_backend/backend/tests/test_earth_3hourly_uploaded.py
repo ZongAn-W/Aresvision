@@ -377,7 +377,7 @@ def test_double_factory_uses_float32_in_training_reload_and_backtest(synthetic_t
     assert result["origin_split"] == "test" and set(result["metrics"]["overall"]) == {"mse", "rmse", "mae", "r2", "mape", "smape"}
 
 
-@pytest.mark.parametrize("kind,batch_size", [("batch_mean", 8), ("batch_gt_eight", 12)])
+@pytest.mark.parametrize("kind,batch_size", [("batch_mean", 8), ("batch_gt_two", 12)])
 def test_old_batch_dependent_checkpoint_is_rejected_on_reload(uploaded_smoke, tmp_path, kind, batch_size):
     payload = copy.deepcopy(load_earth_training_artifact(uploaded_smoke.output).payload)
     source = batch_dependent_source(kind)
@@ -392,6 +392,40 @@ def test_old_batch_dependent_checkpoint_is_rejected_on_reload(uploaded_smoke, tm
         build_earth_model_from_checkpoint(checkpoint)
     with pytest.raises(EarthArtifactError, match="sample-independent"):
         verify_earth_model_reload_isolated(path)
+
+
+@pytest.mark.parametrize("training_batch_size", [12, 64])
+def test_bounded_reload_probe_does_not_prove_eval_independence_above_eight(
+    uploaded_smoke, tmp_path, monkeypatch, training_batch_size,
+):
+    """Large training batches never enlarge the checkpoint's runtime probe."""
+    from training_backbones import earth_3hourly_uploaded_contract as contract
+
+    payload = copy.deepcopy(load_earth_training_artifact(uploaded_smoke.output).payload)
+    source = batch_dependent_source("batch_gt_eight")
+    payload["run"]["hyperparameters"]["batch_size"] = training_batch_size
+    payload["model_ref"]["uploaded_model"].update(
+        source_text=source, content_hash=hashlib.sha256(source.encode()).hexdigest(),
+        source_path=str(tmp_path / "unavailable.source"),
+    )
+    path = tmp_path / "above-eight-boundary.pth"
+    torch.save(payload, path)
+    checkpoint = load_earth_training_artifact(path)
+    observed_batches = []
+    actual_forward = contract.forward
+
+    def record_forward(model, inputs, **kwargs):
+        observed_batches.append(inputs.shape[0])
+        return actual_forward(model, inputs, **kwargs)
+
+    monkeypatch.setattr(contract, "forward", record_forward)
+    model, _ = build_earth_model_from_checkpoint(checkpoint)
+    assert model is not None
+    assert checkpoint.run["hyperparameters"]["batch_size"] == training_batch_size
+    assert set(observed_batches) == {1, 2, 3}
+    # This model changes its behaviour only at B > 8. Passing the bounded
+    # B=2/3 probe preserves its known limitation; it is not proof for B=12/64.
+    verify_earth_model_reload_isolated(path)
 
 
 @pytest.mark.parametrize("mutation", ["daily_schema", "implementation", "source", "tile", "build", "unit", "fingerprint", "normalization"])

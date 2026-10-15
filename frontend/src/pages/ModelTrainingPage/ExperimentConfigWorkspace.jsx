@@ -156,6 +156,7 @@ export default function ExperimentConfigWorkspace({
     uploadAgain: copy.uploadedModelReplace,
     downloadGuide: copy.downloadModelGuide,
     downloadTemplate: copy.downloadModelTemplate,
+    downloadSharedGateTemplate: copy.downloadSharedGateTemplate,
     uploading: copy.uploadingModel,
     revalidate: copy.revalidateModel,
     replace: copy.uploadedModelReplace,
@@ -412,6 +413,7 @@ export default function ExperimentConfigWorkspace({
                   selectionDisabled={false}
                   guideDownloadUrl={resources.guideDownloadUrl}
                   templateDownloadUrl={resources.templateDownloadUrl}
+                  sharedGateTemplateDownloadUrl={resources.sharedGateTemplateDownloadUrl}
                   inlineError={resources.earthUploadedInlineError || ''}
                   statusLabel={resources.earthUploadedStatusLabel || ''}
                   statusTone={resources.earthUploadedStatusTone || 'ok'}
@@ -475,6 +477,7 @@ export default function ExperimentConfigWorkspace({
                 selectionDisabled={transferStructureLocked}
                 guideDownloadUrl={resources.guideDownloadUrl}
                 templateDownloadUrl={resources.templateDownloadUrl}
+                sharedGateTemplateDownloadUrl={resources.sharedGateTemplateDownloadUrl}
                 inlineError={validation.uploadedModelInlineError}
                 statusLabel={uploadedStatusLabel}
                 statusTone={uploadedValidationStatus === 'valid' ? 'ok' : 'warn'}

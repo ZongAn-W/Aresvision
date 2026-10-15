@@ -26,6 +26,12 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 ## 快速接手：先读这一节
 
+2026-10-13 地球三小时上传模型新增可选**季节坐标和静态地形**。`MODEL_SPEC.derived_inputs` 可严格声明 `ls`、`topography` 或两者组合，固定调用为 `model(x)`、`model(x, ls)`、`model(x, topography)`、`model(x, ls, topography)`；地形是来自 NOAA ETOPO 2022 v1 60″ Ice Surface 的离线 240×480 大气下边界资产，海洋/内陆水体在源网格置零，负高程陆地保留。地形按需加载，资产和网格身份冻结到任务/checkpoint，替换、缺失、变体或网格不符均拒绝。详见[Earth 静态地形资产](docs/earth-topography-asset.md)、[上传模型契约](docs/earth-3hourly-uploaded-model.md)和[全图 v2](docs/earth-3hourly-fullgrid-model.md)。季节坐标仍使用 `solar_longitude_meeus_low_precision_v1`；未声明模型和旧 checkpoint 保持原调用方式。已完成合成上传→短训练→严格重载→历史回测→诊断/PFI，以及真实 MERRA-2 三天、7→1、1 epoch 的 v1/v2 CPU 冒烟；这些验证不代表长期训练精度。
+
+2026-10-13 地球单模型预测页面对齐火星外壳：删除 Earth 独有的标题、说明段、`TO3 · DU` 胶囊、`模型与数据集上下文` 折叠块、结果上方的起点说明行与参考场说明段，主按钮改回共用的 `🚀 开始预测`，并移除 Mars 没有的「刷新起点范围」次级按钮（上下文读取失败时由既有 `PredictStatus` 的「重试」触发同一次运行，内部按需重新加载上下文）。Earth 保留「逐步与累计窗口指标」折叠表与手动诊断面板，全屏仍用地球地图。同一轮让 Earth 完整测试集卡片显示与火星同格式的分区行：`earthPredictModel.js` 新增 `earthSplitRanges` / `buildEarthSplitLabelSource`，把 checkpoint 的 `split_policy`/`split_ranges`（或 `task_split.ranges`）整理成共用的 `split_meta` 形状后交给 `getSplitLabel`；读不到边界时该行不显示，不伪造窗口数。`earthPredictPanel.css` 与 `predict.earth*` 中 42 个只服务这些被删区块的文案键一并移除（zh/en 同步），Earth 错误文案键保留。前端 `node --test` **846 passed、2 failed**，两项失败在未改动的 `f71071e` 树上同样失败（训练页既有断言脱节），`npm run build` 通过；合成浏览器 18 项检查通过、0 运行时错误。
+
+2026-10-13 地球「训练后诊断」面板收口（触发方式按既有约定**保持手动**）：全部文案迁到 `predict.earthDiagnostics.*`（zh/en 同名键，面板内不再写中英文内联字符串），标题层级改用共用的 `prediction-chart-title` / `prediction-chart-subtitle`，面板外壳改用共用的 `prediction-panel`，并删除 `.earth-diagnostics-head`、`.earth-diagnostic-metrics`、`.earth-diagnostic-chart-grid`、`.earth-diagnostic-pfi-plot` 等未再使用的样式。`PredictMetrics` 新增 `flattened` 选项，使诊断卡片内嵌的指标块不再被二次套框；PFI 的标题/评价范围/帮助文本只由共用卡片输出一次，单通道不可计算原因显示在明细表行内。进入页面仍只发一次 `GET /api/earth/predict/diagnostics/context` 核验可用性，不发计算请求。独立合成浏览器驱动 **20 项检查通过、0 运行时错误**（含中英双语切换不触发重算）。详见[地球训练后诊断](docs/earth-post-training-diagnostics.md)。
+
 2026-10-12 修复 Earth 验证损失曲线缺失：进度日志中的 `(area-weighted normalized MSE)` 标签导致旧正则漏读 `Val Loss`，任务虽已执行验证，`loss_history.val` 却为 null。解析器兼容带标签/无标签与科学计数法；任务 97 已经 SQLite backup API 备份后从原日志补回三轮真实验证值，仅更新 loss_history，权重、指标、原日志和其他任务未变。证据与追溯见[恢复记录](docs/earth-metrics-task-recovery.md#验证损失曲线补回)。
 
 2026-10-12 修复三小时 Earth 指标契约在任务与 runner 间的版本断链：新任务同时冻结 v3 与面积加权 aggregation，排队恢复、训练 loss、完整验证/测试统计、保存、完成验收及后续读取复用同一契约；旧 v2 排队任务继续真实等权执行，未知版本或统计口径错配在执行前拒绝。旧 v2 产物严格读取兼容，Mars 训练不变。已通过合成 v2/v3 训练与完成链路回归；新增[显式失败任务恢复工具](docs/earth-metrics-task-recovery.md)在完整只读验证后使用 SQLite backup API 备份再迁移，保留原时间、原记录、失败日志及恢复审计。任务 97 经真实发布完整校验、train-only 归一化复算和隔离重载后已恢复 completed/100%，原权重与其余 45 条任务未变；测试 RMSE 14.334705 DU、MAE 8.664098 DU 来自保存的 checkpoint，详细备份/审计与验证范围见专题，未重新训练或重新推理真实测试集。
@@ -42,7 +48,7 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 2026-10-13 Earth 单模型页面改为按需启动：进入页面只读取已完成训练任务目录，不再自动加载预测上下文、重载 checkpoint 或检查诊断可用性；点击“开始预测”后才执行上下文/数据身份校验、历史预测和后续诊断入口。详见[共用单模型预测工作台](docs/shared-single-model-prediction.md)与[地球训练与历史预测](docs/earth-training.md)。
 
-2026-10-10 地球与火星单模型预测使用同一套[单模型预测工作台](docs/shared-single-model-prediction.md)：模型侧栏、参考/预测/残差三联图与单图、时间步、指标、诊断图表外壳及全屏操作共用组件；无模型且无结果时显示紧凑准备面板，可进入模型选择或训练，已有结果但指标尚未取得时显示 `--`，实际 Earth 响应缺项仍显示“未提供”。行星适配层保留各自 API、时间轴、坐标、单位、评价范围和导出能力。Earth 每次运行完整任务 horizon，展示步只改变查看内容，保持 UTC/DU、独立手动抽样诊断、ΔRMSE PFI 和地球地图全屏；Mars 保持 Ls、训练步长上限、ΔR² PFI 与球面。验证包含前端测试/生产构建、合成浏览器桌面与 390px 交互，以及后端契约回归；既有 Mars 坐标失败单独列出，不代表真实训练精度或全分辨率浏览器性能验收。
+2026-10-10 地球与火星单模型预测使用同一套[单模型预测工作台](docs/shared-single-model-prediction.md)：模型侧栏、参考/预测/残差三联图与单图、时间步、指标、诊断图表外壳及全屏操作共用组件；无模型且无结果时显示紧凑准备面板，可进入模型选择或训练，已有结果但指标尚未取得时显示 `--`，实际 Earth 响应缺项仍显示“未提供”。行星适配层保留各自 API、时间轴、坐标、单位、评价范围和导出能力；Earth 单模型页面随后进一步去掉了行星专属外壳，只保留共用区块、逐步指标折叠表与手动诊断（见本节 2026-10-13 记录）。Earth 每次运行完整任务 horizon，展示步只改变查看内容，保持 UTC/DU、独立手动抽样诊断、ΔRMSE PFI 和地球地图全屏；Mars 保持 Ls、训练步长上限、ΔR² PFI 与球面。验证包含前端测试/生产构建、合成浏览器桌面与 390px 交互，以及后端契约回归；既有 Mars 坐标失败单独列出，不代表真实训练精度或全分辨率浏览器性能验收。
 
 Earth 三小时 v1/v2 上传模型创建任务时复用上传或手动重新校验保存的兼容报告，核对归属、valid 状态、具体 dataset/schema 的验证证据、源码 SHA-256、参数 schema 和 batch 范围后冻结配置并排队，不再按实际 window/horizon、通道、batch 和自定义参数重复执行隔离 dry-run。上传及手动重新校验的 dry-run、实际训练的输出/梯度检查和完成前 checkpoint 严格重载继续保留，见[上传模型契约](docs/earth-3hourly-uploaded-model.md)。
 
@@ -56,11 +62,11 @@ Earth 官方 DLinear 与独立契约上传模型统一支持 MSE、RMSE、MAE、
 
 2026-10-08 地球训练新增[任务级自定义数据划分](docs/earth-task-splits.md)：官方 DLinear 与独立契约上传模型共用完整原始 UTC 三小时时间轴的连续划分，默认 70/20/10，三项均大于 0。先确定原始分区，再在分区内部生成完整窗口；各区至少包含输入窗口 + 输出窗口个时间步。服务器持久化请求比例、策略版本和实际边界，normalization 仅拟合当前任务 train，缓存检查任务划分。新 checkpoint 严格核对划分与指标；旧三小时任务继续使用发布 manifest，不自动迁移，日频仍停用。合成数据用于训练链路回归，未执行完整真实两年训练。
 
-文档最近核对日期：**2026-10-12**（本轮复核三小时 manifest 的 `fingerprint_rule`/`source_mtimes` 身份语义、既有发布包指纹冻结、构建器/服务端/独立验证器三份摘要实现的一致性，以及上轮 Earth 源文件 SHA-256 完整性说明；验证范围是合成源文件的预处理/构建、registry/reuse、identity 不变量、缓存和训练数据回归，另对已注册发布 manifest 做只读指纹复算，未重建真实数据包、未改动 `E:\AAOzone` 下任何文件，也未执行真实训练）。地球唯一活动数据集 `earth_merra2_3hourly_v1` 是 3 小时 UTC、240×480 全球五变量数据，官方 DLinear 与符合独立 v1/v2 契约的上传模型均支持按任务配置输入/输出窗口（默认 56→24）训练和历史回测。上传兼容性按具体 dataset_id 校验，未知或 dry-run 失败不能训练；服务器固定数据身份和源码版本。官方 DLinear 和 v1 使用 24×48 空间块，v2 一次调用使用完整 240×480；均为 float32 BTCHW，上传模型不使用 Mars 字段或假设。训练只用 train split 拟合 normalization，产物发布前 strict reload。完整两年数据包已独立验证；已有合成训练/回测记录不代表真实训练结果或预测精度验收。入口见[三小时专题](docs/earth-merra2-3hourly.md)、[独立 v1 上传契约与模板](docs/earth-3hourly-uploaded-model.md)及[全图 v2](docs/earth-3hourly-fullgrid-model.md)。
+文档最近核对日期：**2026-10-13**（本轮核实 Earth ETOPO 来源内容身份、240×480 目标网格、地形上传/训练/检查点/预测/诊断接入；验证真实地形资产、真实 MERRA-2 三天 v1/v2 冒烟及相关后端回归。未执行完整两年训练或精度验收）。地球唯一活动数据集 `earth_merra2_3hourly_v1` 是 3 小时 UTC、240×480 全球五变量数据，官方 DLinear 与符合独立 v1/v2 契约的上传模型均支持按任务配置输入/输出窗口（默认 56→24）训练和历史回测。v1 使用 24×48 空间块，v2 一次调用使用完整 240×480；未声明地形的模型保持原调用，明确声明 `topography` 的模型按真实样本位置接收静态 ETOPO 张量。真实数据冒烟是三天、7→1、单 epoch 的链路验证，不代表两年训练收敛或预测精度。入口见[三小时专题](docs/earth-merra2-3hourly.md)、[上传模型契约](docs/earth-3hourly-uploaded-model.md)、[全图 v2](docs/earth-3hourly-fullgrid-model.md)和[Earth 地形资产](docs/earth-topography-asset.md)。
 
 Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定，固定支持 `earth_merra2_3hourly_v1`，见[生产默认值模板](AresVision_backend/backend/.env.production.example)。`ARESVISION_EARTH_MERRA2_3HOURLY_DIR` 应指向已验证的完整发布目录；三小时包缺失会显示不可用，不回退到日频。旧配置若将 `ARESVISION_DEFAULT_EARTH_DATASET_ID` 设为日频，应改为三小时或移除该项；日频默认值会在启动时明确拒绝。
 
-本次 2026-10-07 核对复查了源码、相关测试和全量发布验证报告；真实包没有用于训练或预测验收。完整发布与独立数据验证记录见专题文档；合成训练/回测 smoke 仍仅作为模型链路记录，不等同于真实两年训练结果。
+本次 2026-10-07 核对复查了源码、相关测试和全量发布验证报告；该轮真实包没有用于训练或预测验收。此历史记录不表示后续地形冒烟结果；当前有限范围的真实 MERRA-2/ETOPO 冒烟见本节 2026-10-13 地形记录及 [Earth 地形专题](docs/earth-topography-asset.md)。
 
 2026-10-06 的既有接手记录核对了**地球 MERRA-2 v2 的官方 DLinear 网页训练与历史日期预测**：训练页新增 `earth_merra2_daily_v2` 数据集选项（固定过去 7 天 → 未来 3 天、TO3 必选加四个可选辅助输入、只用训练期拟合归一化、完成前 CPU 严格重载校验单文件 checkpoint、保存 DU 指标），预测页新增独立的「地球历史预测」模式（按历史起点回测随后 3 天的预测/参考/残差场与指标）；Earth 使用独立的数据准备、训练与推理路径，并在火星推理、比较、PFI、`action=test` 与迁移来源路径上明确 409，不回退到火星。Earth 起点范围为 `2020-01-07` 至 `2021-12-28`，共 722 个起点；响应返回 `origin_split` 标记起点属于 train、validation 或 test。Earth 只接受发布 manifest 固定的 train / validation / test 日期块，前端比例为只读兼容值，不发送自定义比例。Mars 新训练按完整合并时间轴生成可跨 MY 的窗口，严格按配置比例分配保留窗口并保存 split 元数据；归一化只使用训练分区，Mars 缺测、NaN、Inf 会在数据准备阶段明确拒绝。相关实现见[实验中心](docs/experiment-center.md)和[地球训练与历史预测](docs/earth-training.md)。
 
@@ -147,7 +153,7 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 - 内置 PredRNNv2、PredRNN++、ConvLSTM、SimVP、DLinear、PatchTST、TimeMixer、Earthformer 等模型及实验变体，完整注册表见 [model_zoo.py](AresVision_backend/backend/training_backbones/model_zoo.py)。
 - 按模型配置输入窗口、输出步长、气象通道和超参数，查看训练进度、Loss 曲线、日志与测试指标。
 - 偏好设置可自定义新建火星和 Earth 实验的训练轮次、批大小、学习率、窗口 / 步长、数据切分、随机种子、早停和迁移冻结 / 微调默认值；设置保存在当前浏览器，新实验应用设置值，复制配置仍以历史任务为准。Earth 使用任务级原始 UTC 时间轴划分，默认 70/20/10 且三项均须大于 0；窗口 / 步长默认 56→24，可在 1–240 个三小时时间步内自定义。Mars 默认验证比例为 0 时，Earth 使用 70/20/10。
-- 三小时官方 DLinear 通过 `POST /api/training/start` 提交 `dataset_id=earth_merra2_3hourly_v1`；输入 TO3 加可选辅助通道，输出 TO3。训练不复制全部窗口，官方与 v1 的 `batch_size` 按 24×48 空间块计，全图 v2 按完整全球时间窗口计且允许 1–64，默认 1；checkpoint 固定 UTC 三小时时间规则、完整网格、通道、归一化和数据指纹，并保存总体、各 lead 与累计提前步 DU 指标。上传模型需通过对应 v1/v2 契约校验，不回退日频；详见[三小时训练契约](docs/earth-merra2-3hourly.md#官方-dlinear-后端训练)。
+- 三小时官方 DLinear 通过 `POST /api/training/start` 提交 `dataset_id=earth_merra2_3hourly_v1`；输入 TO3 加可选辅助通道，输出 TO3。训练不复制全部窗口，官方与 v1 的 `batch_size` 按 24×48 空间块计，全图 v2 按完整全球时间窗口计且允许 1–64，默认 1；checkpoint 固定 UTC 三小时时间规则、完整网格、通道、归一化和数据指纹，并保存总体、各 lead 与累计提前步 DU 指标。上传模型需通过对应 v1/v2 契约校验，不回退日频；上传模型可声明可选季节坐标 `MODEL_SPEC.derived_inputs.ls`，声明后按 `model(x, ls)` 调用并在 checkpoint 冻结 `season_algorithm`，未声明的模型调用与前向契约不变；详见[三小时训练契约](docs/earth-merra2-3hourly.md#官方-dlinear-后端训练)。
 - 支持迁移学习、权重加载、冻结策略和训练结果重命名；训练失败时提供通知，包括 CUDA 显存不足提示。
 - 支持上传单文件 PyTorch 模型，由平台统一负责数据加载、训练循环、评估和权重保存；训练页把上传模型作为默认模型来源与一等主入口（上传、模板 / 说明下载、区内校验错误、重新校验与删除都在同一区域），官方模型作为兼容入口保留。「管理模型」中可下载本人上传的原始 `.py` 源码，并重命名单个自定义模型。
 - 支持账号私有的多标签分组：启动训练时选择标签，历史记录中搜索、按标签交集筛选，单条或批量添加、移除标签；标签可新建、重命名与删除。操作说明与接口见 [训练模型标签](docs/training-model-tags.md)。
@@ -261,7 +267,8 @@ AresVision/
 | 三维地球观测台与年度分析 | [EarthWorkbenchScene.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthWorkbenchScene.jsx)、[EarthResearchViews.jsx](frontend/src/pages/DataOverviewPage/EarthOverview/EarthResearchViews.jsx)、[earthResearchModel.js](frontend/src/pages/DataOverviewPage/EarthOverview/earthResearchModel.js)、[sphericalRegionalGrid.js](frontend/src/components/sphericalRegionalGrid.js) | [earth_analysis.py](AresVision_backend/backend/routers/earth_analysis.py)、[earth_research_service.py](AresVision_backend/backend/services/earth_research_service.py)、[earth_research.py](AresVision_backend/backend/schemas/earth_research.py) |
 | 主题组合看板与单图放大 | [AnalysisBoard.jsx](frontend/src/pages/DataOverviewPage/workbench/AnalysisBoard.jsx)、[earthAnalysisBoardModel.js](frontend/src/pages/DataOverviewPage/EarthOverview/earthAnalysisBoardModel.js)、[MarsAnalysisBoard.jsx](frontend/src/pages/DataOverviewPage/OverviewCharts/MarsAnalysisBoard.jsx)、[marsAnalysisBoardModel.js](frontend/src/pages/DataOverviewPage/OverviewCharts/marsAnalysisBoardModel.js) | 复用 Earth 年度/空间响应与 Mars 热力图响应，不新增接口 |
 | 数据集注册与查询 | — | [datasets.py](AresVision_backend/backend/routers/datasets.py)、[dataset_registry.py](AresVision_backend/backend/services/dataset_registry.py)、[dataset_identity.py](AresVision_backend/backend/services/dataset_identity.py)、[earth_dataset_metadata.py](AresVision_backend/backend/services/earth_dataset_metadata.py) |
-| Earth 三小时构建、验证、训练/回测与上传模型 | 官方及独立 v1 上传契约已接入 | [earth_3hourly_uploaded_contract.py](AresVision_backend/backend/training_backbones/earth_3hourly_uploaded_contract.py)、[earth_model_source.py](AresVision_backend/backend/services/earth_model_source.py)、[earth_daily.py](AresVision_backend/backend/models/training_scripts/earth_daily.py)、[earth_training_artifact.py](AresVision_backend/backend/services/earth_training_artifact.py)、[earth_prediction_service.py](AresVision_backend/backend/services/earth_prediction_service.py)、[契约与模板](docs/earth-3hourly-uploaded-model.md)、[构建/验证/注册入口](docs/earth-merra2-3hourly.md) |
+| Earth 三小时构建、验证、训练/回测与上传模型 | 官方及独立 v1 上传契约已接入 | [earth_3hourly_uploaded_contract.py](AresVision_backend/backend/training_backbones/earth_3hourly_uploaded_contract.py)（含可选 `derived_inputs` 季节坐标声明）、[earth_season.py](AresVision_backend/backend/services/earth_season.py)（太阳视黄经推导与算法标识）、[earth_model_source.py](AresVision_backend/backend/services/earth_model_source.py)、[earth_daily.py](AresVision_backend/backend/models/training_scripts/earth_daily.py)、[earth_training_artifact.py](AresVision_backend/backend/services/earth_training_artifact.py)、[earth_prediction_service.py](AresVision_backend/backend/services/earth_prediction_service.py)、[契约与模板](docs/earth-3hourly-uploaded-model.md)、[构建/验证/注册入口](docs/earth-merra2-3hourly.md) |
+| Earth 静态地形资产 | ETOPO 离线构建、身份核验、运行时加载与 v1/v2 张量切片 | [earth_topography.py](AresVision_backend/backend/services/earth_topography.py)、[build_earth_topography_asset.py](AresVision_backend/backend/scripts/build_earth_topography_asset.py)、[真实数据冒烟](AresVision_backend/backend/scripts/smoke_earth_topography.py)、[资产专题](docs/earth-topography-asset.md) |
 | 上传数据、来源切换、治理 | [ExplorePage.jsx](frontend/src/pages/ExplorePage.jsx)、[rawDatasetUsage.js](frontend/src/pages/ExplorePage/rawDatasetUsage.js) | [upload.py](AresVision_backend/backend/routers/upload.py)、[user_overview_source_service.py](AresVision_backend/backend/services/user_overview_source_service.py)、[data_governance_service.py](AresVision_backend/backend/services/data_governance_service.py) |
 | 模型训练与任务管理 | [ModelTrainingPage.jsx](frontend/src/pages/ModelTrainingPage.jsx)、[trainingDefaults.js](frontend/src/utils/trainingDefaults.js)、[TrainingContext.jsx](frontend/src/contexts/TrainingContext.jsx) | [training.py](AresVision_backend/backend/routers/training.py)、[training_service.py](AresVision_backend/backend/services/training_service.py) |
 | 地球训练与历史预测 | [earthTrainingConfig.js](frontend/src/pages/ModelTrainingPage/earthTrainingConfig.js)（模型来源、草稿快照、Earth 兼容性读取）、[earthPredictModel.js](frontend/src/pages/PredictPage/earthPredictModel.js)、[EarthPredictPanel.jsx](frontend/src/pages/PredictPage/EarthPredictPanel.jsx) | [earth_training_contract.py](AresVision_backend/backend/services/earth_training_contract.py)、[earth_task_split.py](AresVision_backend/backend/services/earth_task_split.py)（任务级原始 UTC 划分）、[earth_training_artifact.py](AresVision_backend/backend/services/earth_training_artifact.py)、[earth_model_source.py](AresVision_backend/backend/services/earth_model_source.py)（官方/上传模型构建与转发）、[uploaded_model_source.py](AresVision_backend/backend/services/uploaded_model_source.py)（固定引用、哈希与源码解析）、[earth_daily.py](AresVision_backend/backend/models/training_scripts/earth_daily.py)、[earth_prediction_service.py](AresVision_backend/backend/services/earth_prediction_service.py)、[earth_predict.py](AresVision_backend/backend/routers/earth_predict.py)、[earth_daily_model.py](AresVision_backend/backend/training_backbones/earth_daily_model.py) |
@@ -376,7 +383,7 @@ Mars 输出的 `lat` / `lon` 使用数据 loader 提供的真实网格坐标，�
 
 Mars 前端内存缓存与后端持久化缓存是两层机制。前者通过用户会话作用域隔离，退出登录或 API 返回 401 时清理；后者结合任务、分析类型、请求参数及产物指纹定位结果。产物指纹包含模型文件、超参数与数据文件信息，缓存实现支持 `prediction`、`metrics`、`error_distribution`、`pfi`。
 
-NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，而推理在 `asyncio.to_thread` 线程池中执行，并发读取同一批 OpenMARS/MCD/MOLA 文件会间歇性抛出 `NetCDF: Can't open HDF5 attribute`，表现为预测接口 500。官方模型（`services/inference_service.py`）、上传模型数据加载（`training_backbones/user_model_runner.py`）与地形资源（`training_backbones/mola_topography.py`）三处共用在 [netcdf_read_lock.py](AresVision_backend/backend/services/netcdf_read_lock.py) 中定义的可重入锁；锁挂在该模块属性上，因为 `config.py` 会改写 `sys.path`，同一模块可能被加载两次，只有进程级单例才能真正互斥。新增 NetCDF 读取点必须写成 `with netcdf_read_lock(), netCDF4.Dataset(...) as dataset:`。
+NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，而推理在 `asyncio.to_thread` 线程池中执行，并发读取同一批 OpenMARS/MCD/MOLA/ETOPO 文件会间歇性抛出 `NetCDF: Can't open HDF5 attribute`，表现为预测接口 500。官方数据服务（`services/mars_data_service.py`）、上传模型数据加载（`training_backbones/user_model_runner.py`）、Mars MOLA（`training_backbones/mola_topography.py`）和 Earth ETOPO（`services/earth_topography.py`、离线构建器）共用在 [netcdf_read_lock.py](AresVision_backend/backend/services/netcdf_read_lock.py) 中定义的可重入锁；锁挂在该模块属性上，因为 `config.py` 会改写 `sys.path`，同一模块可能被加载两次，只有进程级单例才能真正互斥。新增 NetCDF 读取点必须写成 `with netcdf_read_lock(), netCDF4.Dataset(...) as dataset:`。
 
 预测路由的兜底分支会通过 `logger.exception` 记录完整堆栈，接口只向客户端返回简要 `detail`；排查 500 时以服务端日志为准，不要只依据响应体。
 
@@ -419,7 +426,7 @@ NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，
 - **共用预测布局保留行星契约。** Earth 与 Mars 共用单模型组件，分别使用 Earth API / UTC / DU / 地球地图和 Mars API / Ls / 当前步长限制 / 球面。共用图表由配置区分当前预测窗口、完整 test 与抽样诊断，Earth PFI 为 ΔRMSE（DU）、Mars PFI 为 ΔR²，均保留负值。Earth 诊断仍需独立手动触发，诊断科研导出未开放；合成浏览器交互验证未覆盖真实模型精度和完整 240×480 长 horizon 的浏览器性能，见[专题](docs/shared-single-model-prediction.md)。
 - **Earth 训练后诊断明确抽样范围。** 模型测试与预测页共用[诊断服务](docs/earth-post-training-diagnostics.md)，完整 test 指标复用有效 checkpoint；散点、残差和 PFI 默认取 4 个 test 窗口，最多 8 个。所有值为反归一化 DU，PFI 为 ΔRMSE、固定种子、整窗口通道置换并保留负值。缓存 8 条 / 16 MiB、进程内共享，两入口同条件复用；新任务读取固定 task split，旧三小时读取 manifest。新诊断图暂无科研导出，真实模型精度未验收。
 - **科研导出只重画已有结果。** 当前步场与散点不等于完整测试集评价；逐步曲线使用各模型完整测试集，Mars 导出 PFI 使用最多 40 个抽样窗口且历史缓存可能缺少抽样元数据；Earth 页面 PFI 使用自身 1–8 个固定种子窗口。多模型曲线每图选择 2–8 个模型；超过 8 个时等待明确选择，预览和下载使用同一组模型，不自动截断。导出拒绝过期/缺失/条件不匹配的快照；首版单 worker，最多 8 模型/100 万网格格点/25 万散点/2400 万 PNG 像素。MATLAB 脚本提供可编辑重建入口，尚未执行验证；不是 `.fig`，不保证跨字体/版本像素一致。
-- **Earth 仅使用三小时数据集。** 活动发布为 UTC、240×480，默认 56→24；训练页读取设置中的 Earth 默认值，并支持配置 1–240 个三小时时间步的输入/输出窗口，checkpoint、预测和比较按任务保存的窗口运行，支持官方 DLinear、独立 v1 分块上传模型和 v2 全图上传模型；日频身份仅用于识别旧记录，所有运行入口均拒绝，不自动改写旧 checkpoint。训练/回测数据由 registry 提供，上传模型不能指定数据路径或身份，也不能使用日频/Mars checkpoint。真实包验收范围是数据与只读读取，模型训练/回测已有合成 smoke；无参考真值未来外推和 Earth/Mars 混合比较未开放，全分辨率预测 JSON 有传输和内存成本。细节见[停用约定](docs/earth-dataset-retirement.md)及[三小时专题](docs/earth-merra2-3hourly.md)。
+- **Earth 仅使用三小时数据集。** 活动发布为 UTC、240×480，默认 56→24；训练页读取设置中的 Earth 默认值，并支持配置 1–240 个三小时时间步的输入/输出窗口，checkpoint、预测和比较按任务保存的窗口运行，支持官方 DLinear、独立 v1 分块上传模型和 v2 全图上传模型；可选 ETOPO 静态地形仅由上传模型显式声明，身份冻结并在重载时校验。日频身份仅用于识别旧记录，所有运行入口均拒绝，不自动改写旧 checkpoint。训练/回测数据由 registry 提供，上传模型不能指定数据路径或身份，也不能使用日频/Mars checkpoint。已验证三天真实数据地形模型链路，完整两年训练和精度未验收；无参考真值未来外推和 Earth/Mars 混合比较未开放，全分辨率预测 JSON 有传输和内存成本。细节见[停用约定](docs/earth-dataset-retirement.md)、[三小时专题](docs/earth-merra2-3hourly.md)及[地形专题](docs/earth-topography-asset.md)。
 - **自定义模型管理按账号私有。** 下载与重命名只允许上传者本人操作；下载内容为上传的原始 `.py` 源码，训练权重通过训练任务的产物入口获取。改名更新所选模型的显示名称（去除首尾空白，1–120 个字符），保留包 ID、版本、源码、内容指纹及历史训练任务固定的模型名称；重新校验保留新名称。
 - **预测只走已训练模型。** [predictModelModes.js](frontend/src/pages/PredictPage/predictModelModes.js) 支持地球/火星各自的单模型与多模型模式；`/api/predict/run`、`/metrics`、`/error-distribution`、`/permutation-importance` 缺少 `training_task_id` 时返回 400。原先「不训练直接用官方预训练基线」的默认 PredRNNv2 链路及其 `/predict/ablation`、`/predict/model-info`、`/predict/prewarm`、`/predict/performance`、`/predict/performance-compare` 端点已下线，`models/predrnnv2/` 权重与本地产物 `data/perf_cache/` 不再需要。
 - **个人上传不是训练入口。** 当前训练请求固定使用服务器管理的数据源；预测的数据源校验也拒绝 `personal`。总览可使用上传来源，不代表同一来源可直接用于训练或预测。
@@ -571,6 +578,7 @@ node scripts\serve-prod.mjs
 | `ARESVISION_EARTH_TRAINING_CACHE_DIR` | 三小时验证证明、train-only 统计量和 normalized memmap 的共享目录，默认工作区父级 `earth_training_cache/`；按数据/通道/统计量/布局版本复用，五通道完整发布约 12.55 GiB；不覆盖原包 |
 | `TRAINING_PYTHON_PATH` | 训练子进程使用的 Python，默认使用后端当前解释器 |
 | `ARESVISION_MOLA_TOPOGRAPHY_PATH` | MOLA 地形 NetCDF 路径，默认使用平台地形资源 |
+| `ARESVISION_EARTH_TOPOGRAPHY_PATH` | Earth ETOPO 大气下边界资产路径；仅声明 `derived_inputs.topography` 的上传模型需要，运行时不下载原始 DEM |
 | `ARESVISION_MAX_UPLOAD_SIZE_MB` | 数据上传大小上限，默认 512 MB |
 | `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` | 上传与手动重新校验的模型 dry-run 隔离进程时间上限，默认 120 秒，须为正整数；超时终止子进程并显示“校验超时，请重试”，兼容性为未知且禁止训练；Earth 创建任务不再执行重复 dry-run |
 | `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` | 显式 `earth_probe` 调用中全图 Earth v2 配置 dry-run 的隔离进程预算，默认 300 秒、正整数，取其与通用预算的较大值；任务创建不使用此预算，短窗口上传检查及 v1/Mars 保持通用预算，显式验证器超时仍优先 |
@@ -603,6 +611,7 @@ Earth 三小时有独立的 [v1 上传说明](docs/earth-3hourly-uploaded-model.
 - [模型模板](docs/uploaded-model-template.py)
 - [地球训练与历史预测](docs/earth-training.md)
 - [MOLA 地形资源来源与构建](docs/mola-topography-asset.md)
+- [Earth ETOPO 静态地形资源来源与构建](docs/earth-topography-asset.md)
 
 ## 测试与构建
 
@@ -632,7 +641,7 @@ python -m pytest tests
 
 训练执行准备与恢复回归为 `tests/test_training_queue_recovery.py`：使用临时 SQLite、真实任务/权重/上传模型查询和子进程替身，覆盖官方/上传 Mars 的两种迁移来源、新建队列与实例重建、依赖缺失/失效/权限撤销、FIFO、队列取消及失败后继续。Earth 的启动参数测试改为通过同一准备入口，冻结划分/源码和产物门禁仍由三小时与任务划分测试验证。使用工作区规定的 conda 解释器逐文件运行，并指定仓库外新的英文 `--basetemp`；这些回归不代表真实模型训练或精度验收。
 
-NetCDF 并发读锁由 `tests/test_netcdf_read_lock_contract.py` 覆盖：断言官方模型、上传模型与 MOLA 地形三处共用同一把进程级锁、两个加载器并发执行时 `Dataset` 打开区间不重叠、锁被占用时上传模型读取会等待，并静态检查每个 `Dataset` 构造点都包在 `netcdf_read_lock()` 内。`tests/test_inference_netcdf_thread_safety.py` 覆盖官方模型数据准备路径的串行化。
+NetCDF 并发读锁由 `tests/test_netcdf_read_lock_contract.py` 覆盖：断言官方数据服务、上传模型与 MOLA 地形三处共用同一把进程级锁，官方/上传交叉并发时 `Dataset` 打开区间不重叠，并静态检查每个 `Dataset` 构造点都包在 `netcdf_read_lock()` 内；Earth ETOPO 的新读取点由地形测试覆盖。`tests/test_inference_netcdf_thread_safety.py` 覆盖官方模型数据准备路径的串行化。
 
 预测体积缓存由 `tests/test_prediction_volume_cache.py` 覆盖：断言 `return_scaled_volume` 切窗与逐样本展开路径逐元素一致（bitwise）、测试集分区滑窗与展开切片一致、第二次调用命中缓存返回同一对象、文件变化后缓存签名失效。`tests/test_uploaded_model_ls_inference.py` 的夹具已改为按 `ScaledVolume` 提供数据，继续断言各上传推理路径收到的 Ls 与历史窗口一致。
 
@@ -650,7 +659,7 @@ Mars 坐标回归见 `tests/test_mars_prediction_coordinates.py`：以北高南�
 
 三小时历史回测测试为 `tests/test_earth_3hourly_prediction_time.py`、`tests/test_earth_3hourly_prediction_service.py`、`tests/test_earth_3hourly_prediction_routes.py`，覆盖 UTC 时间窗、完整 240×480 场及发布参考值、物理指标、缓存身份、稳定错误码、认证与 Earth/Mars 隔离。六项公式/流式/新旧契约与服务重启恢复由 `tests/test_earth_metrics_v2.py` 验证，官方/上传 71→9 步合成训练和旧产物预测/比较由 `tests/test_earth_metrics_pipeline.py` 验证；前端为 `frontend/src/pages/ModelTrainingPage/earthMetrics.test.js`。使用固定解释器及仓库外新的英文临时目录，详见[指标专题](docs/earth-evaluation-metrics.md)和[三小时回测验证](docs/earth-merra2-3hourly.md#三小时回测验证)。
 
-三小时上传模型契约、隔离 dry-run、任务/源码冻结、合成训练与严格 checkpoint 重载、历史回测及兼容回归见 `tests/test_earth_3hourly_uploaded.py`；完整包只读集成见 `tests/test_earth_3hourly_uploaded_readonly.py`，须显式设置 `ARESVISION_TEST_EARTH_3HOURLY_PACKAGE`。可复现命令与本轮实际验证范围见 [上传链路验证](docs/earth-merra2-3hourly.md#上传链路验证)。只读包检查、合成 smoke 和 mock 浏览器检查均不等同于真实训练或预测精度验收。
+三小时上传模型契约、隔离 dry-run、任务/源码冻结、训练与严格 checkpoint 重载、历史回测及兼容回归见 `tests/test_earth_3hourly_uploaded.py` 和 `tests/test_earth_topography*.py`；真实地形集成冒烟脚本为 `scripts/smoke_earth_topography.py`，须明确指定新的仓库外输出目录。完整包只读集成见 `tests/test_earth_3hourly_uploaded_readonly.py`，须显式设置 `ARESVISION_TEST_EARTH_3HOURLY_PACKAGE`。本轮真实冒烟只读原发布包并创建三天独立子包，不训练完整两年或评价预测精度。
 
 ## 部署与分发
 

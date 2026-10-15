@@ -448,6 +448,7 @@ export default function ModelTrainingPage() {
       uploadModel: isZh ? '上传 .py' : 'Upload .py',
       downloadModelGuide: isZh ? '下载说明' : 'Guide',
       downloadModelTemplate: isZh ? '下载模板' : 'Template',
+      downloadSharedGateTemplate: isZh ? '共享门控模板' : 'Shared gate template',
       uploadingModel: isZh ? '上传中...' : 'Uploading...',
       revalidateModel: isZh ? '重新校验' : 'Revalidate',
       deleteUploadedModel: isZh ? '删除' : 'Delete',
@@ -2249,6 +2250,9 @@ export default function ModelTrainingPage() {
           ? selectedUploadedModel?.validation_report?.datasets?.[EARTH_3HOURLY_DATASET_ID]?.schema === EARTH_3HOURLY_FULL_GRID_SCHEMA ? 'earth-3hourly-fullgrid-guide' : 'earth-3hourly-guide' : 'guide'),
         templateDownloadUrl: getUserModelDownloadUrl(earthMode && trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1
           ? selectedUploadedModel?.validation_report?.datasets?.[EARTH_3HOURLY_DATASET_ID]?.schema === EARTH_3HOURLY_FULL_GRID_SCHEMA ? 'earth-3hourly-fullgrid-template' : 'earth-3hourly-template' : 'template'),
+        sharedGateTemplateDownloadUrl: earthMode && trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1
+          && selectedUploadedModel?.validation_report?.datasets?.[EARTH_3HOURLY_DATASET_ID]?.schema !== EARTH_3HOURLY_FULL_GRID_SCHEMA
+          ? getUserModelDownloadUrl('earth-3hourly-shared-gate-template') : null,
         earthDatasetAvailability: earthAvailability,
         datasetCatalogError,
         earthUploadedInlineError,

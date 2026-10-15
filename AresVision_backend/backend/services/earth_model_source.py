@@ -8,8 +8,8 @@ The uploaded branch:
 
 * executes the **verified** source only (hash-checked, AST-checked the same way as
   at upload) and never a bare pickle;
-* refuses Mars-only auxiliary inputs, because the Earth feed provides no Ls and no
-  MOLA topography;
+* refuses Mars-only auxiliary inputs; three-hour models separately declare
+  UTC-derived ls and verified ETOPO orography through derived_inputs;
 * records the exact build configuration so a reload rebuilds the same module.
 """
 
@@ -165,11 +165,14 @@ def build_uploaded_earth_model(
     width: int,
     dataset_id: str | None = None,
     contract_schema: str | None = None,
+    derived_inputs: Sequence[str] | None = None,
 ) -> tuple[torch.nn.Module, dict[str, Any], tuple[str, ...]]:
     """Build the uploaded model for the Earth feed.
 
     Returns ``(model, build_config, warnings)``. Raises for a tampered source, a
     missing source without an embedded copy, or a Mars-only auxiliary input.
+    ``derived_inputs`` is the declaration frozen in a checkpoint; when given, the
+    rebuilt source must declare exactly the same tensors.
     """
     order = require_earth_channel_order(input_channel_order)
     if dataset_id == EARTH_DATASET_3HOURLY_ID and (height, width) != (240, 480):
@@ -225,7 +228,8 @@ def build_uploaded_earth_model(
             )
         from services.user_model_validator import UserModelValidator
         from training_backbones.earth_3hourly_uploaded_contract import (
-            build_config, contract_schema_from_spec, prepare_model, RESERVED_PARAMETERS,
+            build_config, contract_schema_from_spec, normalize_derived_inputs,
+            prepare_model, RESERVED_PARAMETERS,
         )
         try:
             source_contract_schema = contract_schema_from_spec(model_spec)
@@ -236,12 +240,30 @@ def build_uploaded_earth_model(
             raise EarthModelBuildError("Stored Earth contract schema disagrees with verified source",
                                        code="uploaded_model_contract_invalid")
         schema, errors = UserModelValidator._normalize_parameters(model_spec.get("parameters", {}))
-        if errors or model_spec.get("auxiliary_inputs") or any(
-                k in RESERVED_PARAMETERS or k.startswith("_") for k in schema):
-            raise EarthModelBuildError("Invalid three-hour uploaded parameters or auxiliary inputs",
+        if errors or any(k in RESERVED_PARAMETERS or k.startswith("_") for k in schema):
+            raise EarthModelBuildError("Invalid three-hour uploaded parameters",
                                        code="uploaded_model_contract_invalid")
+        if model_spec.get("auxiliary_inputs"):
+            # Earth keeps meteorological channel choices separate from the
+            # server-provided seasonal coordinate and ETOPO resource.
+            raise EarthModelBuildError(
+                "The Mars auxiliary_inputs block is not available for Earth data; "
+                "declare MODEL_SPEC.derived_inputs for ls and/or ETOPO topography",
+                code="uploaded_model_contract_invalid",
+            )
+        try:
+            source_derived_inputs = normalize_derived_inputs(model_spec)
+        except ValueError as exc:
+            raise EarthModelBuildError(str(exc), code="uploaded_model_contract_invalid") from exc
         if reference.get("param_schema") != schema:
             raise EarthModelBuildError("Stored parameter schema disagrees with verified source",
+                                       code="uploaded_model_contract_invalid")
+        declared_names = sorted(source_derived_inputs)
+        # The frozen declaration comes from the checkpoint. A rebuilt model must
+        # receive exactly the tensors it was trained with; changing the block
+        # would silently shift the model's inputs.
+        if derived_inputs is not None and list(derived_inputs) != declared_names:
+            raise EarthModelBuildError("Stored derived inputs disagree with verified source",
                                        code="uploaded_model_contract_invalid")
         params, errors = UserModelValidator.normalize_custom_params(schema, reference.get("custom_model_params"))
         if errors:
@@ -253,7 +275,8 @@ def build_uploaded_earth_model(
                                        code="uploaded_model_contract_invalid")
         try:
             model = prepare_model(build_model(config), window=window,
-                                  contract_schema=source_contract_schema)
+                                  contract_schema=source_contract_schema,
+                                  derived_inputs=source_derived_inputs)
         except (ValueError, TypeError, RuntimeError) as exc:
             raise EarthModelBuildError(str(exc), code="uploaded_model_contract_invalid") from exc
         return model, config, ()
@@ -310,6 +333,24 @@ def build_uploaded_earth_model(
     return model, config, tuple(warnings)
 
 
+def prepare_official_three_hour_model(model: torch.nn.Module, model_config: Mapping[str, Any]) -> torch.nn.Module:
+    """Give a three-hourly official model the shared Earth contract attributes.
+
+    The official DLinear is then invoked through exactly the same
+    ``earth_3hourly_uploaded_contract.forward`` (and therefore the same shape,
+    dtype, finiteness and output validation) as an uploaded model. The spatial
+    profile is unchanged: it stays the v1 24x48 tile the caller passes in.
+    """
+    from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, prepare_model
+
+    try:
+        window = int(model_config["window"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EarthModelBuildError("Earth model config has no usable window",
+                                   code="invalid_earth_model_config") from exc
+    return prepare_model(model, window=window, contract_schema=CONTRACT_SCHEMA)
+
+
 def build_earth_model_for_plan(plan: ModelSourcePlan) -> tuple[torch.nn.Module, dict[str, Any], tuple[str, ...]]:
     """Build the Earth model described by a plan (official or uploaded)."""
     profile = earth_training_profile(plan.dataset_id, {'window': plan.window, 'horizon': plan.horizon})
@@ -327,6 +368,7 @@ def build_earth_model_for_plan(plan: ModelSourcePlan) -> tuple[torch.nn.Module, 
         )
         if plan.dataset_id == EARTH_DATASET_3HOURLY_ID:
             config["implementation_id"] = profile["implementation_id"]
+            model = prepare_official_three_hour_model(model, config)
         return model, config, ()
     if plan.model_source == MODEL_SOURCE_UPLOADED:
         if not isinstance(plan.uploaded_model, dict):
@@ -354,14 +396,29 @@ def earth_forward_for_model(
     horizon: int = 3,
     height: int = 36,
     width: int = 72,
+    longitude: Any = None,
+    topography: Any = None,
 ) -> torch.Tensor:
     """Run either model type and normalize the output contract.
 
     Uploaded models are called through their declared contract runner, which
     enforces the spatial shape; the official DLinear keeps its zero time
     placeholder (see :func:`training_backbones.earth_daily_model.earth_forward`).
+    ``longitude`` is the seasonal coordinate. It is only ever consumed by a
+    three-hour uploaded model that declared it in ``MODEL_SPEC.derived_inputs``;
+    every other model is called exactly as before.
     """
     if model_source == MODEL_SOURCE_OFFICIAL:
+        if getattr(model, "_aresvision_earth_3hourly_contract", None):
+            # A three-hourly official model now runs the same contract as an
+            # uploaded one. Only the retired daily profile keeps its own
+            # invocation, because its grid and window policy differ.
+            from training_backbones.earth_3hourly_uploaded_contract import forward
+
+            try:
+                return forward(model, inputs, horizon=horizon, ls=longitude, topography=topography)
+            except ValueError as exc:
+                raise EarthModelBuildError(str(exc), code="invalid_earth_model_contract") from exc
         from training_backbones.earth_daily_model import earth_forward
 
         return earth_forward(model, inputs, horizon=horizon, height=height, width=width)
@@ -370,7 +427,7 @@ def earth_forward_for_model(
     if getattr(model, "_aresvision_earth_3hourly_contract", None):
         from training_backbones.earth_3hourly_uploaded_contract import forward
         try:
-            return forward(model, inputs, horizon=horizon)
+            return forward(model, inputs, horizon=horizon, ls=longitude, topography=topography)
         except ValueError as exc:
             raise EarthModelBuildError(str(exc), code="uploaded_model_contract_invalid") from exc
     if inputs.dim() != 5:

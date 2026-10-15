@@ -16,7 +16,9 @@ async (page) => {
   const context = id => ({ planet:'earth', task_id:id, dataset_id:dataset, dataset_version:'v1', dataset_fingerprint:fingerprint,
     target:'TO3',target_unit:'DU',window:2,horizon:3,frequency_hours:3,grid,input_channel_order:['TO3','U10M'],
     origins:{start:origin,end:origin,count:1,timestamps:[origin]}, model:{model_source:'official',model_architecture:'dlinear'},
-    run:{}, metrics:{splits:{test:{overall}}}, warnings:[] });
+    run:{}, metrics:{splits:{test:{overall,window_count:20}},split_policy:'published_manifest_splits',
+      split_ratios:{train_ratio:.7,validation_ratio:.2,test_ratio:.1},
+      split_ranges:{test:{date_start:'2021-07-01T07:30:00Z',date_end:'2021-07-01T13:30:00Z',window_count:20}}}, warnings:[] });
   const earthResult = id => ({ ...context(id), forecast_origin:origin,origin_split:'test',input_timestamps:['2021-07-01T01:30:00Z',origin],
     target_timestamps:['2021-07-01T07:30:00Z','2021-07-01T10:30:00Z','2021-07-01T13:30:00Z'],
     reference:[field(300),field(301),field(302)],prediction:[field(300.123456),field(301.123456),field(302.123456)],residual:[field(-2),field(-1),field(-3)],
@@ -93,6 +95,7 @@ async (page) => {
   check(await earth.locator('[data-predict-metrics][data-evaluation-scope="current_window"] [data-predict-metric]').count()===6,'Earth six metrics');
   check(await earth.locator('[data-evaluation-scope="current_window"] [data-predict-metric="rmse"] strong').innerText()==='1.2500','Earth DU and four decimal precision');
   check(await earth.locator('.prediction-earth-field[data-colormap="viridis"]').count()===2,'Earth follows colormap preference');
+  check((await earth.locator('[data-predict-metrics][data-evaluation-scope="full_test"]').innerText()).includes('发布测试分区：2021-07-01T07:30:00Z — 2021-07-01T13:30:00Z · 20 个窗口'),'Earth full-test metrics reuse the Mars split line from the checkpoint binding');
   check(await display.getByRole('button',{name:'导出科研图',exact:true}).isEnabled(),'Earth supported triptych export remains available');
   const requestCount=requests.length;
   const fab=page.locator('.settings-fab');
@@ -182,7 +185,10 @@ async (page) => {
   await page.getByRole('button', { name: '地球', exact: true }).click(); await earth.waitFor();
   check(await earth.locator('.prediction-display--empty').count() === 1 && await earth.locator('.prediction-metric-value').count() === 0, 'Earth without a model uses a guide without empty metric cards');
   check(await earth.getByRole('link', { name: '去模型训练', exact: true }).getAttribute('href') === '#/training', 'Earth no-model guide leads to existing training');
-  check(await earth.locator('[data-earth-reference-note]').count() === 0, 'Earth reference explanation is absent before a forecast');
+  check(await earth.locator('h2').count() === 0 && await earth.locator('[data-earth-context-model]').count() === 0, 'Earth single-model page adds no panel of its own');
+  check(await page.locator('[data-prediction-origin]').count() === 1, 'Earth keeps exactly one shared origin control in the sidebar');
+  check(await page.getByRole('button', { name: '刷新起点范围', exact: true }).count() === 0, 'Earth no longer adds a reload-origin button Mars does not have');
+  check(await page.locator('.predict-sidebar').getByRole('button', { name: '重试', exact: true }).count() === 0, 'Earth context retry only appears after a real failure');
   await page.getByRole('button', { name: '火星', exact: true }).click(); await mars.waitFor();
   check(await mars.locator('.prediction-display--empty').count() === 1 && await mars.locator('.prediction-metric-value').count() === 0, 'Mars uses the same compact no-model guide');
   check(errors.length===0,`browser runtime errors: ${errors.join('; ')}`);

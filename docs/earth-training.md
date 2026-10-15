@@ -115,7 +115,7 @@
 
 三小时 checkpoint schema 为 `aresvision_earth_forecast_checkpoint_3hourly_v1`，实现 ID 为 `aresvision_gridpoint_dlinear_3hourly_v1`。保存 window/horizon、hour/step=3、UTC、区间中心规则和 90 分钟中心偏移（01:30…22:30）、完整网格、通道/单位、独立任务分区策略与边界、训练期 normalization、发布 snapshot/SHA/fingerprint 和任务身份；日频 checkpoint 不能加载到三小时任务。验证/测试保存总体、任务 horizon 个 lead step 及累计时长的六项指标（指标 schema v2，单位与公式策略逐项保存），默认 24 步为 3…72 小时和累计前 24/48/72 小时。v1 指标 checkpoint 保持只读兼容；[评价专题](earth-evaluation-metrics.md)定义公式和门禁。
 
-实际 smoke 使用合成 30 天/240 步、完整网格，测试专用连续 split 各 10 天、各 1 个时间窗口；五通道 CPU 训练 1 epoch，最终内存映射版本严格重载通过（1 passed，16.02 秒），归一化只拟合前 10 天。真实数据仅有已验证 7 天包（56 步），不足完整 80 步窗口；未执行真实全两年构建或训练。smoke 与后续分文件测试命令见[三小时训练验证](earth-merra2-3hourly.md#官方-dlinear-后端训练)。
+历史 smoke 使用合成 30 天/240 步，测试专用连续 split 各 10 天、各 1 个时间窗口；五通道 CPU 训练 1 epoch，最终内存映射版本严格重载通过。当前另有真实地形冒烟：从完整 MERRA-2 发布只读创建三天仓库外子包，v1/v2 各以 7→1、1 epoch CPU 完成上传校验、训练、严格重载、历史预测和诊断；这验证真实数据读取与地形消费，不代表完整两年训练或精度验收。命令见[三小时训练验证](earth-merra2-3hourly.md#官方-dlinear-后端训练)和[Earth 地形资产](earth-topography-asset.md)。
 
 ### 用用户上传模型训练日频 Earth（历史资料，已停用）
 
@@ -298,7 +298,7 @@ context 返回 datetime 可选范围、数量、完整时间戳数组和 hour/st
 - Earth 的「模型」分区提供**官方 DLinear / 用户上传模型**两个来源。选官方时只显示固定架构说明；选上传时复用同一套上传卡片（上传、模板/说明下载、重新校验、删除、自定义参数入口），选中后向 `GET /api/user-models/{id}/earth-compatibility` 取回服务端 Earth 兼容性结论：**未取到结论一律按不可用处理**，不兼容时在区内显示具体原因并禁用「开始实验」，检查器同步列出阻塞项。
 - Earth + 上传模型的请求只发送模型 ID 与自定义参数值；版本、内容哈希与数据快照由服务端固定，前端不生成也不接受。
 - 地球数据集分区显示当前发布的频率、网格、变量、单位与窗口契约；发布日期划分和发布指纹仍由服务端在创建任务时校验并绑定。数据不可用时会在就绪检查里给出阻塞原因并禁用「开始实验」，新实验默认使用设置中的窗口（默认 56→24），范围为 1–240 个三小时时间步，任务按保存的窗口运行，网格仍为 240×480。
-- 预测页地球单模型仅提供已完成且权重有效的三小时任务，选择 UTC 起点并使用绑定 checkpoint 和完整窗口；进入页面只读取训练任务目录，点击“开始预测”后才加载预测上下文、执行 checkpoint/数据身份校验并运行预测，诊断可用性检查也在上下文成功后开始；展示顺序为参考、预测、残差（DU）。`EarthPredictPanel` 装配上下文、逐步/累计时段指标与手动诊断，由 `SingleModelWorkbench` 复用火星的三联图/单图、时间步、指标卡片和全屏外壳，模型选择与参数摘要共用 `PredictSidebar`。地球全屏使用真实地球地图，不加载火星纹理、Ls 或火星单位；主题、色带和数值精度遵循全局设置。
+- 预测页地球单模型仅提供已完成且权重有效的三小时任务，选择 UTC 起点并使用绑定 checkpoint 和完整窗口；进入页面只读取训练任务目录，点击“开始预测”后才加载预测上下文、执行 checkpoint/数据身份校验并运行预测，诊断可用性检查也在上下文成功后开始；展示顺序为参考、预测、残差（DU）。`EarthPredictPanel` 只装配上下文、完整测试集指标配置与手动诊断，单模型页面本身不添加行星专属标题、说明段、`TO3 · DU` 胶囊、上下文折叠块、起点说明行或参考场说明，主按钮沿用共用的 `🚀 开始预测`，区块顺序与火星一致；完整测试集卡片下的分区行由 checkpoint 的 `split_policy`/`split_ranges` 映射成与火星相同的 `split_meta` 形状。地球全屏使用真实地球地图，不加载火星纹理、Ls 或火星单位；主题、色带和数值精度遵循全局设置。
 - `singleModelAdapters.js` 负责 UTC 起点、Earth 请求/响应、真实网格、DU、时间步与能力配置；`PredictionPlanetAdapter.jsx` 装配地球地图渲染，`predictionPresentation.js` 提供六项指标、评价范围及 ΔRMSE（DU）PFI 展示配置。共用组件不自行转换 Earth DU 或请求 Mars API。当前预测窗口指标、完整测试集指标与抽样诊断分别标注；诊断独立手动触发，保留默认参数和现有 test 分区/缓存身份，诊断图科研导出未开放。
 - 地球任务不进入 Earth/Mars 混合比较、火星推理或迁移学习。创建任务检查平台窗口范围与参数 schema，但不额外运行实际窗口 dry-run；运行时的模型构建、输出与梯度错误由训练任务报告。旧日频任务仅用于追溯。组件职责、合成桌面/390px 交互回归和实际后端验证见[共用单模型预测工作台](shared-single-model-prediction.md)。
 - 生产站点使用 `frontend/dist`，前端源码修改后必须在 `frontend/` 执行 `npm run build`。

@@ -4,7 +4,7 @@ netCDF4/HDF5 不是线程安全的，并发读取会间歇性报
 ``NetCDF: Can't open HDF5 attribute``（预测接口表现为 500）。平台在
 ``asyncio.to_thread`` 线程池中执行预测，因此两条推理路径都必须串行化读取：
 
-- 官方模型：``services/inference_service.py``
+- 官方模型：``services/mars_data_service.py``（由 inference_service 调用）
 - 上传模型：``training_backbones/user_model_runner.py`` 与
   ``training_backbones/mola_topography.py``
 """
@@ -24,7 +24,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 LOCKED_READER_MODULES = (
     "training_backbones/user_model_runner.py",
     "training_backbones/mola_topography.py",
-    "services/inference_service.py",
+    "services/mars_data_service.py",
 )
 
 
@@ -68,9 +68,12 @@ def _reset_fake_dataset_counters():
 
 
 def test_all_reader_paths_share_one_reentrant_lock():
-    from training_backbones import user_model_runner
+    from services import mars_data_service
+    from training_backbones import mola_topography, user_model_runner
 
     assert user_model_runner.netcdf_read_lock is netcdf_read_lock
+    assert mars_data_service.netcdf_read_lock is netcdf_read_lock
+    assert mola_topography.netcdf_read_lock is netcdf_read_lock
     # 可重入：同一线程嵌套取锁不会死锁。
     with netcdf_read_lock():
         with netcdf_read_lock():
@@ -149,8 +152,12 @@ def test_uploaded_model_loader_waits_for_the_shared_lock(monkeypatch, tmp_path):
     assert _FakeOpenMarsDataset.opened == 1
 
 
-def test_uploaded_model_loader_serializes_concurrent_reads(monkeypatch, tmp_path):
-    """两个线程并发加载时，Dataset 的打开区间不得重叠。"""
+@pytest.mark.parametrize("readers", [
+    ("uploaded", "uploaded"), ("official", "official"), ("uploaded", "official"),
+])
+def test_model_loaders_serialize_concurrent_reads(monkeypatch, tmp_path, readers):
+    """官方与上传读取各自及相互并发时，Dataset 打开区间均不得重叠。"""
+    from services import mars_data_service
     from training_backbones import user_model_runner
 
     openmars_dir = tmp_path / "openmars"
@@ -179,17 +186,21 @@ def test_uploaded_model_loader_serializes_concurrent_reads(monkeypatch, tmp_path
 
     errors: list[BaseException] = []
 
-    def run_loader():
+    def run_loader(reader):
         try:
-            user_model_runner._load_openmars(
-                openmars_dir,
-                require_ls=True,
-                require_coordinates=False,
-            )
+            if reader == "official":
+                mars_data_service._load_openmars(openmars_dir)
+            else:
+                user_model_runner._load_openmars(
+                    openmars_dir,
+                    require_ls=True,
+                    require_coordinates=False,
+                )
         except BaseException as exc:  # noqa: BLE001 - 转发到主线程断言
             errors.append(exc)
 
-    threads = [threading.Thread(target=run_loader, daemon=True) for _ in range(2)]
+    threads = [threading.Thread(target=run_loader, args=(reader,), daemon=True)
+               for reader in readers]
     for thread in threads:
         thread.start()
     for thread in threads:

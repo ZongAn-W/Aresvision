@@ -8,7 +8,7 @@
 
 2026-10-09 训练链路契约补强：新任务的冻结划分缺失时拒绝队列恢复和产物读取，保留真正 legacy manifest 行为；上传模型统一 CPU float32 构建/重载，上传探针与 checkpoint 加载实际权重后核对 eval 样本独立性，重载覆盖保存的任务批次且不改变参数/缓冲区。旧上传校验报告需重新校验。当时创建任务还运行实际配置 dry-run；当前 v1/v2 任务创建改为复用保存的上传兼容报告。细节及兼容边界见[任务划分](earth-task-splits.md)和[上传模型契约](earth-3hourly-uploaded-model.md)。
 
-本轮分文件回归共 415 passed、2 skipped：任务划分 103、训练服务 12、runner 12、artifact 39、上传契约 93、dtype 2、六指标 110、71→9 pipeline 2、诊断集成 15、预测路由 27；跳过的是官方模型不适用的上传源码检查。训练页配置/划分/指标前端测试 36 passed，文档文件链接与 Git diff 空白检查通过。验证使用合成发布及模型，未执行真实两年训练；保留既有 NumPy/FastAPI/Pydantic 依赖提示。
+本轮分文件回归共 415 passed、2 skipped：任务划分 103、训练服务 12、runner 12、artifact 39、上传契约 93、dtype 2、六指标 110、71→9 pipeline 2、诊断集成 15、预测路由 27；跳过的是官方模型不适用的上传源码检查。训练页配置/划分/指标前端测试 36 passed，文档文件链接与 Git diff 空白检查通过。另执行 `scripts/smoke_earth_topography.py`，使用真实 MERRA-2 发布包和真实 ETOPO 资产创建三天仓库外子包，v1/v2 各完成 1 epoch、严格重载、历史预测和诊断；该有限冒烟不代表完整两年训练或预测精度验收。保留既有 NumPy/FastAPI/Pydantic 依赖提示。
 
 | 项目 | 契约 |
 | --- | --- |
@@ -145,7 +145,7 @@ $env:ARESVISION_EARTH_MERRA2_3HOURLY_DIR = "$earthOutput"
 
 ## 三小时上传模型
 
-已开放独立 `aresvision_earth_3hourly_uploaded_model_v1` 契约，绑定 `earth_merra2_3hourly_v1`。下载[专用模板](earth-3hourly-uploaded-model-template.py)，调用形状、通道轴、dtype、设备、单位、保留参数及错误码见[模板说明](earth-3hourly-uploaded-model.md)。日频/Mars 上传结论不继承，三小时专属模型也不会自动获得它们的资格。
+已开放独立 `aresvision_earth_3hourly_uploaded_model_v1` 契约，绑定 `earth_merra2_3hourly_v1`。下载[专用模板](earth-3hourly-uploaded-model-template.py)或[v1 四位置共享门控模板](earth-3hourly-four-positions-shared-no-after-decoder-model.py)，调用形状、通道轴、dtype、设备、单位、保留参数及错误码见[模板说明](earth-3hourly-uploaded-model.md)。日频/Mars 上传结论不继承，三小时专属模型也不会自动获得它们的资格。
 
 实际 v1 模型调用为 float32 `[B,window,C,24,48] → [B,horizon,1,24,48]`，默认 56→24，C 是 TO3 加所选辅助变量的规范顺序；100 个无重叠块拼为 240×480。上传或手动重新校验的 dry-run 在有超时的隔离子进程中检查 16 个通道组合、B=1/2、eval/train 前向与 backward。v1/v2 创建任务复用保存的具体 dataset/schema 兼容报告，复查归属、valid 状态、报告证据、源码摘要、参数 schema 和 batch 范围，冻结源码/schema/参数后排队，不重复执行实际配置 dry-run；未知、失败或缺少验证证据不能写入训练任务。实际训练仍检查输出与梯度，完成前仍严格重载。前端开放来源切换及自定义参数，显示可用/不可用/未知和原因，按数据集提供模板下载。
 

@@ -185,7 +185,11 @@ def normalize_dataset_declarations(model_spec: Any) -> dict[str, dict[str, Any]]
     if not isinstance(datasets, dict):
         raise DatasetCapabilityError("MODEL_SPEC.datasets must be a dict")
     if EARTH_3HOURLY_FEED_KEY in datasets:
-        extra = set(model_spec) - {"name", "description", "parameters", "datasets", "auxiliary_inputs"}
+        # ``derived_inputs`` declares tensors the server derives for the model;
+        # ``auxiliary_inputs`` is the Mars block, accepted here only so the model
+        # build can refuse it with a message that names the Earth equivalent.
+        extra = set(model_spec) - {"name", "description", "parameters", "datasets",
+                                   "auxiliary_inputs", "derived_inputs"}
         if extra:
             raise DatasetCapabilityError(f"Earth three-hour MODEL_SPEC unexpected fields: {sorted(extra)}")
 

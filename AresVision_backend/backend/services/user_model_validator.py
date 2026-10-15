@@ -508,7 +508,8 @@ class UserModelValidator:
     @staticmethod
     def _validate_three_hour_module(module, datasets, param_schema, warnings, *, earth_probe=None):
         from training_backbones.earth_3hourly_uploaded_contract import (
-            EVAL_BATCH_POLICY, RESERVED_PARAMETERS, channel_orders, contract_profile, dry_run,
+            EVAL_BATCH_POLICY, RESERVED_PARAMETERS, channel_orders, contract_profile,
+            dry_run, normalize_derived_inputs,
         )
 
         model_spec = module.MODEL_SPEC
@@ -517,7 +518,11 @@ class UserModelValidator:
         code = "uploaded_model_earth_3hourly_dry_run_failed"
         try:
             if model_spec.get("auxiliary_inputs"):
-                raise ValueError("Three-hour Earth uses only the declared tensor channels")
+                raise ValueError(
+                    "Mars auxiliary_inputs is not an Earth tensor declaration; declare "
+                    "MODEL_SPEC.derived_inputs for ls and/or ETOPO topography"
+                )
+            derived_inputs = normalize_derived_inputs(model_spec)
             if any(k in RESERVED_PARAMETERS or k.startswith("_") for k in param_schema):
                 code = "uploaded_model_contract_invalid"
                 raise ValueError("MODEL_SPEC.parameters cannot override server contract or dataset identity")
@@ -539,11 +544,17 @@ class UserModelValidator:
             if window not in feed['window'] or horizon not in feed['horizon']:
                 code = 'uploaded_model_contract_invalid'
                 raise ValueError(f'Model does not declare window={window}, horizon={horizon}')
+            topography = None
+            if "topography" in derived_inputs:
+                from services.earth_topography import load_earth_topography
+                topography = load_earth_topography()
             for order in orders:
                 shape = dry_run(module.build_model, order, params, window=window, horizon=horizon,
                                 batch_size=(earth_probe or {}).get("batch_size", execution['default_batch_size']),
-                                contract_schema=feed['schema'])
+                                contract_schema=feed['schema'], derived_inputs=derived_inputs,
+                                topography=topography)
         except Exception as exc:
+            code = getattr(exc, "code", code)
             errors = [f"Earth three-hour dry-run failed: {exc}"]
         verdict = {
             "compatible": not errors, "status": "unavailable" if errors else "available",
@@ -554,6 +565,10 @@ class UserModelValidator:
             "batch_size": (earth_probe or {}).get('batch_size', locals().get('execution', {}).get('default_batch_size')),
             "validation_scope": "task_configuration" if earth_probe else "declared_channels_probe_windows",
         }
+        if not errors and derived_inputs:
+            verdict["derived_inputs"] = derived_inputs
+            if topography is not None:
+                verdict["topography_identity"] = topography.identity
         # The legacy verdict is independent of the three-hour run.
         legacy = None
         if "earth_merra2" in datasets and earth_probe is None:
@@ -714,15 +729,23 @@ class UserModelValidator:
     @staticmethod
     def _validate_earth_3hourly_compatibility(*, build_model, model_spec, param_schema, feed):
         """Exercise the server's actual spatial-tile invocation."""
-        from training_backbones.earth_3hourly_uploaded_contract import channel_orders, contract_profile, dry_run
+        from training_backbones.earth_3hourly_uploaded_contract import (
+            channel_orders, contract_profile, dry_run, normalize_derived_inputs,
+        )
         try:
             params = {name: schema["default"] for name, schema in param_schema.items()}
+            derived_inputs = normalize_derived_inputs(model_spec)
             execution = contract_profile(feed['schema'])
+            topography = None
+            if "topography" in derived_inputs:
+                from services.earth_topography import load_earth_topography
+                topography = load_earth_topography()
             for order in channel_orders():
                 shape = dry_run(build_model, order, params,
                     window=execution['probe_window'] if execution['probe_window'] in feed['window'] else feed['window'][0],
                     horizon=execution['probe_horizon'] if execution['probe_horizon'] in feed['horizon'] else feed['horizon'][0],
-                    batch_size=execution['default_batch_size'], contract_schema=feed['schema'])
+                    batch_size=execution['default_batch_size'], contract_schema=feed['schema'],
+                    derived_inputs=derived_inputs, topography=topography)
             return True, [], shape
         except Exception as exc:  # noqa: BLE001 - stable upload verdict
             return False, [f"Earth three-hourly dry-run failed: {exc}"], None

@@ -71,6 +71,7 @@ from services.earth_prediction_cache import (
     EARTH_PREDICTION_CACHE, TASK_SPLIT_BOUNDARY_VERSION, build_earth_prediction_cache_key,
 )
 from services.netcdf_read_lock import netcdf_read_lock
+from services.earth_derived_inputs import topography_for_checkpoint, topography_kwargs
 import xarray as xr
 
 ORIGIN_OUT_OF_RANGE = "earth_prediction_origin_out_of_range"
@@ -239,7 +240,9 @@ def _sync_release(registry: DatasetRegistry, binding: Mapping[str, Any]):
                                       "The bound Earth release metadata changed", status_code=409)
         try:
             threehour_release_split_codes(release.dates, metadata)
-            threehour_available_origin_range(release)
+            # Window availability belongs to the checkpoint's configured
+            # window/horizon below. A valid short release need not support the
+            # default 56->24 configuration to serve a shorter trained model.
             if (not np.array_equal(release.latitude, -89.625 + np.arange(240) * .75)
                     or not np.array_equal(release.longitude, -179.625 + np.arange(480) * .75)):
                 raise ValueError("The three-hour grid coordinates changed")
@@ -251,6 +254,7 @@ def _sync_release(registry: DatasetRegistry, binding: Mapping[str, Any]):
 
 def _validate_checkpoint_split_ranges(checkpoint: Any, release: Any) -> None:
     """Reject a checkpoint whose published split contract no longer matches."""
+    topography_for_checkpoint(checkpoint, release)
     contract = checkpoint.training_contract
     if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
         from services.earth_task_split import EARTH_TASK_SPLIT_POLICY, validate_earth_task_split
@@ -615,6 +619,26 @@ def _read_threehour_forecast_block(release, index, order, normalization, *, wind
     return inputs, reference
 
 
+def _threehour_window_longitude(release, checkpoint, index, window):
+    """Return the input window's seasonal coordinate, or ``None`` when undeclared.
+
+    Built from the release's own timestamps at exactly the indices the input block
+    is read from, so the coordinate and the data can never describe different
+    windows.
+    """
+    if "ls" not in (checkpoint.model_config.get("derived_inputs") or []):
+        return None
+    from services.earth_season import solar_longitude
+    dates = np.asarray(release.dates, dtype="datetime64[ns]")[index - window + 1:index + 1]
+    if len(dates) != int(window):
+        raise DatasetRequestError(
+            "dataset_version_changed",
+            "The forecast window does not fit the published timeline", status_code=409,
+        )
+    # One forecast window is one batch element: the contract fixes [batch, window].
+    return torch.from_numpy(np.ascontiguousarray(solar_longitude(dates)[None, :], dtype="float32"))
+
+
 def _serialize_threehour_result(result):
     public = {key: value for key, value in result.items() if not key.startswith("_")}
     public["prediction"] = _field_list(result["_prediction_du"])
@@ -630,6 +654,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
         raise DatasetRequestError("invalid_earth_training_artifact",
                                   "The checkpoint changed during loading", status_code=409)
     release = _sync_release(registry, checkpoint.dataset_binding)
+    topography_asset = topography_for_checkpoint(checkpoint, release)
     _validate_checkpoint_split_ranges(checkpoint, release)
     contract = checkpoint.training_contract
     window, horizon = contract['window'], contract['horizon']
@@ -656,6 +681,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
         checkpoint_sha256=checkpoint_sha,
         split_boundary_policy=(TASK_SPLIT_BOUNDARY_VERSION if strict_task_split
                                else "legacy_compatibility"),
+        **({"topography_identity": topography_asset.identity} if topography_asset is not None else {}),
     )
     cache = EARTH_PREDICTION_CACHE if cache is None else cache
     cached = cache.get(key)
@@ -670,21 +696,27 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
     order = checkpoint.training_contract["input_channel_order"]
     inputs, reference = _read_threehour_forecast_block(release, index, order, checkpoint.normalization,
                                                      window=window, horizon=horizon)
+    longitude = _threehour_window_longitude(release, checkpoint, index, window)
     try:
         model, warnings = build_earth_model_from_checkpoint(checkpoint)
         resolved_device = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(resolved_device).eval()
         prediction = np.empty_like(reference)
         mean, scale = checkpoint.normalization["mean"][0], checkpoint.normalization["scale"][0]
+        if longitude is not None:
+            longitude = longitude.to(resolved_device)
+        extra = {} if longitude is None else {"longitude": longitude}
         with torch.no_grad():
             full_grid = False
             if checkpoint.model_source == MODEL_SOURCE_UPLOADED:
                 from training_backbones.earth_3hourly_uploaded_contract import contract_profile
                 full_grid = contract_profile(checkpoint.model_config["contract_schema"])["full_grid"]
             if full_grid:
+                tensor = torch.from_numpy(np.ascontiguousarray(inputs[None])).to(resolved_device)
                 output = earth_forward_for_model(
-                    model, torch.from_numpy(np.ascontiguousarray(inputs[None])).to(resolved_device),
+                    model, tensor,
                     model_source=checkpoint.model_source, horizon=horizon, height=240, width=480,
+                    **extra, **topography_kwargs(topography_asset, tensor),
                 )
                 with np.errstate(over="ignore", invalid="ignore"):
                     prediction[:] = output[0, :, 0].cpu().numpy() * scale + mean
@@ -692,9 +724,12 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
                 for lat in range(0, 240, 24):
                     for lon in range(0, 480, 48):
                         tile = np.ascontiguousarray(inputs[None, :, :, lat:lat + 24, lon:lon + 48])
+                        tensor = torch.from_numpy(tile).to(resolved_device)
                         output = earth_forward_for_model(
-                            model, torch.from_numpy(tile).to(resolved_device), model_source=checkpoint.model_source,
+                            model, tensor, model_source=checkpoint.model_source,
                             horizon=horizon, height=24, width=48,
+                            **extra, **topography_kwargs(topography_asset, tensor,
+                                spatial_slices=[(slice(lat, lat + 24), slice(lon, lon + 48))]),
                         )
                         with np.errstate(over="ignore", invalid="ignore"):
                             prediction[:, lat:lat + 24, lon:lon + 48] = output[0, :, 0].cpu().numpy() * scale + mean
@@ -752,6 +787,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
     }
     # Check the bound package again after inference, before publishing/cache insertion.
     _sync_release(registry, checkpoint.dataset_binding)
+    topography_for_checkpoint(checkpoint, release)
     if _threehour_checkpoint_sha(task) != checkpoint_sha:
         raise DatasetRequestError("invalid_earth_training_artifact", "The checkpoint changed during prediction", status_code=409)
     cache.put(key, result)

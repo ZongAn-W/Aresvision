@@ -346,3 +346,51 @@ export function describeEarthModelIdentity(identity, labels = {}) {
     : '';
   return hash ? `${description} · ${hash}` : description;
 }
+
+const EARTH_TASK_SPLIT_POLICY = 'earth_task_split_v1';
+const EARTH_SPLIT_NAMES = ['train', 'validation', 'test'];
+
+/** 兼容 start/end 与 date_start/date_end 两种发布字段，缺失项不猜。 */
+export function earthSplitRanges(source) {
+  const raw = source?.split_ranges || source?.task_split?.ranges || {};
+  const ranges = {};
+  for (const name of EARTH_SPLIT_NAMES) {
+    const range = raw?.[name];
+    if (!range) continue;
+    const dateStart = range.date_start ?? range.start;
+    const dateEnd = range.date_end ?? range.end;
+    if (!dateStart || !dateEnd) continue;
+    const windowCount = Number(range.window_count);
+    ranges[name] = {
+      date_start: String(dateStart),
+      date_end: String(dateEnd),
+      ...(Number.isInteger(windowCount) && windowCount > 0 ? { window_count: windowCount } : {}),
+    };
+  }
+  return ranges;
+}
+
+/**
+ * 把 Earth 检查点保存的划分绑定整理成与火星相同的 `split_meta` 形状，
+ * 供共用的 `getSplitLabel` 直接渲染；没有可读边界时返回 null，不伪造划分行。
+ */
+export function buildEarthSplitLabelSource(source) {
+  const ranges = earthSplitRanges(source);
+  const testRange = ranges.test;
+  if (!testRange) return null;
+  const ratios = source?.split_ratios || source?.task_split?.ratios || null;
+  const policy = source?.split_policy;
+  if (policy === EARTH_TASK_SPLIT_POLICY) {
+    return {
+      split_meta: {
+        source: EARTH_TASK_SPLIT_POLICY,
+        test_range: testRange,
+        ...(ratios ? { ratios } : {}),
+      },
+    };
+  }
+  if (policy === 'published_manifest_splits') {
+    return { split_meta: { source: policy, test_range: testRange } };
+  }
+  return null;
+}

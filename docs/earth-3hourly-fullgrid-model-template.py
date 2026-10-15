@@ -1,4 +1,8 @@
-"""Standalone SimVP for complete normalized Earth three-hour global fields."""
+"""Standalone SimVP for complete normalized Earth three-hour global fields.
+
+For an example consuming both ls and physical ETOPO terrain, use the separate
+earth-3hourly-fullgrid-topography-model-template.py; this SimVP declares neither.
+"""
 
 import torch
 from torch import nn

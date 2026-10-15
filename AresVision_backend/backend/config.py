@@ -89,6 +89,12 @@ MOLA_TOPOGRAPHY_PATH = Path(os.getenv(
     "ARESVISION_MOLA_TOPOGRAPHY_PATH",
     DATA_DIR / "assets" / "mola_topography_5deg.nc",
 ))
+# Independent Earth atmospheric lower-boundary asset. Loaded only by models
+# explicitly declaring derived_inputs.topography; never a Mars/MOLA fallback.
+EARTH_TOPOGRAPHY_PATH = Path(os.getenv(
+    "ARESVISION_EARTH_TOPOGRAPHY_PATH",
+    DATA_DIR / "assets" / "earth_etopo2022_surface_0p75deg.nc",
+)).expanduser()
 
 # ─── 网格 ───
 SUPPORTED_MARS_YEARS = [27, 28]

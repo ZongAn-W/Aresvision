@@ -243,21 +243,19 @@ def test_threehour_prediction_requires_a_completed_artifact():
 
 def test_gridpoint_dlinear_spatial_tiles_preserve_full_field_outputs():
     from services.earth_model_source import ModelSourcePlan, build_earth_model_for_plan
-    from models.training_scripts.earth_daily import _forward_batch
     model, _, _ = build_earth_model_for_plan(ModelSourcePlan(
         model_source="official", input_channel_order=["TO3", "U10M"],
         linear_hidden_layers=2, dataset_id=DATASET_ID,
     ))
     inputs = torch.randn(1, 56, 2, 4, 6)
     with torch.no_grad():
-        complete = _forward_batch(model, inputs, model_source="official", horizon=24)
+        # Tiling is a property of the shared DLinear weights, so it is asserted on
+        # the model itself: the three-hour contract fixes every call to 24x48.
+        complete = model(inputs)
         tiled = torch.empty_like(complete)
         for lat in range(0, 4, 2):
             for lon in range(0, 6, 3):
-                tiled[..., lat:lat + 2, lon:lon + 3] = _forward_batch(
-                    model, inputs[..., lat:lat + 2, lon:lon + 3],
-                    model_source="official", horizon=24,
-                )
+                tiled[..., lat:lat + 2, lon:lon + 3] = model(inputs[..., lat:lat + 2, lon:lon + 3])
     torch.testing.assert_close(tiled, complete)
 
 

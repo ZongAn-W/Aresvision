@@ -568,6 +568,7 @@ def build_earth_training_spec(
     uploaded_model: Optional[Mapping[str, Any]] = None,
     task_split: Optional[Mapping[str, Any]] = None,
     metrics_contract: Optional[Mapping[str, Any]] = None,
+    topography: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Build the internal subprocess spec for one Earth training run.
 
@@ -637,6 +638,10 @@ def build_earth_training_spec(
         }
         if dataset_id == EARTH_DATASET_3HOURLY_ID:
             spec['uploaded_model']['contract_schema'] = source_schema
+    if topography is not None:
+        if dataset_id != EARTH_DATASET_3HOURLY_ID or uploaded_model is None:
+            raise DatasetRequestError("earth_topography_invalid", "Earth topography requires an uploaded three-hour model", status_code=409)
+        spec["topography"] = copy.deepcopy(dict(topography))
     return spec
 
 

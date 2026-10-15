@@ -75,6 +75,7 @@ from services.earth_model_source import (
     EarthModelBuildError,
     build_uploaded_earth_model,
     earth_forward_for_model,
+    prepare_official_three_hour_model,
 )
 from services.uploaded_model_source import verify_reference_source
 from training_backbones.earth_daily_model import (
@@ -122,6 +123,105 @@ class EarthArtifactError(ValueError):
     def __init__(self, message: str, *, code: str = "invalid_earth_training_artifact"):
         super().__init__(message)
         self.code = code
+
+
+TOPOGRAPHY_IDENTITY_KEY = "topography_identity"
+TOPOGRAPHY_GRID_KEY = "topography_grid"
+
+
+def _topography_identity(value: Any) -> dict:
+    """Return the canonical Earth terrain identity or fail closed.
+
+    The terrain service owns the field allow-list and canonical representation.
+    Keeping this adapter here means legacy artifacts never import or require the
+    terrain asset, while a newly declared model cannot freeze a partial or
+    invented identity.
+    """
+    try:
+        import services.earth_topography as topography
+        validator = (getattr(topography, "validate_topography_identity", None)
+                     or getattr(topography, "validate_identity", None))
+        if validator is None:
+            raise ImportError("earth_topography has no identity validator")
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise EarthArtifactError(
+            "Earth topography support is unavailable for a declared terrain model",
+            code="earth_topography_unavailable",
+        ) from exc
+    try:
+        canonical = validator(value)
+    except Exception as exc:
+        raise EarthArtifactError(
+            f"Earth topography identity is invalid: {exc}",
+            code="earth_topography_identity_invalid",
+        ) from exc
+    if not isinstance(canonical, dict):
+        raise EarthArtifactError(
+            "Earth topography identity validator returned an invalid value",
+            code="earth_topography_identity_invalid",
+        )
+    return _plain(canonical)
+
+
+def _topography_grid(value: Any, identity: Mapping[str, Any]) -> dict:
+    """Verify exact saved target coordinates/bounds against the terrain digest."""
+    if not isinstance(value, Mapping) or set(value) != {"latitude", "longitude", "lat_bounds", "lon_bounds"}:
+        raise EarthArtifactError("Checkpoint terrain target grid has missing or unknown fields",
+                                 code="earth_topography_grid_mismatch")
+    try:
+        from services.earth_topography import grid_identity, validate_grid
+        names = ("latitude", "longitude", "lat_bounds", "lon_bounds")
+        arrays = validate_grid(*(value[name] for name in names))
+        if grid_identity(*arrays) != identity["target_grid_sha256"]:
+            raise ValueError("Target coordinates or cell bounds differ from their frozen digest")
+    except Exception as exc:
+        raise EarthArtifactError(f"Checkpoint terrain target grid is invalid: {exc}",
+                                 code="earth_topography_grid_mismatch") from exc
+    return {name: _plain(array) for name, array in zip(names, arrays)}
+
+
+def _load_checkpoint_topography(model_config: Mapping[str, Any]):
+    """Load current bytes on the frozen actual target grid, including bounds."""
+    from services.earth_topography import load_earth_topography
+    identity = _topography_identity(model_config.get(TOPOGRAPHY_IDENTITY_KEY))
+    grid = _topography_grid(model_config.get(TOPOGRAPHY_GRID_KEY), identity)
+    return load_earth_topography(**grid, expected_identity=identity)
+
+
+def _validate_current_topography_identity(
+    identity: Mapping[str, Any], *, model_config: Mapping[str, Any],
+    dataset_snapshot: Mapping[str, Any],
+) -> None:
+    """Compare a frozen terrain identity with the configured current asset/grid."""
+    try:
+        asset = _load_checkpoint_topography(model_config)
+    except EarthArtifactError:
+        raise
+    except Exception as exc:
+        raise EarthArtifactError(
+            f"Earth topography asset does not match the checkpoint: {exc}",
+            code="earth_topography_identity_mismatch",
+        ) from exc
+    current = getattr(asset, "identity", None)
+    if not isinstance(current, Mapping) or dict(current) != dict(identity):
+        raise EarthArtifactError(
+            "Earth topography asset identity differs from the checkpoint",
+            code="earth_topography_identity_mismatch",
+        )
+    elevation = getattr(asset, "elevation", None)
+    shape = tuple(getattr(elevation, "shape", ()) or ())
+    expected_shape = tuple(int(value) for value in (dataset_snapshot.get("grid") or {}).get("shape", ()))
+    if len(shape) != 2 or expected_shape and shape != expected_shape:
+        raise EarthArtifactError(
+            "Earth topography asset grid does not match the bound Earth release",
+            code="earth_topography_grid_mismatch",
+        )
+    model_shape = (int(model_config.get("height", -1)), int(model_config.get("width", -1)))
+    if expected_shape and model_shape != expected_shape:
+        raise EarthArtifactError(
+            "Terrain models must freeze the full Earth target grid in model_config",
+            code="earth_topography_grid_mismatch",
+        )
 
 
 # Uploaded source execution is trusted only after the strict checkpoint shape
@@ -190,6 +290,7 @@ def _runtime_model_cache_key(checkpoint: "EarthCheckpoint") -> tuple:
         _runtime_checkpoint_digest(checkpoint), schema, source_hash, source_identity,
         dataset_identity, str(config.get("implementation_id") or ""),
         int(config.get("window", 0)), channels, shape,
+        json.dumps(config.get(TOPOGRAPHY_IDENTITY_KEY), sort_keys=True, separators=(",", ":")),
         "earth_eval_runtime_probe_v2",
         str(getattr(checkpoint, "path", "") or ""),
     )
@@ -663,6 +764,8 @@ def build_checkpoint_payload(
     task_id: Optional[int] = None,
     model_source: str = MODEL_SOURCE_OFFICIAL,
     uploaded_model: Optional[Mapping[str, Any]] = None,
+    topography_identity: Optional[Mapping[str, Any]] = None,
+    topography_grid: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Assemble the complete checkpoint payload as plain, serialisable data."""
     order = require_earth_channel_order(input_channel_order)
@@ -717,13 +820,40 @@ def build_checkpoint_payload(
         implementation_id=profile["implementation_id"],
     )
     if three_hourly and model_source == MODEL_SOURCE_UPLOADED:
-        from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, contract_profile
+        from training_backbones.earth_3hourly_uploaded_contract import (
+            CONTRACT_SCHEMA, contract_profile, derived_input_names,
+        )
+        from services.earth_season import SEASON_ALGORITHM
         execution = contract_profile(getattr(model, "_aresvision_earth_3hourly_contract", CONTRACT_SCHEMA))
         model_config.update(architecture=EARTH_UPLOADED_ARCHITECTURE,
                             implementation_id=execution["implementation_id"],
                             contract_schema=execution["schema"], spatial_tile_shape=list(execution["shape"]))
         contract.update(uploaded_model_schema=execution["schema"],
                         spatial_tile_shape=list(execution["shape"]), dtype="float32")
+        # Record what the trained model actually declared. The seasonal
+        # coordinate is *derived*, so the producer identity is frozen next to it:
+        # a later formula change must not silently re-feed an old checkpoint.
+        declared = derived_input_names(model)
+        if declared:
+            model_config["derived_inputs"] = declared
+            contract["derived_inputs"] = declared
+            if "ls" in declared:
+                model_config["season_algorithm"] = SEASON_ALGORITHM
+                contract["season_algorithm"] = SEASON_ALGORITHM
+            if "topography" in declared:
+                # The caller supplies the identity of the terrain that fed the
+                # training batches. Never read an asset here and pretend it was
+                # the one the model actually trained with.
+                frozen_terrain = _topography_identity(topography_identity)
+                model_config[TOPOGRAPHY_IDENTITY_KEY] = frozen_terrain
+                contract[TOPOGRAPHY_IDENTITY_KEY] = copy.deepcopy(frozen_terrain)
+                frozen_grid = _topography_grid(topography_grid, frozen_terrain)
+                model_config[TOPOGRAPHY_GRID_KEY] = frozen_grid
+                contract[TOPOGRAPHY_GRID_KEY] = copy.deepcopy(frozen_grid)
+    if topography_identity is not None and TOPOGRAPHY_IDENTITY_KEY not in model_config:
+        raise EarthArtifactError("A terrain identity requires a declared Earth topography input")
+    if topography_grid is not None and TOPOGRAPHY_GRID_KEY not in model_config:
+        raise EarthArtifactError("A terrain grid requires a declared Earth topography input")
     model_ref = build_model_reference(
         model_source=model_source,
         model_config=model_config,
@@ -802,6 +932,66 @@ def _plain(value: Any) -> Any:
 
 # ── validation and loading ─────────────────────────────────────────────────
 
+def _validate_derived_inputs(model_config: Mapping[str, Any],
+                             training_contract: Mapping[str, Any],
+                             dataset_snapshot: Optional[Mapping[str, Any]] = None) -> None:
+    """Validate a checkpoint's frozen server-derived inputs and their producer.
+
+    Checkpoints written before this contract carry no block, and stay readable: an
+    absent declaration means the model was trained on observation channels only.
+    """
+    from services.earth_season import SEASON_ALGORITHM
+    from training_backbones.earth_3hourly_uploaded_contract import DERIVED_INPUT_SPECS
+
+    declared = model_config.get("derived_inputs")
+    mirrored = training_contract.get("derived_inputs")
+    if declared is None:
+        if (mirrored is not None or "season_algorithm" in model_config
+                or "season_algorithm" in training_contract
+                or TOPOGRAPHY_IDENTITY_KEY in model_config
+                or TOPOGRAPHY_IDENTITY_KEY in training_contract
+                or TOPOGRAPHY_GRID_KEY in model_config or TOPOGRAPHY_GRID_KEY in training_contract):
+            raise EarthArtifactError(
+                "A checkpoint without derived inputs must not record derived-input identities")
+        return
+    if (not isinstance(declared, list) or not declared
+            or any(not isinstance(name, str) or name not in DERIVED_INPUT_SPECS for name in declared)
+            or sorted(set(declared)) != list(declared)):
+        raise EarthArtifactError("Checkpoint derived inputs are invalid")
+    if mirrored != declared:
+        raise EarthArtifactError("Checkpoint derived inputs disagree with its training contract")
+    recorded = (model_config.get("season_algorithm"), training_contract.get("season_algorithm"))
+    if "ls" in declared:
+        # The coordinate is computed, not read from the package, so an unknown
+        # producer means the numbers this model was trained on cannot be
+        # reproduced. Fail closed rather than feed it a different formula.
+        if recorded != (SEASON_ALGORITHM, SEASON_ALGORITHM):
+            raise EarthArtifactError("Checkpoint season algorithm is missing or unsupported")
+    elif recorded != (None, None):
+        raise EarthArtifactError("A season algorithm requires the ls derived input")
+    if "topography" in declared:
+        terrain = _topography_identity(model_config.get(TOPOGRAPHY_IDENTITY_KEY))
+        mirrored_terrain = _topography_identity(training_contract.get(TOPOGRAPHY_IDENTITY_KEY))
+        if terrain != mirrored_terrain:
+            raise EarthArtifactError(
+                "Checkpoint topography identity disagrees with its training contract",
+                code="earth_topography_identity_mismatch",
+            )
+        grid = _topography_grid(model_config.get(TOPOGRAPHY_GRID_KEY), terrain)
+        mirrored_grid = _topography_grid(training_contract.get(TOPOGRAPHY_GRID_KEY), terrain)
+        if grid != mirrored_grid:
+            raise EarthArtifactError("Checkpoint terrain target grid disagrees with its training contract",
+                                     code="earth_topography_grid_mismatch")
+        if dataset_snapshot is not None:
+            _validate_current_topography_identity(
+                terrain, model_config=model_config, dataset_snapshot=dataset_snapshot,
+            )
+    elif (TOPOGRAPHY_IDENTITY_KEY in model_config
+          or TOPOGRAPHY_IDENTITY_KEY in training_contract
+          or TOPOGRAPHY_GRID_KEY in model_config or TOPOGRAPHY_GRID_KEY in training_contract):
+        raise EarthArtifactError("A terrain identity requires the topography derived input")
+
+
 def validate_checkpoint_payload(
     payload: Mapping[str, Any],
     *,
@@ -854,6 +1044,9 @@ def validate_checkpoint_payload(
     if model_source == MODEL_SOURCE_OFFICIAL:
         if model_config.get("architecture") != "dlinear":
             raise EarthArtifactError("Checkpoint model is not the official DLinear")
+        if ("derived_inputs" in model_config or "season_algorithm" in model_config
+                or TOPOGRAPHY_IDENTITY_KEY in model_config or TOPOGRAPHY_GRID_KEY in model_config):
+            raise EarthArtifactError("Official Earth DLinear does not declare derived inputs")
     else:
         uploaded = model_ref.get("uploaded_model")
         if not isinstance(uploaded, Mapping):
@@ -927,6 +1120,7 @@ def validate_checkpoint_payload(
                 or training_contract.get("spatial_tile_shape") != list(execution["shape"])
                 or training_contract.get("dtype") != "float32"):
             raise EarthArtifactError("Three-hour uploaded execution contract is invalid")
+        _validate_derived_inputs(model_config, training_contract)
     if three_hourly and (
         [height, width] != profile["grid_shape"]
         or model_config.get("implementation_id") != expected_implementation
@@ -1031,6 +1225,10 @@ def validate_checkpoint_payload(
         raise EarthArtifactError("Checkpoint grid shape disagrees with the model config")
     if three_hourly:
         _validate_threehourly_binding(binding, contract, normalization)
+        if model_source == MODEL_SOURCE_UPLOADED:
+            _validate_derived_inputs(model_config, contract, snapshot)
+        elif any(key in contract for key in ("derived_inputs", "season_algorithm", TOPOGRAPHY_IDENTITY_KEY, TOPOGRAPHY_GRID_KEY)):
+            raise EarthArtifactError("Official Earth DLinear must not freeze derived-input identities")
     if expected_binding is not None:
         _compare_binding(binding, expected_binding)
 
@@ -1379,6 +1577,20 @@ def load_earth_training_artifact(
                 raise EarthArtifactError("Checkpoint model source does not match the task")
             if source == MODEL_SOURCE_UPLOADED:
                 uploaded = model_ref["uploaded_model"]
+                frozen_terrain = expected_hyperparameters.get("_earth_topography")
+                declared_inputs = validated["model_config"].get("derived_inputs") or []
+                if "topography" in declared_inputs:
+                    from training_backbones.earth_3hourly_uploaded_contract import DERIVED_INPUT_SPECS
+                    expected_declaration = {name: copy.deepcopy(DERIVED_INPUT_SPECS[name]) for name in declared_inputs}
+                    if (not isinstance(frozen_terrain, Mapping)
+                            or set(frozen_terrain) != {"declaration", "identity"}
+                            or frozen_terrain["declaration"] != expected_declaration
+                            or _topography_identity(frozen_terrain.get("identity")) !=
+                                validated["model_config"][TOPOGRAPHY_IDENTITY_KEY]):
+                        raise EarthArtifactError("Checkpoint topography does not match the task's frozen declaration/identity",
+                                                 code="earth_topography_identity_mismatch")
+                elif frozen_terrain is not None:
+                    raise EarthArtifactError("A task terrain identity requires a declared checkpoint topography input")
                 expected_contract = expected_hyperparameters.get("_earth_uploaded_contract_schema")
                 if expected_contract is not None and expected_contract != validated["model_config"].get("contract_schema"):
                     raise EarthArtifactError("Checkpoint spatial execution contract does not match the task")
@@ -1423,6 +1635,13 @@ def build_earth_model_from_checkpoint(
     warnings: tuple[str, ...] = ()
     runtime_key = None
     inflight_event = None
+    if "topography" in (checkpoint.model_config.get("derived_inputs") or []):
+        # A caller may hold a previously loaded checkpoint across an asset
+        # replacement. Revalidate before a cached executable model can return.
+        _validate_derived_inputs(
+            checkpoint.model_config, checkpoint.training_contract,
+            checkpoint.dataset_binding.get("dataset_snapshot") or {},
+        )
     if use_runtime_cache and checkpoint.model_source == MODEL_SOURCE_UPLOADED:
         runtime_key = _runtime_model_cache_key(checkpoint)
         # Single-flight: a waiter never builds or probes a second full-grid
@@ -1457,11 +1676,18 @@ def build_earth_model_from_checkpoint(
                     width=int(checkpoint.model_config.get("width", 72)),
                     dataset_id=checkpoint.dataset_binding.get("dataset_id"),
                     contract_schema=checkpoint.model_config.get("contract_schema"),
+                    derived_inputs=(checkpoint.model_config.get("derived_inputs", [])
+                                    if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID
+                                    else None),
                 )
             except EarthModelBuildError as exc:
                 raise EarthArtifactError(str(exc), code=exc.code) from exc
         else:
             model = forecaster_from_config(checkpoint.model_config)
+            if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
+                # Reload must reproduce the invocation the run trained with: the
+                # official three-hour model shares the uploaded contract path.
+                model = prepare_official_three_hour_model(model, checkpoint.model_config)
         try:
             model.load_state_dict(checkpoint.payload["model_state_dict"], strict=True)
         except Exception as exc:
@@ -1479,12 +1705,15 @@ def build_earth_model_from_checkpoint(
                 # Runtime reads use a fixed, bounded batch and input-element
                 # budget.  The training batch remains validated in the frozen
                 # task contract but cannot amplify this safety probe.
+                terrain_probe = ({"topography": _load_checkpoint_topography(checkpoint.model_config)}
+                                 if "topography" in (checkpoint.model_config.get("derived_inputs") or []) else {})
                 validate_eval_batch_independence(
                     model, window=checkpoint.model_config["window"],
                     channels=checkpoint.model_config["input_channels"], horizon=checkpoint.model_config["horizon"],
                     batch_size=(checkpoint.run.get("hyperparameters") or {}).get("batch_size", 1 if execution["full_grid"] else 8),
                     probe_batch_size=RUNTIME_PROBE_BATCH_SIZE,
                     max_input_elements=RUNTIME_PROBE_MAX_INPUT_ELEMENTS,
+                    **terrain_probe,
                 )
             except (ValueError, TypeError, RuntimeError) as exc:
                 raise EarthArtifactError(str(exc)) from exc
@@ -1612,9 +1841,37 @@ def _verify_round_trip(path: Path, expected: Mapping[str, Any]) -> None:
             height, width = min(height, 24), min(width, 48)
     generator = torch.Generator().manual_seed(20200101)
     probe = torch.randn((batch_size, window, channels, height, width), generator=generator)
+    probe_longitude = None
+    declared = expected.get("model_config", {}).get("derived_inputs") or []
+    if "ls" in declared:
+        # A model that declared the seasonal coordinate cannot be run without it,
+        # on either side of the comparison.
+        from training_backbones.earth_3hourly_uploaded_contract import probe_longitude as build_probe
+        probe_longitude = build_probe(batch_size, window)
+    # Only passed when one exists, so a payload without a declaration keeps the
+    # exact call it had before derived inputs existed.
+    extra = {} if probe_longitude is None else {"longitude": probe_longitude}
+    if "topography" in declared:
+        from services.earth_topography import prepare_topography_batch
+        asset = _load_checkpoint_topography(expected["model_config"])
+        # V1 probes deliberately cover different actual spatial locations; a
+        # single tile broadcast would fail to prove the saved model invocation.
+        spatial_slices = None
+        if (height, width) != tuple(asset.elevation.shape):
+            rows, columns = asset.elevation.shape
+            spatial_slices = [
+                (slice((index * height) % rows, (index * height) % rows + height),
+                 slice((index * width) % columns, (index * width) % columns + width))
+                for index in range(batch_size)
+            ]
+        extra["topography"] = prepare_topography_batch(asset, probe, spatial_slices)
     with torch.no_grad():
-        first = _forward_payload_model(model, expected, probe)
-        second = _forward_payload_model(reference, expected, probe)
+        first = _forward_payload_model(model, expected, probe, **{
+            key: value.clone() for key, value in extra.items()
+        })
+        second = _forward_payload_model(reference, expected, probe, **{
+            key: value.clone() for key, value in extra.items()
+        })
     if not torch.equal(first, second):
         raise EarthArtifactError("The written checkpoint does not reproduce its own output")
 
@@ -1637,24 +1894,37 @@ def _reference_model_from_payload(payload: Mapping[str, Any]) -> torch.nn.Module
                 else None
             ),
             contract_schema=payload["model_config"].get("contract_schema"),
+            derived_inputs=(payload["model_config"].get("derived_inputs", [])
+                            if payload.get("artifact_schema") == EARTH_3HOURLY_ARTIFACT_SCHEMA else None),
         )
     else:
         model = forecaster_from_config(payload["model_config"])
+        if (payload.get("artifact_schema") == EARTH_3HOURLY_ARTIFACT_SCHEMA
+                and (payload.get("dataset_binding") or {}).get("dataset_id") == EARTH_DATASET_3HOURLY_ID):
+            # The independent reference model must take the same call path as the
+            # published one, otherwise the comparison is not like for like.
+            model = prepare_official_three_hour_model(model, payload["model_config"])
     model.load_state_dict(payload["model_state_dict"], strict=True)
     model.eval()
     return model
 
 
 def _forward_payload_model(
-    model: torch.nn.Module, payload: Mapping[str, Any], probe: torch.Tensor
+    model: torch.nn.Module, payload: Mapping[str, Any], probe: torch.Tensor,
+    longitude: Optional[torch.Tensor] = None,
+    topography: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Run one model from a payload descriptor through the shared Earth interface."""
     model_ref = payload.get("model_ref") or {}
     model_source = str(model_ref.get("model_source") or MODEL_SOURCE_OFFICIAL)
+    extra = {} if longitude is None else {"longitude": longitude}
+    if topography is not None:
+        extra["topography"] = topography
     return earth_forward_for_model(
         model, probe, model_source=model_source,
         horizon=int(payload["model_config"]["horizon"]),
         height=int(probe.shape[-2]), width=int(probe.shape[-1]),
+        **extra,
     )
 
 

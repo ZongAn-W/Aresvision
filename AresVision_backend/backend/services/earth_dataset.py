@@ -1238,6 +1238,23 @@ class EarthThreeHourlyWindows:
         """Read exactly one temporal window, optionally limited to a spatial tile."""
         return self._read_window(index, lat_slice=lat_slice, lon_slice=lon_slice, verify_source=True)
 
+    def window_longitude(self, index):
+        """Return one input window's seasonal coordinate as float32 ``[window]``.
+
+        Derived from the partition's own timestamps, so it costs no extra read and
+        cannot disagree with the data the same window returns. Models that do not
+        declare the derived input never receive it.
+        """
+        from services.earth_season import solar_longitude
+        index = operator.index(index)
+        if index < 0 or index >= self.length:
+            raise IndexError(index)
+        return solar_longitude(self.dates[index:index + self.window])
+
+    def window_longitudes(self, indices):
+        """Stack several windows' seasonal coordinates as float32 ``[N, window]``."""
+        return np.stack([self.window_longitude(index) for index in indices])
+
     def _read_window(self, index, *, lat_slice, lon_slice, verify_source):
         from services.netcdf_read_lock import netcdf_read_lock
         index = operator.index(index)

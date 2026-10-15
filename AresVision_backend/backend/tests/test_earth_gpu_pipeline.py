@@ -127,8 +127,9 @@ def test_batched_tile_fetch_preserves_sampler_order_and_duplicates(cached_window
     expected = [wrapper[index] for index in indices]
     actual = wrapper.__getitems__(indices)
     for before, after in zip(expected, actual):
-        for left, right in zip(before, after):
-            torch.testing.assert_close(left, right, rtol=0, atol=0)
+        assert before.keys() == after.keys()
+        for key in before:
+            torch.testing.assert_close(before[key], after[key], rtol=0, atol=0)
 
 
 def test_finite_gradient_checks_use_one_boolean_without_modifying_gradients(monkeypatch):

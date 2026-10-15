@@ -589,6 +589,17 @@ class TrainingService:
                 from training_backbones.earth_3hourly_uploaded_contract import contract_schema_for_reference
                 payload_hypers["_earth_uploaded_contract_schema"] = contract_schema_for_reference(payload_hypers["_earth_uploaded_reference"])
                 payload_hypers["_earth_uploaded_reference"]["contract_schema"] = payload_hypers["_earth_uploaded_contract_schema"]
+                from services.earth_derived_inputs import freeze_topography_for_reference
+                try:
+                    terrain = freeze_topography_for_reference(
+                        payload_hypers["_earth_uploaded_reference"],
+                        registry.get_earth_snapshot(resolved_dataset_id,
+                            expected_fingerprint=dataset_binding["dataset_fingerprint"]),
+                    )
+                except (ValueError, OSError, RuntimeError) as exc:
+                    raise DatasetRequestError("earth_topography_invalid", str(exc), status_code=409) from exc
+                if terrain is not None:
+                    payload_hypers["_earth_topography"] = terrain
         if not earth_training:
             await self._resolve_transfer_source(
                 user_id=user_id,
@@ -730,6 +741,11 @@ class TrainingService:
                 raise DatasetRequestError('uploaded_model_contract_invalid', str(exc), status_code=409) from exc
             if raw_hypers.get('_earth_uploaded_contract_schema', schema) != schema:
                 raise DatasetRequestError('uploaded_model_contract_invalid', 'Frozen spatial contract disagrees with the model source', status_code=409)
+            from services.earth_derived_inputs import topography_for_reference
+            try:
+                topography_for_reference(reference, release, raw_hypers.get("_earth_topography"))
+            except (ValueError, OSError, RuntimeError) as exc:
+                raise DatasetRequestError("earth_topography_invalid", str(exc), status_code=409) from exc
         if task_split is not None:
             from services.earth_task_split import validate_earth_task_split
             try:
@@ -742,6 +758,7 @@ class TrainingService:
             task_id=task.id, dataset_binding=binding, hyperparameters=normalized,
             uploaded_model=raw_hypers.get("_earth_uploaded_reference"),
             metrics_contract=metrics_contract,
+            topography=raw_hypers.get("_earth_topography"),
         )
         spec["data_path"] = str(Path(release.data_path).resolve())
         return spec
@@ -899,6 +916,20 @@ class TrainingService:
                 "source_text": reference.source_text,
             }
         )
+        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+            from services.earth_derived_inputs import declaration_for_reference
+            try:
+                declaration = declaration_for_reference(reference.checkpoint_reference())
+                if "topography" in declaration:
+                    from services.earth_topography import load_earth_topography
+                    report = json.loads(getattr(package, "validation_report", None) or "{}")
+                    proof = (report.get("earth_datasets") or {}).get(dataset_id) or {}
+                    asset = load_earth_topography()
+                    if (proof.get("derived_inputs") != declaration
+                            or proof.get("topography_identity") != asset.identity):
+                        raise ValueError("Terrain validation evidence differs from the current asset; revalidate this uploaded model")
+            except (ValueError, OSError, RuntimeError) as exc:
+                raise DatasetRequestError("earth_topography_invalid", str(exc), status_code=409) from exc
         warnings = list(verdict.warnings)
         if verdict.output_shape:
             warnings.append(
@@ -1350,10 +1381,12 @@ class TrainingService:
                         task_split = required_task_split(frozen_hypers)
                         if task_split != earth_training_spec.get("task_split"):
                             raise EarthArtifactError("Training spec partitions do not match the frozen task")
+                        if frozen_hypers.get("_earth_topography") != earth_training_spec.get("topography"):
+                            raise EarthArtifactError("Training spec terrain does not match the frozen task")
                         expected_hypers.update({
                             key: frozen_hypers[key]
                             for key in (TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, EARTH_METRICS_SCHEMA_KEY,
-                                        EARTH_METRICS_AGGREGATION_KEY)
+                                        EARTH_METRICS_AGGREGATION_KEY, "_earth_topography")
                             if key in frozen_hypers
                         })
                         execution_contract = earth_spec_metrics_contract(earth_training_spec)

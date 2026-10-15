@@ -38,6 +38,7 @@ from services.earth_training_artifact import (
     build_earth_model_from_checkpoint,
 )
 from services.netcdf_read_lock import netcdf_read_lock
+from services.earth_derived_inputs import topography_for_checkpoint, topography_kwargs
 from services.uploaded_model_source import UploadedModelSourceError
 
 DIAGNOSTIC_VERSION = "earth_test_diagnostics_v1"
@@ -160,6 +161,8 @@ def build_earth_diagnostics_cache_key(*, task_id, checkpoint_sha256, dataset_bin
         "aggregation": aggregation,
         "metric_policy": metric_policy,
     }
+    if training_contract.get("topography_identity") is not None:
+        identity["topography"] = training_contract["topography_identity"]
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -274,11 +277,24 @@ def _read_region(ds, dataset, selected, lat, lon, height, width):
     return inputs, reference
 
 
-def _predict_tile(model, inputs, checkpoint, device):
+def _diagnostic_longitude(dataset, checkpoint, indices):
+    """Per-window seasonal coordinate, or ``None`` when none was declared."""
+    if "ls" not in (checkpoint.model_config.get("derived_inputs") or []):
+        return None
+    if not hasattr(dataset, "window_longitudes"):
+        raise _error("invalid_earth_training_artifact",
+                     "The checkpoint declares a seasonal coordinate this dataset cannot derive")
+    return torch.from_numpy(np.ascontiguousarray(dataset.window_longitudes(indices), dtype="float32"))
+
+
+def _predict_tile(model, inputs, checkpoint, device, longitude=None, topography=None):
+    extra = {} if longitude is None else {"longitude": longitude.to(device)}
+    if topography is not None:
+        extra["topography"] = topography.to(device)
     output = earth_forward_for_model(
         model, torch.from_numpy(np.ascontiguousarray(inputs)).to(device),
         model_source=checkpoint.model_source, horizon=checkpoint.training_contract["horizon"],
-        height=inputs.shape[-2], width=inputs.shape[-1],
+        height=inputs.shape[-2], width=inputs.shape[-1], **extra,
     )
     expected = (len(inputs), checkpoint.training_contract["horizon"], 1, *inputs.shape[-2:])
     if not isinstance(output, torch.Tensor) or tuple(output.shape) != expected or not torch.isfinite(output).all():
@@ -292,20 +308,37 @@ def _predict_tile(model, inputs, checkpoint, device):
     return prediction
 
 
+def _diagnostic_inputs(dataset, checkpoint, indices, inputs, lat=0, lon=0):
+    extra = {}
+    longitude = _diagnostic_longitude(dataset, checkpoint, indices)
+    if longitude is not None:
+        extra["longitude"] = longitude
+    asset = getattr(dataset, "_earth_topography_asset", None)
+    if asset is not None:
+        spatial = [(slice(lat, lat + inputs.shape[-2]), slice(lon, lon + inputs.shape[-1]))] * len(inputs)
+        extra.update(topography_kwargs(asset, torch.from_numpy(np.ascontiguousarray(inputs)),
+                                       spatial_slices=spatial))
+    return extra
+
+
 def _tile_batches(ds, dataset, selected, model, checkpoint, device):
+    def call(inputs, indices, lat=0, lon=0):
+        # Pass the coordinate only when the checkpoint declared one, so a model
+        # that declared nothing keeps the exact call it had before.
+        extra = _diagnostic_inputs(dataset, checkpoint, indices, inputs, lat, lon)
+        return _predict_tile(model, inputs, checkpoint, device, **extra)
+
     if _full_grid_contract(checkpoint.training_contract):
         for offset, index in enumerate(selected):
             inputs, reference = _read_full_grid(ds, dataset, [index])
-            prediction = _predict_tile(model, inputs, checkpoint, device)
-            yield offset, 0, 0, prediction, reference
+            yield offset, 0, 0, call(inputs, [index]), reference
         return
     for lat in range(0, len(dataset.lat), TILE_SHAPE[0]):
         for lon in range(0, len(dataset.lon), TILE_SHAPE[1]):
             for offset in range(0, len(selected), BATCH_SIZE):
                 indices = selected[offset:offset + BATCH_SIZE]
                 inputs, reference = _read_tile(ds, dataset, indices, lat, lon)
-                prediction = _predict_tile(model, inputs, checkpoint, device)
-                yield offset, lat, lon, prediction, reference
+                yield offset, lat, lon, call(inputs, indices, lat, lon), reference
 
 
 class _ScatterSampler:
@@ -393,6 +426,7 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
     if _threehour_checkpoint_sha(task) != sha:
         raise _error("invalid_earth_training_artifact", "The Earth checkpoint changed during diagnostic loading")
     release = _sync_release(registry, checkpoint.dataset_binding)
+    topography_asset = topography_for_checkpoint(checkpoint, release)
     _validate_checkpoint_split_ranges(checkpoint, release)
     contract = checkpoint.training_contract
     try:
@@ -401,6 +435,7 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
             selected_channels=contract["input_channel_order"], normalization=checkpoint.normalization,
             task_split=contract.get("task_split"),
         )
+        dataset._earth_topography_asset = topography_asset
     except ValueError as exc:
         raise _error("invalid_earth_training_artifact", str(exc)) from exc
     aggregation = checkpoint.metrics.get("aggregation") or GRID_UNIFORM_AGGREGATION
@@ -486,6 +521,7 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
                                pfi_repeats, seed, spatial_weights=spatial_weights,
                                aggregation=aggregation, metric_policy=metric_policy) if include_pfi else None
         _sync_release(registry, checkpoint.dataset_binding)
+        topography_for_checkpoint(checkpoint, release)
         if _threehour_checkpoint_sha(task) != sha:
             raise _error("invalid_earth_training_artifact", "The Earth checkpoint changed during diagnostics")
         # Reload also verifies the uploaded source against its pinned digest at
@@ -580,7 +616,8 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
                     # A smaller PFI subset also needs its own batch composition.
                     for offset in range(0, len(selected), BATCH_SIZE):
                         stop = min(offset + BATCH_SIZE, len(selected))
-                        baseline.update(_predict_tile(model, inputs[offset:stop], checkpoint, device), reference[offset:stop],
+                        baseline.update(_predict_tile(model, inputs[offset:stop], checkpoint, device,
+                            **_diagnostic_inputs(dataset, checkpoint, selected[offset:stop], inputs[offset:stop], lat, lon)), reference[offset:stop],
                                        spatial_weights=tile_weights)
                 for channel, rows in enumerate(accumulators):
                     channel_varies[channel] |= bool(np.any(inputs[1:, :, channel] != inputs[:1, :, channel]))
@@ -590,7 +627,8 @@ def _compute_pfi(ds, dataset, selected, model, checkpoint, device, baseline, rep
                             permuted = inputs[offset:stop].copy()
                             # All T,H,W positions come from the same source window.
                             permuted[:, :, channel] = inputs[np.asarray(mapping[offset:stop]), :, channel]
-                            prediction = _predict_tile(model, permuted, checkpoint, device)
+                            prediction = _predict_tile(model, permuted, checkpoint, device,
+                                **_diagnostic_inputs(dataset, checkpoint, selected[offset:stop], permuted, lat, lon))
                             rows[repeat].update(prediction, reference[offset:stop], spatial_weights=tile_weights)
     baseline_rmse = float(baseline.result()["overall"]["rmse"])
     items = []
@@ -628,7 +666,8 @@ def _accumulate_full_grid_pfi(ds, dataset, selected, model, checkpoint, device,
     for offset, index in enumerate(selected):
         inputs, reference = _read_full_grid(ds, dataset, [index])
         if recompute_baseline:
-            baseline.update(_predict_tile(model, inputs, checkpoint, device), reference,
+            baseline.update(_predict_tile(model, inputs, checkpoint, device,
+                **_diagnostic_inputs(dataset, checkpoint, [index], inputs)), reference,
                             spatial_weights=spatial_weights)
         for repeat, mapping in enumerate(mappings):
             source, _ = _read_full_grid(ds, dataset, [selected[mapping[offset]]])
@@ -636,7 +675,8 @@ def _accumulate_full_grid_pfi(ds, dataset, selected, model, checkpoint, device,
                 channel_varies[channel] |= bool(np.any(source[:, :, channel] != inputs[:, :, channel]))
                 permuted = inputs.copy()
                 permuted[:, :, channel] = source[:, :, channel]
-                rows[repeat].update(_predict_tile(model, permuted, checkpoint, device), reference,
+                rows[repeat].update(_predict_tile(model, permuted, checkpoint, device,
+                    **_diagnostic_inputs(dataset, checkpoint, [index], permuted)), reference,
                                     spatial_weights=spatial_weights)
 
 

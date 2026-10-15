@@ -73,8 +73,9 @@ def test_full_grid_batch_preserves_window_order_and_source_identity(full_grid_wi
     actual = wrapper.__getitems__([3, 1, 3])
     assert len(checks) == 2
     for before, after in zip(expected, actual):
-        for left, right in zip(before, after):
-            torch.testing.assert_close(left, right, rtol=0, atol=0)
+        assert before.keys() == after.keys()
+        for key in before:
+            torch.testing.assert_close(before[key], after[key], rtol=0, atol=0)
 
 
 @pytest.mark.parametrize('field,value', [('cache_version', 2), ('storage_shape', [88, 2, 24, 48])])

@@ -165,11 +165,11 @@ def test_threehour_checkpoint_roundtrip_preserves_contract_and_tile_output(tmp_p
     assert config["window"] == 56 and config["horizon"] == 24
     assert [config["height"], config["width"]] == [240, 480]
     model.eval()
-    probe = torch.randn(1, 56, len(order), 3, 5)
+    probe = torch.randn(1, 56, len(order), 24, 48)
     with torch.no_grad():
-        first = earth_forward_for_model(model, probe, model_source="official", horizon=24, height=3, width=5)
-        second = earth_forward_for_model(rebuilt, probe, model_source="official", horizon=24, height=3, width=5)
-    assert first.shape == (1, 24, 1, 3, 5)
+        first = earth_forward_for_model(model, probe, model_source="official", horizon=24, height=24, width=48)
+        second = earth_forward_for_model(rebuilt, probe, model_source="official", horizon=24, height=24, width=48)
+    assert first.shape == (1, 24, 1, 24, 48)
     assert torch.equal(first, second)
     raw = torch.load(target, map_location="cpu", weights_only=True)
     json.dumps({key: value for key, value in raw.items() if key != "model_state_dict"})

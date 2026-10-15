@@ -137,6 +137,11 @@ def _build_loaders(
     validation_started = time.perf_counter()
     release = registry.get_earth_snapshot(binding["dataset_id"])
     assert_release_matches_binding(release, binding)
+    topography_asset = None
+    if spec.get("uploaded_model") is not None:
+        from services.earth_derived_inputs import topography_for_reference
+        topography_asset = topography_for_reference(
+            spec["uploaded_model"], release, spec.get("topography"))
     validation_seconds = time.perf_counter() - validation_started
     print(f"Earth preparation: data validation {'hit' if release.verification_cached else 'verified'} "
           f"elapsed={validation_seconds:.3f}s", flush=True)
@@ -208,7 +213,7 @@ def _build_loaders(
     wrapper = _SpatialTileDataset if window_type is EarthThreeHourlyWindows and not full_grid else _ArrayDataset
     pin_memory = device is not None and device.type == 'cuda'
     train_loader = torch.utils.data.DataLoader(
-        wrapper(splits["train"], area_weights=area_weights),
+        wrapper(splits["train"], area_weights=area_weights, topography_asset=topography_asset),
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
@@ -216,14 +221,14 @@ def _build_loaders(
         generator=generator,
     )
     validation_loader = torch.utils.data.DataLoader(
-        wrapper(splits["validation"], area_weights=area_weights),
+        wrapper(splits["validation"], area_weights=area_weights, topography_asset=topography_asset),
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
         pin_memory=pin_memory,
     )
     test_loader = torch.utils.data.DataLoader(
-        wrapper(splits["test"], area_weights=area_weights),
+        wrapper(splits["test"], area_weights=area_weights, topography_asset=topography_asset),
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
@@ -251,6 +256,7 @@ def _build_loaders(
         "full_grid": full_grid,
         "area_weights": area_weights,
         "cache_path": cache_path,
+        "topography_asset": topography_asset,
         "preparation_timings": {'validation_seconds': validation_seconds,
                                 'normalization_seconds': normalization_seconds,
                                 'cache_seconds': cache_seconds,
@@ -259,11 +265,19 @@ def _build_loaders(
 
 
 class _ArrayDataset(torch.utils.data.Dataset):
-    """Convert only the requested window; never expand all overlapping windows."""
+    """Convert only the requested window; never expand all overlapping windows.
 
-    def __init__(self, source: EarthOzoneWindows, area_weights=None):
+    Samples are returned as a mapping. The seasonal coordinate is always produced
+    when the source can derive it; whether a model *receives* it is decided by the
+    model's own declaration, never by the loader. A mapping also keeps the
+    ``[B, window]`` coordinate distinguishable from the ``[H, W]`` area weights,
+    which a positional tuple cannot do.
+    """
+
+    def __init__(self, source: EarthOzoneWindows, area_weights=None, topography_asset=None):
         self.source = source
         self.area_weights = area_weights
+        self.topography_asset = topography_asset
         # Area weights are normalized over the complete global grid. A full-grid
         # sample therefore represents one unit of spatial mass. Tile datasets
         # override this with one global tile's share below.
@@ -272,23 +286,36 @@ class _ArrayDataset(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return len(self.source)
 
+    def _sample(self, index, inputs, targets, spatial_slices=None):
+        sample = {"inputs": torch.from_numpy(inputs), "targets": torch.from_numpy(targets)}
+        if self.topography_asset is not None:
+            from services.earth_derived_inputs import topography_kwargs
+            sample["topography"] = topography_kwargs(
+                self.topography_asset, sample["inputs"].unsqueeze(0),
+                spatial_slices=None if spatial_slices is None else [spatial_slices],
+            )["topography"][0]
+        longitude = self._longitude(index)
+        if longitude is not None:
+            sample["longitude"] = longitude
+        if self.area_weights is not None:
+            sample["area_weights"] = torch.from_numpy(np.asarray(self.area_weights, dtype='float32'))
+        return sample
+
+    def _longitude(self, index):
+        if not hasattr(self.source, 'window_longitude'):
+            return None
+        return torch.from_numpy(np.asarray(self.source.window_longitude(index), dtype='float32'))
+
     def __getitem__(self, index):
         inputs, targets = self.source[index]
-        result = (torch.from_numpy(inputs), torch.from_numpy(targets))
-        if self.area_weights is not None:
-            return (*result, torch.from_numpy(np.asarray(self.area_weights, dtype='float32')))
-        return result
+        return self._sample(index, inputs, targets)
 
     def __getitems__(self, indices):
         if not hasattr(self.source, 'read_windows'):
             return [self[index] for index in indices]
         requests = [(index, slice(None), slice(None)) for index in indices]
-        result = [(torch.from_numpy(inputs), torch.from_numpy(targets))
-                  for inputs, targets in self.source.read_windows(requests)]
-        if self.area_weights is not None:
-            weights = torch.from_numpy(np.asarray(self.area_weights, dtype='float32'))
-            result = [(*item, weights) for item in result]
-        return result
+        return [self._sample(index, inputs, targets)
+                for index, (inputs, targets) in zip(indices, self.source.read_windows(requests))]
 
 
 class _SpatialTileDataset(_ArrayDataset):
@@ -298,8 +325,8 @@ class _SpatialTileDataset(_ArrayDataset):
     forecast windows; evaluation visits every cell of every window exactly once.
     """
 
-    def __init__(self, source, area_weights=None):
-        super().__init__(source, area_weights=area_weights)
+    def __init__(self, source, area_weights=None, topography_asset=None):
+        super().__init__(source, area_weights=area_weights, topography_asset=topography_asset)
         self.tiles = [
             (slice(lat, lat + THREE_HOUR_TILE_SHAPE[0]),
              slice(lon, lon + THREE_HOUR_TILE_SHAPE[1]))
@@ -317,11 +344,11 @@ class _SpatialTileDataset(_ArrayDataset):
         inputs, targets = self.source.read_window(
             window_index, lat_slice=latitude, lon_slice=longitude
         )
-        result = (torch.from_numpy(inputs), torch.from_numpy(targets))
+        sample = self._sample(window_index, inputs, targets, (latitude, longitude))
         if self.area_weights is not None:
-            weights = np.asarray(self.area_weights[latitude, longitude], dtype='float32')
-            return (*result, torch.from_numpy(weights))
-        return result
+            sample["area_weights"] = torch.from_numpy(
+                np.asarray(self.area_weights[latitude, longitude], dtype='float32'))
+        return sample
 
     def __getitems__(self, indices):
         if not hasattr(self.source, 'read_windows'):
@@ -331,17 +358,14 @@ class _SpatialTileDataset(_ArrayDataset):
             window, tile = divmod(index, len(self.tiles))
             latitude, longitude = self.tiles[tile]
             requests.append((window, latitude, longitude))
-        result = [(torch.from_numpy(inputs), torch.from_numpy(targets))
-                  for inputs, targets in self.source.read_windows(requests)]
-        if self.area_weights is not None:
-            weighted = []
-            for item, index in zip(result, indices):
-                _, tile = divmod(index, len(self.tiles))
-                latitude, longitude = self.tiles[tile]
-                weights = torch.from_numpy(np.asarray(self.area_weights[latitude, longitude], dtype='float32'))
-                weighted.append((*item, weights))
-            result = weighted
-        return result
+        samples = []
+        for (window, latitude, longitude), (inputs, targets) in zip(requests, self.source.read_windows(requests)):
+            sample = self._sample(window, inputs, targets, (latitude, longitude))
+            if self.area_weights is not None:
+                sample["area_weights"] = torch.from_numpy(
+                    np.asarray(self.area_weights[latitude, longitude], dtype='float32'))
+            samples.append(sample)
+        return samples
 
 
 def _require_finite_gradients(model):
@@ -355,14 +379,19 @@ def _require_finite_gradients(model):
         raise EarthTrainingError(f"Non-finite gradient for {parameters[invalid][0]}")
 
 
-def _forward_batch(model, inputs, *, model_source, horizon):
+def _forward_batch(model, inputs, *, model_source, horizon, longitude=None, topography=None):
     # Test doubles from the legacy runner contract expose a boolean marker and
     # implement the tensor call directly; real uploaded models carry a schema id.
     if model_source == MODEL_SOURCE_UPLOADED and getattr(model, "_aresvision_earth_3hourly_contract", None) is True:
         return model(inputs)
+    # The coordinate is only ever passed when one exists, so a model that declares
+    # nothing keeps the exact call it had before derived inputs existed.
+    extra = {} if longitude is None else {"longitude": longitude}
+    if topography is not None:
+        extra["topography"] = topography.to(inputs.device)
     return earth_forward_for_model(
         model, inputs, model_source=model_source, horizon=horizon,
-        height=inputs.shape[-2], width=inputs.shape[-1],
+        height=inputs.shape[-2], width=inputs.shape[-1], **extra,
     )
 
 
@@ -396,12 +425,25 @@ def _weighted_mse(output, targets, spatial_weights=None, sample_weight_denominat
 
 
 def _split_batch(batch):
+    """Split a loader batch into ``(inputs, longitude, targets, area_weights)``.
+
+    This runner's own datasets return mappings, so the seasonal coordinate is
+    explicit. Positional tuples stay supported for loaders built elsewhere:
+    ``(inputs, targets)`` and the legacy ``(inputs, targets, area weights)``.
+    A coordinate is never inferred from a tuple position, because an ``[H, W]``
+    weight tensor and a small ``[B, window]`` coordinate have the same rank.
+    """
+    if isinstance(batch, dict):
+        for key in ("inputs", "targets"):
+            if key not in batch:
+                raise EarthTrainingError(f"Earth loader batch is missing {key}")
+        return batch["inputs"], batch.get("longitude"), batch["targets"], batch.get("area_weights")
     if len(batch) == 2:
-        inputs, targets = batch
-        return inputs, targets, None
+        return batch[0], None, batch[1], None
     if len(batch) == 3:
-        return batch
-    raise EarthTrainingError('Earth loader batches must contain inputs, targets and optional area weights')
+        return batch[0], None, batch[1], batch[2]
+    raise EarthTrainingError(
+        'Earth loader batches must be mappings or (inputs, targets[, area weights]) tuples')
 
 
 def _evaluate_split(
@@ -424,10 +466,13 @@ def _evaluate_split(
                                         'area_weight_denominator', None)
     with torch.no_grad():
         for batch in loader:
-            inputs, targets, spatial_weights = _split_batch(batch)
+            inputs, longitude, targets, spatial_weights = _split_batch(batch)
             inputs = inputs.to(device, non_blocking=device.type == 'cuda')
             targets = targets.to(device, non_blocking=device.type == 'cuda')
-            output = _forward_batch(model, inputs, model_source=model_source, horizon=horizon)
+            if longitude is not None:
+                longitude = longitude.to(device, non_blocking=device.type == 'cuda')
+            output = _forward_batch(model, inputs, model_source=model_source, horizon=horizon,
+                                    longitude=longitude, topography=(batch.get("topography") if isinstance(batch, dict) else None))
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during evaluation")
             loss, denominator = _weighted_mse(
@@ -577,13 +622,16 @@ def run_training(
         loss_elements = 0
         total_batches = len(prepared["train_loader"])
         for batch_index, batch in enumerate(prepared["train_loader"], start=1):
-            inputs, targets, spatial_weights = _split_batch(batch)
+            inputs, longitude, targets, spatial_weights = _split_batch(batch)
             inputs = inputs.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
             targets = targets.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
+            if longitude is not None:
+                longitude = longitude.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
             if spatial_weights is not None:
                 spatial_weights = spatial_weights.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
             optimizer.zero_grad(set_to_none=True)
-            output = _forward_batch(model, inputs, model_source=model_source, horizon=profile["horizon"])
+            output = _forward_batch(model, inputs, model_source=model_source, horizon=profile["horizon"],
+                                    longitude=longitude, topography=(batch.get("topography") if isinstance(batch, dict) else None))
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during training")
             loss, denominator = _weighted_mse(
@@ -757,6 +805,10 @@ def run_training(
         task_id=task_id,
         model_source=model_source,
         uploaded_model=uploaded_block,
+        **({"topography_identity": prepared["topography_asset"].identity,
+            "topography_grid": {name: getattr(prepared["topography_asset"], name).tolist()
+                                for name in ("latitude", "longitude", "lat_bounds", "lon_bounds")}}
+           if prepared["topography_asset"] is not None else {}),
     )
     saved_path = save_earth_artifact_atomic(payload, output_path, strict_reload=True)
     # Final proof on the published file: reload it strictly and reproduce the
@@ -765,6 +817,7 @@ def run_training(
         saved_path, expected_binding=binding, expected_task_id=task_id,
         expected_hyperparameters=(None if metrics_contract is None else {
             **hyperparameters,
+            **({"_earth_topography": spec["topography"]} if "topography" in spec else {}),
             **({"_earth_task_split": prepared["task_split"],
                 EARTH_METRICS_SCHEMA_KEY: metrics_contract["schema"],
                 EARTH_METRICS_AGGREGATION_KEY: metrics_contract["aggregation"]}
@@ -777,11 +830,17 @@ def run_training(
     for warning in reload_warnings:
         print(f"Earth reload warning: {warning}", flush=True)
     reloaded.to(resolved_device)
-    sample_inputs, _, _ = _split_batch(next(iter(prepared["test_loader"])))
+    sample_batch = next(iter(prepared["test_loader"]))
+    sample_inputs, sample_longitude, _, _ = _split_batch(sample_batch)
+    sample_topography = sample_batch.get("topography") if isinstance(sample_batch, dict) else None
     sample_inputs = sample_inputs.to(resolved_device)
+    if sample_longitude is not None:
+        sample_longitude = sample_longitude.to(resolved_device)
     with torch.no_grad():
-        before = _forward_batch(model, sample_inputs, model_source=model_source, horizon=profile["horizon"])
-        after = _forward_batch(reloaded, sample_inputs, model_source=model_source, horizon=profile["horizon"])
+        before = _forward_batch(model, sample_inputs, model_source=model_source,
+                                horizon=profile["horizon"], longitude=sample_longitude, topography=sample_topography)
+        after = _forward_batch(reloaded, sample_inputs, model_source=model_source,
+                               horizon=profile["horizon"], longitude=sample_longitude, topography=sample_topography)
     if not torch.equal(before, after):
         raise EarthTrainingError("The published checkpoint does not reproduce the trained model")
     print(f"Model saved: {saved_path}", flush=True)

@@ -209,7 +209,8 @@ def test_full_grid_prediction_uses_one_model_call_and_global_context(monkeypatch
     payload = _uploaded_payload()
     checkpoint = SimpleNamespace(
         **{key: payload[key] for key in ("model_config", "model_ref", "dataset_binding", "training_contract", "normalization")},
-        model_source="uploaded", model_identity=lambda: {"model_source": "uploaded"},
+        model_source="uploaded", uploaded_model=payload["model_ref"]["uploaded_model"],
+        model_identity=lambda: {"model_source": "uploaded"},
     )
     dates = np.datetime64("2020-01-01T01:30") + np.arange(5) * np.timedelta64(3, "h")
     release = SimpleNamespace(dates=dates, latitude=np.linspace(-89.625, 89.625, 240),

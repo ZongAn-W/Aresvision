@@ -145,19 +145,23 @@ only when all of these hold:
 2. it passes the shared safety gate (imports limited to `torch` / `numpy`, no
    `open` / `eval` / `exec` / `compile` / `__import__`, no `system` / `popen` / `Popen` / `run`);
 3. `MODEL_SPEC["datasets"]` declares the `earth_merra2` feed;
-4. that declaration does not require Ls or MOLA topography — Earth training rejects
-   Mars-only auxiliary inputs;
-5. a real dry-run builds the model with Earth's window/horizon/grid and runs
-   `[1, 7, {1, 5}, 36, 72]` → `[1, 3, 1, 36, 72]`.
+4. for the active three-hour Earth feed, the declaration uses the independent
+   v1 tile or v2 full-grid schema; `ls` and Earth `topography` are declared via
+   `derived_inputs`, never through Mars `auxiliary_inputs`;
+5. a real dry-run builds the model with the selected three-hour window,
+   horizon, grid and declared derived inputs. The complete active contract is
+   documented in [Earth three-hour uploaded models](earth-3hourly-uploaded-model.md).
 
 Any failure is reported with a reason; the training page disables "start experiment"
 until the verdict is positive. An upload with no `datasets` block keeps its historical
 Mars behaviour and reports `"compatible": false` for Earth with the reason
 `MODEL_SPEC does not declare the earth_merra2 dataset feed`.
 
-The Earth feed does **not** pass `ls` or MOLA topography, so anything a model needs must
-come from the five Earth channels (`TO3` plus four optional). `selected_channels` for
-Earth starts with the mandatory `TO3` target.
+The retired daily Earth example below does not describe the active three-hour
+feed. Active Earth models receive `TO3` plus selected meteorological channels,
+and may additionally declare UTC-derived `ls` or the server-owned ETOPO
+`topography` tensor. Mars MOLA declarations remain Mars-only. See the active
+[v1 contract](earth-3hourly-uploaded-model.md) and [Earth terrain asset](earth-topography-asset.md).
 
 Ask the server for the verdict instead of guessing:
 

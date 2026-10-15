@@ -28,6 +28,11 @@ UPLOADED_MODEL_DOWNLOAD_ASSETS = {
         "download_name": "aresvision_earth_3hourly_model_v1.py",
         "media_type": "text/x-python; charset=utf-8",
     },
+    "earth-3hourly-shared-gate-template": {
+        "path": REPO_ROOT / "docs" / "earth-3hourly-four-positions-shared-no-after-decoder-model.py",
+        "download_name": "aresvision_earth_3hourly_shared_gate_model_v1.py",
+        "media_type": "text/x-python; charset=utf-8",
+    },
     "earth-3hourly-guide": {
         "path": REPO_ROOT / "docs" / "earth-3hourly-uploaded-model.md",
         "download_name": "aresvision_earth_3hourly_model_v1.md",
