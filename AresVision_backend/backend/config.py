@@ -57,6 +57,10 @@ EARTH_MERRA2_3HOURLY_DIR = Path(os.getenv(
     "ARESVISION_EARTH_MERRA2_3HOURLY_DIR",
     DATA_DIR / "earth" / "merra2_3hourly_v1",
 )).expanduser()
+EARTH_MERRA2_3HOURLY_5DEG_DIR = Path(os.getenv(
+    "ARESVISION_EARTH_MERRA2_3HOURLY_5DEG_DIR",
+    DATA_DIR / "earth" / "merra2_3hourly_5deg_v1",
+)).expanduser()
 
 EARTH_DEFAULT_DATASET_IDS = frozenset({
     "earth_merra2_3hourly_v1",
@@ -94,6 +98,10 @@ MOLA_TOPOGRAPHY_PATH = Path(os.getenv(
 EARTH_TOPOGRAPHY_PATH = Path(os.getenv(
     "ARESVISION_EARTH_TOPOGRAPHY_PATH",
     DATA_DIR / "assets" / "earth_etopo2022_surface_0p75deg.nc",
+)).expanduser()
+EARTH_TOPOGRAPHY_5DEG_PATH = Path(os.getenv(
+    "ARESVISION_EARTH_TOPOGRAPHY_5DEG_PATH",
+    DATA_DIR / "assets" / "earth_etopo2022_surface_5deg.nc",
 )).expanduser()
 
 # ─── 网格 ───
@@ -164,7 +172,7 @@ USER_MODEL_VALIDATION_TIMEOUT_SECONDS = int(os.getenv("USER_MODEL_VALIDATION_TIM
 if USER_MODEL_VALIDATION_TIMEOUT_SECONDS <= 0:
     raise ValueError("USER_MODEL_VALIDATION_TIMEOUT_SECONDS must be a positive integer")
 USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS = int(os.getenv(
-    "USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS", "300"
+    "USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS", "900"
 ))
 if USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS <= 0:
     raise ValueError("USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS must be a positive integer")

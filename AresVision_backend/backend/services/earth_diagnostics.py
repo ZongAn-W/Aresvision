@@ -22,7 +22,7 @@ import numpy as np
 import torch
 import xarray as xr
 
-from services.dataset_identity import DatasetRequestError, EARTH_DATASET_3HOURLY_ID
+from services.dataset_identity import DatasetRequestError, EARTH_DATASET_3HOURLY_ID, EARTH_THREE_HOURLY_DATASET_IDS
 from services.earth_dataset import (
     EarthThreeHourlyWindows, _threehour_path, _threehour_values, validate_normalization,
     threehour_global_cell_area_weights,
@@ -56,6 +56,8 @@ RESIDUAL_DEFINITION = "prediction-reference"
 
 
 def _full_grid_contract(training_contract):
+    if training_contract.get("dataset_id") == "earth_merra2_3hourly_5deg_v1":
+        return True
     schema = training_contract.get("uploaded_model_schema")
     if schema is None:
         return False
@@ -155,7 +157,7 @@ def build_earth_diagnostics_cache_key(*, task_id, checkpoint_sha256, dataset_bin
         "window": training_contract["window"], "horizon": training_contract["horizon"],
         "channels": training_contract["input_channel_order"], "normalization": normalization,
         "selected_indices": list(selected_indices), "parameters": parameters,
-        "tile_shape": [240, 480] if _full_grid_contract(training_contract) else list(TILE_SHAPE),
+        "tile_shape": list(training_contract.get("grid_shape", [240, 480])) if _full_grid_contract(training_contract) else list(TILE_SHAPE),
         "batch_size": 1 if _full_grid_contract(training_contract) else BATCH_SIZE,
         "uploaded_model_schema": training_contract.get("uploaded_model_schema"),
         "aggregation": aggregation,
@@ -419,7 +421,7 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
     if pfi_windows is not None:
         pfi_windows = _integer("pfi_windows", pfi_windows, 1, MAX_PFI_WINDOWS)
     _require_completed_earth_task(task)
-    if getattr(task, "dataset_id", None) != EARTH_DATASET_3HOURLY_ID:
+    if getattr(task, "dataset_id", None) not in EARTH_THREE_HOURLY_DATASET_IDS:
         raise _error("dataset_prediction_not_supported", "Earth diagnostics require the active three-hour dataset")
     sha = _threehour_checkpoint_sha(task)
     checkpoint = _load_checkpoint(task)
@@ -535,7 +537,7 @@ def compute_earth_diagnostics(task: Any, registry: Any, *, sample_windows=DEFAUL
         result = {
             "algorithm_version": DIAGNOSTIC_VERSION, "planet": "earth", "task_id": int(task.id),
             "status": "completed", "unit": "DU", "target_unit": "DU", "target": "TO3",
-            "dataset_id": EARTH_DATASET_3HOURLY_ID,
+            "dataset_id": checkpoint.dataset_binding["dataset_id"],
             "dataset_version": checkpoint.dataset_binding["dataset_version"],
             "dataset_fingerprint": checkpoint.dataset_binding["dataset_fingerprint"],
             "checkpoint_sha256": sha, "model": checkpoint.model_identity(),

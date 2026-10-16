@@ -63,16 +63,42 @@ parameters. Training still checks outputs and finite gradients, and checkpoint
 strict reload still checks eval sample independence with the saved batch.
 The upload's isolated CPU check does not guarantee CUDA memory capacity or that
 every task configuration can run.
-Upload/revalidation uses `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` (default 120
-seconds). Explicit `earth_probe` calls can still check a complete configuration;
-the full-grid probe uses the larger of that budget and
-`USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` (default 300 seconds); both must
-be positive integers. This full-grid budget is retained for explicit probes and
-is not used during task creation. The probe receives the frozen schema from the
-upload report and checks it against the executed model declaration. Explicit
-validator budgets, including short test timeouts and the in-process `None`
-override, keep their original semantics. Tile/Mars checks keep the ordinary
-budget. Unknown or failed saved upload reports prohibit training.
+Upload/revalidation begins with `USER_MODEL_VALIDATION_TIMEOUT_SECONDS`
+(default 120 seconds). After the isolated child imports the source, normalizes
+its dataset declaration and validates its parameter schema, it announces a
+full-grid contract to the parent. The parent then uses the larger of the ordinary
+budget and `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` (default 900 seconds).
+The deadline is measured from process start; phase messages cannot reset it.
+The parent never imports uploaded source to select a budget. A hung import or
+invalid declaration cannot obtain the extension. Both settings must be positive
+integers. Upload/revalidation waits for the isolated process in a background
+thread so unrelated API requests remain responsive.
+
+Explicit `earth_probe` calls still check the requested complete configuration;
+full-grid probes use the same larger budget, with their frozen schema checked
+against the executed model declaration. Explicit validator budgets, including
+short test timeouts and the in-process `None` override, retain their original
+semantics. Tile/Mars checks keep the ordinary budget. Task creation reuses the
+saved report and does not run these probes. Unknown or failed saved upload
+reports prohibit training. The full 240x480 grid, all 16 channel combinations,
+default model parameters and all forward/backward and eval independence checks
+remain enabled. A 900-second limit is a bounded CPU validation allowance, not a
+promise that every architecture or requested training configuration will fit.
+
+On 2026-10-16, the uploaded shared terrain-affine gate architecture with its
+original defaults (16/64/128 hidden dimensions, two temporal blocks, gate width
+32) passed the complete isolated CPU float32 upload check in **700.78 seconds**
+(two PyTorch threads). This exercised all 16 channel combinations, 2->1 temporal
+windows, full 240x480 inputs/outputs, B=1/2, seasonal coordinates, verified ETOPO
+terrain, finite gradients and eval sample independence. Its source bytes,
+identity, version and display name were preserved; the existing service saved
+the successful report after a SQLite backup. This is an upload compatibility
+check, not a full training or forecast-accuracy result. Grouped backend regression
+runs cover 209 unique tests, including deadline extension/termination, large
+reports, composed declarations, responsive upload/revalidation, ownership,
+downloads and cached training admission. Run the relevant tests from
+`AresVision_backend/backend/` with the configured AresVision interpreter and
+`-m pytest --asyncio-mode=auto`; the async service tests need this option.
 
 An available upload report covers its declared short windows, not an arbitrary
 20->20 configuration or requested batch. An explicit probe timeout is reported as
@@ -131,3 +157,5 @@ memory and throughput for the selected model and task configuration.
 
 See [task partitions](earth-task-splits.md), [metrics](earth-evaluation-metrics.md)
 and [v1 compatibility](earth-3hourly-uploaded-model.md).
+
+独立的三小时 **36×72（5°）** 训练发布、完整全球窗口与上传模型契约见 [5° 数据集](earth-merra2-5deg.md)；本文件的原 0.75° 契约继续兼容。

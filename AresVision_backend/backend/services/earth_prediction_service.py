@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from services.dataset_identity import (
-    DatasetRequestError, is_earth_training_task, EARTH_DATASET_3HOURLY_ID,
+    DatasetRequestError, is_earth_training_task, EARTH_DATASET_3HOURLY_ID, EARTH_THREE_HOURLY_DATASET_IDS,
     require_active_dataset, training_task_dataset_id,
 )
 from services.dataset_registry import DatasetRegistry
@@ -127,7 +127,7 @@ def _task_binding(task: Any) -> dict:
             "This Earth task has no verified dataset binding",
             status_code=409,
         )
-    if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID and (
+    if binding["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS and (
             binding["dataset_version"] != "v1" or binding["dataset_identity_status"] != "verified"
             or not binding["dataset_snapshot"]):
         raise DatasetRequestError("invalid_earth_training_artifact",
@@ -173,7 +173,7 @@ def _load_checkpoint(task: Any):
             ) from exc
     try:
         expected_hypers = None
-        if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+        if binding["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS:
             expected_hypers = json.loads(getattr(task, "hyperparameters", None) or "{}")
             if not isinstance(expected_hypers, dict):
                 raise EarthArtifactError("The task hyperparameters are damaged")
@@ -183,9 +183,9 @@ def _load_checkpoint(task: Any):
             expected_task_id=getattr(task, "id", None),
             expected_hyperparameters=expected_hypers,
         )
-        if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+        if binding["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS:
             build_earth_model_from_checkpoint(checkpoint)  # Strict state-dict shape check for context/cache hits too.
-        if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+        if binding["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS:
             expected_snapshot = binding.get("dataset_snapshot")
             actual_snapshot = checkpoint.dataset_binding["dataset_snapshot"]
             if not isinstance(expected_snapshot, dict) or any(
@@ -210,11 +210,12 @@ def _load_checkpoint(task: Any):
 
 
 def _sync_release(registry: DatasetRegistry, binding: Mapping[str, Any]):
+    from services.earth_training_contract import earth_training_profile
     """Return the release the task was bound to, or a stable version error."""
     try:
         release = registry.get_earth_snapshot(binding["dataset_id"])
     except DatasetRequestError as exc:
-        if (binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID
+        if (binding["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS
                 and exc.code == "dataset_unavailable"
                 and exc.availability_reason != "package_unreadable"):
             raise DatasetRequestError("dataset_version_changed",
@@ -227,7 +228,7 @@ def _sync_release(registry: DatasetRegistry, binding: Mapping[str, Any]):
             "The dataset release changed since this task was trained; retrain before predicting",
             status_code=409,
         )
-    if binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
+    if binding.get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS:
         snapshot = binding.get("dataset_snapshot") or {}
         if (metadata.get("dataset_id") != binding["dataset_id"]
                 or metadata.get("dataset_version") != binding.get("dataset_version")
@@ -243,8 +244,9 @@ def _sync_release(registry: DatasetRegistry, binding: Mapping[str, Any]):
             # Window availability belongs to the checkpoint's configured
             # window/horizon below. A valid short release need not support the
             # default 56->24 configuration to serve a shorter trained model.
-            if (not np.array_equal(release.latitude, -89.625 + np.arange(240) * .75)
-                    or not np.array_equal(release.longitude, -179.625 + np.arange(480) * .75)):
+            height, width = earth_training_profile(binding["dataset_id"])["grid_shape"]
+            if (not np.array_equal(release.latitude, -90 + (np.arange(height) + .5) * (180 / height))
+                    or not np.array_equal(release.longitude, -180 + (np.arange(width) + .5) * (360 / width))):
                 raise ValueError("The three-hour grid coordinates changed")
             _threehour_path(release)
         except (EarthArtifactError, ValueError) as exc:
@@ -256,7 +258,7 @@ def _validate_checkpoint_split_ranges(checkpoint: Any, release: Any) -> None:
     """Reject a checkpoint whose published split contract no longer matches."""
     topography_for_checkpoint(checkpoint, release)
     contract = checkpoint.training_contract
-    if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
+    if checkpoint.dataset_binding.get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS:
         from services.earth_task_split import EARTH_TASK_SPLIT_POLICY, validate_earth_task_split
         if contract.get("split_policy") == EARTH_TASK_SPLIT_POLICY:
             try:
@@ -318,7 +320,7 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
     # while applying the frozen task split to both model sources.
     strict_origins = strict_task_split or checkpoint.model_source == MODEL_SOURCE_UPLOADED
     origins = threehour_available_origin_range(release, window=contract['window'], horizon=contract['horizon'],
-        strict_split=strict_origins, task_split=task_split) if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else available_origin_range(
+        strict_split=strict_origins, task_split=task_split) if checkpoint.dataset_binding["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS else available_origin_range(
         release,
         window=int(contract.get("window", EARTH_WINDOW)),
         horizon=int(contract.get("horizon", EARTH_HORIZON)),
@@ -328,7 +330,7 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
     snapshot = checkpoint.dataset_binding.get("dataset_snapshot") or {}
     published_splits = snapshot.get("splits") or {}
     training_end = (published_splits.get("train") or {}).get("end")
-    if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+    if checkpoint.dataset_binding["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS:
         training_end = contract["split_ranges"]["train"]["date_end"]
     # Report the uploaded model's file state without failing the context call: the
     # page must be able to explain that the original file is gone even though the
@@ -375,7 +377,7 @@ def build_prediction_context(task: Any, registry: DatasetRegistry) -> EarthPredi
         warnings=warnings,
         temporal=({"frequency_hours": 3, "step_unit": "hour", "step": 3,
                    "time_zone": "UTC", "timestamp_rule": "interval_center"}
-                  if checkpoint.dataset_binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else {}),
+                  if checkpoint.dataset_binding["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS else {}),
     )
 
 
@@ -444,7 +446,7 @@ def run_earth_prediction(
 ) -> dict:
     """Forecast the three days after ``origin`` and score them against the release."""
     _require_completed_earth_task(task)
-    if getattr(task, "dataset_id", None) == EARTH_DATASET_3HOURLY_ID:
+    if getattr(task, "dataset_id", None) in EARTH_THREE_HOURLY_DATASET_IDS:
         return _run_threehour_prediction(task, origin, registry, device=device, cache=cache)
     checkpoint = _load_checkpoint(task)
     try:
@@ -585,8 +587,8 @@ def _threehour_checkpoint_sha(task):
 def _read_threehour_forecast_block(release, index, order, normalization, *, window=56, horizon=24):
     """Read the task's input/reference span outside the tile loop."""
     mean, scale = validate_normalization(normalization, order)
-    inputs = np.empty((window, len(order), 240, 480), dtype="float32")
-    reference = np.empty((horizon, 240, 480), dtype="float32")
+    inputs = np.empty((window, len(order), len(release.latitude), len(release.longitude)), dtype="float32")
+    reference = np.empty((horizon, len(release.latitude), len(release.longitude)), dtype="float32")
     try:
         path = _threehour_path(release)
         first, forecast, stop = index - window + 1, index + 1, index + horizon + 1
@@ -674,7 +676,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
     iso = lambda value: np.datetime_as_string(value, unit="s") + "Z"
     normalized_origin = iso(release.dates[index])
     key = build_earth_prediction_cache_key(
-        planet="earth", dataset_id=EARTH_DATASET_3HOURLY_ID,
+        planet="earth", dataset_id=checkpoint.dataset_binding["dataset_id"],
         dataset_version=checkpoint.dataset_binding["dataset_version"],
         dataset_fingerprint=checkpoint.dataset_binding["dataset_fingerprint"],
         task_id=task.id, forecast_origin=normalized_origin, target_timestamps=timestamps,
@@ -707,7 +709,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
             longitude = longitude.to(resolved_device)
         extra = {} if longitude is None else {"longitude": longitude}
         with torch.no_grad():
-            full_grid = False
+            full_grid = checkpoint.dataset_binding["dataset_id"] == "earth_merra2_3hourly_5deg_v1"
             if checkpoint.model_source == MODEL_SOURCE_UPLOADED:
                 from training_backbones.earth_3hourly_uploaded_contract import contract_profile
                 full_grid = contract_profile(checkpoint.model_config["contract_schema"])["full_grid"]
@@ -715,7 +717,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
                 tensor = torch.from_numpy(np.ascontiguousarray(inputs[None])).to(resolved_device)
                 output = earth_forward_for_model(
                     model, tensor,
-                    model_source=checkpoint.model_source, horizon=horizon, height=240, width=480,
+                    model_source=checkpoint.model_source, horizon=horizon, height=len(release.latitude), width=len(release.longitude),
                     **extra, **topography_kwargs(topography_asset, tensor),
                 )
                 with np.errstate(over="ignore", invalid="ignore"):
@@ -765,7 +767,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
     source_status, source_warnings = _model_source_state(checkpoint)
     result = {
         "planet": "earth", "task_id": task.id,
-        "dataset_id": EARTH_DATASET_3HOURLY_ID,
+        "dataset_id": checkpoint.dataset_binding["dataset_id"],
         "dataset_version": checkpoint.dataset_binding["dataset_version"],
         "dataset_fingerprint": checkpoint.dataset_binding["dataset_fingerprint"],
         "target": "TO3", "target_unit": "DU", "window": window, "horizon": horizon,
@@ -779,7 +781,7 @@ def _run_threehour_prediction(task, origin, registry, *, device=None, cache=None
         "model_architecture": identity.get("model_architecture"), "model_source": identity.get("model_source"),
         "model": identity, "model_source_status": source_status,
         "warnings": list(dict.fromkeys([*warnings, *source_warnings])), "metrics": metrics, "cache_key": key,
-        "grid": {"shape": [240, 480], "latitude": release.latitude.tolist(), "longitude": release.longitude.tolist(),
+        "grid": {"shape": [len(release.latitude), len(release.longitude)], "latitude": release.latitude.tolist(), "longitude": release.longitude.tolist(),
                  **{name: published_grid.get(name) for name in (
                      "latitude_range", "longitude_range", "latitude_step", "longitude_step", "coverage", "wrap_longitude")}},
         "variables": [{"id": "TO3", "label": VARIABLE_LABELS["TO3"], "units": "DU", "role": "target_and_input"}],

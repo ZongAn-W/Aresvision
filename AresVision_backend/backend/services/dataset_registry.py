@@ -22,6 +22,8 @@ from services.dataset_identity import (
     EARTH_DATASET_ID,
     EARTH_DATASET_V2_ID,
     EARTH_DATASET_3HOURLY_ID,
+    EARTH_DATASET_3HOURLY_5DEG_ID,
+    EARTH_THREE_HOURLY_DATASET_IDS,
     EARTH_DATASET_IDS,
     IDENTITY_STATUS_UNVERSIONED,
     IDENTITY_STATUS_VERIFIED,
@@ -65,6 +67,7 @@ EARTH_SCHEMA = "aresvision_earth_daily_v1"
 EARTH_3HOURLY_SCHEMA = "aresvision_earth_3hourly_v1"
 EARTH_3HOURLY_DATA_FILE = "earth_merra2_3hourly.nc"
 EARTH_3HOURLY_DISPLAY_NAME = "MERRA-2 3-hourly global 0.75 degree v1"
+EARTH_3HOURLY_5DEG_DISPLAY_NAME = "MERRA-2 3-hourly global 5 degree v1"
 
 
 def earth_3hourly_training_profile() -> dict:
@@ -184,6 +187,7 @@ class DatasetRegistry:
         earth_dataset_id: Optional[str] = None,
         legacy_earth_package_dir: Any = None,
         earth_3hourly_package_dir: Any = None,
+        earth_3hourly_5deg_package_dir: Any = None,
         verification_cache_dir: Any = None,
         progress=None,
     ):
@@ -230,6 +234,13 @@ class DatasetRegistry:
             if earth_3hourly_package_dir is not None
             else self._earth_package_dir.parent / "merra2_3hourly_v1",
             "version": "v1", "display": EARTH_3HOURLY_DISPLAY_NAME,
+            "data_file_name": EARTH_3HOURLY_DATA_FILE,
+        }
+        self._earth_specs[EARTH_DATASET_3HOURLY_5DEG_ID] = {
+            "path": Path(earth_3hourly_5deg_package_dir).expanduser()
+            if earth_3hourly_5deg_package_dir is not None
+            else self._earth_package_dir.parent / "merra2_3hourly_5deg_v1",
+            "version": "v1", "display": EARTH_3HOURLY_5DEG_DISPLAY_NAME,
             "data_file_name": EARTH_3HOURLY_DATA_FILE,
         }
         # NetCDF reads are serialized: one verification at a time protects the
@@ -313,7 +324,7 @@ class DatasetRegistry:
             "binding_basis": REGISTRY_BINDING_BASIS,
             "version_status": IDENTITY_STATUS_VERIFIED,
         }
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             snapshot.update({
                 "manifest_content_sha256": metadata.get("manifest_content_sha256"),
                 "frequency_hours": 3, "step_unit": "hour", "step": 3,
@@ -368,6 +379,8 @@ class DatasetRegistry:
         Kept as a thin wrapper over :meth:`get_earth_snapshot` so the overview
         error contract (an explicit expected fingerprint) does not change.
         """
+        if dataset_id == EARTH_DATASET_3HOURLY_5DEG_ID:
+            raise DatasetRequestError("dataset_overview_not_supported", "The 5 degree Earth release is a training and backtesting dataset", status_code=409)
         return self.get_earth_snapshot(dataset_id, expected_fingerprint=expected_fingerprint)
 
     @staticmethod
@@ -410,24 +423,29 @@ class DatasetRegistry:
         }
 
     def _base_earth_descriptor(self, dataset_id: str, availability: str, reason: Optional[str]) -> dict:
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
+            lowres = dataset_id == EARTH_DATASET_3HOURLY_5DEG_ID
+            profile = earth_training_profile(dataset_id)
             descriptor = {
-                "dataset_id": dataset_id, "display_name": EARTH_3HOURLY_DISPLAY_NAME,
+                "dataset_id": dataset_id, "display_name": EARTH_3HOURLY_5DEG_DISPLAY_NAME if lowres else EARTH_3HOURLY_DISPLAY_NAME,
                 "planet": "earth", "dataset_version": "v1", "schema": EARTH_3HOURLY_SCHEMA,
                 "availability": availability, "availability_reason": reason,
                 "manifest_sha256": None, "manifest_content_sha256": None,
                 "data_sha256": None, "dataset_fingerprint": None,
                 "capabilities": {"metadata": True, "training": True,
-                                 "web_overview": True, "trained_prediction": True},
+                                 "web_overview": not lowres, "trained_prediction": True},
                 "time": {"kind": "datetime", "calendar": None, "start": None, "end": None,
                          "count": None, "step": 3, "step_unit": "hour",
                          "frequency_hours": 3, "time_zone": "UTC"},
                 "frequency_hours": 3, "step_unit": "hour", "step": 3,
-                "grid_shape": [240, 480], "grid": None,
+                "grid_shape": list(profile["grid_shape"]), "grid": None,
                 "channel_order": [], "variables": [], "splits": None,
-                "training_profile": earth_3hourly_training_profile(),
-                "limitations": ["Uploaded three-hour models require the independent versioned contract and dry-run",
-                                 "Overview fields use a server display grid; point queries use the native 240 by 480 grid"],
+                "training_profile": profile,
+                "limitations": (["This 5 degree release uses full global 36x72 windows for official DLinear and explicitly compatible uploaded models",
+                                 "The release is generated by spherical cell-area weighted overlap from the native 0.75 degree package"]
+                                if lowres else
+                                ["Uploaded three-hour models require the independent versioned contract and dry-run",
+                                 "Overview fields use a server display grid; point queries use the native 240 by 480 grid"]),
             }
             return descriptor
         is_v2 = dataset_id == EARTH_DATASET_V2_ID
@@ -477,7 +495,7 @@ class DatasetRegistry:
                 and signature == self._earth_cache_signature.get(dataset_id)
             ):
                 return self._earth_cache_release[dataset_id]
-            if (not force_full and dataset_id == EARTH_DATASET_3HOURLY_ID
+            if (not force_full and dataset_id in EARTH_THREE_HOURLY_DATASET_IDS
                     and signature == self._earth_cache_signature.get(dataset_id)
                     and dataset_id in self._earth_cache_descriptor):
                 return None  # An unchanged missing/invalid new package is already classified.
@@ -485,11 +503,11 @@ class DatasetRegistry:
             self._earth_cache_descriptor.pop(dataset_id, None)
             self._earth_cache_signature.pop(dataset_id, None)
             self.verification_count += 1
-            if dataset_id != EARTH_DATASET_3HOURLY_ID and (not spec["manifest"] or not spec["data"]):
+            if dataset_id not in EARTH_THREE_HOURLY_DATASET_IDS and (not spec["manifest"] or not spec["data"]):
                 self._earth_cache_descriptor[dataset_id] = self._unavailable_earth_descriptor(dataset_id, REASON_PACKAGE_MISSING)
                 return None
             try:
-                if dataset_id == EARTH_DATASET_3HOURLY_ID:
+                if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
                     kwargs = {"verification_cache_dir": self._verification_cache_dir}
                     if force_full:
                         kwargs["force_full"] = True
@@ -530,6 +548,9 @@ class DatasetRegistry:
                 raise
             # Carry the registration identity in the release so every consumer
             # answers with the same id, version and fingerprint.
+            if release.metadata.get("dataset_id", dataset_id) != dataset_id:
+                self._earth_cache_descriptor[dataset_id] = self._unavailable_earth_descriptor(dataset_id, "invalid_dataset")
+                return None
             release.metadata.setdefault("dataset_id", dataset_id)
             release.metadata.setdefault("dataset_version", spec["version"])
             descriptor = self._available_earth_descriptor(dataset_id, release.metadata)
@@ -548,8 +569,14 @@ class DatasetRegistry:
         # and is far larger than the descriptor contract. The response model would
         # drop it anyway, so it never reaches a client.
         descriptor.pop("manifest", None)
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
-            descriptor["training_profile"] = earth_3hourly_training_profile()
+        if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
+            descriptor["training_profile"] = earth_training_profile(dataset_id)
+            if dataset_id == EARTH_DATASET_3HOURLY_5DEG_ID:
+                descriptor["limitations"] = [
+                    "This 5 degree release uses full global 36x72 windows for official DLinear and explicitly compatible uploaded models",
+                    "The release is generated by spherical cell-area weighted overlap from the native 0.75 degree package",
+                ]
+                return descriptor
             descriptor["limitations"] = [
                 "Uploaded three-hour models require the independent versioned contract and dry-run",
                 "The three-hourly release is configured on the server and verified against its manifest",

@@ -17,7 +17,9 @@ TILE_SHAPE = (24, 48)
 FULL_GRID_CONTRACT_SCHEMA = "aresvision_earth_3hourly_fullgrid_model_v2"
 FULL_GRID_IMPLEMENTATION_ID = "aresvision_earth_3hourly_fullgrid_runner_v2"
 FULL_GRID_SHAPE = (240, 480)
-SUPPORTED_CONTRACT_SCHEMAS = frozenset({CONTRACT_SCHEMA, FULL_GRID_CONTRACT_SCHEMA})
+LOWRES_DATASET_ID = "earth_merra2_3hourly_5deg_v1"
+LOWRES_CONTRACT_SCHEMA = "aresvision_earth_3hourly_5deg_model_v1"
+SUPPORTED_CONTRACT_SCHEMAS = frozenset({CONTRACT_SCHEMA, FULL_GRID_CONTRACT_SCHEMA, LOWRES_CONTRACT_SCHEMA})
 CHANNELS = ("TO3", "U10M", "V10M", "T2M", "SWGDN")
 UNITS = ("DU", "m s-1", "m s-1", "K", "W m-2")
 FEED = {
@@ -32,6 +34,8 @@ FEED = {
 }
 FULL_GRID_FEED = {**FEED, "schema": FULL_GRID_CONTRACT_SCHEMA,
                   "spatial_tile_shape": list(FULL_GRID_SHAPE)}
+LOWRES_FEED = {**FEED, "schema": LOWRES_CONTRACT_SCHEMA,
+               "grid": [[36, 72]], "spatial_tile_shape": [36, 72]}
 RESERVED_PARAMETERS = frozenset({
     *FEED, "dataset_id", "dataset_version", "dataset_fingerprint", "dataset_snapshot",
     "fingerprint", "snapshot", "version", "data_dir", "data_path", "dataset_dir", "dataset_path",
@@ -66,17 +70,25 @@ DERIVED_INPUT_ATTRIBUTE = "_aresvision_earth_derived_inputs"
 def contract_profile(schema=CONTRACT_SCHEMA):
     if schema not in SUPPORTED_CONTRACT_SCHEMAS:
         raise ValueError("Unsupported Earth three-hour uploaded model schema")
-    full_grid = schema == FULL_GRID_CONTRACT_SCHEMA
-    return {"schema": schema, "shape": FULL_GRID_SHAPE if full_grid else TILE_SHAPE,
-            "implementation_id": FULL_GRID_IMPLEMENTATION_ID if full_grid else IMPLEMENTATION_ID,
+    lowres = schema == LOWRES_CONTRACT_SCHEMA
+    full_grid = schema in (FULL_GRID_CONTRACT_SCHEMA, LOWRES_CONTRACT_SCHEMA)
+    return {"schema": schema, "shape": (36, 72) if lowres else FULL_GRID_SHAPE if full_grid else TILE_SHAPE,
+            "dataset_id": LOWRES_DATASET_ID if lowres else DATASET_ID,
+            "implementation_id": "aresvision_earth_3hourly_5deg_runner_v1" if lowres else FULL_GRID_IMPLEMENTATION_ID if full_grid else IMPLEMENTATION_ID,
             "full_grid": full_grid, "default_batch_size": 1 if full_grid else 8,
             "max_batch_size": 64,
-            "probe_window": 2 if full_grid else 56,
-            "probe_horizon": 1 if full_grid else 24}
+            # Admission exercises every channel subset and repeated eval/train
+            # calls. Prefer short declared windows for both spatial contracts;
+            # actual task windows remain frozen and checked during execution.
+            "probe_window": 2, "probe_horizon": 1}
 
 
 def contract_schema_from_spec(model_spec):
-    feed = (model_spec.get("datasets") or {}).get(DATASET_ID) or {}
+    declarations = model_spec.get("datasets") or {}
+    feeds = [declarations[key] for key in (DATASET_ID, LOWRES_DATASET_ID) if key in declarations]
+    if len(feeds) != 1:
+        raise ValueError("An Earth model must declare exactly one three-hour spatial feed")
+    feed = feeds[0]
     schema = feed.get("schema")
     contract_profile(schema)
     return schema
@@ -99,7 +111,12 @@ def contract_schema_from_source(source):
                    and any(isinstance(name, ast.Name) and name.id == "MODEL_SPEC" for name in node.targets)]
     if len(assignments) != 1:
         raise ValueError("Earth source must export one MODEL_SPEC assignment")
-    schema = ast.literal_eval(field(field(field(assignments[0], "datasets"), DATASET_ID), "schema"))
+    datasets = field(assignments[0], "datasets")
+    keys = [name.value for name in datasets.keys if isinstance(name, ast.Constant)]
+    dataset_ids = [key for key in (DATASET_ID, LOWRES_DATASET_ID) if key in keys]
+    if len(dataset_ids) != 1:
+        raise ValueError("An Earth model must declare exactly one three-hour spatial feed")
+    schema = ast.literal_eval(field(field(datasets, dataset_ids[0]), "schema"))
     contract_profile(schema)
     return schema
 
@@ -180,7 +197,8 @@ def validate_forward_signature(model):
 
 def build_config(order, params=None, *, window=56, horizon=24, contract_schema=CONTRACT_SCHEMA):
     from services.earth_training_contract import earth_training_profile
-    profile = earth_training_profile(DATASET_ID, {'window': window, 'horizon': horizon})
+    execution = contract_profile(contract_schema)
+    profile = earth_training_profile(execution['dataset_id'], {'window': window, 'horizon': horizon})
     order = list(order)
     if not order or order[0] != "TO3" or order != [c for c in CHANNELS if c in order]:
         raise ValueError("Earth three-hour channels must be unique and canonical with TO3 first")
@@ -191,11 +209,11 @@ def build_config(order, params=None, *, window=56, horizon=24, contract_schema=C
     if any(key in RESERVED_PARAMETERS or key.startswith("_") for key in params):
         raise ValueError("Custom parameters cannot override the server Earth contract")
     return {
-        **params, "dataset_id": DATASET_ID, "contract_schema": contract_schema,
+        **params, "dataset_id": execution['dataset_id'], "contract_schema": contract_schema,
         "in_channels": len(order), "selected_channels": order, "target_channel": "TO3",
         "window": profile['window'], "horizon": profile['horizon'],
         "height": execution["shape"][0], "width": execution["shape"][1],
-        "global_grid_shape": [240, 480], "spatial_tile_shape": list(execution["shape"]),
+        "global_grid_shape": list(profile['grid_shape']), "spatial_tile_shape": list(execution["shape"]),
     }
 
 
@@ -401,7 +419,8 @@ def _probe_topography_asset(model, asset):
         return None
     if asset is None:
         from services.earth_topography import load_earth_topography
-        asset = load_earth_topography()
+        dataset_id = contract_profile(getattr(model, '_aresvision_earth_3hourly_contract', CONTRACT_SCHEMA))['dataset_id']
+        asset = load_earth_topography(dataset_id=dataset_id) if dataset_id == LOWRES_DATASET_ID else load_earth_topography()
     import numpy as np
     if np.ptp(asset.elevation) <= 0:
         raise ValueError("Earth topography probes require a nonconstant verified terrain asset")

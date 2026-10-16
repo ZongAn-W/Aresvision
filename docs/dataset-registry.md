@@ -1,8 +1,8 @@
 # 服务器数据集注册表与训练任务身份
 
-当前公开目录仅列出 `openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1`。日频 v1/v2 的身份保留用于识别历史记录，但目录详情、数据快照、总览/分析、训练与历史预测均返回 409 `dataset_retired`。三小时是开发与生产唯一默认 Earth ID，缺包不回退；详见[日频停用约定](earth-dataset-retirement.md)。下文日频注册、读取、兼容接口和验证数量均记录历史实现。
+当前公开目录列出 `openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1`、`earth_merra2_3hourly_5deg_v1`。5° 发布用于训练和历史回测，数据总览默认仍为原 0.75° 发布。日频 v1/v2 的身份保留用于识别历史记录，但目录详情、数据快照、总览/分析、训练与历史预测均返回 409 `dataset_retired`。三小时是开发与生产唯一默认 Earth ID，缺包不回退；详见[日频停用约定](earth-dataset-retirement.md)。下文日频注册、读取、兼容接口和验证数量均记录历史实现。
 
-实施方案见 [数据集注册与训练任务身份实施方案](plans/2026-09-23-dataset-registry-and-task-identity.md)。文档最近核对日期：**2026-10-08**；三小时注册、分块校验、官方 DLinear / 独立契约上传模型 56→24 训练与 UTC datetime 历史回测已实现，日频运行入口已停用。完整包可用不等同于真实模型精度验收，历史验证见文末及[三小时专题](earth-merra2-3hourly.md)。
+实施方案见 [数据集注册与训练任务身份实施方案](plans/2026-09-23-dataset-registry-and-task-identity.md)。文档最近核对日期：**2026-10-16**（新增独立 5° 训练/回测身份与空间契约）；三小时注册、分块校验、官方 DLinear / 独立契约上传模型 56→24 训练与 UTC datetime 历史回测已实现，日频运行入口已停用。完整包可用不等同于真实模型精度验收，历史验证见文末及[三小时专题](earth-merra2-3hourly.md)。
 
 [二维地球数据总览实施方案](plans/2026-09-23-earth-overview-2d.md) 对应阶段已实现；当前总览行为见 [二维地球数据总览](earth-overview.md)，活动全球发布见[三小时数据契约](earth-merra2-3hourly.md)，归档日频契约见 [地球小数据包](earth-compact-dataset.md)。
 
@@ -13,7 +13,7 @@
 | 能力 | 状态 |
 | --- | --- |
 | `GET /api/datasets` 与 `GET /api/datasets/{dataset_id}` | 已实现，公开只读 |
-| 活动目录 `openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1` | 已实现；日频 ID 仅保留历史身份 |
+| 活动目录 `openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1`、`earth_merra2_3hourly_5deg_v1` | 已实现；日频 ID 仅保留历史身份 |
 | Earth 小包（manifest + NetCDF）发布指纹与内容一致性校验 | 已实现 |
 | `GET /api/datasets/{dataset_id}/overview/*` 三个地球总览接口 | 已实现，见 [二维地球数据总览](earth-overview.md) |
 | 训练任务五个身份列、旧任务幂等回填 | 已实现 |
@@ -28,7 +28,7 @@
 | 持久性基线、Earth/Mars 混合比较、无真值外推 | 未实现 |
 | 用户上传数据注册、在线下载、数据集管理后台 | 未实现 |
 
-`capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=true` 表示训练入口已接通，`trained_prediction=true` 表示历史回测入口已接通；数据是否可用仍由 `availability` 单独表达。三小时为 `metadata/training/trained_prediction/web_overview=true`，official DLinear 与符合独立契约的 uploaded 模型使用 56→24 profile；旧日频/Mars 上传结论不能证明三小时兼容。总览和历史回测使用 UTC timestamp；日频请求在读取归档包或 checkpoint 前拒绝。缺包时目录仍返回 200，创建训练的数据请求返回 503；已绑定三小时任务回测时的缺失或损坏发布返回 409 `dataset_version_changed`，权限无法验证仍返回 503。
+`capabilities.web_overview=true` 表示总览与三维分析工作台入口已适配，`capabilities.training=true` 表示训练入口已接通，`trained_prediction=true` 表示历史回测入口已接通；数据是否可用仍由 `availability` 单独表达。原 0.75° 三小时发布为 `metadata/training/trained_prediction/web_overview=true`，新 5° 发布除 `web_overview=false` 外相同，official DLinear 与符合独立契约的 uploaded 模型使用 56→24 profile；旧日频/Mars 上传结论不能证明三小时兼容。总览和历史回测使用 UTC timestamp；日频请求在读取归档包或 checkpoint 前拒绝。缺包时目录仍返回 200，创建训练的数据请求返回 503；已绑定三小时任务回测时的缺失或损坏发布返回 409 `dataset_version_changed`，权限无法验证仍返回 503。
 
 ## 注册身份：ID、版本与指纹分开
 
@@ -39,6 +39,7 @@
 | `earth_merra2_daily_v1` | `earth` | `v1` | `aresvision_earth_daily_v1` | 保留原 31×49 区域抽样包，原始文件和哈希不变 |
 | `earth_merra2_daily_v2` | `earth` | `v2` | `aresvision_earth_daily_v1` | 归档全球 36×72、5° 单元，运行接口已停用 |
 | `earth_merra2_3hourly_v1` | `earth` | `v1` | `aresvision_earth_3hourly_v1` | 独立全球 240×480、0.75° 单元，三小时 UTC 中心标签，分块校验 |
+| `earth_merra2_3hourly_5deg_v1` | `earth` | `v1` | `aresvision_earth_3hourly_v1` | 独立全球 36×72、5° 三小时训练发布，完整全球窗口 |
 
 - `schema` 是文件格式协议名，不是数据集 ID，也不是数据版本。
 - `manifest_sha256` 指 `manifest.json` **原始字节**的 SHA-256；日频发布继续按其固定原始字节哈希验证。
@@ -369,3 +370,7 @@ foreach ($datasetTest in $datasetTests) {
 - 应用装配与真实小包联调（同一阶段记录）：在真实 SQLite 数据库的临时副本上用 `TestClient` 启动完整 `main.app`，`GET /api/datasets` 返回三个条目、Earth 为 `available` 且指纹为 `74ce…d31`；`GET /api/datasets/missing` 返回 404；响应不含小包绝对路径；启动迁移把 14 条历史任务全部回填为 `legacy_inferred`，旧超参数、状态、权重路径与指标逐字不变。
 - 第二阶段（二维地球总览）完成后，`capabilities.web_overview` 改为 `true`，并新增 `test_available_earth_does_not_claim_the_overview_is_unconnected` 等测试，确认目录不再宣称地球总览未接入；当时 Earth 训练拒绝、发布 SHA 与版本断言保持不变。总览接口与真实数据比对结果见 [二维地球数据总览](earth-overview.md) 的“验证记录”。
 - 第三阶段（2026-09-28，地球训练与历史预测）完成后，Earth 的 `capabilities.training` 与 `trained_prediction` 改为 `true`，目录新增 `training_profile`，Earth 训练绑定改为 `verified` 并携带发布指纹与快照；上表中“Earth 训练拒绝”的旧断言已按新契约更新为「Earth 走独立路径、按 `availability` 决定可用性」。本阶段的实测结果、任务 ID 与错误码见 [地球训练与历史预测](earth-training.md)。
+
+## 三小时 5° 训练发布
+
+`earth_merra2_3hourly_5deg_v1` 为新增活动身份，schema 仍为 `aresvision_earth_3hourly_v1`，网格固定 36×72、全球 5°，原三小时时间轴不变。注册表严格拒绝两个空间发布路径互换；新条目提供 training/trained_prediction，web_overview=false。任务、缓存和 checkpoint 使用独立 ID/发布指纹，默认总览仍为 0.75°。构建、上传契约和配置见 [5° 专题](earth-merra2-5deg.md)。

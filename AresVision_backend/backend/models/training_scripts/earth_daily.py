@@ -37,10 +37,10 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from services.dataset_registry import DatasetRegistry  # noqa: E402
-from services.dataset_identity import DatasetRequestError, EARTH_DATASET_3HOURLY_ID  # noqa: E402
+from services.dataset_identity import DatasetRequestError, is_earth_three_hourly_dataset_id  # noqa: E402
 from services.earth_dataset import (  # noqa: E402
     EarthOzoneWindows, EarthThreeHourlyWindows, build_threehour_training_cache,
-    fit_threehour_normalization, THREE_HOURLY_GRID_SHAPE,
+    fit_threehour_normalization,
     threehour_global_cell_area_weights,
 )
 from training_backbones.earth_3hourly_uploaded_contract import (  # noqa: E402
@@ -107,7 +107,9 @@ def seed_everything(seed: int) -> None:
 def _uses_full_grid(spec: dict) -> bool:
     reference = spec.get('uploaded_model') or {}
     full_grid = reference.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA
-    if full_grid and (spec['dataset_binding']['dataset_id'] != EARTH_DATASET_3HOURLY_ID
+    if spec['dataset_binding']['dataset_id'] == 'earth_merra2_3hourly_5deg_v1':
+        return True
+    if full_grid and (not is_earth_three_hourly_dataset_id(spec['dataset_binding']['dataset_id'])
                       or spec['hyperparameters'].get('model_source') != MODEL_SOURCE_UPLOADED):
         raise EarthTrainingError('The full-grid contract requires an uploaded three-hour Earth model')
     return full_grid
@@ -153,7 +155,7 @@ def _build_loaders(
     if "task_split" in spec:
         from services.earth_task_split import validate_earth_task_split
         validate_earth_task_split(task_split, release.dates, profile["window"], profile["horizon"], hyperparameters)
-    window_type = EarthThreeHourlyWindows if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID else EarthOzoneWindows
+    window_type = EarthThreeHourlyWindows if is_earth_three_hourly_dataset_id(binding["dataset_id"]) else EarthOzoneWindows
     normalization_started = time.perf_counter()
     if window_type is EarthThreeHourlyWindows:
         from config import EARTH_TRAINING_CACHE_DIR
@@ -761,10 +763,10 @@ def run_training(
         "device": str(resolved_device),
         "duration_seconds": round(time.time() - start_time, 3),
     }
-    if binding["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+    if is_earth_three_hourly_dataset_id(binding["dataset_id"]):
         if prepared["full_grid"]:
             run["memory_strategy"] = "normalized_memmap_full_grid"
-            run["spatial_grid_shape"] = list(THREE_HOURLY_GRID_SHAPE)
+            run["spatial_grid_shape"] = list(prepared["profile"]["grid_shape"])
             run["batch_unit"] = "global_time_window"
         else:
             run["memory_strategy"] = "normalized_memmap_spatial_tiles"
@@ -874,21 +876,26 @@ def _load_spec_from_env() -> dict:
 
 def _build_registry(spec: Optional[dict] = None) -> DatasetRegistry:
     from config import (EARTH_MERRA2_DIR, EARTH_MERRA2_V1_DIR,
-                        EARTH_MERRA2_3HOURLY_DIR, EARTH_TRAINING_CACHE_DIR)
+                        EARTH_MERRA2_3HOURLY_DIR, EARTH_MERRA2_3HOURLY_5DEG_DIR, EARTH_TRAINING_CACHE_DIR)
 
     threehour_dir = EARTH_MERRA2_3HOURLY_DIR
-    if (spec or {}).get("dataset_binding", {}).get("dataset_id") == "earth_merra2_3hourly_v1":
+    lowres_dir = EARTH_MERRA2_3HOURLY_5DEG_DIR
+    if is_earth_three_hourly_dataset_id((spec or {}).get("dataset_binding", {}).get("dataset_id")):
         data_path = (spec or {}).get("data_path")
         if data_path is not None:
             path = Path(data_path)
             if path.name != "earth_merra2_3hourly.nc" or not path.is_absolute():
                 raise EarthTrainingError("The server three-hour data path is invalid")
-            threehour_dir = path.parent
+            if spec["dataset_binding"]["dataset_id"] == "earth_merra2_3hourly_5deg_v1":
+                lowres_dir = path.parent
+            else:
+                threehour_dir = path.parent
     return DatasetRegistry(
         EARTH_MERRA2_DIR,
         earth_dataset_id="earth_merra2_daily_v2",
         legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
         earth_3hourly_package_dir=threehour_dir,
+        earth_3hourly_5deg_package_dir=lowres_dir,
         verification_cache_dir=EARTH_TRAINING_CACHE_DIR,
         progress=lambda message: print(message, flush=True),
     )

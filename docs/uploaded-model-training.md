@@ -361,7 +361,7 @@ MODEL_SPEC = {
 ## Validation Rules
 
 Upload and manual revalidation use a bounded child process,
-with a default budget of 120 seconds. Set the positive integer
+starting with a default import/declaration budget of 120 seconds. Set the positive integer
 `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` in the backend environment and restart the
 backend to change it. All execution checks remain required. A timeout terminates
 the child and records `validation_report.code="uploaded_model_validation_timeout"`;
@@ -371,14 +371,23 @@ the package stays invalid until revalidation succeeds. Earth compatibility repor
 timeout error text receive the same treatment. This budget is separate from the
 30-second checkpoint completion/reload gate.
 
-Explicit `earth_probe` calls for Earth full-grid v2 configurations use the larger
-of the ordinary budget and `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`
-(default 300 seconds). This setting remains available for explicit probes; task
-creation reuses the saved upload report and does not use this budget.
-Upload short-window probes, Mars and v1 tile checks retain the ordinary budget;
-explicit validator timeouts remain authoritative. The process result is drained
+After the isolated child imports the source and validates its dataset declaration
+and parameter schema, a full-grid v2 declaration extends the total budget to the
+larger of the ordinary setting and `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`
+(default 900 seconds). The deadline always counts from process start; the parent
+never executes uploaded source to choose it. A hung import or invalid declaration
+does not receive the extension. Full-grid upload/revalidation still uses all 16
+channel combinations, the full 240x480 grid, default model parameters, finite
+gradient checks and eval sample independence. Upload and revalidation wait in a
+background thread so unrelated API requests remain responsive.
+
+Explicit `earth_probe` calls use the same larger budget for full-grid v2 and still
+check the requested configuration. Mars and v1 tile checks retain the ordinary
+budget; explicit validator timeouts remain authoritative. Task creation reuses
+the saved report and does not run these probes. The process result is drained
 before joining its sender to avoid false timeouts for large reports. The process
-must still exit successfully within the deadline. See [full-grid admission](earth-3hourly-fullgrid-model.md).
+must still exit successfully within the deadline. See
+[full-grid admission](earth-3hourly-fullgrid-model.md).
 
 Version 1 accepts these import roots:
 

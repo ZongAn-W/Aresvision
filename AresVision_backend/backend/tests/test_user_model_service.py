@@ -3,6 +3,7 @@ import hashlib
 import json
 import sys
 import tempfile
+import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from pathlib import Path
@@ -137,6 +138,45 @@ async def test_service_creates_lists_revalidates_and_soft_deletes_model():
             assert Path(package.storage_path).exists()
         finally:
             await engine.dispose()
+
+
+@pytest.mark.parametrize("operation", ["upload", "revalidate"])
+async def test_slow_validation_keeps_other_requests_responsive(tmp_path, operation):
+    engine, sessionmaker = await _make_sessionmaker(tmp_path / "test.db")
+    entered, release = threading.Event(), threading.Event()
+    worker_threads = []
+    validator = RecordingValidator()
+    service = UserModelService(
+        storage_root=tmp_path / "uploads", sessionmaker=sessionmaker, validator=validator,
+    )
+    pending = None
+    try:
+        user = await _create_user(sessionmaker, "responsive@example.com")
+        package = await service.create_from_source(user.id, "model.py", VALID_MODEL)
+        original = validator.validate_file
+        def blocked(path):
+            worker_threads.append(threading.get_ident())
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("Validation blocked the event loop")
+            return original(path)
+        validator.validate_file = blocked
+        coroutine = (service.create_from_source(user.id, "other.py", VALID_MODEL)
+                     if operation == "upload" else service.revalidate_package(package.id, user.id))
+        pending = asyncio.create_task(coroutine)
+        assert await asyncio.to_thread(entered.wait, 2)
+        packages = await asyncio.wait_for(service.list_user_packages(user.id), timeout=2)
+        assert [item.id for item in packages] == [package.id]
+        assert not pending.done()
+        assert len(worker_threads) == 1
+        assert worker_threads[0] != threading.get_ident()
+        release.set()
+        assert (await pending).validation_status == "valid"
+    finally:
+        release.set()
+        if pending is not None and not pending.done():
+            await pending
+        await engine.dispose()
 
 
 async def test_service_validates_temporary_file_before_permanent_storage_write():

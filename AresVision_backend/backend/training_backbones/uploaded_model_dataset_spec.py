@@ -42,7 +42,7 @@ Backward compatibility rules:
 from __future__ import annotations
 
 from typing import Any
-from training_backbones.earth_3hourly_uploaded_contract import FEED, FULL_GRID_FEED, FULL_GRID_CONTRACT_SCHEMA
+from training_backbones.earth_3hourly_uploaded_contract import FEED, FULL_GRID_FEED, FULL_GRID_CONTRACT_SCHEMA, LOWRES_FEED, LOWRES_DATASET_ID, LOWRES_CONTRACT_SCHEMA
 
 #: Keys of the independent Earth feeds inside ``MODEL_SPEC.datasets``.
 EARTH_FEED_KEY = "earth_merra2"
@@ -144,7 +144,7 @@ def normalize_earth_feed(feed: Any) -> dict[str, Any]:
     return normalized
 
 
-def normalize_earth_3hourly_feed(feed: Any) -> dict[str, Any]:
+def normalize_earth_3hourly_feed(feed: Any, dataset_id=EARTH_3HOURLY_FEED_KEY) -> dict[str, Any]:
     """Validate the versioned Earth three-hour uploaded-model contract."""
     if not isinstance(feed, dict):
         raise DatasetCapabilityError(f"MODEL_SPEC.datasets.{EARTH_3HOURLY_FEED_KEY} must be a dict")
@@ -160,7 +160,7 @@ def normalize_earth_3hourly_feed(feed: Any) -> dict[str, Any]:
             return len(actual) == len(expected) and all(exact(a, b) for a, b in zip(actual, expected))
         return actual == expected
 
-    expected_feed = FULL_GRID_FEED if feed.get("schema") == FULL_GRID_CONTRACT_SCHEMA else FEED
+    expected_feed = LOWRES_FEED if dataset_id == LOWRES_DATASET_ID else FULL_GRID_FEED if feed.get("schema") == FULL_GRID_CONTRACT_SCHEMA else FEED
     for key, value in expected_feed.items():
         actual = feed.get(key)
         if key in ('window', 'horizon'):
@@ -184,7 +184,9 @@ def normalize_dataset_declarations(model_spec: Any) -> dict[str, dict[str, Any]]
         return {}
     if not isinstance(datasets, dict):
         raise DatasetCapabilityError("MODEL_SPEC.datasets must be a dict")
-    if EARTH_3HOURLY_FEED_KEY in datasets:
+    if any(key in datasets for key in (EARTH_3HOURLY_FEED_KEY, LOWRES_DATASET_ID)):
+        if all(key in datasets for key in (EARTH_3HOURLY_FEED_KEY, LOWRES_DATASET_ID)):
+            raise DatasetCapabilityError("Declare one three-hour spatial feed per uploaded file")
         # ``derived_inputs`` declares tensors the server derives for the model;
         # ``auxiliary_inputs`` is the Mars block, accepted here only so the model
         # build can refuse it with a message that names the Earth equivalent.
@@ -199,12 +201,12 @@ def normalize_dataset_declarations(model_spec: Any) -> dict[str, dict[str, Any]]
             raise DatasetCapabilityError("MODEL_SPEC.datasets keys must be non-empty strings")
         if name.strip() == EARTH_FEED_KEY:
             normalized[EARTH_FEED_KEY] = normalize_earth_feed(feed)
-        elif name.strip() == EARTH_3HOURLY_FEED_KEY:
-            normalized[EARTH_3HOURLY_FEED_KEY] = normalize_earth_3hourly_feed(feed)
+        elif name.strip() in (EARTH_3HOURLY_FEED_KEY, LOWRES_DATASET_ID):
+            normalized[name.strip()] = normalize_earth_3hourly_feed(feed, dataset_id=name.strip())
         else:
             raise DatasetCapabilityError(
                 "MODEL_SPEC.datasets supports only earth_merra2 and "
-                f"{EARTH_3HOURLY_FEED_KEY}, got unknown feed {name!r}"
+                f"{EARTH_3HOURLY_FEED_KEY} or {LOWRES_DATASET_ID}, got unknown feed {name!r}"
             )
     return normalized
 
@@ -212,7 +214,7 @@ def normalize_dataset_declarations(model_spec: Any) -> dict[str, dict[str, Any]]
 def declares_earth_feed(model_spec: Any) -> bool:
     """Whether the spec declares an Earth feed at all (malformed counts as declared)."""
     return isinstance(model_spec, dict) and isinstance(model_spec.get("datasets"), dict) \
-        and (EARTH_FEED_KEY in model_spec["datasets"] or EARTH_3HOURLY_FEED_KEY in model_spec["datasets"])
+        and (EARTH_FEED_KEY in model_spec["datasets"] or EARTH_3HOURLY_FEED_KEY in model_spec["datasets"] or LOWRES_DATASET_ID in model_spec["datasets"])
 
 
 def earth_feed_from_spec(model_spec: Any) -> dict[str, Any] | None:
@@ -221,8 +223,8 @@ def earth_feed_from_spec(model_spec: Any) -> dict[str, Any] | None:
     return declarations.get(EARTH_FEED_KEY)
 
 
-def earth_3hourly_feed_from_spec(model_spec: Any) -> dict[str, Any] | None:
-    return normalize_dataset_declarations(model_spec).get(EARTH_3HOURLY_FEED_KEY)
+def earth_3hourly_feed_from_spec(model_spec: Any, dataset_id=EARTH_3HOURLY_FEED_KEY) -> dict[str, Any] | None:
+    return normalize_dataset_declarations(model_spec).get(dataset_id)
 
 
 def earth_incompatibility_reasons(

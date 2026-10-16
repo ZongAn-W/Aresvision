@@ -338,3 +338,5 @@ conda run -n AresVision python scripts\audit\earth-training-acceptance.py
 新三小时官方/上传任务统一使用 `earth_raw_utc_timeline_v1`，比例针对完整原始时间轴，采用向下取整、最大余数（同余数按 train/validation/test）确定步数。各分区独立生成窗口，完整输入与目标不跨界；每区至少 window+horizon 步，否则创建前返回 422。normalization 仅拟合当前任务 train，并保存策略与实际边界用于缓存及严格重载。
 
 官方历史回测保留完整发布可选起点；上传回测要求完整输入/目标落在同一任务分区。两者 origin_split 使用任务边界。比较要求 test UTC 范围、window/horizon、实际窗口数及指标口径一致，不一致返回 409。新任务保存独立 `_earth_task_split_policy`，恢复和产物读取同时识别该标记、已有 split 及 v2 指标任务证据，缺失冻结划分时拒绝；只有真正旧任务继续使用发布 manifest，不自动迁移。详细元数据、默认两年示例和验证范围见[任务级划分专题](earth-task-splits.md)。上传模型的构建、训练和重载统一初始化 CPU float32，eval 批次一致性在准入和实际权重重载时核验，详见[上传模型契约](earth-3hourly-uploaded-model.md)。
+
+独立的三小时 **36×72（5°）** 训练发布、完整全球窗口与上传模型契约见 [5° 数据集](earth-merra2-5deg.md)；本文件的原 0.75° 契约继续兼容。

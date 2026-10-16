@@ -18,7 +18,8 @@ import netCDF4
 import numpy as np
 import torch
 
-from config import EARTH_TOPOGRAPHY_PATH, EARTH_MERRA2_3HOURLY_DIR
+from config import (EARTH_TOPOGRAPHY_PATH, EARTH_TOPOGRAPHY_5DEG_PATH,
+                    EARTH_MERRA2_3HOURLY_DIR, EARTH_MERRA2_3HOURLY_5DEG_DIR)
 from services.netcdf_read_lock import netcdf_read_lock
 
 ASSET_SCHEMA = "aresvision_earth_topography_v1"
@@ -187,13 +188,17 @@ def release_topography_grid(release: Any = None, *, path: Any = None) -> tuple:
 def load_earth_topography(latitude: Any = None, longitude: Any = None,
                           lat_bounds: Any = None, lon_bounds: Any = None, *,
                           expected_identity: Any = None, path: Any = None,
-                          release: Any = None) -> EarthTopographyAsset:
-    asset_path = Path(EARTH_TOPOGRAPHY_PATH if path is None else path)
+                          release: Any = None, dataset_id=None) -> EarthTopographyAsset:
+    lowres = (dataset_id == 'earth_merra2_3hourly_5deg_v1'
+              or (release is not None and np.asarray(release.latitude).shape == (36,))
+              or (latitude is not None and np.asarray(latitude).shape == (36,)))
+    asset_path = Path((EARTH_TOPOGRAPHY_5DEG_PATH if lowres else EARTH_TOPOGRAPHY_PATH) if path is None else path)
     if not asset_path.is_file():
         raise FileNotFoundError(f"Earth ETOPO topography asset not found: {asset_path}; build offline and set ARESVISION_EARTH_TOPOGRAPHY_PATH")
     supplied = (latitude, longitude, lat_bounds, lon_bounds)
     if all(value is None for value in supplied):
-        target = release_topography_grid(release)
+        target = (release_topography_grid(path=EARTH_MERRA2_3HOURLY_5DEG_DIR / 'earth_merra2_3hourly.nc')
+                  if lowres and release is None else release_topography_grid(release))
     elif any(value is None for value in supplied):
         raise ValueError("Earth topography requires all actual target coordinates and cell bounds")
     else:

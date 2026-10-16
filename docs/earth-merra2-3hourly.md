@@ -408,3 +408,5 @@ try {
 运行时复查：后端 `/health`、前端页面及代理 `/api/datasets` 均为 HTTP 200。日频 v1/v2 与三小时 descriptor 均 `available`；三小时 ID/version/fingerprint 与上文完整包摘要一致，training profile 声明 `official/uploaded`、56→24。`default_earth_dataset_id` 保持 `earth_merra2_daily_v2`。README 及 docs 的 350 个相对文件链接检查通过，Git diff 空白检查通过。
 
 本轮没有重建、迁移或修改真实包，没有执行完整真实生产训练，也没有真实任务的历史预测或精度验收。合成数据 smoke 仅验证执行与产物链路；只读集成仅验证数据读取契约。高分辨率预测的传输/浏览器内存、任意用户网络的 GPU 容量与收敛仍需按实际模型验证。
+
+独立的三小时 **36×72（5°）** 训练发布、完整全球窗口与上传模型契约见 [5° 数据集](earth-merra2-5deg.md)；本文件的原 0.75° 契约继续兼容。

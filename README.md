@@ -26,6 +26,12 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 ## 快速接手：先读这一节
 
+2026-10-16 新增独立 Earth 三小时 5° 训练数据集 `earth_merra2_3hourly_5deg_v1`：从已验证的原 0.75° 包按球面单元重叠面积聚合为 **36×72**，保持全部 UTC 三小时时间点、五变量与单位。训练页提供新选项，官方 DLinear 和独立低分辨率契约上传模型使用完整全球窗口；可选季节坐标与独立 5° ETOPO 资产、训练/预测/诊断/checkpoint/缓存按新身份隔离。原数据总览继续默认使用 0.75°，新 5° 发布仅用于训练和历史回测。已生成并完整校验 2020–2021、5848 步五变量发布；真实 7→1、1 epoch CPU 完成训练、严格重载、历史预测与诊断，未验收长期收敛。构建、配置、模板与验证范围见 [Earth 三小时 5° 数据集](docs/earth-merra2-5deg.md)。
+
+2026-10-16 Earth 全图 v2 上传与重新校验补上独立预算：隔离子进程完成导入、数据声明与参数 schema 检查后，通知父进程采用全图时间上限（默认 900 秒，与通用预算取较大值，从进程启动计时）。v1/Mars 保留 120 秒通用预算，显式验证器预算优先；不在父进程执行上传源码。上传和重新校验在后台线程等待隔离进程，其他 API 请求可继续响应。完整 240×480、16 种通道组合、默认参数、梯度和 eval 检查保留，详见[全图上传预算](docs/earth-3hourly-fullgrid-model.md)。
+
+2026-10-16 修复 Earth v1 分块上传模型校验超时：上传及手动重新校验优先采用模型声明支持的 2→1 短窗口，未声明时分别使用对应列表首项；保留 24×48 空间块、全部 16 种通道组合、默认参数、梯度与 eval 批次独立性检查。报告记录实际探针窗口，训练继续使用任务选择的窗口，显式配置探针继续执行请求值。通过上传校验不证明所有训练配置均可运行，详见[上传模型校验](docs/earth-3hourly-uploaded-model.md#校验和错误)。
+
 2026-10-13 地球三小时上传模型新增可选**季节坐标和静态地形**。`MODEL_SPEC.derived_inputs` 可严格声明 `ls`、`topography` 或两者组合，固定调用为 `model(x)`、`model(x, ls)`、`model(x, topography)`、`model(x, ls, topography)`；地形是来自 NOAA ETOPO 2022 v1 60″ Ice Surface 的离线 240×480 大气下边界资产，海洋/内陆水体在源网格置零，负高程陆地保留。地形按需加载，资产和网格身份冻结到任务/checkpoint，替换、缺失、变体或网格不符均拒绝。详见[Earth 静态地形资产](docs/earth-topography-asset.md)、[上传模型契约](docs/earth-3hourly-uploaded-model.md)和[全图 v2](docs/earth-3hourly-fullgrid-model.md)。季节坐标仍使用 `solar_longitude_meeus_low_precision_v1`；未声明模型和旧 checkpoint 保持原调用方式。已完成合成上传→短训练→严格重载→历史回测→诊断/PFI，以及真实 MERRA-2 三天、7→1、1 epoch 的 v1/v2 CPU 冒烟；这些验证不代表长期训练精度。
 
 2026-10-13 地球单模型预测页面对齐火星外壳：删除 Earth 独有的标题、说明段、`TO3 · DU` 胶囊、`模型与数据集上下文` 折叠块、结果上方的起点说明行与参考场说明段，主按钮改回共用的 `🚀 开始预测`，并移除 Mars 没有的「刷新起点范围」次级按钮（上下文读取失败时由既有 `PredictStatus` 的「重试」触发同一次运行，内部按需重新加载上下文）。Earth 保留「逐步与累计窗口指标」折叠表与手动诊断面板，全屏仍用地球地图。同一轮让 Earth 完整测试集卡片显示与火星同格式的分区行：`earthPredictModel.js` 新增 `earthSplitRanges` / `buildEarthSplitLabelSource`，把 checkpoint 的 `split_policy`/`split_ranges`（或 `task_split.ranges`）整理成共用的 `split_meta` 形状后交给 `getSplitLabel`；读不到边界时该行不显示，不伪造窗口数。`earthPredictPanel.css` 与 `predict.earth*` 中 42 个只服务这些被删区块的文案键一并移除（zh/en 同步），Earth 错误文案键保留。前端 `node --test` **846 passed、2 failed**，两项失败在未改动的 `f71071e` 树上同样失败（训练页既有断言脱节），`npm run build` 通过；合成浏览器 18 项检查通过、0 运行时错误。
@@ -62,7 +68,7 @@ Earth 官方 DLinear 与独立契约上传模型统一支持 MSE、RMSE、MAE、
 
 2026-10-08 地球训练新增[任务级自定义数据划分](docs/earth-task-splits.md)：官方 DLinear 与独立契约上传模型共用完整原始 UTC 三小时时间轴的连续划分，默认 70/20/10，三项均大于 0。先确定原始分区，再在分区内部生成完整窗口；各区至少包含输入窗口 + 输出窗口个时间步。服务器持久化请求比例、策略版本和实际边界，normalization 仅拟合当前任务 train，缓存检查任务划分。新 checkpoint 严格核对划分与指标；旧三小时任务继续使用发布 manifest，不自动迁移，日频仍停用。合成数据用于训练链路回归，未执行完整真实两年训练。
 
-文档最近核对日期：**2026-10-13**（本轮核实 Earth ETOPO 来源内容身份、240×480 目标网格、地形上传/训练/检查点/预测/诊断接入；验证真实地形资产、真实 MERRA-2 三天 v1/v2 冒烟及相关后端回归。未执行完整两年训练或精度验收）。地球唯一活动数据集 `earth_merra2_3hourly_v1` 是 3 小时 UTC、240×480 全球五变量数据，官方 DLinear 与符合独立 v1/v2 契约的上传模型均支持按任务配置输入/输出窗口（默认 56→24）训练和历史回测。v1 使用 24×48 空间块，v2 一次调用使用完整 240×480；未声明地形的模型保持原调用，明确声明 `topography` 的模型按真实样本位置接收静态 ETOPO 张量。真实数据冒烟是三天、7→1、单 epoch 的链路验证，不代表两年训练收敛或预测精度。入口见[三小时专题](docs/earth-merra2-3hourly.md)、[上传模型契约](docs/earth-3hourly-uploaded-model.md)、[全图 v2](docs/earth-3hourly-fullgrid-model.md)和[Earth 地形资产](docs/earth-topography-asset.md)。
+文档最近核对日期：**2026-10-16**（本轮核实 Earth v1 短窗口与 v2 全图上传预算、隔离进程截止时间及 API 响应性；分组回归覆盖 209 条唯一用例，实际共享地形门控模型 v1/v2 分别约 25.5/700.8 秒通过隔离重新校验。未执行这些模型的完整训练或精度验收）。地球默认活动数据集 `earth_merra2_3hourly_v1` 是 3 小时 UTC、240×480 全球五变量数据，官方 DLinear 与符合独立 v1/v2 契约的上传模型均支持按任务配置输入/输出窗口（默认 56→24）训练和历史回测。v1 使用 24×48 空间块，v2 一次调用使用完整 240×480；未声明地形的模型保持原调用，明确声明 `topography` 的模型按真实样本位置接收静态 ETOPO 张量。真实数据冒烟是三天、7→1、单 epoch 的链路验证，不代表两年训练收敛或预测精度。入口见[三小时专题](docs/earth-merra2-3hourly.md)、[上传模型契约](docs/earth-3hourly-uploaded-model.md)、[全图 v2](docs/earth-3hourly-fullgrid-model.md)和[Earth 地形资产](docs/earth-topography-asset.md)。
 
 Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定，固定支持 `earth_merra2_3hourly_v1`，见[生产默认值模板](AresVision_backend/backend/.env.production.example)。`ARESVISION_EARTH_MERRA2_3HOURLY_DIR` 应指向已验证的完整发布目录；三小时包缺失会显示不可用，不回退到日频。旧配置若将 `ARESVISION_DEFAULT_EARTH_DATASET_ID` 设为日频，应改为三小时或移除该项；日频默认值会在启动时明确拒绝。
 
@@ -141,7 +147,7 @@ Earth 默认入口由 `GET /api/datasets` 的 `default_earth_dataset_id` 决定�
 - 包含 MCD 总览数据、NOMAD 网格数据和 MOLA 地形资源的构建脚本。
 - 保留历史 MERRA-2 地球臭氧日数据小包的构建、独立读取、预览和训练冒烟脚本；日频运行入口已停用，见 [地球小数据包](docs/earth-compact-dataset.md)。
 - 提供独立的 Earth MERRA-2 三小时离线构建与验证脚本：SLV/RAD 五变量连续三个小时真实平均、01:30 等 UTC 中心标签、全球 240×480 保守球面重网格和显式缺失掩码；数据写入 Git checkout 外的目录，支持 7–30 天 smoke 与完整两年处理。产品已接入注册、分块校验、官方 DLinear / 独立契约上传模型训练与历史回测 API，总览已适配 UTC timestamp、服务端 60×120 面积降采样地图、原生点位与后端日聚合；训练/预测前端已支持 56→24 与 UTC 回测。发布 manifest 声明身份规则 `fingerprint_rule`（`1`=legacy 全文摘要，`2`=内容身份），`mtime_ns` 只进顶层 `source_mtimes` 溯源块、不参与身份；构建器、服务端和独立验证器各自实现同一套规则，既有发布包按 rule 1 冻结。见 [三小时数据构建、训练与历史回测](docs/earth-merra2-3hourly.md)。
-- 服务器数据集目录：`GET /api/datasets` 列出三个活动数据集（`openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1`）及三小时默认 Earth ID；详情返回元数据、版本、发布指纹、可用状态和能力声明。日频详情返回 409 `dataset_retired`；缺少三小时包不阻断启动，也不回退到日频。约定与状态解释见[数据集注册表](docs/dataset-registry.md)。
+- 服务器数据集目录：`GET /api/datasets` 列出四个活动数据集（`openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1`、`earth_merra2_3hourly_5deg_v1`）及三小时默认 Earth ID；详情返回元数据、版本、发布指纹、可用状态和能力声明。日频详情返回 409 `dataset_retired`；缺少三小时包不阻断启动，也不回退到日频。约定与状态解释见[数据集注册表](docs/dataset-registry.md)。
 - 数据总览支持“火星 / 地球”切换：地球场景按 UTC 三小时时间步查看 MERRA-2 五个变量的三维全球球体、播放、点位时间序列与全球单元面积加权均值，见 [二维地球数据总览](docs/earth-overview.md) 与 [共用分析工作台](docs/earth-analysis-workbench.md)。
 - 地球年度分析按 2020、2021 分开计算，覆盖季节结构、年内变化、季节极值、环境因子、辐射/温度与臭氧关系、变量相关、空间距平与极区统计；年度结果由三小时源聚合为完整 UTC 日均。昼夜分析尚未接入，卡片显示能力说明，不请求火星昼夜接口。
 - 后续扩展见 [火星 / 地球共用分析工作台方案](docs/plans/2026-09-23-earth-shared-analysis-workbench.md)；其首期范围（共用工作台、三维地球、年度分析、极区、图表 AI 解读）已实现，手势交互与跨星球数值比较仍属后续计划。
@@ -341,7 +347,7 @@ Mars 的 `selected_channels`（包括检查点的 `training_contract.selected_ch
 4. 任务进度、Loss、日志及产物路径写入任务记录；前端 `TrainingContext` 通过轮询与 WebSocket 接收更新，页面按任务状态把展示切换到监控或结果工作区。
 5. 训练完成后还需存在有效权重文件才会标记模型可用；结果工作区的「用于预测」写入 `TRAINING_TASK_HANDOFF_KEY` 后跳转预测页，「去模型比较」按任务行星带 `mode=trained_compare` 或 `mode=earth_compare` 进入比较模式，「复制配置」把完整训练配置回填到新建实验表单。
 
-`training_dataset` 当前只允许 `openmars_mcd`、`mcd_overview` 与 `earth_merra2_3hourly_v1`。请求可用顶层 `dataset_id` 或旧字段 `hyperparameters.training_dataset` 指定；日频、两处冲突、未知 ID 和非字符串值在创建任务前拒绝。火星身份仍走 `demo3.py` 与上传模型 runner；**地球身份走独立的 `earth_daily.py`**（沿用文件名），实际使用任务配置的三小时窗口（默认 56→24）与任务级比例，客户端提交的 `model_script` 不决定执行代码。地球任务不能作为火星迁移来源，上传 Earth checkpoint 会被判为不兼容。
+`training_dataset` 当前允许 `openmars_mcd`、`mcd_overview`、`earth_merra2_3hourly_v1` 与 `earth_merra2_3hourly_5deg_v1`。请求可用顶层 `dataset_id` 或旧字段 `hyperparameters.training_dataset` 指定；日频、两处冲突、未知 ID 和非字符串值在创建任务前拒绝。火星身份仍走 `demo3.py` 与上传模型 runner；**地球身份走独立的 `earth_daily.py`**（沿用文件名），实际使用任务配置的三小时窗口（默认 56→24）与任务级比例，客户端提交的 `model_script` 不决定执行代码。地球任务不能作为火星迁移来源，上传 Earth checkpoint 会被判为不兼容。
 
 地球的模型来源由 `model_source` 决定：`official` 用官方 DLinear；`uploaded` 时 `TrainingService` 在写任务前校验归属、valid 状态、保存报告中所选 dataset_id/schema 的兼容证据、源码 SHA-256、参数 schema 和 batch 范围，固定包 ID、版本、源码、schema 和参数后直接排队，不重复执行实际配置 dry-run。三小时使用独立的 v1 分块契约或 v2 全图契约，不继承归档日频 `earth_merra2` 契约或 Mars 结论。三小时排队任务保存冻结源码和契约，重启后恢复同一模型；遗留日频队列在启动子进程前拒绝。`earth_model_source.py` 按契约重建模型，checkpoint 核对源码、build config、数据身份、窗口、单位和 normalization，再严格加载 state dict。
 
@@ -426,7 +432,7 @@ NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，
 - **共用预测布局保留行星契约。** Earth 与 Mars 共用单模型组件，分别使用 Earth API / UTC / DU / 地球地图和 Mars API / Ls / 当前步长限制 / 球面。共用图表由配置区分当前预测窗口、完整 test 与抽样诊断，Earth PFI 为 ΔRMSE（DU）、Mars PFI 为 ΔR²，均保留负值。Earth 诊断仍需独立手动触发，诊断科研导出未开放；合成浏览器交互验证未覆盖真实模型精度和完整 240×480 长 horizon 的浏览器性能，见[专题](docs/shared-single-model-prediction.md)。
 - **Earth 训练后诊断明确抽样范围。** 模型测试与预测页共用[诊断服务](docs/earth-post-training-diagnostics.md)，完整 test 指标复用有效 checkpoint；散点、残差和 PFI 默认取 4 个 test 窗口，最多 8 个。所有值为反归一化 DU，PFI 为 ΔRMSE、固定种子、整窗口通道置换并保留负值。缓存 8 条 / 16 MiB、进程内共享，两入口同条件复用；新任务读取固定 task split，旧三小时读取 manifest。新诊断图暂无科研导出，真实模型精度未验收。
 - **科研导出只重画已有结果。** 当前步场与散点不等于完整测试集评价；逐步曲线使用各模型完整测试集，Mars 导出 PFI 使用最多 40 个抽样窗口且历史缓存可能缺少抽样元数据；Earth 页面 PFI 使用自身 1–8 个固定种子窗口。多模型曲线每图选择 2–8 个模型；超过 8 个时等待明确选择，预览和下载使用同一组模型，不自动截断。导出拒绝过期/缺失/条件不匹配的快照；首版单 worker，最多 8 模型/100 万网格格点/25 万散点/2400 万 PNG 像素。MATLAB 脚本提供可编辑重建入口，尚未执行验证；不是 `.fig`，不保证跨字体/版本像素一致。
-- **Earth 仅使用三小时数据集。** 活动发布为 UTC、240×480，默认 56→24；训练页读取设置中的 Earth 默认值，并支持配置 1–240 个三小时时间步的输入/输出窗口，checkpoint、预测和比较按任务保存的窗口运行，支持官方 DLinear、独立 v1 分块上传模型和 v2 全图上传模型；可选 ETOPO 静态地形仅由上传模型显式声明，身份冻结并在重载时校验。日频身份仅用于识别旧记录，所有运行入口均拒绝，不自动改写旧 checkpoint。训练/回测数据由 registry 提供，上传模型不能指定数据路径或身份，也不能使用日频/Mars checkpoint。已验证三天真实数据地形模型链路，完整两年训练和精度未验收；无参考真值未来外推和 Earth/Mars 混合比较未开放，全分辨率预测 JSON 有传输和内存成本。细节见[停用约定](docs/earth-dataset-retirement.md)、[三小时专题](docs/earth-merra2-3hourly.md)及[地形专题](docs/earth-topography-asset.md)。
+- **Earth 仅使用三小时数据集。** 默认发布为 UTC、240×480，另有独立 5° 36×72 训练/历史回测发布，两者均默认 56→24；训练页读取设置中的 Earth 默认值，并支持配置 1–240 个三小时时间步的输入/输出窗口，checkpoint、预测和比较按任务保存的窗口运行，支持官方 DLinear、独立 v1 分块上传模型和 v2 全图上传模型；可选 ETOPO 静态地形仅由上传模型显式声明，身份冻结并在重载时校验。日频身份仅用于识别旧记录，所有运行入口均拒绝，不自动改写旧 checkpoint。训练/回测数据由 registry 提供，上传模型不能指定数据路径或身份，也不能使用日频/Mars checkpoint。原 0.75° 已验证三天真实数据地形模型链路；5° 完成两年数据上的 7→1、1 epoch CPU 冒烟，两者的长期收敛与精度仍未验收；无参考真值未来外推和 Earth/Mars 混合比较未开放，全分辨率预测 JSON 有传输和内存成本。细节见[停用约定](docs/earth-dataset-retirement.md)、[三小时专题](docs/earth-merra2-3hourly.md)及[地形专题](docs/earth-topography-asset.md)。
 - **自定义模型管理按账号私有。** 下载与重命名只允许上传者本人操作；下载内容为上传的原始 `.py` 源码，训练权重通过训练任务的产物入口获取。改名更新所选模型的显示名称（去除首尾空白，1–120 个字符），保留包 ID、版本、源码、内容指纹及历史训练任务固定的模型名称；重新校验保留新名称。
 - **预测只走已训练模型。** [predictModelModes.js](frontend/src/pages/PredictPage/predictModelModes.js) 支持地球/火星各自的单模型与多模型模式；`/api/predict/run`、`/metrics`、`/error-distribution`、`/permutation-importance` 缺少 `training_task_id` 时返回 400。原先「不训练直接用官方预训练基线」的默认 PredRNNv2 链路及其 `/predict/ablation`、`/predict/model-info`、`/predict/prewarm`、`/predict/performance`、`/predict/performance-compare` 端点已下线，`models/predrnnv2/` 权重与本地产物 `data/perf_cache/` 不再需要。
 - **个人上传不是训练入口。** 当前训练请求固定使用服务器管理的数据源；预测的数据源校验也拒绝 `personal`。总览可使用上传来源，不代表同一来源可直接用于训练或预测。
@@ -458,7 +464,7 @@ NetCDF 读取必须串行：netCDF4 背后的 HDF5 C 库不是线程安全的，
 | MCD 原始数据 | `data/MCD_Output_global_10m_ls_lst/` | 可通过 `MCD_RAW_3H_DIR` 指向外部目录 |
 | 预处理张量（遗留） | `data/processed_tensors.pt` | 早期默认 PredRNNv2 子系统的派生文件；该子系统已下线，仓库中已无代码引用，训练与预测的数据读取不经过该文件，保留或删除都不影响运行 |
 | 训练产物 | `models/training_results/` | 训练任务生成；已训练模型预测依赖有效权重和任务元数据 |
-| 地球三小时包 | `data/earth/merra2_3hourly_v1/` 或配置的外部目录 | 唯一活动 Earth 发布；包含 `manifest.json` 与 `earth_merra2_3hourly.nc`，支持总览、训练与历史回测；日频文件仅保留归档，不需删除 |
+| 地球三小时包 | `data/earth/merra2_3hourly_v1/` 或配置的外部目录 | 默认 Earth 发布；另可配置独立 5° 训练包，详见[5° 数据集](docs/earth-merra2-5deg.md)；包含 `manifest.json` 与 `earth_merra2_3hourly.nc`，支持总览、训练与历史回测；日频文件仅保留归档，不需删除 |
 
 具体字段与读取规则见 [数据服务](AresVision_backend/backend/services/data_service.py) 与 [训练模型推理服务](AresVision_backend/backend/services/inference_service.py)。文件名符合规则不代表数据结构一定兼容。
 
@@ -578,10 +584,12 @@ node scripts\serve-prod.mjs
 | `ARESVISION_EARTH_TRAINING_CACHE_DIR` | 三小时验证证明、train-only 统计量和 normalized memmap 的共享目录，默认工作区父级 `earth_training_cache/`；按数据/通道/统计量/布局版本复用，五通道完整发布约 12.55 GiB；不覆盖原包 |
 | `TRAINING_PYTHON_PATH` | 训练子进程使用的 Python，默认使用后端当前解释器 |
 | `ARESVISION_MOLA_TOPOGRAPHY_PATH` | MOLA 地形 NetCDF 路径，默认使用平台地形资源 |
+| `ARESVISION_EARTH_MERRA2_3HOURLY_5DEG_DIR` | 独立 36×72 三小时训练包目录，包含 manifest 和 NetCDF；不替换数据总览默认值 |
+| `ARESVISION_EARTH_TOPOGRAPHY_5DEG_PATH` | 与 5° 发布严格对齐的 ETOPO 静态资产；仅声明地形的低分辨率上传模型需要 |
 | `ARESVISION_EARTH_TOPOGRAPHY_PATH` | Earth ETOPO 大气下边界资产路径；仅声明 `derived_inputs.topography` 的上传模型需要，运行时不下载原始 DEM |
 | `ARESVISION_MAX_UPLOAD_SIZE_MB` | 数据上传大小上限，默认 512 MB |
-| `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` | 上传与手动重新校验的模型 dry-run 隔离进程时间上限，默认 120 秒，须为正整数；超时终止子进程并显示“校验超时，请重试”，兼容性为未知且禁止训练；Earth 创建任务不再执行重复 dry-run |
-| `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` | 显式 `earth_probe` 调用中全图 Earth v2 配置 dry-run 的隔离进程预算，默认 300 秒、正整数，取其与通用预算的较大值；任务创建不使用此预算，短窗口上传检查及 v1/Mars 保持通用预算，显式验证器超时仍优先 |
+| `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` | 上传与手动重新校验的通用隔离进程预算，默认 120 秒、正整数；导入和声明检查仍在此预算内，合法全图声明按下一项扩展总预算。超时终止子进程并禁止训练；Earth 创建任务不重复 dry-run |
+| `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` | 全图 Earth v2 上传、重新校验与显式配置探针的总预算，默认 900 秒、正整数，与通用预算取较大值；手动指标恢复工具的重载检查也复用此配置。任务创建不运行探针，v1/Mars 保持通用预算，显式验证器超时仍优先 |
 | `ARESVISION_FRONTEND_DIST` | 指定后端托管的前端构建目录 |
 
 ## 自定义模型
@@ -592,7 +600,7 @@ Earth 三小时官方和 v1 新训练缓存按空间块连续存储（`earth_spa
 
 Earth 三小时有独立的 [v1 上传说明](docs/earth-3hourly-uploaded-model.md)与[Python 模板](docs/earth-3hourly-uploaded-model-template.py)。训练页选中该数据集时下载对应模板，兼容性显示可用/不可用/未知及原因；Mars 使用原上传入口。新模型声明 `earth_merra2_3hourly_v1`，实际调用 `[B,window,C,24,48] → [B,horizon,1,24,48]`，拼回 240×480。服务器在上传或手动重新校验时检查通道、单位、dtype、设备和反向传播，创建任务复用报告并冻结源码、schema 和参数；checkpoint 保存独立契约、源码摘要、发布身份、任务划分与 normalization。上传模型历史回测完整窗口必须在同一任务分区内，旧任务仍按 manifest。
 
-模型上传和手动重新校验默认最多等待 120 秒，检查 eval 独立性、前向/反向和梯度；Earth v1/v2 创建任务不再按实际 window/horizon、通道、batch 和模型参数重复执行隔离 dry-run。上传报告的绿色兼容不代表任意实际配置已经通过，运行失败仍由训练任务报告。显式 `earth_probe` 调用保留完整配置探针及 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS=300` 的全图预算。上传或显式探针超时报告使用 `uploaded_model_validation_timeout`，表示校验未完成，不视为已证实不兼容。隔离校验先读取结果再等待子进程退出，避免大报告塞满管道被误判超时；超时仍强制终止子进程。v1 checkpoint 保持独立 30 秒重载预算，v2 checkpoint 继续使用通用验证预算，未放宽重载门禁。细节见[全图 v2 准入](docs/earth-3hourly-fullgrid-model.md)。
+模型上传和手动重新校验使用通用 120 秒预算，隔离子进程确认合法 Earth 全图 v2 声明后使用默认 900 秒总预算；检查 eval 独立性、前向/反向和梯度，在后台线程等待子进程以保持其他 API 响应。Earth v1/v2 创建任务不再按实际 window/horizon、通道、batch 和模型参数重复执行隔离 dry-run。上传报告的绿色兼容不代表任意实际配置已经通过，运行失败仍由训练任务报告。显式 `earth_probe` 调用保留完整配置探针，全图采用通用预算与 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS=900` 的较大值，显式验证器预算优先。上传或显式探针超时报告使用 `uploaded_model_validation_timeout`，表示校验未完成，不视为已证实不兼容。隔离校验先读取结果再等待子进程退出，避免大报告塞满管道被误判超时；超时仍强制终止子进程。v1 checkpoint 保持独立 30 秒重载预算，v2 checkpoint 继续使用通用验证预算，未放宽重载门禁。细节见[全图 v2 准入](docs/earth-3hourly-fullgrid-model.md)。
 
 自定义模型文件需导出 `MODEL_SPEC` 和 `build_model(config)`。基本张量约定为：
 

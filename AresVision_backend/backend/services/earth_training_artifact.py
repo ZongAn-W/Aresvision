@@ -67,7 +67,7 @@ from services.earth_training_contract import (
     earth_training_profile,
     earth_task_metrics_contract,
 )
-from services.dataset_identity import EARTH_DATASET_3HOURLY_ID, DatasetRequestError
+from services.dataset_identity import EARTH_DATASET_3HOURLY_ID, EARTH_THREE_HOURLY_DATASET_IDS, DatasetRequestError
 from services.training_split import normalize_split_ratios, TrainingSplitError
 from services.earth_model_source import (
     MODEL_SOURCE_OFFICIAL,
@@ -316,7 +316,7 @@ def compute_earth_metrics(predictions_du, targets_du, dataset_id: str | None = N
     Three-hour weights may be supplied as normalized cell-area weights. Omitting
     them preserves the historical grid-uniform policy for legacy callers.
     """
-    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+    if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
         accumulator = ErrorAccumulator(dataset_id=dataset_id, horizon=np.asarray(predictions_du).shape[1])
         accumulator.update(predictions_du, targets_du, spatial_weights=spatial_weights)
         return accumulator.result()
@@ -353,7 +353,7 @@ class ErrorAccumulator:
     """Float64 error sums and weighted Chan target moments; memory scales with horizon."""
 
     def __init__(self, dataset_id: str | None = None, horizon: int | None = None) -> None:
-        self._three_hourly = dataset_id == EARTH_DATASET_3HOURLY_ID
+        self._three_hourly = dataset_id in EARTH_THREE_HOURLY_DATASET_IDS
         leads = (24 if horizon is None else horizon) if self._three_hourly else len(LEAD_DAYS)
         if type(leads) is not int or not 1 <= leads <= 240:
             raise EarthArtifactError('Metric horizon must be an integer between 1 and 240')
@@ -502,21 +502,21 @@ def build_metrics_block(
         raise EarthArtifactError("Unsupported Earth metric aggregation")
     block = {
         "schema": (EARTH_3HOURLY_METRICS_SCHEMA_V3 if area_weighted
-                   else EARTH_3HOURLY_METRICS_SCHEMA_V2 if dataset_id == EARTH_DATASET_3HOURLY_ID
+                   else EARTH_3HOURLY_METRICS_SCHEMA_V2 if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS
                    else EARTH_METRICS_SCHEMA),
         "target": EARTH_TARGET_CHANNEL,
         "unit": EARTH_TARGET_UNIT,
         "aggregation": aggregation,
         "splits": {
             "validation": _checked_split_metrics(validation, validation_window_count, dataset_id, horizon,
-                                                  full=dataset_id == EARTH_DATASET_3HOURLY_ID,
+                                                  full=dataset_id in EARTH_THREE_HOURLY_DATASET_IDS,
                                                   area_weighted=area_weighted),
             "test": _checked_split_metrics(test, test_window_count, dataset_id, horizon,
-                                            full=dataset_id == EARTH_DATASET_3HOURLY_ID,
+                                            full=dataset_id in EARTH_THREE_HOURLY_DATASET_IDS,
                                             area_weighted=area_weighted),
         },
     }
-    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+    if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
         block.update(metric_units=dict(METRIC_UNITS),
                      metric_policy=dict(AREA_WEIGHTED_METRIC_POLICY if area_weighted else METRIC_POLICY))
     return block
@@ -543,7 +543,7 @@ def _checked_split_metrics(metrics: Mapping[str, Any], window_count: int, datase
     for key in keys:
         block["overall"][key] = _finite_float(overall.get(key), f"overall.{key}")
     by_lead = metrics.get("by_lead")
-    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+    if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
         expected_horizon = 24 if horizon is None else horizon
         if not isinstance(by_lead, (list, tuple)) or len(by_lead) != expected_horizon:
             raise EarthArtifactError('Three-hourly metrics must contain every configured lead in order')
@@ -771,7 +771,7 @@ def build_checkpoint_payload(
     order = require_earth_channel_order(input_channel_order)
     binding = _binding_payload(dataset_binding)
     dataset_id = binding["dataset_id"]
-    three_hourly = dataset_id == EARTH_DATASET_3HOURLY_ID
+    three_hourly = dataset_id in EARTH_THREE_HOURLY_DATASET_IDS
     profile = earth_training_profile(dataset_id, run.get('hyperparameters')) if three_hourly else earth_training_profile()
     try:
         normalized_split_ratios = normalize_split_ratios(split_ratios)
@@ -1006,7 +1006,7 @@ def validate_checkpoint_payload(
     if artifact_schema not in (EARTH_ARTIFACT_SCHEMA, EARTH_3HOURLY_ARTIFACT_SCHEMA):
         raise EarthArtifactError("Unsupported Earth checkpoint schema")
     three_hourly = artifact_schema == EARTH_3HOURLY_ARTIFACT_SCHEMA
-    metric_dataset_id = EARTH_DATASET_3HOURLY_ID if three_hourly else None
+    metric_dataset_id = (payload.get("dataset_binding") or {}).get("dataset_id") if three_hourly else None
     profile = earth_training_profile(metric_dataset_id, (payload.get('model_config') or {}) if three_hourly else None)
 
     state_dict = payload.get("model_state_dict")
@@ -1082,7 +1082,7 @@ def validate_checkpoint_payload(
     height, width = int(model_config.get("height", -1)), int(model_config.get("width", -1))
     if height < 1 or width < 1:
         raise EarthArtifactError("model_config grid shape is invalid")
-    expected_implementation = EARTH_3HOURLY_IMPLEMENTATION_ID
+    expected_implementation = profile["implementation_id"]
     if three_hourly and model_source == MODEL_SOURCE_UPLOADED:
         from training_backbones.earth_3hourly_uploaded_contract import (
             build_config, contract_profile, contract_schema_for_reference,
@@ -1092,6 +1092,8 @@ def validate_checkpoint_payload(
             execution = contract_profile(model_config.get("contract_schema"))
         except (ValueError, TypeError) as exc:
             raise EarthArtifactError(str(exc)) from exc
+        if execution["dataset_id"] != metric_dataset_id:
+            raise EarthArtifactError("Uploaded spatial schema belongs to another Earth dataset")
         expected_implementation = execution["implementation_id"]
         if (model_config.get("architecture") != EARTH_UPLOADED_ARCHITECTURE
                 or model_config.get("spatial_tile_shape") != list(execution["shape"])):
@@ -1157,7 +1159,7 @@ def validate_checkpoint_payload(
         raise EarthArtifactError("Training contract window/horizon disagrees with its dataset profile")
     if three_hourly:
         expected_fields = {
-            "dataset_id": EARTH_DATASET_3HOURLY_ID,
+            "dataset_id": metric_dataset_id,
             "profile_id": profile["profile_id"],
             "step": 3, "frequency_hours": 3, "time_zone": "UTC",
             "timestamp_rule": THREE_HOURLY_TIMESTAMP_RULE,
@@ -1210,7 +1212,7 @@ def validate_checkpoint_payload(
         raise EarthArtifactError("Checkpoint dataset snapshot must be an object")
     if snapshot.get("planet") != "earth":
         raise EarthArtifactError("Checkpoint dataset binding is not an Earth release")
-    bound_three_hourly = binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID
+    bound_three_hourly = binding.get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS
     if bound_three_hourly != three_hourly:
         raise EarthArtifactError("Daily and three-hourly checkpoint schemas cannot cross dataset profiles")
     if binding.get("dataset_id") != snapshot.get("dataset_id"):
@@ -1543,7 +1545,7 @@ def load_earth_training_artifact(
             raise EarthArtifactError("Checkpoint metrics do not match the task's required metrics contract")
         requested_id = expected_hyperparameters.get("training_dataset")
         actual_id = validated["dataset_binding"].get("dataset_id")
-        if requested_id == EARTH_DATASET_3HOURLY_ID or actual_id == EARTH_DATASET_3HOURLY_ID:
+        if requested_id in EARTH_THREE_HOURLY_DATASET_IDS or actual_id in EARTH_THREE_HOURLY_DATASET_IDS:
             if requested_id is not None and requested_id != actual_id:
                 raise EarthArtifactError("Checkpoint dataset profile does not match the task")
             for key in ("window", "horizon"):
@@ -1677,14 +1679,14 @@ def build_earth_model_from_checkpoint(
                     dataset_id=checkpoint.dataset_binding.get("dataset_id"),
                     contract_schema=checkpoint.model_config.get("contract_schema"),
                     derived_inputs=(checkpoint.model_config.get("derived_inputs", [])
-                                    if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID
+                                    if checkpoint.dataset_binding.get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS
                                     else None),
                 )
             except EarthModelBuildError as exc:
                 raise EarthArtifactError(str(exc), code=exc.code) from exc
         else:
             model = forecaster_from_config(checkpoint.model_config)
-            if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
+            if checkpoint.dataset_binding.get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS:
                 # Reload must reproduce the invocation the run trained with: the
                 # official three-hour model shares the uploaded contract path.
                 model = prepare_official_three_hour_model(model, checkpoint.model_config)
@@ -1695,7 +1697,7 @@ def build_earth_model_from_checkpoint(
                 f"The Earth checkpoint weights do not fit the model: {exc}"
             ) from exc
         model.eval()
-        if checkpoint.dataset_binding.get("dataset_id") == EARTH_DATASET_3HOURLY_ID and checkpoint.model_source == MODEL_SOURCE_UPLOADED:
+        if checkpoint.dataset_binding.get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS and checkpoint.model_source == MODEL_SOURCE_UPLOADED:
             from training_backbones.earth_3hourly_uploaded_contract import (
                 RUNTIME_PROBE_BATCH_SIZE, RUNTIME_PROBE_MAX_INPUT_ELEMENTS,
                 contract_profile, validate_eval_batch_independence,
@@ -1836,7 +1838,7 @@ def _verify_round_trip(path: Path, expected: Mapping[str, Any]) -> None:
         execution = contract_profile(model_config["contract_schema"]) if "contract_schema" in model_config else None
         if execution is not None and execution["full_grid"]:
             batch_size = (expected.get("run", {}).get("hyperparameters") or {}).get("batch_size", 1)
-        else:
+        elif (expected.get("dataset_binding") or {}).get("dataset_id") != "earth_merra2_3hourly_5deg_v1":
             # Official gridpoint weights and v1 uploads support the existing tile probe.
             height, width = min(height, 24), min(width, 48)
     generator = torch.Generator().manual_seed(20200101)
@@ -1889,7 +1891,7 @@ def _reference_model_from_payload(payload: Mapping[str, Any]) -> torch.nn.Module
             height=int(payload["model_config"].get("height", 36)),
             width=int(payload["model_config"].get("width", 72)),
             dataset_id=(
-                EARTH_DATASET_3HOURLY_ID
+                payload["dataset_binding"]["dataset_id"]
                 if payload.get("artifact_schema") == EARTH_3HOURLY_ARTIFACT_SCHEMA
                 else None
             ),
@@ -1900,7 +1902,7 @@ def _reference_model_from_payload(payload: Mapping[str, Any]) -> torch.nn.Module
     else:
         model = forecaster_from_config(payload["model_config"])
         if (payload.get("artifact_schema") == EARTH_3HOURLY_ARTIFACT_SCHEMA
-                and (payload.get("dataset_binding") or {}).get("dataset_id") == EARTH_DATASET_3HOURLY_ID):
+                and (payload.get("dataset_binding") or {}).get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS):
             # The independent reference model must take the same call path as the
             # published one, otherwise the comparison is not like for like.
             model = prepare_official_three_hour_model(model, payload["model_config"])
@@ -1931,7 +1933,7 @@ def _forward_payload_model(
 def normalization_from_release(release, input_channel_order: Sequence[str], *, task_split=None) -> dict:
     """Fit on task train, or the published train interval for legacy releases."""
     order = require_earth_channel_order(input_channel_order)
-    if release.metadata.get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
+    if release.metadata.get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS:
         from services.earth_dataset import fit_threehour_normalization
         return fit_threehour_normalization(release, order, task_split=task_split)
     dates = np.asarray(release.dates, dtype="datetime64[D]")
@@ -2050,7 +2052,7 @@ def has_earth_task_split(contract: Mapping[str, Any] | None) -> bool:
 
 
 def _require_daily_prediction_release(release) -> None:
-    if (getattr(release, "metadata", None) or {}).get("dataset_id") == EARTH_DATASET_3HOURLY_ID:
+    if (getattr(release, "metadata", None) or {}).get("dataset_id") in EARTH_THREE_HOURLY_DATASET_IDS:
         raise EarthArtifactError(
             "Three-hourly datetime prediction is not available through the daily date interface",
             code="dataset_prediction_not_supported",
@@ -2061,7 +2063,7 @@ def _threehour_prediction_times(release) -> np.ndarray:
     """Keep timestamp indexing separate from the retained date-only interface."""
     metadata = getattr(release, "metadata", None) or {}
     time_metadata = metadata.get("time") or {}
-    if (metadata.get("dataset_id") != EARTH_DATASET_3HOURLY_ID
+    if (metadata.get("dataset_id") not in EARTH_THREE_HOURLY_DATASET_IDS
             or metadata.get("frequency_hours") != 3
             or metadata.get("step_unit") != "hour" or metadata.get("step") != 3
             or time_metadata.get("kind") != "datetime"

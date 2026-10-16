@@ -6,6 +6,7 @@ import ModelArchitectureSelector from './ModelArchitectureSelector';
 import { TagPicker } from '../../components/TrainingTags/TagControls';
 import {
   TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1,
+  TRAINING_DATASET_EARTH_MERRA2_3HOURLY_5DEG_V1,
   TRAINING_DATASET_MCD_OVERVIEW,
   TRAINING_DATASET_OPENMARS_MCD,
   getModelStructureParamLabel,
@@ -184,7 +185,7 @@ export default function ExperimentConfigWorkspace({
   };
   // Earth uses dataset-specific upload verdicts and keeps transfer learning disabled.
   const isEarth = isEarthTrainingDataset(trainingDataset);
-  const isEarthThreeHourly = trainingDataset === TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1;
+  const isEarthThreeHourly = isEarth;
   const earthProfile = getEarthTrainingProfile(trainingDataset);
   const architecturePickerOpen = resources.architecturePickerOpen;
   const isRecurrentModel = isRecurrentArchitecture(normalizedArchitecture);
@@ -292,6 +293,7 @@ export default function ExperimentConfigWorkspace({
     { value: TRAINING_DATASET_OPENMARS_MCD, label: copy.datasetOpenMarsMcd },
     { value: TRAINING_DATASET_MCD_OVERVIEW, label: copy.datasetMcdOverview },
     { value: TRAINING_DATASET_EARTH_MERRA2_3HOURLY_V1, label: copy.datasetEarthMerra23HourlyV1 },
+    { value: TRAINING_DATASET_EARTH_MERRA2_3HOURLY_5DEG_V1, label: copy.datasetEarthMerra25Degree },
   ];
   return (
     <div className="experiment-center-stack" data-config-canvas="true">
@@ -380,7 +382,7 @@ export default function ExperimentConfigWorkspace({
           {isEarth ? (
             <div className="experiment-earth-model" data-earth-model-block="true">
               <div className="experiment-source-toggle" role="group" aria-label={copy.modelSource} data-model-source-toggle="true">
-                {EARTH_MODEL_SOURCE_OPTIONS.map((option) => {
+                {EARTH_MODEL_SOURCE_OPTIONS.filter((option) => earthProfile.modelSources.includes(option.value)).map((option) => {
                   const active = modelSource === option.value;
                   return (
                     <button
@@ -425,7 +427,7 @@ export default function ExperimentConfigWorkspace({
                     <span>{copy.modelSourceOfficial}</span>
                     <b>{getExperimentArchitectureLabel(EARTH_MODEL_ARCHITECTURE)}</b>
                   </span>
-                  <p className="experiment-expert-note">{isEarthThreeHourly ? copy.earthThreeHourlyModelFixedNote : copy.earthModelFixedNote}</p>
+                  <p className="experiment-expert-note">{isEarthThreeHourly ? copy.earthThreeHourlyModelFixedNote(earthProfile.gridShape) : copy.earthModelFixedNote}</p>
                 </>
               )}
               {isUploaded && resources.earthUploadedNotice ? (

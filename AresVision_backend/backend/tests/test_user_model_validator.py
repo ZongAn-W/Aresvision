@@ -451,7 +451,7 @@ def test_full_grid_probe_preserves_explicit_timeout(monkeypatch, explicit):
     assert calls == [explicit]
 
 
-@pytest.mark.parametrize('configured,expected', [(None, 300), ('420', 420)])
+@pytest.mark.parametrize('configured,expected', [(None, 900), ('420', 420)])
 def test_full_grid_budget_configuration_reaches_default_probe(configured, expected):
     environment = os.environ.copy()
     environment.pop('USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS', None)
@@ -501,6 +501,65 @@ def test_large_validation_report_is_drained_before_child_exit(tmp_path):
     assert result.ok, result.errors
     assert result.description == description
     assert {child.pid for child in multiprocessing.active_children()} <= previous_children
+
+
+@pytest.mark.parametrize("full_grid_budget,delay,expected_ok", [
+    (10, 5, True), (None, 5, False), (10, 11, False),
+])
+def test_full_grid_contract_signal_extends_only_the_default_absolute_deadline(
+    monkeypatch, full_grid_budget, delay, expected_ok,
+):
+    from types import SimpleNamespace
+    from queue import Empty
+
+    elapsed = [0.0]
+    class ResultQueue:
+        def __init__(self):
+            self.messages = [
+                {"phase": user_model_validator._FULL_GRID_VALIDATION_PHASE},
+                {"ok": True},
+            ]
+        def get(self, **kwargs):
+            message = self.messages[0]
+            if "phase" not in message and elapsed[0] + kwargs["timeout"] < delay:
+                elapsed[0] += kwargs["timeout"]
+                raise Empty
+            self.messages.pop(0)
+            elapsed[0] = 1.0 if "phase" in message else delay
+            return message
+        def close(self):
+            pass
+    class Process:
+        def __init__(self):
+            self.exitcode = None
+            self.alive = True
+        def start(self):
+            pass
+        def join(self, timeout):
+            # The child exits only once its simulated computation is finished.
+            if elapsed[0] + timeout >= delay:
+                elapsed[0] = max(elapsed[0], delay)
+                self.alive = False
+                self.exitcode = 0
+        def is_alive(self):
+            return self.alive
+        def terminate(self):
+            self.alive = False
+            self.exitcode = -1
+        def kill(self):
+            pytest.fail("The fake child should terminate immediately")
+    queue = ResultQueue()
+    process = Process()
+    monkeypatch.setattr(user_model_validator.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(multiprocessing, "get_context", lambda kind: SimpleNamespace(
+        Queue=lambda **kwargs: queue, Process=lambda **kwargs: process,
+    ))
+    result = UserModelValidator._validate_file_with_timeout(
+        Path("model.py"), 2, full_grid_timeout_seconds=full_grid_budget,
+    )
+    assert result.ok is expected_ok
+    if not expected_ok:
+        assert result.code == VALIDATION_TIMEOUT_CODE
 
 
 @pytest.mark.parametrize('exitcode', [1, None])

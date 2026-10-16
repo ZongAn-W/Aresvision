@@ -76,6 +76,45 @@ def test_full_grid_upload_and_cached_compatibility_preserve_spatial_contract(ful
     assert cached['spatial_input_shape'] == [240, 480]
 
 
+@pytest.mark.parametrize("schema", [CONTRACT_SCHEMA, FULL_GRID_CONTRACT_SCHEMA])
+def test_upload_budget_signal_uses_the_normalized_executed_contract(tmp_path, schema):
+    feed = copy.deepcopy(FULL_GRID_FEED if schema == FULL_GRID_CONTRACT_SCHEMA else FEED)
+    feed.update(window=[2], horizon=[1])
+    spec = {"name": "Budget", "parameters": {}, "datasets": {DATASET_ID: feed}}
+    source = SOURCE.replace("= SPEC", "= " + repr(spec))
+    if schema == CONTRACT_SCHEMA:
+        source = source.replace("(240,480)", "(24,48)")
+    # Composed declarations must work without executing source in the parent.
+    source = source.replace("MODEL_SPEC = ", "MODEL_SPEC = dict(", 1)
+    source = source.replace("\nclass FullGrid", ")\nclass FullGrid", 1)
+    path = tmp_path / "model.py"
+    path.write_text(source, encoding="utf-8")
+    announced = []
+    result = UserModelValidator._validate_file_in_process(
+        path, on_contract_validated=announced.append,
+    )
+    assert result.ok, result.errors
+    assert announced == [schema]
+    # Invalid full-grid declarations cannot request the extended budget.
+    invalid_path = tmp_path / "invalid.py"
+    invalid_path.write_text(source.replace("'frequency_hours': 3", "'frequency_hours': 6"), encoding="utf-8")
+    announced.clear()
+    result = UserModelValidator._validate_file_in_process(invalid_path, on_contract_validated=announced.append)
+    assert not result.ok and announced == []
+
+
+def test_full_grid_phase_message_and_large_report_survive_spawn(tmp_path):
+    feed = {**copy.deepcopy(FULL_GRID_FEED), "window": [2], "horizon": [1]}
+    spec = {"name": "LargeFullGrid", "parameters": {}, "datasets": {DATASET_ID: feed},
+            "description": "full-grid report " * 4096}
+    path = tmp_path / "model.py"
+    path.write_text(SOURCE.replace("= SPEC", "= " + repr(spec)), encoding="utf-8")
+    result = UserModelValidator().validate_file(path)
+    assert result.ok, result.errors
+    assert result.description == spec["description"]
+    assert result.earth_compatibilities[DATASET_ID]["output_shape"] == [2, 1, 1, 240, 480]
+
+
 def test_full_grid_task_probe_checks_actual_window_and_horizon(full_package):
     package, _ = full_package
     probe = {'input_channel_order': ['TO3'], 'window': 20, 'horizon': 20,

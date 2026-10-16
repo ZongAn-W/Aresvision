@@ -72,6 +72,7 @@ def test_registered_ids_are_stable_and_ordered():
     assert DATASET_IDS == (
         "openmars_mcd", "mcd_overview", "earth_merra2_daily_v1", "earth_merra2_daily_v2",
         "earth_merra2_3hourly_v1",
+        "earth_merra2_3hourly_5deg_v1",
     )
 
 

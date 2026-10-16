@@ -81,11 +81,13 @@ def forward(self, x, topography):
 
 ## 校验和错误
 
+v1 分块上传和手动重新校验优先使用模型声明支持的短窗口 2→1；输入或输出未声明该值时，分别使用对应声明列表的首项（例如仅支持 56→24 的模型仍校验 56→24）。完整 24×48 空间块、模型默认参数、16 种通道组合与全部前向、梯度及 eval 独立性检查保留。报告保存实际探针的 `window`、`horizon` 和 `validation_scope=declared_channels_probe_windows`，通过校验只证明该探针配置；实际训练继续使用任务选择的窗口，不由上传探针覆盖。该策略避免可变窗口的循环/门控模型在全部通道上重复长序列检查而超时。显式 `earth_probe` 仍按传入的窗口、batch 和参数执行。
+
 上传沿用仓库的单文件大小、UTF-8、AST 导入/调用检查和隔离进程超时边界。该检查不是操作系统级不可信代码沙箱，部署时仍需遵循既有任务执行权限边界。
 
-上传和手动重新校验的模型 dry-run 默认使用 120 秒隔离进程预算，可通过后端 `.env` 的 `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` 设置正整数秒数；修改配置后重启后端。创建任务不重复执行实际配置 dry-run。到期仍强制终止子进程，全部通道、前向、梯度及 eval 批次一致性检查保留。超时报告顶层 `code` 为 `uploaded_model_validation_timeout`，兼容性查询返回 `status=unknown`、`compatible=false` 和同一错误码，页面显示“校验超时，请重试”。上传包在重新校验成功前仍为 `validation_status=invalid`，禁止创建训练任务。旧报告只有 `User model validation timed out after ... seconds` 文本时也识别为超时，无需改写数据库。该预算不影响下文 checkpoint 完成门禁的独立 30 秒重载检查。
+上传和手动重新校验的模型 dry-run 默认从 120 秒通用隔离进程预算开始（全图 v2 在合法声明确认后扩展，见下段），可通过后端 `.env` 的 `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` 设置正整数秒数；修改配置后重启后端。创建任务不重复执行实际配置 dry-run。到期仍强制终止子进程，全部通道、前向、梯度及 eval 批次一致性检查保留。超时报告顶层 `code` 为 `uploaded_model_validation_timeout`，兼容性查询返回 `status=unknown`、`compatible=false` 和同一错误码，页面显示“校验超时，请重试”。上传包在重新校验成功前仍为 `validation_status=invalid`，禁止创建训练任务。旧报告只有 `User model validation timed out after ... seconds` 文本时也识别为超时，无需改写数据库。该预算不影响下文 checkpoint 完成门禁的独立 30 秒重载检查。
 
-显式 `earth_probe` 调用仍可检查实际窗口、batch、通道和模型参数；全图 v2 使用通用预算与 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`（默认 300 秒）的较大值，v1 分块及 Mars 不改变预算。该配置保留用于显式探针，不参与任务创建。探针超时表示当前配置尚未完成验证，不是模型已经证实不兼容。隔离进程先读取完整报告再等待退出，避免大报告堵塞 Windows 管道；无结果、异常退出和真正超时继续拒绝，详见[全图 v2](earth-3hourly-fullgrid-model.md)。
+全图 v2 上传与重新校验在隔离子进程完成导入、数据声明规范化及参数 schema 检查后，通知父进程使用通用预算与 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS`（默认 900 秒）的较大值；总截止时间从进程启动计算，通知不重置计时，不在父进程执行上传源码。导入卡死、非法声明、v1 分块及 Mars 不获得扩展。显式 `earth_probe` 仍检查实际窗口、batch、通道和模型参数，全图使用同一预算；显式指定的验证器超时（含 `None`）保持原义。上传与重新校验在后台线程等待隔离进程，其他 API 可继续响应。任务创建复用报告，不运行这些探针。探针超时表示当前配置尚未完成验证，不是模型已经证实不兼容。隔离进程先读取完整报告再等待退出，避免大报告堵塞 Windows 管道；无结果、异常退出和真正超时继续拒绝，详见[全图 v2](earth-3hourly-fullgrid-model.md)。
 
 上传 dry-run 检查全部 16 种通道组合、B=1/2、eval 前向、train 前向及 backward。在 backward 前后均用固定的不同样本核对单独与合批、交换顺序、更换其他成员和重复调用的输出，覆盖 B=2/3/默认8，采用 float32 容差 `rtol=1e-5, atol=1e-5`。checkpoint 重载保留并校验保存的训练 batch，但运行时独立性探针使用单独的有界预算：v1 的合批大小固定为 B=2/3，全图 v2 为 B=1/2，不随训练 batch 放大；因此只在 B>8 才依赖其他样本的模型可能通过这些探针，不能据此声称所有 batch 均已证明独立。探针拒绝 eval 修改参数或缓冲区，并在结束时恢复原值与各模块模式。依赖 batch 均值、`BatchNorm(track_running_stats=False)`、首次调用校准或 eval 计数缓冲区的模型会被拒绝。成功报告保存 `eval_batch_policy=earth_eval_sample_independent_v1`；旧报告没有该证据时显示 unknown，需要重新校验。创建任务复用该报告，不再次执行实际所选通道、batch 和自定义参数的隔离探针。有限探针不能证明任意源码对全部输入都独立，CPU dry-run 通过也不代表任意任务配置、GPU 资源预算或模型收敛已验收。
 
@@ -117,3 +119,5 @@ def forward(self, x, topography):
 ## 任务级比例
 
 上传模型和官方 DLinear 共用[任务级划分策略](earth-task-splits.md)。请求比例均为有限数值、大于 0 且总和为 1，默认 0.7/0.2/0.1；每区至少 window+horizon 步。数据身份仍绑定原发布，normalization 与缓存按数据、实际 train 区间、通道顺序及方法/布局版本共享；当前任务和 checkpoint 继续严格保存自己的完整划分。模型自定义参数、batch、学习率和轮次不改变全时间轴缓存内容。复用证明、完整性与失效规则见[训练准备缓存](earth-preparation-cache.md)。队列重启复用固定划分；多模型比较要求相同 test UTC 范围及窗口口径。
+
+独立的三小时 **36×72（5°）** 训练发布、完整全球窗口与上传模型契约见 [5° 数据集](earth-merra2-5deg.md)；本文件的原 0.75° 契约继续兼容。

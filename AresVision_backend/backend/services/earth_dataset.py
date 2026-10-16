@@ -35,7 +35,10 @@ SCHEMA = 'aresvision_earth_daily_v1'
 THREE_HOURLY_SCHEMA = 'aresvision_earth_3hourly_v1'
 THREE_HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1'
 THREE_HOURLY_DATASET_VERSION = 'v1'
+THREE_HOURLY_5DEG_DATASET_ID = 'earth_merra2_3hourly_5deg_v1'
+THREE_HOURLY_DATASET_IDS = (THREE_HOURLY_DATASET_ID, THREE_HOURLY_5DEG_DATASET_ID)
 THREE_HOURLY_GRID_SHAPE = (240, 480)
+THREE_HOURLY_5DEG_GRID_SHAPE = (36, 72)
 THREE_HOURLY_TILE_SHAPE = (24, 48)
 THREE_HOURLY_TILE_CACHE_LAYOUT = 'earth_spatial_tiles_v1'
 THREE_HOURLY_FULL_GRID_CACHE_LAYOUT = 'earth_full_grid_v1'
@@ -44,6 +47,18 @@ THREE_HOURLY_TRAINING_PROFILE = {
     'target': 'TO3', 'target_unit': 'DU', 'window': 56, 'horizon': 24,
     'step_unit': 'hour', 'step': 3, 'grid_shape': [240, 480],
 }
+THREE_HOURLY_5DEG_TRAINING_PROFILE = {
+    'target': 'TO3', 'target_unit': 'DU', 'window': 56, 'horizon': 24,
+    'step_unit': 'hour', 'step': 3, 'grid_shape': [36, 72],
+}
+
+
+def threehourly_grid_shape(dataset_id):
+    if dataset_id == THREE_HOURLY_5DEG_DATASET_ID:
+        return THREE_HOURLY_5DEG_GRID_SHAPE
+    if dataset_id == THREE_HOURLY_DATASET_ID:
+        return THREE_HOURLY_GRID_SHAPE
+    raise ValueError(f'Unsupported three-hour Earth dataset: {dataset_id}')
 
 TARGET_CHANNEL = 'TO3'
 TARGET_CHANNEL_INDEX = 0
@@ -134,8 +149,9 @@ def _validate_earth_3hourly_dataset(ds, *, chunk_steps=8, progress=None):
     once. Missing observations must be NaN and agree with their explicit binary
     validity masks; they are retained rather than filled or rejected outright.
     """
+    dataset_id = ds.attrs.get('dataset_id')
     if (ds.attrs.get('planet') != 'Earth' or ds.attrs.get('schema') != THREE_HOURLY_SCHEMA
-            or ds.attrs.get('dataset_id') != THREE_HOURLY_DATASET_ID
+            or dataset_id not in THREE_HOURLY_DATASET_IDS
             or ds.attrs.get('dataset_version') != THREE_HOURLY_DATASET_VERSION):
         raise ValueError('Expected the Earth MERRA-2 three-hour v1 dataset')
     if (ds.attrs.get('frequency_hours') != 3 or ds.attrs.get('step_unit') != 'hour'
@@ -146,16 +162,21 @@ def _validate_earth_3hourly_dataset(ds, *, chunk_steps=8, progress=None):
         raise ValueError('Unexpected temporal averaging or conservative regrid method')
     if set(ds.sizes) != {'time', 'lat', 'lon', 'bounds'} or ds.sizes.get('bounds') != 2:
         raise ValueError('Three-hour dimensions must be time, lat, lon and two interval bounds')
-    for axis, size, centre, edge in (('lat', 240, -89.625, -90.), ('lon', 480, -179.625, -180.)):
-        expected = centre + np.arange(size) * .75
+    height, width = threehourly_grid_shape(dataset_id)
+    step = 180.0 / height
+    lon_step = 360.0 / width
+    for axis, size, centre, edge, axis_step in (('lat', height, -90 + step / 2, -90., step),
+                                                ('lon', width, -180 + lon_step / 2, -180., lon_step)):
+        expected = centre + np.arange(size) * axis_step
         if (axis not in ds.coords or ds[axis].dims != (axis,)
                 or not np.array_equal(ds[axis].values, expected)):
-            raise ValueError(f'{axis} must contain the exact global 0.75 degree cell centres')
+            raise ValueError(f'{axis} must contain the exact global {axis_step} degree cell centres')
         unit = 'degrees_north' if axis == 'lat' else 'degrees_east'
         if ds[axis].attrs.get('units') != unit:
             raise ValueError(f'{axis} must use units {unit}')
         bounds_name = f'{axis}_bounds'
-        bounds = np.column_stack((edge + np.arange(size) * .75, edge + (np.arange(size) + 1) * .75))
+        bounds = np.column_stack((edge + np.arange(size) * axis_step,
+                                  edge + (np.arange(size) + 1) * axis_step))
         if (bounds_name not in ds or ds[bounds_name].dims != (axis, 'bounds')
                 or not np.array_equal(ds[bounds_name].values, bounds)
                 or ds[axis].attrs.get('bounds') != bounds_name
@@ -198,10 +219,10 @@ def _validate_earth_3hourly_dataset(ds, *, chunk_steps=8, progress=None):
         raise ValueError('chunk_steps must be positive')
     statistics = {}
     from services.netcdf_read_lock import netcdf_read_lock
-    total = len(times) * 240 * 480
+    total = len(times) * height * width
     for name, unit in zip(CHANNELS, UNITS):
         if (name not in ds or ds[name].dims != ('time', 'lat', 'lon')
-                or ds[name].shape != (len(times), 240, 480)
+                or ds[name].shape != (len(times), height, width)
                 or str(ds[name].dtype) != 'float32' or ds[name].attrs.get('units') != unit):
             raise ValueError(f'{name} must be float32 (time, lat, lon) in {unit}')
         for packing in ('scale_factor', 'add_offset'):
@@ -591,24 +612,26 @@ def cell_area_weights_from_lat_bounds(lat_bounds, longitude_count: int) -> np.nd
 def threehour_global_cell_area_weights(release) -> np.ndarray:
     """Read exact cell bounds from a verified three-hour global release."""
     metadata = getattr(release, 'metadata', {}) or {}
+    dataset_id = metadata.get('dataset_id') or THREE_HOURLY_DATASET_ID
+    height, width = threehourly_grid_shape(dataset_id)
+    step = 180.0 / height
     if (metadata.get('schema') != THREE_HOURLY_SCHEMA
-            or metadata.get('dataset_id') not in (None, THREE_HOURLY_DATASET_ID)
             or metadata.get('dataset_version') not in (None, THREE_HOURLY_DATASET_VERSION)
-            or metadata.get('grid_shape') != [240, 480]
-            or not np.array_equal(np.asarray(release.latitude), -89.625 + np.arange(240) * .75)
-            or not np.array_equal(np.asarray(release.longitude), -179.625 + np.arange(480) * .75)):
-        raise ValueError('Area weights require a verified fixed three-hour global grid')
+            or metadata.get('grid_shape') != [height, width]
+            or not np.array_equal(np.asarray(release.latitude), -90 + (np.arange(height) + .5) * step)
+            or not np.array_equal(np.asarray(release.longitude), -180 + (np.arange(width) + .5) * step)):
+        raise ValueError('Area weights require a verified three-hour global grid')
     path = _threehour_path(release)
     from services.netcdf_read_lock import netcdf_read_lock
     with netcdf_read_lock(), xr.open_dataset(path, engine='netcdf4', mask_and_scale=False) as ds:
         bounds = np.asarray(ds['lat_bounds'].values, dtype='float64')
-        expected = np.column_stack((-90. + np.arange(240) * .75,
-                                    -90. + (np.arange(240) + 1) * .75))
+        expected = np.column_stack((-90. + np.arange(height) * step,
+                                    -90. + (np.arange(height) + 1) * step))
         if (ds['lat_bounds'].dims != ('lat', 'bounds')
                 or bounds.shape != expected.shape or not np.array_equal(bounds, expected)):
             raise ValueError('Verified release latitude cell bounds changed')
     _threehour_path(release)
-    return cell_area_weights_from_lat_bounds(bounds, 480)
+    return cell_area_weights_from_lat_bounds(bounds, width)
 
 
 def _threehour_values(ds, channel, start, stop, *, lat_slice=slice(None), lon_slice=slice(None)):
@@ -810,7 +833,7 @@ def _build_threehour_training_cache_uncached(release, channels, normalization, c
     folder = Path(folder_override)
     folder.mkdir(parents=True, exist_ok=False)
     path = folder / 'normalized.npy'
-    shape = (len(release.dates), len(order), 240, 480)
+    shape = (len(release.dates), len(order), len(release.latitude), len(release.longitude))
     layout = THREE_HOURLY_FULL_GRID_CACHE_LAYOUT if full_grid else THREE_HOURLY_TILE_CACHE_LAYOUT
     storage_shape = shape if full_grid else (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
     mapped = np.lib.format.open_memmap(path, mode='w+', dtype='float32', shape=storage_shape)
@@ -829,6 +852,8 @@ def _build_threehour_training_cache_uncached(release, channels, normalization, c
                     if full_grid:
                         mapped[start:stop, index] = values
                     else:
+                        if tuple(values.shape[-2:]) != THREE_HOURLY_GRID_SHAPE:
+                            raise ValueError('Spatial tile cache is only available for the native 240x480 release')
                         tiles = values.reshape(stop - start, 10, 24, 10, 48)
                         tiles = tiles.transpose(1, 3, 0, 2, 4).reshape(100, stop - start, 24, 48)
                         mapped[:, start:stop, index] = tiles
@@ -843,8 +868,8 @@ def _build_threehour_training_cache_uncached(release, channels, normalization, c
         'schema': THREE_HOURLY_CACHE_SCHEMA, 'cache_version': 1,
         'cache_identity_version': 2,
         'cache_status': 'ready',
-        'dataset_id': THREE_HOURLY_DATASET_ID,
-        'dataset_version': THREE_HOURLY_DATASET_VERSION,
+        'dataset_id': release.metadata.get('dataset_id', THREE_HOURLY_DATASET_ID),
+        'dataset_version': release.metadata.get('dataset_version', THREE_HOURLY_DATASET_VERSION),
         'dataset_fingerprint': release.metadata.get('dataset_fingerprint'),
         'package_signature': cache_identity['package_signature'],
         'shape': list(shape), 'input_channel_order': order,
@@ -866,13 +891,13 @@ def _build_threehour_training_cache_uncached(release, channels, normalization, c
 
 def _training_cache_identity(release, order, normalization, *, full_grid):
     from services.earth_preparation_cache import signature_json
-    shape = (len(release.dates), len(order), 240, 480)
+    shape = (len(release.dates), len(order), len(release.latitude), len(release.longitude))
     layout = THREE_HOURLY_FULL_GRID_CACHE_LAYOUT if full_grid else THREE_HOURLY_TILE_CACHE_LAYOUT
     storage_shape = shape if full_grid else (100, shape[0], shape[1], *THREE_HOURLY_TILE_SHAPE)
     return {
         'schema': THREE_HOURLY_CACHE_SCHEMA, 'cache_version': 1,
-        'cache_identity_version': 2, 'dataset_id': THREE_HOURLY_DATASET_ID,
-        'dataset_version': THREE_HOURLY_DATASET_VERSION,
+        'cache_identity_version': 2, 'dataset_id': release.metadata.get('dataset_id', THREE_HOURLY_DATASET_ID),
+        'dataset_version': release.metadata.get('dataset_version', THREE_HOURLY_DATASET_VERSION),
         'dataset_fingerprint': release.metadata.get('dataset_fingerprint'),
         'package_signature': signature_json(release.signature),
         'input_channel_order': list(order), 'layout': layout,
@@ -1065,7 +1090,8 @@ class EarthThreeHourlyWindows:
         if split not in SPLITS:
             raise ValueError(f'Unknown split: {split}')
         from services.earth_training_contract import earth_training_profile
-        profile = earth_training_profile(THREE_HOURLY_DATASET_ID, {'window': window, 'horizon': horizon})
+        dataset_id = str((release.metadata or {}).get('dataset_id') or THREE_HOURLY_DATASET_ID)
+        profile = earth_training_profile(dataset_id, {'window': window, 'horizon': horizon})
         window, horizon = profile['window'], profile['horizon']
         channels = canonical_input_channels(selected_channels)
         dates = np.asarray(release.dates, dtype='datetime64[ns]')
@@ -1076,10 +1102,9 @@ class EarthThreeHourlyWindows:
         codes = task_split_codes(dates, release.metadata, task_split)
         lat = np.asarray(release.latitude, dtype='float64')
         lon = np.asarray(release.longitude, dtype='float64')
-        if (lat.shape != (240,) or lon.shape != (480,)
-                or not np.array_equal(lat, -89.625 + np.arange(240) * .75)
-                or not np.array_equal(lon, -179.625 + np.arange(480) * .75)):
-            raise ValueError('Earth three-hour training requires the global 240x480 grid')
+        expected_shape = tuple(profile['grid_shape'])
+        if (lat.shape != (expected_shape[0],) or lon.shape != (expected_shape[1],)):
+            raise ValueError(f'Earth three-hour training requires the global {expected_shape[0]}x{expected_shape[1]} grid')
         indices = np.flatnonzero(codes == SPLITS[split])
         length = len(indices) - window - horizon + 1
         if length < 1:
@@ -1127,12 +1152,12 @@ class EarthThreeHourlyWindows:
         _threehour_path(self._release)
         path = Path(path)
         metadata = json.loads((path.parent / 'metadata.json').read_text(encoding='utf-8'))
-        shape = (len(self._release.dates), len(self.input_channels), 240, 480)
+        shape = (len(self._release.dates), len(self.input_channels), len(self._release.latitude), len(self._release.longitude))
         from services.earth_preparation_cache import signature_json
         normalization_match = metadata.get('normalization') == self.normalization
         if metadata.get('cache_identity_version') == 2 and isinstance(metadata.get('normalization'), dict):
             normalization_match = _normalization_content(metadata['normalization']) == _normalization_content(self.normalization)
-        if (metadata.get('dataset_id') != THREE_HOURLY_DATASET_ID
+        if (metadata.get('dataset_id') != self._release.metadata.get('dataset_id', THREE_HOURLY_DATASET_ID)
                 or metadata.get('dataset_fingerprint') != self._release.metadata.get('dataset_fingerprint')
                 or metadata.get('input_channel_order') != self.input_channels
                 or not normalization_match

@@ -30,7 +30,7 @@ from services.uploaded_model_source import (
     resolve_source_text,
     hash_source_bytes,
 )
-from services.dataset_identity import EARTH_DATASET_3HOURLY_ID
+from services.dataset_identity import EARTH_THREE_HOURLY_DATASET_IDS
 from services.earth_training_contract import earth_training_profile
 from training_backbones.earth_daily_model import (
     earth_model_config,
@@ -175,14 +175,14 @@ def build_uploaded_earth_model(
     rebuilt source must declare exactly the same tensors.
     """
     order = require_earth_channel_order(input_channel_order)
-    if dataset_id == EARTH_DATASET_3HOURLY_ID and (height, width) != (240, 480):
-        raise EarthModelBuildError("Three-hour uploaded model requires the server 240x480 grid",
+    if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS and [height, width] != earth_training_profile(dataset_id)["grid_shape"]:
+        raise EarthModelBuildError("Three-hour uploaded model requires the dataset's exact global grid",
                                    code="uploaded_model_contract_invalid")
     try:
         source_text, source_report = resolve_source_text(reference)
     except UploadedModelSourceError as exc:
         raise EarthModelBuildError(str(exc), code=exc.code) from exc
-    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+    if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
         embedded = reference.get("source_text")
         if (not reference.get("content_hash")
                 or hash_source_bytes(source_text.encode("utf-8")) != reference["content_hash"]
@@ -204,13 +204,13 @@ def build_uploaded_earth_model(
             code="uploaded_model_source_invalid",
         )
 
-    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+    if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
         from training_backbones.uploaded_model_dataset_spec import (
             EARTH_3HOURLY_FEED_KEY,
             earth_3hourly_feed_from_spec,
         )
         try:
-            feed = earth_3hourly_feed_from_spec(model_spec)
+            feed = earth_3hourly_feed_from_spec(model_spec, dataset_id=dataset_id)
         except Exception as exc:
             raise EarthModelBuildError(
                 f"The uploaded model has an invalid Earth three-hourly spec: {exc}",
@@ -235,6 +235,9 @@ def build_uploaded_earth_model(
             source_contract_schema = contract_schema_from_spec(model_spec)
         except ValueError as exc:
             raise EarthModelBuildError(str(exc), code="uploaded_model_contract_invalid") from exc
+        from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+        if contract_profile(source_contract_schema)["dataset_id"] != dataset_id:
+            raise EarthModelBuildError("Uploaded spatial schema belongs to another Earth dataset", code="uploaded_model_contract_invalid")
         if any(expected is not None and source_contract_schema != expected
                for expected in (contract_schema, reference.get("contract_schema"))):
             raise EarthModelBuildError("Stored Earth contract schema disagrees with verified source",
@@ -341,6 +344,9 @@ def prepare_official_three_hour_model(model: torch.nn.Module, model_config: Mapp
     dtype, finiteness and output validation) as an uploaded model. The spatial
     profile is unchanged: it stays the v1 24x48 tile the caller passes in.
     """
+    if (model_config.get("height"), model_config.get("width")) == (36, 72):
+        return model
+
     from training_backbones.earth_3hourly_uploaded_contract import CONTRACT_SCHEMA, prepare_model
 
     try:
@@ -366,7 +372,7 @@ def build_earth_model_for_plan(plan: ModelSourcePlan) -> tuple[torch.nn.Module, 
             window=profile["window"], horizon=profile["horizon"],
             height=height, width=width,
         )
-        if plan.dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if plan.dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             config["implementation_id"] = profile["implementation_id"]
             model = prepare_official_three_hour_model(model, config)
         return model, config, ()

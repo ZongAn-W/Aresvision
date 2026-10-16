@@ -108,8 +108,51 @@ def test_template_passes_spawn_isolation_and_does_not_claim_daily_or_mars(tmp_pa
     verdict = result.report_dict()["earth_datasets"][DATASET_ID]
     assert verdict["contract_schema"] == CONTRACT_SCHEMA and verdict["status"] == "available"
     assert verdict["eval_batch_policy"] == EVAL_BATCH_POLICY
-    assert verdict["output_shape"] == [2, 24, 1, 24, 48]
+    assert verdict["output_shape"] == [2, 1, 1, 24, 48]
     assert len(channel_orders()) == 16
+
+
+@pytest.mark.parametrize("windows,horizons,expected", [
+    ([56, 2], [24, 1], (2, 1)),
+    ([56], [24], (56, 24)),
+])
+def test_tile_admission_uses_declared_probe_windows_for_all_channels(
+    tmp_path, monkeypatch, windows, horizons, expected,
+):
+    import training_backbones.earth_3hourly_uploaded_contract as contract
+
+    declaration = spec()
+    declaration["datasets"][DATASET_ID].update(window=windows, horizon=horizons)
+    calls = []
+    original = contract.dry_run
+
+    def observed(build_model, order, params, **kwargs):
+        calls.append((order, kwargs["window"], kwargs["horizon"], kwargs["batch_size"]))
+        return original(build_model, order, params, **kwargs)
+
+    monkeypatch.setattr(contract, "dry_run", observed)
+    package, result = package_at(tmp_path, source_with_spec(declaration))
+    assert result.ok, result.errors
+    assert calls == [(order, *expected, 8) for order in channel_orders()]
+    verdict = result.earth_compatibilities[DATASET_ID]
+    assert (verdict["window"], verdict["horizon"]) == expected
+    assert verdict["output_shape"] == [2, expected[1], 1, 24, 48]
+    assert verdict["validation_scope"] == "declared_channels_probe_windows"
+    assert UserModelService.earth_compatibility_for_package(
+        package, dataset_id=DATASET_ID,
+    )["compatible"] is True
+
+    # Explicit configuration probes still execute the requested long windows,
+    # channels and batch, even when admission preferred short windows.
+    calls.clear()
+    checked = evaluate_package_earth_compatibility(
+        package, UserModelValidator(timeout_seconds=None), dataset_id=DATASET_ID,
+        earth_probe={"input_channel_order": ["TO3", "T2M"], "window": 56,
+                     "horizon": 24, "batch_size": 4, "custom_model_params": {}},
+    )
+    assert checked.compatible, checked.reasons
+    assert checked.output_shape == [2, 24, 1, 24, 48]
+    assert calls == [(["TO3", "T2M"], 56, 24, 4)]
 
 
 @pytest.mark.parametrize("replacement", [

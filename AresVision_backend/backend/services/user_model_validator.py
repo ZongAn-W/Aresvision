@@ -46,6 +46,7 @@ from training_backbones.uploaded_model_source_check import (
 
 EXPECTED_OUTPUT_SHAPE = [2, 3, 1, 8, 16]
 VALIDATION_TIMEOUT_CODE = "uploaded_model_validation_timeout"
+_FULL_GRID_VALIDATION_PHASE = "validated_earth_full_grid_contract"
 _DEFAULT_TIMEOUT = object()
 
 
@@ -134,23 +135,30 @@ class UserModelValidator:
         if path is None:
             raise TypeError("validate_file() missing required file_path")
 
-        # Only server-provided task probes use the full-grid budget. Explicit
-        # timeouts (including test budgets and None) retain their semantics.
-        if (uses_default_timeout and isinstance(earth_probe, dict)
-                and earth_probe.get("contract_schema") == "aresvision_earth_3hourly_fullgrid_model_v2"):
-            timeout_seconds = max(
+        # Uploads identify their contract inside the isolated child. Only a
+        # normalized full-grid declaration may extend the ordinary deadline.
+        # Explicit timeouts (including test budgets and None) remain absolute.
+        full_grid_timeout_seconds = None
+        if uses_default_timeout:
+            full_grid_timeout_seconds = max(
                 timeout_seconds, config.USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS
             )
+        if (uses_default_timeout and isinstance(earth_probe, dict)
+                and earth_probe.get("contract_schema") == "aresvision_earth_3hourly_fullgrid_model_v2"):
+            timeout_seconds = full_grid_timeout_seconds
 
         if timeout_seconds is None:
             return UserModelValidator._validate_file_in_process(Path(path), earth_probe=earth_probe)
-        return UserModelValidator._validate_file_with_timeout(Path(path), timeout_seconds, earth_probe=earth_probe)
+        return UserModelValidator._validate_file_with_timeout(
+            Path(path), timeout_seconds, earth_probe=earth_probe,
+            full_grid_timeout_seconds=full_grid_timeout_seconds,
+        )
 
     @staticmethod
     def _validate_file_with_timeout(
         file_path: Path,
         timeout_seconds: float,
-        *, earth_probe=None,
+        *, earth_probe=None, full_grid_timeout_seconds=None,
     ) -> UserModelValidationResult:
         context = multiprocessing.get_context("spawn")
         result_queue = context.Queue(maxsize=1)
@@ -158,7 +166,8 @@ class UserModelValidator:
             target=_validate_file_child,
             args=(str(file_path), result_queue, earth_probe),
         )
-        deadline = time.monotonic() + timeout_seconds
+        started = time.monotonic()
+        deadline = started + timeout_seconds
         payload = None
         try:
             process.start()
@@ -167,7 +176,14 @@ class UserModelValidator:
             # pipe, incorrectly turning a successful probe into a timeout.
             while time.monotonic() < deadline:
                 try:
-                    payload = result_queue.get(timeout=min(.1, max(0., deadline - time.monotonic())))
+                    message = result_queue.get(timeout=min(.1, max(0., deadline - time.monotonic())))
+                    if (isinstance(message, dict)
+                            and message.get("phase") == _FULL_GRID_VALIDATION_PHASE):
+                        if full_grid_timeout_seconds is not None:
+                            timeout_seconds = max(timeout_seconds, full_grid_timeout_seconds)
+                            deadline = started + timeout_seconds
+                        continue
+                    payload = message
                     break
                 except Empty:
                     if not process.is_alive():
@@ -210,7 +226,9 @@ class UserModelValidator:
         )
 
     @staticmethod
-    def _validate_file_in_process(file_path: Path, *, earth_probe=None) -> UserModelValidationResult:
+    def _validate_file_in_process(
+        file_path: Path, *, earth_probe=None, on_contract_validated=None,
+    ) -> UserModelValidationResult:
         path = Path(file_path)
         errors: list[str] = []
         warnings: list[str] = []
@@ -273,7 +291,10 @@ class UserModelValidator:
         module_name = f"_aresvision_user_model_{uuid.uuid4().hex}"
         try:
             module = UserModelValidator._import_module(path, module_name)
-            return UserModelValidator._validate_module(module, warnings, earth_probe=earth_probe)
+            return UserModelValidator._validate_module(
+                module, warnings, earth_probe=earth_probe,
+                on_contract_validated=on_contract_validated,
+            )
         except Exception as exc:  # noqa: BLE001 - return validation errors, not service exceptions.
             return UserModelValidationResult(
                 ok=False,
@@ -305,7 +326,9 @@ class UserModelValidator:
         return module
 
     @staticmethod
-    def _validate_module(module: Any, warnings: list[str], *, earth_probe=None) -> UserModelValidationResult:
+    def _validate_module(
+        module: Any, warnings: list[str], *, earth_probe=None, on_contract_validated=None,
+    ) -> UserModelValidationResult:
         import torch
 
         model_spec = getattr(module, "MODEL_SPEC", None)
@@ -376,7 +399,10 @@ class UserModelValidator:
                 param_schema=param_schema,
             )
 
-        if EARTH_3HOURLY_FEED_KEY in datasets:
+        if any(key in datasets for key in (EARTH_3HOURLY_FEED_KEY, "earth_merra2_3hourly_5deg_v1")):
+            feed_key = EARTH_3HOURLY_FEED_KEY if EARTH_3HOURLY_FEED_KEY in datasets else "earth_merra2_3hourly_5deg_v1"
+            if on_contract_validated is not None:
+                on_contract_validated(datasets[feed_key]["schema"])
             return UserModelValidator._validate_three_hour_module(
                 module, datasets, param_schema, warnings, earth_probe=earth_probe,
             )
@@ -512,6 +538,7 @@ class UserModelValidator:
             dry_run, normalize_derived_inputs,
         )
 
+        feed_key = EARTH_3HOURLY_FEED_KEY if EARTH_3HOURLY_FEED_KEY in datasets else "earth_merra2_3hourly_5deg_v1"
         model_spec = module.MODEL_SPEC
         errors = []
         shape = None
@@ -533,7 +560,7 @@ class UserModelValidator:
                 code = "invalid_earth_training_parameters"
                 raise ValueError("; ".join(parameter_errors))
             orders = [earth_probe["input_channel_order"]] if earth_probe else channel_orders()
-            feed = datasets[EARTH_3HOURLY_FEED_KEY]
+            feed = datasets[feed_key]
             if ((earth_probe or {}).get('contract_schema') is not None
                     and earth_probe['contract_schema'] != feed['schema']):
                 code = 'uploaded_model_contract_invalid'
@@ -547,7 +574,8 @@ class UserModelValidator:
             topography = None
             if "topography" in derived_inputs:
                 from services.earth_topography import load_earth_topography
-                topography = load_earth_topography()
+                topography = (load_earth_topography(dataset_id=feed_key)
+                              if feed_key == "earth_merra2_3hourly_5deg_v1" else load_earth_topography())
             for order in orders:
                 shape = dry_run(module.build_model, order, params, window=window, horizon=horizon,
                                 batch_size=(earth_probe or {}).get("batch_size", execution['default_batch_size']),
@@ -559,7 +587,7 @@ class UserModelValidator:
         verdict = {
             "compatible": not errors, "status": "unavailable" if errors else "available",
             "code": code if errors else None, "errors": errors, "output_shape": shape,
-            "contract_schema": datasets[EARTH_3HOURLY_FEED_KEY]['schema'], "dataset_id": EARTH_3HOURLY_FEED_KEY,
+            "contract_schema": datasets[feed_key]['schema'], "dataset_id": feed_key,
             "eval_batch_policy": EVAL_BATCH_POLICY if not errors else None,
             "window": locals().get('window'), "horizon": locals().get('horizon'),
             "batch_size": (earth_probe or {}).get('batch_size', locals().get('execution', {}).get('default_batch_size')),
@@ -585,7 +613,7 @@ class UserModelValidator:
             earth_ok=bool(legacy and legacy.earth_ok),
             earth_errors=legacy.earth_errors if legacy else ["MODEL_SPEC does not declare the earth_merra2 daily feed"],
             earth_output_shape=legacy.earth_output_shape if legacy else None, earth_checked=True,
-            earth_compatibilities={EARTH_3HOURLY_FEED_KEY: verdict}, mars_ok=bool(legacy and legacy.ok),
+            earth_compatibilities={feed_key: verdict}, mars_ok=bool(legacy and legacy.ok),
         )
 
     @staticmethod
@@ -960,10 +988,17 @@ def _validation_payload(result: UserModelValidationResult) -> dict[str, Any]:
 
 
 def _validate_file_child(file_path: str, result_queue: Any, earth_probe=None) -> None:
+    def on_contract_validated(schema):
+        if schema == "aresvision_earth_3hourly_fullgrid_model_v2":
+            result_queue.put({"phase": _FULL_GRID_VALIDATION_PHASE})
+
     try:
         import torch
         torch.set_num_threads(2)
-        result = UserModelValidator._validate_file_in_process(Path(file_path), earth_probe=earth_probe)
+        result = UserModelValidator._validate_file_in_process(
+            Path(file_path), earth_probe=earth_probe,
+            on_contract_validated=on_contract_validated,
+        )
         result_queue.put(_validation_payload(result))
     except BaseException as exc:  # noqa: BLE001 - child process must report failures.
         result_queue.put(

@@ -35,8 +35,10 @@ import xarray as xr
 from services.dataset_identity import build_dataset_fingerprint
 from services.earth_dataset import (
     CHANNELS, SCHEMA, SPLITS, UNITS, load_earth_dataset,
-    THREE_HOURLY_SCHEMA, THREE_HOURLY_DATASET_ID, THREE_HOURLY_DATASET_VERSION,
-    THREE_HOURLY_TRAINING_PROFILE, validate_earth_3hourly_dataset,
+    THREE_HOURLY_SCHEMA, THREE_HOURLY_DATASET_ID, THREE_HOURLY_5DEG_DATASET_ID,
+    THREE_HOURLY_DATASET_IDS, THREE_HOURLY_DATASET_VERSION,
+    THREE_HOURLY_TRAINING_PROFILE, THREE_HOURLY_5DEG_TRAINING_PROFILE,
+    validate_earth_3hourly_dataset,
 )
 from services.netcdf_read_lock import netcdf_read_lock
 
@@ -611,7 +613,7 @@ def _finite_json_float(value):
 def _assert_threehour_manifest_identity(manifest):
     if (not isinstance(manifest, dict) or manifest.get("schema") != THREE_HOURLY_SCHEMA
             or manifest.get("planet") != "Earth"
-            or manifest.get("dataset_id") != THREE_HOURLY_DATASET_ID
+            or manifest.get("dataset_id") not in THREE_HOURLY_DATASET_IDS
             or manifest.get("dataset_version") != THREE_HOURLY_DATASET_VERSION
             or manifest.get("data_file") != THREE_HOURLY_DATA_FILE_NAME):
         raise EarthPackageError(REASON_INVALID_MANIFEST, "wrong three-hour release identity or filename")
@@ -634,9 +636,12 @@ def _assert_threehour_manifest_matches(ds, manifest, statistics):
     files = manifest.get("source_files")
     processing = manifest.get("processing")
     rule = manifest.get("time_rule")
+    lowres = manifest.get("dataset_id") == THREE_HOURLY_5DEG_DATASET_ID
+    grid_shape = (36, 72) if lowres else (240, 480)
+    grid_step = 5.0 if lowres else .75
     expected_grid = {
-        "latitude": {"start": -89.625, "end": 89.625, "step": .75, "count": 240},
-        "longitude": {"start": -179.625, "end": 179.625, "step": .75, "count": 480},
+        "latitude": {"start": -90 + grid_step / 2, "end": 90 - grid_step / 2, "step": grid_step, "count": grid_shape[0]},
+        "longitude": {"start": -180 + grid_step / 2, "end": 180 - grid_step / 2, "step": grid_step, "count": grid_shape[1]},
         "latitude_bounds": [-90., 90.], "longitude_bounds": [-180., 180.],
     }
     checks = [
@@ -646,10 +651,10 @@ def _assert_threehour_manifest_matches(ds, manifest, statistics):
         manifest.get("frequency_hours") == 3,
         manifest.get("step_unit") == "hour", manifest.get("step") == 3,
         manifest.get("time_zone") == "UTC", manifest.get("time_kind") == "iso-datetime",
-        manifest.get("cadence") == "3 hour mean", manifest.get("grid_shape") == [240, 480],
+        manifest.get("cadence") == "3 hour mean", manifest.get("grid_shape") == list(grid_shape),
         manifest.get("grid") == expected_grid,
         manifest.get("channel_order") == list(CHANNELS),
-        manifest.get("training_profile") == THREE_HOURLY_TRAINING_PROFILE,
+        manifest.get("training_profile") == (THREE_HOURLY_5DEG_TRAINING_PROFILE if lowres else THREE_HOURLY_TRAINING_PROFILE),
         manifest.get("source_sha256") == ds.attrs.get("source_sha256"),
         isinstance(source, dict), isinstance(files, list) and bool(files),
         isinstance(processing, dict), isinstance(rule, dict),
@@ -765,8 +770,8 @@ def _proof_matches_manifest(release: VerifiedEarthRelease, manifest: dict, raw: 
                 or dates[0] != dates[0].astype("datetime64[D]") + np.timedelta64(90, "m")
                 or dates[-1] != dates[-1].astype("datetime64[D]") + np.timedelta64(1350, "m")
                 or len(dates) != manifest["dimensions"]["time"]
-                or not np.array_equal(lat, -89.625 + np.arange(240) * .75)
-                or not np.array_equal(lon, -179.625 + np.arange(480) * .75)):
+                or not np.array_equal(lat, -90 + (np.arange(len(lat)) + .5) * (180 / len(lat)))
+                or not np.array_equal(lon, -180 + (np.arange(len(lon)) + .5) * (360 / len(lon)))):
             return False
         metadata = release.metadata
         calendar = metadata["time"]["calendar"]
@@ -789,34 +794,41 @@ def _proof_matches_manifest(release: VerifiedEarthRelease, manifest: dict, raw: 
         # Registration adds these stable ids to in-memory snapshots, so allow
         # them only when equal to their fixed values.
         candidate = dict(metadata)
-        for name, value in (("dataset_id", THREE_HOURLY_DATASET_ID),
+        for name, value in (("dataset_id", manifest["dataset_id"]),
                             ("dataset_version", THREE_HOURLY_DATASET_VERSION)):
             if name in candidate and candidate.pop(name) != value:
                 return False
+        expected.pop("dataset_id", None)
+        expected.pop("dataset_version", None)
         return candidate == expected
     except (EarthPackageError, KeyError, TypeError, ValueError, OverflowError, IndexError):
         return False
 
 
 def _threehour_metadata(manifest, raw, calendar, dates, lat, lon, statistics) -> dict:
+    profile = THREE_HOURLY_5DEG_TRAINING_PROFILE if manifest.get("dataset_id") == THREE_HOURLY_5DEG_DATASET_ID else THREE_HOURLY_TRAINING_PROFILE
+    step = 180.0 / profile["grid_shape"][0]
     return {
+        "dataset_id": manifest["dataset_id"], "dataset_version": manifest["dataset_version"],
         "dataset_fingerprint": manifest["dataset_fingerprint"],
         "manifest_sha256": hashlib.sha256(raw).hexdigest(),
         "manifest_content_sha256": threehour_manifest_content_sha256(manifest),
         "data_sha256": manifest["data_sha256"],
         "manifest": manifest, "schema": THREE_HOURLY_SCHEMA,
-        "frequency_hours": 3, "step_unit": "hour", "step": 3, "grid_shape": [240, 480],
-        "training_profile": dict(THREE_HOURLY_TRAINING_PROFILE),
+        "frequency_hours": 3, "step_unit": "hour", "step": 3,
+        "grid_shape": list(profile["grid_shape"]),
+        "training_profile": dict(profile),
         "time": {"kind": "datetime", "calendar": calendar, "time_zone": "UTC",
                  "start": manifest["time_start"], "end": manifest["time_end"],
                  "count": len(dates), "step": 3, "step_unit": "hour",
                  "frequency_hours": 3, "label": "interval_center",
                  "interval_start": manifest["time_rule"]["interval_start"],
                  "interval_end_exclusive": manifest["time_rule"]["interval_end_exclusive"]},
-        "grid": {"shape": [240, 480], "dimension_order": ["lat", "lon"],
+        "grid": {"shape": list(profile["grid_shape"]), "dimension_order": ["lat", "lon"],
                  "latitude_range": [-90., 90.], "longitude_range": [-180., 180.],
                  "cell_bounds": {"latitude": [-90., 90.], "longitude": [-180., 180.]},
-                 "latitude_step": .75, "longitude_step": .75,
+                 "latitude_step": step,
+                 "longitude_step": step,
                  "latitude_order": "ascending", "longitude_order": "ascending",
                  "coverage": "global", "wrap_longitude": True,
                  "latitude_values": lat.tolist(), "longitude_values": lon.tolist()},
@@ -838,7 +850,7 @@ def _release_from_verification_proof(proof: Mapping[str, Any], *, package_dir: P
     try:
         if proof.get("schema") != VERIFIER_VERSION:
             return None
-        if (proof.get("dataset_id") != THREE_HOURLY_DATASET_ID
+        if (proof.get("dataset_id") not in THREE_HOURLY_DATASET_IDS
                 or proof.get("dataset_version") != THREE_HOURLY_DATASET_VERSION
                 or type(proof.get("created_at")) not in (int, float)
                 or not math.isfinite(proof["created_at"])):
@@ -860,9 +872,12 @@ def _release_from_verification_proof(proof: Mapping[str, Any], *, package_dir: P
         dates = np.asarray(proof["dates"], dtype="datetime64[ns]")
         latitude = readonly_array(proof["latitude"], "float64")
         longitude = readonly_array(proof["longitude"], "float64")
+        if not isinstance(metadata, dict):
+            return None
+        expected_shape = (36, 72) if proof.get("dataset_id") == THREE_HOURLY_5DEG_DATASET_ID else (240, 480)
         if (not isinstance(metadata, dict) or dates.ndim != 1 or len(dates) < 8
-                or latitude.shape != (240,) or longitude.shape != (480,)
-                or metadata.get("dataset_id") not in (None, THREE_HOURLY_DATASET_ID)
+                or latitude.shape != (expected_shape[0],) or longitude.shape != (expected_shape[1],)
+                or metadata.get("dataset_id") not in (None, *THREE_HOURLY_DATASET_IDS)
                 or metadata.get("schema") != THREE_HOURLY_SCHEMA
                 or metadata.get("manifest_sha256") != proof.get("manifest_sha256")
                 or metadata.get("manifest_content_sha256") != proof.get("manifest_content_sha256")

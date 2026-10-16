@@ -13,6 +13,16 @@ from services.user_model_service import UserModelService
 router = APIRouter(prefix="/user-models", tags=["User Models"])
 REPO_ROOT = Path(__file__).resolve().parents[3]
 UPLOADED_MODEL_DOWNLOAD_ASSETS = {
+    "earth-3hourly-5deg-template": {
+        "path": REPO_ROOT / "docs" / "earth-3hourly-5deg-model-template.py",
+        "download_name": "aresvision_earth_3hourly_5deg_model_v1.py",
+        "media_type": "text/x-python; charset=utf-8",
+    },
+    "earth-3hourly-5deg-guide": {
+        "path": REPO_ROOT / "docs" / "earth-merra2-5deg.md",
+        "download_name": "aresvision_earth_3hourly_5deg_model_v1.md",
+        "media_type": "text/markdown; charset=utf-8",
+    },
     "guide": {
         "path": REPO_ROOT / "docs" / "uploaded-model-training.md",
         "download_name": "aresvision_uploaded_model_guide.md",

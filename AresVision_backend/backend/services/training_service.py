@@ -25,6 +25,7 @@ from config import (
     EARTH_MERRA2_DIR,
     EARTH_MERRA2_V1_DIR,
     EARTH_MERRA2_3HOURLY_DIR,
+    EARTH_MERRA2_3HOURLY_5DEG_DIR,
     EARTH_TRAINING_CACHE_DIR,
     MCD_VARIABLES,
     TRAINING_RESULTS_DIR,
@@ -36,7 +37,7 @@ from database.models import ModelTrainingTask, PredictionAnalysisCache, Training
 from services.data_service import DataService
 from services.dataset_identity import (
     DatasetRequestError,
-    EARTH_DATASET_3HOURLY_ID,
+    EARTH_THREE_HOURLY_DATASET_IDS,
     is_earth_training_task,
     resolve_dataset_id,
     require_training_dataset,
@@ -437,7 +438,7 @@ class TrainingService:
         resolved_dataset_id = resolve_dataset_id(dataset_id, hyperparameters or {})
         earth_training = is_earth_dataset_id(resolved_dataset_id)
         earth_source = (
-            requested_model_source if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID
+            requested_model_source if resolved_dataset_id in EARTH_THREE_HOURLY_DATASET_IDS
             else model_source if earth_training else "official"
         )
         earth_reference: dict | None = None
@@ -447,7 +448,7 @@ class TrainingService:
             # preparation and training path below.
             require_training_dataset(resolved_dataset_id)
         registry = dataset_registry or self._default_dataset_registry()
-        if earth_training and resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if earth_training and resolved_dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             # Reject unsupported Earth configurations (SPHERE, transfer learning,
             # wrong architecture, missing/extra uploaded id) and validate the strict
             # parameter contract before the task row exists.
@@ -458,7 +459,7 @@ class TrainingService:
                 dataset_id=resolved_dataset_id,
             )
         dataset_binding = registry.build_training_binding(resolved_dataset_id)
-        if earth_training and resolved_dataset_id != EARTH_DATASET_3HOURLY_ID:
+        if earth_training and resolved_dataset_id not in EARTH_THREE_HOURLY_DATASET_IDS:
             # Preserve the daily package-before-configuration error precedence.
             require_earth_training_configuration(
                 model_source=earth_source, uploaded_model_id=uploaded_model_id,
@@ -466,7 +467,7 @@ class TrainingService:
             )
 
         earth_task_split = None
-        if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if resolved_dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             from services.earth_task_split import build_earth_task_split, timeline_from_snapshot
             from services.training_split import TrainingSplitError
             normalized = require_earth_training_configuration(
@@ -506,7 +507,7 @@ class TrainingService:
                     input_channel_order=canonical_channel_order((hyperparameters or {}).get("selected_channels")),
                     window=(hyperparameters or {}).get('window', 56),
                     horizon=(hyperparameters or {}).get('horizon', 24),
-                    batch_size=normalized["batch_size"] if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID else 8,
+                    batch_size=normalized["batch_size"] if resolved_dataset_id in EARTH_THREE_HOURLY_DATASET_IDS else 8,
                 )
         elif model_source == "uploaded":
             model_script, raw_hypers = await self._resolve_uploaded_training_entrypoint(
@@ -565,7 +566,7 @@ class TrainingService:
         payload_hypers.pop("tag_ids", None)
         payload_hypers.pop("tags", None)
         payload_hypers["_data_source"] = source
-        if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if resolved_dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             metrics_contract = earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V3)
             payload_hypers[EARTH_METRICS_SCHEMA_KEY] = metrics_contract["schema"]
             payload_hypers[EARTH_METRICS_AGGREGATION_KEY] = metrics_contract["aggregation"]
@@ -584,7 +585,7 @@ class TrainingService:
             payload_hypers["_uploaded_model_filename"] = Path(earth_reference.source_path).name
             payload_hypers["_uploaded_model_param_schema"] = dict(earth_reference.param_schema)
             payload_hypers["custom_model_params"] = dict(earth_reference.custom_model_params)
-            if resolved_dataset_id == EARTH_DATASET_3HOURLY_ID:
+            if resolved_dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
                 payload_hypers["_earth_uploaded_reference"] = earth_reference.checkpoint_reference()
                 from training_backbones.earth_3hourly_uploaded_contract import contract_schema_for_reference
                 payload_hypers["_earth_uploaded_contract_schema"] = contract_schema_for_reference(payload_hypers["_earth_uploaded_reference"])
@@ -685,6 +686,7 @@ class TrainingService:
             EARTH_MERRA2_DIR, earth_dataset_id="earth_merra2_daily_v2",
             legacy_earth_package_dir=EARTH_MERRA2_V1_DIR,
             earth_3hourly_package_dir=EARTH_MERRA2_3HOURLY_DIR,
+            earth_3hourly_5deg_package_dir=EARTH_MERRA2_3HOURLY_5DEG_DIR,
             verification_cache_dir=EARTH_TRAINING_CACHE_DIR,
         )
 
@@ -725,7 +727,7 @@ class TrainingService:
                 status_code=409,
             )
         release = (dataset_registry or self._default_dataset_registry()).get_earth_snapshot(
-            EARTH_DATASET_3HOURLY_ID, expected_fingerprint=binding["dataset_fingerprint"],
+            binding["dataset_id"], expected_fingerprint=binding["dataset_fingerprint"],
         )
         reference = raw_hypers.get("_earth_uploaded_reference")
         if normalized.get("model_source") == "uploaded":
@@ -855,7 +857,7 @@ class TrainingService:
                 status_code=422,
             )
 
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             from services.user_model_service import UserModelService
             from training_backbones.earth_3hourly_uploaded_contract import contract_profile
 
@@ -892,7 +894,7 @@ class TrainingService:
             )
 
         contract_schema = None
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             from training_backbones.earth_3hourly_uploaded_contract import contract_profile
             contract_schema = (verdict.datasets.get(dataset_id) or {}).get('schema')
             try:
@@ -916,7 +918,7 @@ class TrainingService:
                 "source_text": reference.source_text,
             }
         )
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             from services.earth_derived_inputs import declaration_for_reference
             try:
                 declaration = declaration_for_reference(reference.checkpoint_reference())
@@ -924,7 +926,8 @@ class TrainingService:
                     from services.earth_topography import load_earth_topography
                     report = json.loads(getattr(package, "validation_report", None) or "{}")
                     proof = (report.get("earth_datasets") or {}).get(dataset_id) or {}
-                    asset = load_earth_topography()
+                    asset = (load_earth_topography(dataset_id=dataset_id)
+                             if dataset_id == "earth_merra2_3hourly_5deg_v1" else load_earth_topography())
                     if (proof.get("derived_inputs") != declaration
                             or proof.get("topography_identity") != asset.identity):
                         raise ValueError("Terrain validation evidence differs from the current asset; revalidate this uploaded model")
@@ -1369,7 +1372,7 @@ class TrainingService:
             if earth_training_spec is not None and model_artifact_valid:
                 try:
                     expected_hypers = dict(earth_training_spec["hyperparameters"])
-                    if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+                    if earth_training_spec["dataset_binding"]["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS:
                         from services.earth_task_split import (
                             TASK_SPLIT_KEY, TASK_SPLIT_POLICY_KEY, required_task_split,
                         )
@@ -1412,7 +1415,7 @@ class TrainingService:
                         expected_hypers,
                         earth_training_spec["task_id"],
                     )
-                    if earth_training_spec["dataset_binding"]["dataset_id"] == EARTH_DATASET_3HOURLY_ID:
+                    if earth_training_spec["dataset_binding"]["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS:
                         if any(earth_artifact.metrics.get(key) != value for key, value in execution_contract.items()):
                             raise EarthArtifactError("Earth checkpoint metrics do not match the frozen execution contract")
                         from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA

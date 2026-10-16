@@ -122,3 +122,7 @@ acceptance run.
 
 This is a static model input asset; it does not add a three-dimensional Earth
 renderer or claim predictive accuracy improvement.
+
+## Independent 5 degree training asset
+
+The 36×72 training release uses a separate `earth_etopo2022_surface_5deg.nc` asset and `ARESVISION_EARTH_TOPOGRAPHY_5DEG_PATH`. Build from the same reviewed ETOPO/GSHHG inputs with `--target-release` pointing to the actual 5° release and a separate `--output`; runtime selects it only for that release/grid. Source policies, content and grid identity checks remain identical. See [the 5° dataset](earth-merra2-5deg.md).

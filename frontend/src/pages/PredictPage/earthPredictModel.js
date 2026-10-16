@@ -14,12 +14,13 @@ export const EARTH_TARGET_UNIT = 'DU';
 export const EARTH_METRIC_KEYS = ['mse', 'rmse', 'mae', 'r2', 'mape', 'smape'];
 export const EARTH_FIELD_KINDS = ['reference', 'prediction', 'residual'];
 export const EARTH_3HOURLY_DATASET_ID = 'earth_merra2_3hourly_v1';
+export const EARTH_THREE_HOURLY_DATASET_IDS = [EARTH_3HOURLY_DATASET_ID, 'earth_merra2_3hourly_5deg_v1'];
 
 /** Return the cadence advertised by the server, retaining daily defaults. */
 export function getEarthCadence(value) {
   const frequencyHours = Number(value?.frequency_hours ?? value?.temporal?.frequency_hours);
   const step = Number(value?.step ?? value?.temporal?.step);
-  const threeHourly = String(value?.dataset_id || '') === EARTH_3HOURLY_DATASET_ID
+  const threeHourly = EARTH_THREE_HOURLY_DATASET_IDS.includes(String(value?.dataset_id || ''))
     || frequencyHours === 3;
   return {
     threeHourly,
@@ -250,7 +251,7 @@ export function isEarthTask(task) {
   if (typeof task.is_earth_task === 'boolean') return task.is_earth_task;
   return String(task.dataset_id || '') === 'earth_merra2_daily_v2'
     || String(task.dataset_id || '') === 'earth_merra2_daily_v1'
-    || String(task.dataset_id || '') === EARTH_3HOURLY_DATASET_ID;
+    || EARTH_THREE_HOURLY_DATASET_IDS.includes(String(task.dataset_id || ''));
 }
 
 /**
@@ -262,7 +263,7 @@ export function isEarthTask(task) {
 export function getEarthTrainingModelOptions(tasks = []) {
   return (Array.isArray(tasks) ? tasks : [])
     .filter((task) => task?.status === 'completed' && task?.model_available === true
-      && task.dataset_id === EARTH_3HOURLY_DATASET_ID)
+      && EARTH_THREE_HOURLY_DATASET_IDS.includes(task.dataset_id))
     .map((task) => {
       const base = task.custom_model_name || `Task #${task.id}`;
       const identity = readEarthTaskModelIdentity(task);

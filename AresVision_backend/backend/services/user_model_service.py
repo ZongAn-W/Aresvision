@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -49,7 +50,7 @@ class UserModelService:
 
         content_hash = hashlib.sha256(source).hexdigest()
         safe_name = self._safe_filename(original_filename)
-        result = self._validate_source_bytes(source, safe_name)
+        result = await asyncio.to_thread(self._validate_source_bytes, source, safe_name)
 
         package_id = str(uuid.uuid4())
         user_dir = self.storage_root / str(user_id)
@@ -146,7 +147,7 @@ class UserModelService:
         dry-run is repeated per request, so this stays cheap; callers that need a
         fresh proof can use ``revalidate`` first.
         """
-        if dataset_id not in {"earth_merra2", "earth_merra2_daily_v1", "earth_merra2_daily_v2", "earth_merra2_3hourly_v1"}:
+        if dataset_id not in {"earth_merra2", "earth_merra2_daily_v1", "earth_merra2_daily_v2", "earth_merra2_3hourly_v1", "earth_merra2_3hourly_5deg_v1"}:
             raise ValueError("Unknown Earth dataset_id")
         package = await self.get_package_for_user(package_id, user_id)
         return self.earth_compatibility_for_package(package, dataset_id=dataset_id)
@@ -160,7 +161,7 @@ class UserModelService:
             report = {}
         if not isinstance(report, dict):
             report = {}
-        if dataset_id == "earth_merra2_3hourly_v1":
+        if dataset_id in ("earth_merra2_3hourly_v1", "earth_merra2_3hourly_5deg_v1"):
             verdicts = report.get("earth_datasets")
             earth = verdicts.get(dataset_id) if isinstance(verdicts, dict) else None
         else:
@@ -172,7 +173,7 @@ class UserModelService:
         compatible = earth.get("compatible") is True and available and package.validation_status == "valid" and report.get("ok") is True
         code = earth.get("code")
         status = "available" if compatible else ("unavailable" if earth else "unknown")
-        if dataset_id == "earth_merra2_3hourly_v1" and earth:
+        if dataset_id in ("earth_merra2_3hourly_v1", "earth_merra2_3hourly_5deg_v1") and earth:
             from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA, EVAL_BATCH_POLICY, contract_profile
             try:
                 execution = contract_profile(earth.get('contract_schema'))
@@ -185,7 +186,7 @@ class UserModelService:
                     or earth.get("status") == "unknown"
                     or (earth.get("compatible") is True and (earth.get("status") != "available"
                         or earth.get("output_shape") != [2, expected_horizon, 1, *(execution or {}).get('shape', ())]))
-                    or (earth.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA
+                    or (earth.get('contract_schema') in (FULL_GRID_CONTRACT_SCHEMA, 'aresvision_earth_3hourly_5deg_model_v1')
                         and (earth.get('validation_scope') != 'declared_channels_probe_windows'
                              or earth.get('batch_size') != 1
                              or earth.get('window') not in declaration.get('window', [])
@@ -231,9 +232,9 @@ class UserModelService:
             "contract_schema": earth.get("contract_schema"),
             "eval_batch_policy": earth.get("eval_batch_policy"),
             "output_shape": earth.get("output_shape"),
-            "default_batch_size": 1 if earth.get('contract_schema') == 'aresvision_earth_3hourly_fullgrid_model_v2' else 8,
+            "default_batch_size": 1 if earth.get('contract_schema') in ('aresvision_earth_3hourly_fullgrid_model_v2', 'aresvision_earth_3hourly_5deg_model_v1') else 8,
             "max_batch_size": 64,
-            "spatial_input_shape": declaration.get('spatial_tile_shape') if dataset_id == 'earth_merra2_3hourly_v1' else None,
+            "spatial_input_shape": declaration.get('spatial_tile_shape') if dataset_id in ('earth_merra2_3hourly_v1', 'earth_merra2_3hourly_5deg_v1') else None,
         }
 
     async def revalidate_package(self, package_id: str, user_id: int) -> UserModelPackage:
@@ -248,7 +249,9 @@ class UserModelService:
             # ``.source`` suffix so it is never importable directly, and re-using that
             # path here would make the validator reject the extension and report a
             # model as broken for a naming detail.
-            result = self._validate_source_bytes(source, self._upload_filename(package))
+            result = await asyncio.to_thread(
+                self._validate_source_bytes, source, self._upload_filename(package),
+            )
             package.validation_status = "valid" if result.ok else "invalid"
             package.validation_report = json.dumps(result.report_dict(), ensure_ascii=False)
             package.param_schema = json.dumps(result.param_schema, ensure_ascii=False)

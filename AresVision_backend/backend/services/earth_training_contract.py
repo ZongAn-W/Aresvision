@@ -29,12 +29,14 @@ from services.dataset_identity import (
     EARTH_DATASET_ID,
     EARTH_DATASET_V2_ID,
     EARTH_DATASET_3HOURLY_ID,
+    EARTH_DATASET_3HOURLY_5DEG_ID,
+    EARTH_THREE_HOURLY_DATASET_IDS,
     SERVER_IDENTITY_FIELDS,
     DatasetRequestError,
 )
 from services.training_split import TrainingSplitError
 
-EARTH_DATASET_IDS = (EARTH_DATASET_ID, EARTH_DATASET_V2_ID, EARTH_DATASET_3HOURLY_ID)
+EARTH_DATASET_IDS = (EARTH_DATASET_ID, EARTH_DATASET_V2_ID, *EARTH_THREE_HOURLY_DATASET_IDS)
 
 #: Both official DLinear and pinned uploaded sources are supported per dataset
 #: profile.  The uploaded source must pass the profile-specific dry run.
@@ -68,6 +70,7 @@ EARTH_3HOURLY_HORIZON = 24
 EARTH_3HOURLY_WINDOW_BOUNDS = (1, 240)
 EARTH_3HOURLY_HORIZON_BOUNDS = (1, 240)
 EARTH_3HOURLY_GRID_SHAPE = (240, 480)
+EARTH_3HOURLY_5DEG_GRID_SHAPE = (36, 72)
 
 EARTH_METRICS_SCHEMA = "earth_training_metrics_v1"
 EARTH_ARTIFACT_SCHEMA = "aresvision_earth_forecast_checkpoint_v1"
@@ -125,7 +128,7 @@ def earth_task_metrics_contract(hyperparameters: Mapping[str, Any], *, executabl
 
 def earth_spec_metrics_contract(spec: Mapping[str, Any]) -> Optional[dict]:
     """Resolve execution before data preparation; old unmarked specs stay equal-weighted."""
-    if spec.get("dataset_binding", {}).get("dataset_id") != EARTH_DATASET_3HOURLY_ID:
+    if spec.get("dataset_binding", {}).get("dataset_id") not in EARTH_THREE_HOURLY_DATASET_IDS:
         return None
     if "metrics_contract" not in spec:
         return earth_3hourly_metrics_contract(EARTH_3HOURLY_METRICS_SCHEMA_V2, executable=True)
@@ -215,16 +218,17 @@ def earth_training_profile(dataset_id: Any = None, hyperparameters: Optional[Map
         "supports_transfer_learning": False,
         "implementation_id": EARTH_IMPLEMENTATION_ID,
     }
-    if resolved_id == EARTH_DATASET_3HOURLY_ID:
+    if resolved_id in EARTH_THREE_HOURLY_DATASET_IDS:
+        lowres = resolved_id == EARTH_DATASET_3HOURLY_5DEG_ID
         profile.update({
-            "profile_id": "earth_3hourly_dlinear_v1",
+            "profile_id": "earth_3hourly_dlinear_5deg_v1" if lowres else "earth_3hourly_dlinear_v1",
             "model_architectures": [EARTH_SUPPORTED_ARCHITECTURE, EARTH_UPLOADED_ARCHITECTURE],
             "model_sources": list(EARTH_MODEL_SOURCES),
             "window": EARTH_3HOURLY_WINDOW,
             "horizon": EARTH_3HOURLY_HORIZON,
             "step_unit": "hour", "step": 3, "frequency_hours": 3,
-            "grid_shape": list(EARTH_3HOURLY_GRID_SHAPE),
-            "implementation_id": EARTH_3HOURLY_IMPLEMENTATION_ID,
+            "grid_shape": list(EARTH_3HOURLY_5DEG_GRID_SHAPE if lowres else EARTH_3HOURLY_GRID_SHAPE),
+            "implementation_id": "aresvision_gridpoint_dlinear_3hourly_5deg_v1" if lowres else EARTH_3HOURLY_IMPLEMENTATION_ID,
             "window_bounds": list(EARTH_3HOURLY_WINDOW_BOUNDS),
             "horizon_bounds": list(EARTH_3HOURLY_HORIZON_BOUNDS),
             "configurable_windows": True,
@@ -518,7 +522,7 @@ def require_earth_training_configuration(
             status_code=422,
         )
     hypers = dict(hyperparameters or {})
-    if _profile_dataset_id(dataset_id, hypers) == EARTH_DATASET_3HOURLY_ID:
+    if _profile_dataset_id(dataset_id, hypers) in EARTH_THREE_HOURLY_DATASET_IDS:
         requested_source = hypers.get("model_source")
         requested_architecture = hypers.get("model_architecture")
         expected_architecture = EARTH_UPLOADED_ARCHITECTURE if normalized_source == "uploaded" else EARTH_SUPPORTED_ARCHITECTURE
@@ -579,7 +583,7 @@ def build_earth_training_spec(
     """
     dataset_id = _profile_dataset_id(dataset_binding.get("dataset_id"), hyperparameters)
     normalized = normalize_earth_training_hyperparameters(hyperparameters, dataset_id=dataset_id)
-    if dataset_id == EARTH_DATASET_3HOURLY_ID and (uploaded_model is not None or normalized["model_source"] == "uploaded"):
+    if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS and (uploaded_model is not None or normalized["model_source"] == "uploaded"):
         reference = dict(uploaded_model or {})
         if (not isinstance(reference.get("package_id"), str) or not reference["package_id"]
                 or type(reference.get("version")) is not int or reference["version"] < 1
@@ -593,7 +597,7 @@ def build_earth_training_spec(
         # runner build the official DLinear and then fail to load uploaded weights.
         normalized["model_source"] = "uploaded"
         normalized["model_architecture"] = EARTH_UPLOADED_ARCHITECTURE
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             from training_backbones.earth_3hourly_uploaded_contract import (
                 contract_schema_for_reference, contract_profile,
             )
@@ -602,6 +606,8 @@ def build_earth_training_spec(
             except (ValueError, TypeError) as exc:
                 raise DatasetRequestError('uploaded_model_contract_invalid', str(exc), status_code=409) from exc
             execution = contract_profile(source_schema)
+            if execution["dataset_id"] != dataset_id:
+                raise DatasetRequestError("uploaded_model_contract_invalid", "Uploaded spatial schema belongs to another Earth dataset", status_code=409)
             if normalized['batch_size'] > execution['max_batch_size']:
                 raise DatasetRequestError('invalid_earth_training_parameters',
                     f"Full-grid Earth batch_size must be between 1 and {execution['max_batch_size']}", status_code=422)
@@ -620,7 +626,7 @@ def build_earth_training_spec(
         "hyperparameters": normalized,
         "training_profile": earth_training_profile(dataset_id, normalized),
     }
-    if dataset_id == EARTH_DATASET_3HOURLY_ID:
+    if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
         spec["metrics_contract"] = dict(metrics_contract) if metrics_contract is not None else earth_3hourly_metrics_contract(
             EARTH_3HOURLY_METRICS_SCHEMA_V3, executable=True,
         )
@@ -636,10 +642,10 @@ def build_earth_training_spec(
             for key, value in dict(uploaded_model).items()
             if key in SERVER_UPLOADED_REFERENCE_FIELDS
         }
-        if dataset_id == EARTH_DATASET_3HOURLY_ID:
+        if dataset_id in EARTH_THREE_HOURLY_DATASET_IDS:
             spec['uploaded_model']['contract_schema'] = source_schema
     if topography is not None:
-        if dataset_id != EARTH_DATASET_3HOURLY_ID or uploaded_model is None:
+        if dataset_id not in EARTH_THREE_HOURLY_DATASET_IDS or uploaded_model is None:
             raise DatasetRequestError("earth_topography_invalid", "Earth topography requires an uploaded three-hour model", status_code=409)
         spec["topography"] = copy.deepcopy(dict(topography))
     return spec
