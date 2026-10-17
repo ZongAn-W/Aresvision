@@ -1135,6 +1135,12 @@ class EarthThreeHourlyWindows:
         dataset.input_channels, dataset.input_units = channels, input_units(channels)
         dataset.target_channel_index = TARGET_CHANNEL_INDEX
         dataset.normalization = normalization
+        # Precompute one seasonal coordinate per published UTC timestamp, then
+        # slice windows without rerunning the solar-longitude formula.
+        from services.earth_season import solar_longitude
+        seasonal = np.asarray(solar_longitude(dataset.dates), dtype="float32")
+        seasonal.setflags(write=False)
+        dataset._seasonal_longitude = seasonal
         dataset._normalized_map = None
         dataset._normalized_cache_layout = None
         dataset.mean = mean.astype('float32')
@@ -1270,15 +1276,18 @@ class EarthThreeHourlyWindows:
         cannot disagree with the data the same window returns. Models that do not
         declare the derived input never receive it.
         """
-        from services.earth_season import solar_longitude
         index = operator.index(index)
         if index < 0 or index >= self.length:
             raise IndexError(index)
-        return solar_longitude(self.dates[index:index + self.window])
+        return self._seasonal_longitude[index:index + self.window].copy()
 
     def window_longitudes(self, indices):
         """Stack several windows' seasonal coordinates as float32 ``[N, window]``."""
-        return np.stack([self.window_longitude(index) for index in indices])
+        positions = np.asarray([operator.index(index) for index in indices], dtype="int64")
+        if positions.ndim != 1 or np.any(positions < 0) or np.any(positions >= self.length):
+            raise IndexError("Earth seasonal-coordinate window index is out of range")
+        windows = np.lib.stride_tricks.sliding_window_view(self._seasonal_longitude, self.window)
+        return np.array(windows[positions], dtype="float32", copy=True)
 
     def _read_window(self, index, *, lat_slice, lon_slice, verify_source):
         from services.netcdf_read_lock import netcdf_read_lock

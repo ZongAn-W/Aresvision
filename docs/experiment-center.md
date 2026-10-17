@@ -36,6 +36,14 @@ Earth 默认数据集读取 `/api/datasets` 的 `default_earth_dataset_id`。日
 
 阶段（configure / monitor / result）仍由任务状态推导，视图只决定工作区布局。首次加载若已选中任务（运行中的任务优先，否则选列表最新记录）则进入训练监视；没有任务时默认实验配置。用户主动切换视图后，轮询不会覆盖选择。点「新建实验」或「复制配置」进入实验配置，选任务或成功开始训练进入训练监视。配置画布和实验矩阵始终保持挂载（只用 `hidden` 隐藏），所以切换视图不会清空表单，也不会丢失矩阵筛选、排序或横向滚动位置。
 
+### 训练状态同步
+
+`TrainingContext` 在训练页每 5 秒刷新任务列表，每 3 秒独立读取所选任务日志，WebSocket 提供额外的实时进度。排队/运行/完成状态和目录计数来自任务列表，日志不用于猜测状态。2026-10-17 修复轮询请求重叠导致的状态停滞：旧实现每次轮询都会作废上一请求，响应持续超过 5 秒时，所有响应均被丢弃，页面可能始终显示排队，而训练日志继续增长。
+
+定时轮询现在复用同账号、同页面作用域内尚未完成的请求，允许慢响应更新状态与 loss history。提交、改名及状态消息触发的主动刷新仍发起新请求，防止操作前的快照覆盖新数据；账号/页面切换和卸载仍使旧响应失效。断开 WebSocket 时，HTTP 轮询仍能更新任务状态。修复只涉及前端，不要求重启正在训练的后端；生产页面构建更新后需刷新浏览器加载新资源。
+
+隔离回归脚本为 [browser-check.js](../scripts/audit/training-status/browser-check.js)。在仓库根目录先用 `npx --yes --package @playwright/cli playwright-cli -s=training-status open http://127.0.0.1:5173` 打开页面，再执行 `npx --yes --package @playwright/cli playwright-cli -s=training-status run-code --filename scripts/audit/training-status/browser-check.js`。脚本拦截全部 API 与 WebSocket，以 6.2 秒任务响应和即时训练日志检查 queued→running→completed，不创建或停止真实任务。返回值应为 `updated=true`、`finalStatus=completed`、`maxInFlight=1`、`errors=[]`。
+
 ### 实验矩阵
 
 实验矩阵直接消费 `TrainingContext` 的任务快照，不建立第二套轮询。每一行是一条训练任务记录，默认列为模型名称、标签、架构、数据集、状态、进度和开始时间；表头固定在顶部，选择框与实验名称固定在左侧。表格区域宽于 700px 时也固定左侧标签和右侧操作列；宽度不超过 700px 时，标签及操作列随横向滚动，实验名称缩至 180px，区域不超过 400px 时缩至 140px 并最多显示两行（悬停仍可查看完整名称）。该规则按表格实际宽度判断，因此展开属性面板后也不会让固定列占满表格。固定单元格使用不透明背景，避免滚动后的文字透叠。

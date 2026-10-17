@@ -115,6 +115,7 @@ RUN_REQUIRED_KEYS = (
     "epochs_completed",
     "run_complete",
 )
+MODEL_RELOAD_TIMEOUT_MESSAGE = "Earth checkpoint model reload timed out"
 
 
 class EarthArtifactError(ValueError):
@@ -1739,8 +1740,20 @@ def build_earth_model_from_checkpoint(
                     event.set()
 
 
-def verify_earth_model_reload_isolated(path: Any, *, timeout_seconds: float = 30.0) -> None:
+def verify_earth_model_reload_isolated(path: Any, *, timeout_seconds: Optional[float] = None) -> None:
     """Check executable checkpoint reload without running uploaded code in the parent."""
+    if timeout_seconds is None:
+        timeout_seconds = 30.0
+        checkpoint = load_earth_training_artifact(path)
+        schema = checkpoint.model_config.get("contract_schema")
+        if checkpoint.model_source == MODEL_SOURCE_UPLOADED and schema is not None:
+            from training_backbones.earth_3hourly_uploaded_contract import contract_profile
+            if contract_profile(schema)["full_grid"]:
+                import config
+                # CPU verification retains the saved full batch, including for
+                # 36x72 models. Allow the same budget as global upload checks.
+                timeout_seconds = max(timeout_seconds, config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS,
+                                      config.USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS)
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)
     process = context.Process(target=_earth_model_reload_child, args=(str(path), send))
@@ -1754,7 +1767,7 @@ def verify_earth_model_reload_isolated(path: Any, *, timeout_seconds: float = 30
             if process.is_alive():
                 process.kill()
                 process.join(1)
-            raise EarthArtifactError("Earth checkpoint model reload timed out")
+            raise EarthArtifactError(MODEL_RELOAD_TIMEOUT_MESSAGE)
         if not receive.poll():
             raise EarthArtifactError("Earth checkpoint model reload exited without a result")
         result = receive.recv()

@@ -172,12 +172,7 @@ class TrainingService:
                                 "dataset_identity_status", "dataset_snapshot")},
                             json.loads(task.hyperparameters or "{}"), task.id,
                         )
-                        from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA
-                        if earth_artifact.model_config.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA:
-                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path,
-                                timeout_seconds=config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS)
-                        else:
-                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
+                        await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
                     except Exception as exc:
                         task.status = "failed"
                         task.metrics = json.dumps({"error_code": "invalid_earth_training_artifact", "error": str(exc)})
@@ -1418,12 +1413,7 @@ class TrainingService:
                     if earth_training_spec["dataset_binding"]["dataset_id"] in EARTH_THREE_HOURLY_DATASET_IDS:
                         if any(earth_artifact.metrics.get(key) != value for key, value in execution_contract.items()):
                             raise EarthArtifactError("Earth checkpoint metrics do not match the frozen execution contract")
-                        from training_backbones.earth_3hourly_uploaded_contract import FULL_GRID_CONTRACT_SCHEMA
-                        if earth_artifact.model_config.get('contract_schema') == FULL_GRID_CONTRACT_SCHEMA:
-                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path,
-                                timeout_seconds=config.USER_MODEL_VALIDATION_TIMEOUT_SECONDS)
-                        else:
-                            await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
+                        await asyncio.to_thread(verify_earth_model_reload_isolated, output_path)
                 except Exception as exc:  # noqa: BLE001 - reported as a task failure
                     earth_artifact_error = exc
                     model_artifact_valid = False

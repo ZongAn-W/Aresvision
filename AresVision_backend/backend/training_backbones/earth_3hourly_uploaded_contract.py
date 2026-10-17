@@ -291,6 +291,13 @@ def forward(model, inputs, *, horizon=24, ls=None, topography=None):
         # uploaded model's in-place operations, in training as well as eval.
         arguments.append(value.clone())
     output = model(*arguments)
+    # The runner may use CUDA autocast while keeping the public Earth contract
+    # float32. Casting only at the contract boundary preserves strict external
+    # dtype semantics and keeps the model's internal Tensor Core path enabled.
+    if (inputs.device.type == "cuda" and torch.is_autocast_enabled()
+            and isinstance(output, torch.Tensor)
+            and output.dtype in (torch.float16, torch.bfloat16)):
+        output = output.float()
     expected = (inputs.shape[0], horizon, 1, *shape)
     if (not isinstance(output, torch.Tensor) or tuple(output.shape) != expected
             or output.dtype != torch.float32 or output.device != inputs.device

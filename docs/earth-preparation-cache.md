@@ -1,5 +1,7 @@
 # Earth 三小时训练准备缓存
 
+训练执行阶段的 CUDA 混合精度、批次预取和派生输入复用见 [Earth 训练提速](earth-training-performance.md)。本页缓存的存储 dtype 仍为 float32，身份、完整性校验和归一化定义保持不变。
+
 三小时训练的准备阶段由后端和训练子进程共同使用内容寻址的证明文件。验证证明绑定发布 manifest 的 SHA、NetCDF 数据 SHA、数据 fingerprint、源文件身份和验证器版本；命中前仍读取并核对 manifest、文件大小和身份，`force_full` 可要求重新执行完整 SHA-256 与科学契约扫描。源包改变、证明损坏或版本过期会回退到完整校验。源文件清单中的 `bytes`/`mtime_ns` 元数据可供快速变化检测，但不证明内容完整；内容完整性由分块计算的逐文件 SHA-256 证明。构建或预处理发布前会再次核对全部 digest，因此同大小且恢复 mtime 的原地修改也不能复用旧输出。
 
 归一化只扫描任务 train 的连续 UTC 时间步，使用 `per_channel_standard`、ddof=0 和 float64 合并矩；验证集、测试集和预测不能影响统计量。统计量 JSON 的身份包括数据 fingerprint、源文件身份、train 起止时间/步数、输入通道顺序和方法版本。任务返回值重新带回当前冻结划分，统计量内容本身不把 validation/test 边界混入复用键。

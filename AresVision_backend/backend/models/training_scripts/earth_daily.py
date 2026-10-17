@@ -20,6 +20,8 @@ Progress output keeps the existing parent-side format::
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import json
 import os
 import random
@@ -102,6 +104,94 @@ def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed % (2**32))
     torch.manual_seed(seed)
+
+
+def configure_cuda_acceleration(device: torch.device) -> dict[str, Any]:
+    """Enable safe fixed-shape CUDA acceleration without changing the model."""
+    if device.type != "cuda":
+        return {"amp": False, "amp_dtype": None, "tf32": False, "cudnn_benchmark": False}
+    # TF32 affects matrix/conv math while preserving the model and checkpoint
+    # structure. It is a good fit for the Earth training workload on Ampere+.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    try:
+        torch.set_float32_matmul_precision("high")
+    except (AttributeError, RuntimeError):
+        pass
+    enabled = os.getenv("ARESVISION_EARTH_AMP", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    dtype = "bfloat16" if enabled and torch.cuda.is_bf16_supported() else "float16" if enabled else None
+    return {"amp": enabled, "amp_dtype": dtype, "tf32": True, "cudnn_benchmark": True}
+
+
+def autocast_context(acceleration: dict[str, Any]):
+    if not acceleration.get("amp"):
+        return nullcontext()
+    dtype = torch.bfloat16 if acceleration.get("amp_dtype") == "bfloat16" else torch.float16
+    return torch.autocast(device_type="cuda", dtype=dtype)
+
+
+def make_grad_scaler(acceleration: dict[str, Any]):
+    enabled = bool(acceleration.get("amp")) and acceleration.get("amp_dtype") != "bfloat16"
+    try:
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    except (AttributeError, TypeError, RuntimeError):
+        return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
+def _cuda_math_state():
+    return (torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32,
+            torch.backends.cudnn.benchmark, torch.get_float32_matmul_precision(),
+            torch.backends.cudnn.deterministic)
+
+
+def _restore_cuda_math(state):
+    matmul_tf32, cudnn_tf32, benchmark, precision, deterministic = state
+    torch.backends.cuda.matmul.allow_tf32 = matmul_tf32
+    torch.set_float32_matmul_precision(precision)
+    torch.backends.cudnn.allow_tf32 = cudnn_tf32
+    torch.backends.cudnn.benchmark = benchmark
+    torch.backends.cudnn.deterministic = deterministic
+
+
+class _PrefetchLoader:
+    """Overlap one CPU batch with GPU compute without pickling protected memmaps."""
+
+    def __init__(self, loader):
+        self.loader = loader
+        self.dataset = loader.dataset
+
+    def __len__(self):
+        return len(self.loader)
+
+    def __iter__(self):
+        sentinel = object()
+        iterator = iter(self.loader)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="earth-batch") as executor:
+            future = executor.submit(next, iterator, sentinel)
+            while True:
+                batch = future.result()
+                if batch is sentinel:
+                    break
+                future = executor.submit(next, iterator, sentinel)
+                yield batch
+
+
+def _prefetch_loader(loader, source, device):
+    enabled = os.getenv("ARESVISION_EARTH_PREFETCH", "1").strip().lower() not in {"0", "false", "no", "off"}
+    # Bound the extra resident batch to 64 MiB. Large native full-grid windows
+    # retain synchronous loading rather than staging another multi-GiB batch.
+    shape = (len(getattr(source, "lat", ())), len(getattr(source, "lon", ())))
+    if isinstance(loader.dataset, _SpatialTileDataset):
+        shape = THREE_HOUR_TILE_SHAPE
+    elements = (source.window * len(source.input_channels) + source.horizon) * np.prod(shape)
+    if (enabled and device is not None and device.type == "cuda"
+            and getattr(source, "_normalized_map", None) is not None
+            and elements * 4 * loader.batch_size <= 64 * 1024**2):
+        return _PrefetchLoader(loader)
+    return loader
 
 
 def _uses_full_grid(spec: dict) -> bool:
@@ -236,6 +326,9 @@ def _build_loaders(
         num_workers=0,
         pin_memory=pin_memory,
     )
+    train_loader = _prefetch_loader(train_loader, splits["train"], device)
+    validation_loader = _prefetch_loader(validation_loader, splits["validation"], device)
+    test_loader = _prefetch_loader(test_loader, splits["test"], device)
     spatial_mode = 'spatial_tile' if wrapper is _SpatialTileDataset else 'full_grid'
     print(
         f'Earth preparation complete: spatial mode={spatial_mode}, '
@@ -288,20 +381,49 @@ class _ArrayDataset(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return len(self.source)
 
-    def _sample(self, index, inputs, targets, spatial_slices=None):
-        sample = {"inputs": torch.from_numpy(inputs), "targets": torch.from_numpy(targets)}
-        if self.topography_asset is not None:
+    def _sample(self, index, inputs, targets, spatial_slices=None,
+                *, longitude=None, topography=None):
+        input_tensor = inputs if isinstance(inputs, torch.Tensor) else torch.from_numpy(inputs)
+        target_tensor = targets if isinstance(targets, torch.Tensor) else torch.from_numpy(targets)
+        sample = {"inputs": input_tensor, "targets": target_tensor}
+        if topography is not None:
+            sample["topography"] = topography
+        elif self.topography_asset is not None:
             from services.earth_derived_inputs import topography_kwargs
             sample["topography"] = topography_kwargs(
-                self.topography_asset, sample["inputs"].unsqueeze(0),
+                self.topography_asset, input_tensor.unsqueeze(0),
                 spatial_slices=None if spatial_slices is None else [spatial_slices],
             )["topography"][0]
-        longitude = self._longitude(index)
+        longitude = self._longitude(index) if longitude is None else longitude
         if longitude is not None:
             sample["longitude"] = longitude
         if self.area_weights is not None:
             sample["area_weights"] = torch.from_numpy(np.asarray(self.area_weights, dtype='float32'))
         return sample
+
+    def _batch_samples(self, entries):
+        """Batch derived-input preparation so each terrain is copied once per batch."""
+        if not entries:
+            return []
+        # Only the shape is needed by terrain preparation. Do not materialize
+        # another full history batch before DataLoader's own collation.
+        input_tensor = torch.from_numpy(entries[0][1][0]).unsqueeze(0).expand(len(entries), -1, -1, -1, -1)
+        terrain_batch = None
+        if self.topography_asset is not None:
+            from services.earth_derived_inputs import topography_kwargs
+            slices = [item[2] for item in entries]
+            terrain_batch = topography_kwargs(
+                self.topography_asset, input_tensor,
+                spatial_slices=None if all(value is None for value in slices) else slices,
+            )["topography"]
+        samples = []
+        for offset, (index, (inputs, targets), spatial_slices) in enumerate(entries):
+            samples.append(self._sample(
+                index, inputs, targets, spatial_slices,
+                longitude=self._longitude(index),
+                topography=None if terrain_batch is None else terrain_batch[offset],
+            ))
+        return samples
 
     def _longitude(self, index):
         if not hasattr(self.source, 'window_longitude'):
@@ -316,8 +438,10 @@ class _ArrayDataset(torch.utils.data.Dataset):
         if not hasattr(self.source, 'read_windows'):
             return [self[index] for index in indices]
         requests = [(index, slice(None), slice(None)) for index in indices]
-        return [self._sample(index, inputs, targets)
-                for index, (inputs, targets) in zip(indices, self.source.read_windows(requests))]
+        windows = self.source.read_windows(requests)
+        return self._batch_samples([
+            (index, window, None) for index, window in zip(indices, windows)
+        ])
 
 
 class _SpatialTileDataset(_ArrayDataset):
@@ -360,13 +484,15 @@ class _SpatialTileDataset(_ArrayDataset):
             window, tile = divmod(index, len(self.tiles))
             latitude, longitude = self.tiles[tile]
             requests.append((window, latitude, longitude))
-        samples = []
-        for (window, latitude, longitude), (inputs, targets) in zip(requests, self.source.read_windows(requests)):
-            sample = self._sample(window, inputs, targets, (latitude, longitude))
+        windows = self.source.read_windows(requests)
+        samples = self._batch_samples([
+            (window, values, (latitude, longitude))
+            for (window, latitude, longitude), values in zip(requests, windows)
+        ])
+        for sample, (window, latitude, longitude) in zip(samples, requests):
             if self.area_weights is not None:
                 sample["area_weights"] = torch.from_numpy(
                     np.asarray(self.area_weights[latitude, longitude], dtype='float32'))
-            samples.append(sample)
         return samples
 
 
@@ -399,11 +525,11 @@ def _forward_batch(model, inputs, *, model_source, horizon, longitude=None, topo
 
 def _weighted_mse(output, targets, spatial_weights=None, sample_weight_denominator=None):
     """Return normalized MSE and its denominator for stable streamed logging."""
-    squared = torch.square(output - targets)
+    squared = torch.square(output.float() - targets.float())
     if spatial_weights is None:
         denominator = torch.as_tensor(squared.numel(), dtype=squared.dtype, device=squared.device)
         return squared.mean(), denominator
-    weights = spatial_weights.to(device=output.device, dtype=output.dtype)
+    weights = spatial_weights.to(device=output.device, dtype=torch.float32)
     if weights.ndim == 2:
         weights = weights.unsqueeze(0)
     if weights.ndim != 3 or tuple(weights.shape[-2:]) != tuple(output.shape[-2:]):
@@ -419,7 +545,7 @@ def _weighted_mse(output, targets, spatial_weights=None, sample_weight_denominat
             raise EarthTrainingError('Area-weighted sample denominator must be finite and positive')
         denominator = torch.as_tensor(
             float(output.shape[0] * output.shape[1] * sample_weight_denominator),
-            dtype=output.dtype, device=output.device,
+            dtype=squared.dtype, device=output.device,
         )
     if not torch.isfinite(denominator) or denominator <= 0:
         raise EarthTrainingError('Area-weighted MSE denominator must be finite and positive')
@@ -456,6 +582,7 @@ def _evaluate_split(
     *,
     loss_function=None,
     model_source: str = MODEL_SOURCE_OFFICIAL,
+    acceleration: Optional[dict[str, Any]] = None,
 ) -> tuple[dict, float]:
     """Return DU metrics plus the mean normalized MSE for a whole partition."""
     model.eval()
@@ -473,13 +600,14 @@ def _evaluate_split(
             targets = targets.to(device, non_blocking=device.type == 'cuda')
             if longitude is not None:
                 longitude = longitude.to(device, non_blocking=device.type == 'cuda')
-            output = _forward_batch(model, inputs, model_source=model_source, horizon=horizon,
-                                    longitude=longitude, topography=(batch.get("topography") if isinstance(batch, dict) else None))
+            with autocast_context(acceleration or {}):
+                output = _forward_batch(model, inputs, model_source=model_source, horizon=horizon,
+                                        longitude=longitude, topography=(batch.get("topography") if isinstance(batch, dict) else None))
+                loss, denominator = _weighted_mse(
+                    output, targets, spatial_weights, sample_weight_denominator,
+                )
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during evaluation")
-            loss, denominator = _weighted_mse(
-                output, targets, spatial_weights, sample_weight_denominator,
-            )
             if not torch.isfinite(loss):
                 raise EarthTrainingError("Non-finite evaluation loss")
             total_loss += float(loss.item()) * float(denominator.item())
@@ -494,12 +622,41 @@ def _evaluate_split(
     return accumulator.result(), total_loss / total_loss_denominator
 
 
-def run_training(
+def _optimizer_step(model, optimizer, loss, scaler):
+    """Skip only recoverable FP16 scaling overflows; other non-finite gradients fail."""
+    if not scaler.is_enabled():
+        loss.backward()
+        _require_finite_gradients(model)
+        optimizer.step()
+        return True
+    scaler.scale(loss).backward()
+    scaler.unscale_(optimizer)
+    previous_scale = scaler.get_scale()
+    # GradScaler checks every unscaled gradient and suppresses optimizer.step
+    # on overflow. Reject repeated overflows in the caller instead of publishing
+    # an untrained checkpoint, while permitting normal dynamic-scale warmup.
+    scaler.step(optimizer)
+    scaler.update()
+    return scaler.get_scale() >= previous_scale
+
+
+def run_training(spec, output_path, registry, device=None, cache_root=None):
+    """Keep CUDA math configuration local to this run, including failure paths."""
+    baseline_math = _cuda_math_state()
+    try:
+        return _run_training(spec, output_path, registry, device=device,
+                             cache_root=cache_root, baseline_math=baseline_math)
+    finally:
+        _restore_cuda_math(baseline_math)
+
+
+def _run_training(
     spec: dict,
     output_path: Path,
     registry: DatasetRegistry,
     device: Optional[str] = None,
     cache_root: Optional[Path] = None,
+    baseline_math=None,
 ) -> dict:
     """Train, evaluate and publish one Earth checkpoint.
 
@@ -555,6 +712,8 @@ def run_training(
 
     seed_everything(seed)
     resolved_device = resolve_device(device)
+    acceleration = configure_cuda_acceleration(resolved_device)
+    scaler = make_grad_scaler(acceleration)
     prepared = _build_loaders(spec, registry, batch_size, seed, cache_root=cache_root, device=resolved_device)
     order = prepared["input_channel_order"]
     dataset_by_name = prepared["splits"]
@@ -584,7 +743,11 @@ def run_training(
         if model_source == MODEL_SOURCE_UPLOADED
         else "official:dlinear"
     )
-    print(f"Training Device: {resolved_device}", flush=True)
+    print(
+        f"Training Device: {resolved_device}; AMP={acceleration['amp']}; "
+        f"TF32={acceleration['tf32']}; cuDNN benchmark={acceleration['cudnn_benchmark']}",
+        flush=True,
+    )
     print(
         f"EarthModel={model_label}, Dataset={binding['dataset_id']}@{binding['dataset_version']}, "
         f"Channels={','.join(order)}, Window={profile['window']}, Horizon={profile['horizon']}",
@@ -613,6 +776,8 @@ def run_training(
     stopped_early = False
     epochs_without_improvement = 0
     start_time = time.time()
+    skipped_amp_steps = 0
+    consecutive_overflows = 0
     sample_weight_denominator = getattr(
         getattr(prepared["train_loader"], 'dataset', None),
         'area_weight_denominator', None,
@@ -623,6 +788,7 @@ def run_training(
         running_loss = 0.0
         loss_elements = 0
         total_batches = len(prepared["train_loader"])
+        optimizer_steps = 0
         for batch_index, batch in enumerate(prepared["train_loader"], start=1):
             inputs, longitude, targets, spatial_weights = _split_batch(batch)
             inputs = inputs.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
@@ -632,18 +798,25 @@ def run_training(
             if spatial_weights is not None:
                 spatial_weights = spatial_weights.to(resolved_device, non_blocking=resolved_device.type == 'cuda')
             optimizer.zero_grad(set_to_none=True)
-            output = _forward_batch(model, inputs, model_source=model_source, horizon=profile["horizon"],
-                                    longitude=longitude, topography=(batch.get("topography") if isinstance(batch, dict) else None))
+            with autocast_context(acceleration):
+                output = _forward_batch(model, inputs, model_source=model_source, horizon=profile["horizon"],
+                                        longitude=longitude, topography=(batch.get("topography") if isinstance(batch, dict) else None))
+                loss, denominator = _weighted_mse(
+                    output, targets, spatial_weights, sample_weight_denominator,
+                )
             if not torch.isfinite(output).all():
                 raise EarthTrainingError("Non-finite model output during training")
-            loss, denominator = _weighted_mse(
-                output, targets, spatial_weights, sample_weight_denominator,
-            )
             if not torch.isfinite(loss):
                 raise EarthTrainingError("Non-finite training loss")
-            loss.backward()
-            _require_finite_gradients(model)
-            optimizer.step()
+            if not _optimizer_step(model, optimizer, loss, scaler):
+                skipped_amp_steps += 1
+                consecutive_overflows += 1
+                print(f"Earth AMP: skipped overflowing optimizer step; scale={scaler.get_scale():g}", flush=True)
+                if consecutive_overflows >= 8:
+                    raise EarthTrainingError("Repeated FP16 gradient overflows; disable ARESVISION_EARTH_AMP")
+            else:
+                consecutive_overflows = 0
+                optimizer_steps += 1
             denominator_value = float(denominator.item())
             running_loss += float(loss.item()) * denominator_value
             loss_elements += denominator_value
@@ -655,6 +828,8 @@ def run_training(
                     flush=True,
                 )
 
+        if optimizer_steps == 0:
+            raise EarthTrainingError("No finite optimizer update was completed in this epoch")
         training_loss = running_loss / max(loss_elements, 1)
         validation_metrics, validation_loss = _evaluate_split(
             model,
@@ -662,6 +837,7 @@ def run_training(
             dataset_by_name["validation"],
             resolved_device,
             model_source=model_source,
+            acceleration=acceleration,
         )
         epochs_completed = epoch
         loss_name = "area-weighted normalized MSE" if area_weighted else "normalized MSE"
@@ -695,6 +871,13 @@ def run_training(
         raise EarthTrainingError("Training produced no best weights")
     print(f"Earth best epoch: {best_epoch}", flush=True)
 
+    if baseline_math is not None:
+        _restore_cuda_math(baseline_math)
+    if resolved_device.type == 'cuda':
+        # Final metrics and the strict reload proof must use reproducible conv
+        # kernels: even two eval calls on identical CUDA weights may differ.
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
     model.load_state_dict(best_state, strict=True)
     model.to(resolved_device)
     validation_metrics, validation_loss = _evaluate_split(
@@ -761,6 +944,10 @@ def run_training(
         "python_version": sys.version.split()[0],
         "torch_version": torch.__version__,
         "device": str(resolved_device),
+        "acceleration": dict(acceleration),
+        "amp_skipped_optimizer_steps": skipped_amp_steps,
+        "saved_metrics_precision": "float32",
+        "saved_metrics_cudnn_deterministic": resolved_device.type == 'cuda',
         "duration_seconds": round(time.time() - start_time, 3),
     }
     if is_earth_three_hourly_dataset_id(binding["dataset_id"]):

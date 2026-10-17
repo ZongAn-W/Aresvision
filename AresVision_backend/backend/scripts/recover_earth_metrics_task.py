@@ -19,8 +19,11 @@ def main():
     parser.add_argument("--package-dir", type=Path, default=config.EARTH_MERRA2_3HOURLY_DIR)
     parser.add_argument("--audit-root", type=Path, default=config.DATA_DIR / "recovery")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--failure-kind", choices=("metrics-contract", "reload-timeout"),
+                        default="metrics-contract")
     args = parser.parse_args()
     options = dict(expected_checkpoint_sha256=args.checkpoint_sha256,
+                   failure_kind=args.failure_kind,
                    timeout_seconds=config.USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS,
                    progress=lambda message: print(message, flush=True))
     if args.apply:

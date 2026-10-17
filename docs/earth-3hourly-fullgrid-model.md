@@ -133,8 +133,13 @@ The server freezes the schema in the model reference and
 checkpoint schema must agree. The three-hour artifact container stays compatible,
 while the v2 model implementation and full spatial call size are independently
 recorded. Strict reload and eval independence use full maps. The parent completion
-and recovery check use the configured validation budget for v2; v1 retains its
-separate 30-second checkpoint gate. Old weights are not automatically promoted.
+and restart recovery checks use the larger of the generic and global validation
+budgets (global default 900 seconds), including the independent 36x72 full-grid
+contract. Explicit reload deadlines take priority. V1 spatial tiles retain their
+separate 30-second checkpoint gate. The saved-batch CPU round trip and strict
+model/weight checks remain unchanged. Already failed timeout-only tasks require
+[explicit verified recovery](earth-metrics-task-recovery.md#重载超时恢复).
+Old weights are not automatically promoted.
 
 The normalized cache is time-major `[time,C,240,480]`, tagged
 `earth_full_grid_v1` with explicit schema/version, data identity and normalization.

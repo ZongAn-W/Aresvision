@@ -26,6 +26,16 @@ AstraAtmos 使用「大气之 A / Atmospheric A」作为正式标志：冰蓝 A 
 
 ## 快速接手：先读这一节
 
+2026-10-17 修复 Earth 全图 checkpoint 完成验收的超时预算：36×72 与 240×480 上传模型按空间契约统一使用全图预算（默认 900 秒，与通用预算取较大值），不再分别落入 30/120 秒；保存 batch 的 CPU round-trip、strict state-dict 和 eval 独立性检查保留。已有仅因重载超时失败的完整 v3 产物可使用显式恢复工具，在数据/源码/参数/归一化/指标与隔离执行全部复核后备份并恢复，原权重与指标契约不改写，见[恢复说明](docs/earth-metrics-task-recovery.md#重载超时恢复)。
+
+2026-10-17 修复训练监控慢响应时状态停留在排队的问题：任务列表仍每 5 秒轮询，但请求未完成时复用当前请求，避免响应超过轮询间隔后被持续作废；提交、改名等操作后的主动刷新仍发起新请求，并保留账号/页面切换的过期响应隔离。日志仍每 3 秒独立刷新，运行状态与损失曲线统一采用任务快照，详见[训练状态同步](docs/experiment-center.md#训练状态同步)。
+
+2026-10-17 Earth CUDA runner 默认启用 BF16（不支持时用带动态缩放的 FP16）、TF32、cuDNN 调优和有界单线程批次预取；季节坐标按分区预计算，地形按 batch 准备。窗口、horizon、模型层和参数尺寸不变；最终完整验证/测试恢复 FP32 前向并保留严格保存与重载。另提供 [36×72 共享地形门控优化模板](docs/earth-3hourly-5deg-shared-topography-model-template.py)，在单次前向内复用派生编码，大 CUDA batch 按样本分段并重算激活，保持一次原 batch 的参数更新。模板须作为新文件上传，已有上传源码不自动改写；AMP 会改变数值轨迹，关闭方式和实测范围见 [Earth 训练提速](docs/earth-training-performance.md)。
+
+2026-10-17 基于 T11（task90）新增 [纯 SimVP 对照模板](docs/earth-3hourly-5deg-t11-pure-simvp-model.py)，桌面文件为 `09_pure_simvp_earth_36x72_T11_control.py`。它逐字保留 T11 的 SpatialEncoder、TemporalInceptionBlock、TemporalTranslator、SpatialDecoder（空间 64、时间 128、2 个时间块、dropout 0.1 和普通零填充），去掉 ConvLSTM、所有共享地形门控和 `ls/topography` 输入；空间编码器直接接收五个观测通道。对照实验使用与 T11 相同的 36×72、五通道、20→20、batch32、20 epochs、seed11、学习率 0.001、早停5和70/15/15划分。它与 T11 的第一层输入参数量不同，这是去掉 ConvLSTM 后的必要变化；后续 SimVP 核心层保持一致。
+
+另提供 [T11 去 ConvLSTM、保留门控的 SimVP 对照模板](docs/earth-3hourly-5deg-t11-no-convlstm-model.py)，桌面文件为 `10_gated_simvp_no_convlstm_earth_36x72_T11_control.py`。它保留 T11 的季节/地形输入、共享门控和 SimVP 核心定义；默认两个时间块仍调用门控五次，原 ConvLSTM 前后两次门控在移除递归层后连续作用于观测输入。第一层空间卷积改为 5→64，其余默认参数不变，五通道 20→20 时共 580,258 个参数。须作为新模型上传，不兼容直接加载 T11 权重；结构和验证范围见 [5° 模型说明](docs/earth-merra2-5deg.md#训练与上传模型)。
+
 2026-10-16 新增独立 Earth 三小时 5° 训练数据集 `earth_merra2_3hourly_5deg_v1`：从已验证的原 0.75° 包按球面单元重叠面积聚合为 **36×72**，保持全部 UTC 三小时时间点、五变量与单位。训练页提供新选项，官方 DLinear 和独立低分辨率契约上传模型使用完整全球窗口；可选季节坐标与独立 5° ETOPO 资产、训练/预测/诊断/checkpoint/缓存按新身份隔离。原数据总览继续默认使用 0.75°，新 5° 发布仅用于训练和历史回测。已生成并完整校验 2020–2021、5848 步五变量发布；真实 7→1、1 epoch CPU 完成训练、严格重载、历史预测与诊断，未验收长期收敛。构建、配置、模板与验证范围见 [Earth 三小时 5° 数据集](docs/earth-merra2-5deg.md)。
 
 2026-10-16 Earth 全图 v2 上传与重新校验补上独立预算：隔离子进程完成导入、数据声明与参数 schema 检查后，通知父进程采用全图时间上限（默认 900 秒，与通用预算取较大值，从进程启动计时）。v1/Mars 保留 120 秒通用预算，显式验证器预算优先；不在父进程执行上传源码。上传和重新校验在后台线程等待隔离进程，其他 API 请求可继续响应。完整 240×480、16 种通道组合、默认参数、梯度和 eval 检查保留，详见[全图上传预算](docs/earth-3hourly-fullgrid-model.md)。
@@ -582,6 +592,8 @@ node scripts\serve-prod.mjs
 | `ARESVISION_EARTH_MERRA2_3HOURLY_DIR` | 三小时独立发布目录，默认 `data/earth/merra2_3hourly_v1`；相对路径相对后端启动目录，须同时有 `manifest.json` 与 `earth_merra2_3hourly.nc`；不会替换日频配置 |
 | `ARESVISION_DEFAULT_EARTH_DATASET_ID` | 开发与生产均为 `earth_merra2_3hourly_v1`；仅接受该值，由 `GET /api/datasets` 返回，日频配置会在启动时拒绝 |
 | `ARESVISION_EARTH_TRAINING_CACHE_DIR` | 三小时验证证明、train-only 统计量和 normalized memmap 的共享目录，默认工作区父级 `earth_training_cache/`；按数据/通道/统计量/布局版本复用，五通道完整发布约 12.55 GiB；不覆盖原包 |
+| `ARESVISION_EARTH_AMP` | 默认 `1`，Earth CUDA 训练与逐轮验证启用 BF16/FP16；`0` 关闭 autocast，TF32/cuDNN 调优仍开启；最终保存指标使用关闭 autocast 的 FP32 前向 |
+| `ARESVISION_EARTH_PREFETCH` | 默认 `1`，CUDA normalized memmap 估算批次数据不超过 64 MiB 时预取一批；`0` 关闭，CPU 和大型原网格批次保持同步 |
 | `TRAINING_PYTHON_PATH` | 训练子进程使用的 Python，默认使用后端当前解释器 |
 | `ARESVISION_MOLA_TOPOGRAPHY_PATH` | MOLA 地形 NetCDF 路径，默认使用平台地形资源 |
 | `ARESVISION_EARTH_MERRA2_3HOURLY_5DEG_DIR` | 独立 36×72 三小时训练包目录，包含 manifest 和 NetCDF；不替换数据总览默认值 |
@@ -589,7 +601,7 @@ node scripts\serve-prod.mjs
 | `ARESVISION_EARTH_TOPOGRAPHY_PATH` | Earth ETOPO 大气下边界资产路径；仅声明 `derived_inputs.topography` 的上传模型需要，运行时不下载原始 DEM |
 | `ARESVISION_MAX_UPLOAD_SIZE_MB` | 数据上传大小上限，默认 512 MB |
 | `USER_MODEL_VALIDATION_TIMEOUT_SECONDS` | 上传与手动重新校验的通用隔离进程预算，默认 120 秒、正整数；导入和声明检查仍在此预算内，合法全图声明按下一项扩展总预算。超时终止子进程并禁止训练；Earth 创建任务不重复 dry-run |
-| `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` | 全图 Earth v2 上传、重新校验与显式配置探针的总预算，默认 900 秒、正整数，与通用预算取较大值；手动指标恢复工具的重载检查也复用此配置。任务创建不运行探针，v1/Mars 保持通用预算，显式验证器超时仍优先 |
+| `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS` | 全图 Earth 上传、重新校验、显式配置探针及 checkpoint 隔离重载的预算，覆盖 240×480 和 36×72 契约；默认 900 秒、正整数，与通用预算取较大值。显式恢复工具也复用此配置，显式调用超时值优先；任务创建不运行探针 |
 | `ARESVISION_FRONTEND_DIST` | 指定后端托管的前端构建目录 |
 
 ## 自定义模型
@@ -600,7 +612,7 @@ Earth 三小时官方和 v1 新训练缓存按空间块连续存储（`earth_spa
 
 Earth 三小时有独立的 [v1 上传说明](docs/earth-3hourly-uploaded-model.md)与[Python 模板](docs/earth-3hourly-uploaded-model-template.py)。训练页选中该数据集时下载对应模板，兼容性显示可用/不可用/未知及原因；Mars 使用原上传入口。新模型声明 `earth_merra2_3hourly_v1`，实际调用 `[B,window,C,24,48] → [B,horizon,1,24,48]`，拼回 240×480。服务器在上传或手动重新校验时检查通道、单位、dtype、设备和反向传播，创建任务复用报告并冻结源码、schema 和参数；checkpoint 保存独立契约、源码摘要、发布身份、任务划分与 normalization。上传模型历史回测完整窗口必须在同一任务分区内，旧任务仍按 manifest。
 
-模型上传和手动重新校验使用通用 120 秒预算，隔离子进程确认合法 Earth 全图 v2 声明后使用默认 900 秒总预算；检查 eval 独立性、前向/反向和梯度，在后台线程等待子进程以保持其他 API 响应。Earth v1/v2 创建任务不再按实际 window/horizon、通道、batch 和模型参数重复执行隔离 dry-run。上传报告的绿色兼容不代表任意实际配置已经通过，运行失败仍由训练任务报告。显式 `earth_probe` 调用保留完整配置探针，全图采用通用预算与 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS=900` 的较大值，显式验证器预算优先。上传或显式探针超时报告使用 `uploaded_model_validation_timeout`，表示校验未完成，不视为已证实不兼容。隔离校验先读取结果再等待子进程退出，避免大报告塞满管道被误判超时；超时仍强制终止子进程。v1 checkpoint 保持独立 30 秒重载预算，v2 checkpoint 继续使用通用验证预算，未放宽重载门禁。细节见[全图 v2 准入](docs/earth-3hourly-fullgrid-model.md)。
+模型上传和手动重新校验使用通用 120 秒预算，隔离子进程确认合法 Earth 全图 v2 声明后使用默认 900 秒总预算；检查 eval 独立性、前向/反向和梯度，在后台线程等待子进程以保持其他 API 响应。Earth v1/v2 创建任务不再按实际 window/horizon、通道、batch 和模型参数重复执行隔离 dry-run。上传报告的绿色兼容不代表任意实际配置已经通过，运行失败仍由训练任务报告。显式 `earth_probe` 调用保留完整配置探针，全图采用通用预算与 `USER_MODEL_FULL_GRID_VALIDATION_TIMEOUT_SECONDS=900` 的较大值，显式验证器预算优先。上传或显式探针超时报告使用 `uploaded_model_validation_timeout`，表示校验未完成，不视为已证实不兼容。隔离校验先读取结果再等待子进程退出，避免大报告塞满管道被误判超时；超时仍强制终止子进程。v1 分块 checkpoint 保持独立 30 秒重载预算；v2 与 36×72 全图 checkpoint 在完成验收和重启恢复时统一使用全图预算，保留完整重载门禁。细节见[全图 v2 准入](docs/earth-3hourly-fullgrid-model.md)。
 
 自定义模型文件需导出 `MODEL_SPEC` 和 `build_model(config)`。基本张量约定为：
 

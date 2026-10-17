@@ -152,6 +152,21 @@ def _recover(case, **overrides):
     return recovery.recover_task(case.database, TASK_ID, case.package_dir, **arguments)
 
 
+@pytest.fixture
+def reload_timeout_case(recovery_case):
+    case = recovery_case
+    hypers = copy.deepcopy(case.hypers)
+    hypers.update(_earth_metrics_schema=EARTH_3HOURLY_METRICS_SCHEMA_V3,
+                  _earth_metrics_aggregation=CELL_AREA_WEIGHTED_AGGREGATION)
+    _update_task(case, hyperparameters=json.dumps(hypers), progress=99.,
+                 metrics=json.dumps({"error_code": "invalid_earth_training_artifact",
+                                     "error": recovery.MODEL_RELOAD_TIMEOUT_MESSAGE}))
+    case.log.write_text("Earth training completed\nModel saved: " + str(case.path) + "\n" +
+                        recovery.MODEL_RELOAD_TIMEOUT_MESSAGE + "\n", encoding="utf-8")
+    case.hypers = hypers
+    return case
+
+
 def _fast_gates(case, monkeypatch):
     """Retain the real strict checkpoint loader; bound repetition of proven scans."""
     monkeypatch.setattr(recovery, "_fit_threehour_normalization_uncached",
@@ -178,6 +193,72 @@ def test_full_synthetic_recovery_verification_is_readonly_and_reload_is_isolated
     assert plan["metrics"] == load_earth_training_artifact(case.path).metrics
     assert _rows(case.database) == before
     assert [file_sha256(path) for path in (case.database, case.path, case.log, case.source)] == digests
+    assert not case.audit_root.exists()
+
+
+def test_reload_timeout_verification_requires_explicit_kind_and_keeps_contract(reload_timeout_case):
+    case = reload_timeout_case
+    before = _rows(case.database)
+    with pytest.raises(EarthArtifactError, match="exact metrics-contract failure"):
+        _verify(case)
+    plan = recovery.verify_recovery(case.database, TASK_ID, case.package_dir,
+        expected_checkpoint_sha256=file_sha256(case.path), failure_kind="reload-timeout")
+    assert plan['schema'] == recovery.RELOAD_AUDIT_SCHEMA
+    assert plan['migrated_hyperparameters'] == case.hypers
+    assert plan['verification']['isolated_reload'] == 'passed'
+    assert _rows(case.database) == before
+    assert not case.audit_root.exists()
+
+
+def test_reload_timeout_recovery_backs_up_and_preserves_original_contract(reload_timeout_case, monkeypatch):
+    case = reload_timeout_case
+    _fast_gates(case, monkeypatch)
+    before = _rows(case.database)
+    digests = {path: file_sha256(path) for path in (case.path, case.source, case.log)}
+    result = _recover(case, failure_kind='reload-timeout')
+    after = _rows(case.database)
+    assert after[1:] == before[1:]
+    assert after[0]['status'] == 'completed' and after[0]['progress'] == 100.
+    assert after[0]['pid'] is None
+    changed = {key for key in before[0] if before[0][key] != after[0][key]}
+    assert changed == {'hyperparameters', 'metrics', 'status', 'progress', 'pid'}
+    hypers = json.loads(after[0]['hyperparameters'])
+    audit = hypers.pop('_earth_reload_recovery')
+    assert hypers == case.hypers
+    assert audit['original_failure'] == json.loads(before[0]['metrics'])
+    assert audit['schema'] == recovery.RELOAD_AUDIT_SCHEMA
+    assert audit['from_schema'] == audit['to_schema'] == EARTH_3HOURLY_METRICS_SCHEMA_V3
+    assert _rows(result['database_backup']) == before
+    assert all(file_sha256(path) == digest for path, digest in digests.items())
+    assert load_earth_training_artifact(case.path, expected_hyperparameters=hypers,
+        expected_task_id=TASK_ID).metrics == json.loads(after[0]['metrics'])
+    with pytest.raises(EarthArtifactError, match='exact reload-timeout failure'):
+        _recover(case, failure_kind='reload-timeout')
+
+
+@pytest.mark.parametrize('damage', ['failure', 'schema', 'metric', 'source', 'reload'])
+def test_reload_timeout_recovery_rejects_unverified_evidence(reload_timeout_case, monkeypatch, damage):
+    case = reload_timeout_case
+    _fast_gates(case, monkeypatch)
+    if damage == 'failure':
+        _update_task(case, metrics=json.dumps({'error_code':'invalid_earth_training_artifact',
+                                              'error':'Stopped by user'}))
+    elif damage == 'schema':
+        hypers = copy.deepcopy(case.hypers)
+        hypers['_earth_metrics_schema'] = EARTH_3HOURLY_METRICS_SCHEMA_V2
+        _update_task(case, hyperparameters=json.dumps(hypers))
+    elif damage == 'metric':
+        _write_tampered_checkpoint(case, lambda p: p['metrics']['splits']['test']['overall'].update(rmse=99.))
+    elif damage == 'source':
+        case.source.write_text('# changed source\n', encoding='utf-8')
+    else:
+        def fail(*args, **kwargs):
+            raise EarthArtifactError(recovery.MODEL_RELOAD_TIMEOUT_MESSAGE)
+        monkeypatch.setattr(recovery, 'verify_earth_model_reload_isolated', fail)
+    before = _rows(case.database)
+    with pytest.raises(EarthArtifactError):
+        _recover(case, failure_kind='reload-timeout')
+    assert _rows(case.database) == before
     assert not case.audit_root.exists()
 
 

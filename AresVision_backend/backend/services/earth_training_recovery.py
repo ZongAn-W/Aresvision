@@ -1,4 +1,4 @@
-"""Explicit, audited v2-task/v3-checkpoint recovery; never an automatic fallback."""
+"""Explicit audited recovery for metrics-contract failures or reload timeouts."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 import sqlite3
 import uuid
 
-from services.dataset_identity import EARTH_DATASET_3HOURLY_ID
+from services.dataset_identity import EARTH_DATASET_3HOURLY_ID, EARTH_THREE_HOURLY_DATASET_IDS
 from services.earth_dataset import (
     _fit_threehour_normalization_uncached, threehour_global_cell_area_weights,
 )
@@ -22,7 +22,7 @@ from services.earth_dataset_metadata import (
 )
 from services.earth_training_artifact import (
     EarthArtifactError, assert_release_matches_binding, load_earth_training_artifact,
-    verify_earth_model_reload_isolated,
+    verify_earth_model_reload_isolated, MODEL_RELOAD_TIMEOUT_MESSAGE,
 )
 from services.earth_training_contract import (
     CELL_AREA_WEIGHTED_AGGREGATION,
@@ -32,6 +32,7 @@ from services.earth_training_contract import (
 
 FAILURE_MESSAGE = "Checkpoint metrics do not match the task's required metrics contract"
 AUDIT_SCHEMA = "earth_metrics_contract_recovery_v1"
+RELOAD_AUDIT_SCHEMA = "earth_reload_timeout_recovery_v1"
 
 
 def _json(value):
@@ -87,7 +88,7 @@ def _source_evidence(hypers, checkpoint, row):
 
 
 def verify_recovery(database, task_id, package_dir, *, expected_checkpoint_sha256,
-                    timeout_seconds=300.0, progress=None):
+                    timeout_seconds=300.0, progress=None, failure_kind="metrics-contract"):
     """Read and verify all evidence without changing DB, weights, data or logs."""
     def report(message):
         if progress is not None:
@@ -97,14 +98,25 @@ def verify_recovery(database, task_id, package_dir, *, expected_checkpoint_sha25
         row = _task_row(connection, task_id)
     hypers = json.loads(row["hyperparameters"])
     failure = json.loads(row["metrics"] or "{}")
+    if failure_kind not in {"metrics-contract", "reload-timeout"}:
+        raise EarthArtifactError("Unsupported recovery failure kind")
+    reload_timeout = failure_kind == "reload-timeout"
+    failure_message = MODEL_RELOAD_TIMEOUT_MESSAGE if reload_timeout else FAILURE_MESSAGE
     if (row["status"] != "failed" or row["model_script"] != "earth_daily.py"
-            or row["dataset_id"] != EARTH_DATASET_3HOURLY_ID
+            or row["dataset_id"] not in EARTH_THREE_HOURLY_DATASET_IDS
             or row["dataset_version"] != "v1" or row["dataset_identity_status"] != "verified"
             or row["end_time"] is None
             or failure.get("error_code") != "invalid_earth_training_artifact"
-            or failure.get("error") != FAILURE_MESSAGE
-            or hypers.get("_earth_metrics_schema") != EARTH_3HOURLY_METRICS_SCHEMA_V2):
-        raise EarthArtifactError("Recovery requires a failed v2 Earth task with the exact metrics-contract failure")
+            or failure.get("error") != failure_message
+            or (not reload_timeout and (
+                row["dataset_id"] != EARTH_DATASET_3HOURLY_ID
+                or hypers.get("_earth_metrics_schema") != EARTH_3HOURLY_METRICS_SCHEMA_V2))
+            or (reload_timeout and (
+                hypers.get("_earth_metrics_schema") != EARTH_3HOURLY_METRICS_SCHEMA_V3
+                or hypers.get("_earth_metrics_aggregation") != CELL_AREA_WEIGHTED_AGGREGATION))):
+        expected = "a failed v3 Earth task with the exact reload-timeout failure" if reload_timeout else (
+            "a failed v2 Earth task with the exact metrics-contract failure")
+        raise EarthArtifactError("Recovery requires " + expected)
     # Validate the original frozen declaration before proposing the explicit migration.
     from services.earth_task_split import required_task_split
     from services.earth_training_contract import earth_task_metrics_contract
@@ -115,8 +127,9 @@ def verify_recovery(database, task_id, package_dir, *, expected_checkpoint_sha25
     if weight_sha != expected_checkpoint_sha256:
         raise EarthArtifactError("Recovery checkpoint SHA-256 differs from the explicitly selected artifact")
     migrated = copy.deepcopy(hypers)
-    migrated["_earth_metrics_schema"] = EARTH_3HOURLY_METRICS_SCHEMA_V3
-    migrated["_earth_metrics_aggregation"] = CELL_AREA_WEIGHTED_AGGREGATION
+    if not reload_timeout:
+        migrated["_earth_metrics_schema"] = EARTH_3HOURLY_METRICS_SCHEMA_V3
+        migrated["_earth_metrics_aggregation"] = CELL_AREA_WEIGHTED_AGGREGATION
     checkpoint = load_earth_training_artifact(
         path, expected_binding=_binding(row), expected_hyperparameters=migrated, expected_task_id=task_id,
     )
@@ -149,7 +162,7 @@ def verify_recovery(database, task_id, package_dir, *, expected_checkpoint_sha25
     log_path = Path(row["log_file_path"])
     log_sha = file_sha256(log_path)
     log = log_path.read_text(encoding="utf-8")
-    if (FAILURE_MESSAGE not in log or "Earth training completed" not in log
+    if (failure_message not in log or "Earth training completed" not in log
             or "Model saved: " + str(path) not in log):
         raise EarthArtifactError("Recovery requires the preserved save/completion/failure log")
     report("Checkpoint, frozen parameters, source and complete metrics verified")
@@ -157,7 +170,7 @@ def verify_recovery(database, task_id, package_dir, *, expected_checkpoint_sha25
     release = read_earth_3hourly_release(package_dir, force_full=True, progress=progress)
     # The low-level verifier returns scientific metadata; registry identity is
     # added only after verifying the active three-hour publication.
-    release.metadata.setdefault("dataset_id", EARTH_DATASET_3HOURLY_ID)
+    release.metadata.setdefault("dataset_id", row["dataset_id"])
     release.metadata.setdefault("dataset_version", "v1")
     assert_release_matches_binding(release, checkpoint.dataset_binding)
     expected_snapshot = checkpoint.dataset_binding["dataset_snapshot"]
@@ -174,7 +187,8 @@ def verify_recovery(database, task_id, package_dir, *, expected_checkpoint_sha25
     report("Release identity, task partitions, latitude bounds and train-only normalization verified")
     verify_earth_model_reload_isolated(path, timeout_seconds=timeout_seconds)
     report("Isolated strict model reload, eval independence and output round trip verified")
-    plan = {"schema": AUDIT_SCHEMA, "original_task": row, "migrated_hyperparameters": migrated,
+    plan = {"schema": RELOAD_AUDIT_SCHEMA if reload_timeout else AUDIT_SCHEMA,
+            "failure_kind": failure_kind, "original_task": row, "migrated_hyperparameters": migrated,
             "checkpoint_path": str(path), "checkpoint_sha256": weight_sha,
             "log_sha256": log_sha, "package_dir": str(Path(package_dir).resolve()),
             "package_signature": release.signature, "metrics": checkpoint.metrics,
@@ -199,11 +213,11 @@ def _assert_evidence_unchanged(plan):
 
 
 def recover_task(database, task_id, package_dir, *, expected_checkpoint_sha256,
-                 audit_root, timeout_seconds=300.0, progress=None):
+                 audit_root, timeout_seconds=300.0, progress=None, failure_kind="metrics-contract"):
     """Verify first, then backup with SQLite API and update exactly one unchanged row."""
     plan = verify_recovery(database, task_id, package_dir,
                            expected_checkpoint_sha256=expected_checkpoint_sha256,
-                           timeout_seconds=timeout_seconds, progress=progress)
+                           timeout_seconds=timeout_seconds, progress=progress, failure_kind=failure_kind)
     operation_id = str(uuid.uuid4())
     directory = Path(audit_root).resolve() / f"task_{task_id}_{operation_id}"
     directory.mkdir(parents=True, exist_ok=False)
@@ -229,11 +243,15 @@ def recover_task(database, task_id, package_dir, *, expected_checkpoint_sha256,
         if file_sha256(log_backup) != plan["log_sha256"]:
             raise EarthArtifactError("Recovery failure log backup differs from the original")
         migrated = copy.deepcopy(plan["migrated_hyperparameters"])
-        migrated["_earth_metrics_recovery"] = {
-            "schema": AUDIT_SCHEMA, "operation_id": operation_id,
+        reload_timeout = plan.get("failure_kind") == "reload-timeout"
+        recovery_key = "_earth_reload_recovery" if reload_timeout else "_earth_metrics_recovery"
+        migrated[recovery_key] = {
+            "schema": plan["schema"], "operation_id": operation_id,
             "recovered_utc": datetime.now(timezone.utc).isoformat(),
-            "from_schema": EARTH_3HOURLY_METRICS_SCHEMA_V2, "to_schema": EARTH_3HOURLY_METRICS_SCHEMA_V3,
-            "reason": "Task marker incorrectly froze v2; verified saved run uses area weighting",
+            "from_schema": EARTH_3HOURLY_METRICS_SCHEMA_V3 if reload_timeout else EARTH_3HOURLY_METRICS_SCHEMA_V2,
+            "to_schema": EARTH_3HOURLY_METRICS_SCHEMA_V3,
+            "reason": ("Completed checkpoint passed isolated reload after the original timeout" if reload_timeout else
+                       "Task marker incorrectly froze v2; verified saved run uses area weighting"),
             "original_failure": json.loads(plan["original_task"]["metrics"]),
             "checkpoint_sha256": plan["checkpoint_sha256"],
             "database_backup": str(backup_path), "audit_path": str(audit_path),
